@@ -188,9 +188,9 @@ pub async fn execute_powershell(
     let structured = exit_code.map(|code| {
         let (full, over_limit) = collector.read_full_output(STRUCTURED_OUTPUT_MAX_BYTES);
         json!(BashStructuredOutput {
-            output: full,
+            output: full.clone(),
             truncated: over_limit,
-            full_output_path: if over_limit { full.clone() } else { None },
+            full_output_path: if over_limit { Some(full) } else { None },
             exit_code: code,
             wall_time_seconds,
         })

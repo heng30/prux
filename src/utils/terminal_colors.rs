@@ -9,7 +9,7 @@
 
 use crate::utils::color::Rgb;
 use std::{
-    io::{IsTerminal, Write},
+    io::Write,
     sync::OnceLock,
     time::{Duration, Instant},
 };
@@ -21,6 +21,7 @@ pub const QUERY_TIMEOUT_MS: u64 = 100;
 const PALETTE_SIZE: usize = 16;
 
 /// 关闭查询的覆盖开关值（`PRUX_TERMINAL_COLORS=0`）
+#[cfg(unix)]
 const ENV_OVERRIDE: &str = "PRUX_TERMINAL_COLORS";
 
 /// 终端上报的当前配色
@@ -228,6 +229,7 @@ pub fn parse_terminal_colors(bytes: &[u8]) -> TerminalColors {
 fn query_allowed() -> bool {
     #[cfg(unix)]
     {
+        use std::io::IsTerminal;
         match std::env::var(ENV_OVERRIDE).ok().as_deref() {
             Some("0") | Some("false") | Some("no") => return false,
             _ => {}
