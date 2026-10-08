@@ -410,17 +410,17 @@ fn update_terminal_title(shared: &Rc<RefCell<App>>) {
 
 /// 初始化终端：开 raw mode、进备用屏、开 bracketed paste，并请求终端透传鼠标与扩展键
 /// （tmux 内走 xterm modifyOtherKeys，否则用 crossterm 的 kitty 增强键协议）。
-/// 任一步失败返回 `Err`（调用方负责提示并退出）；成功返回可供 ratatui 绘制的终端句柄。
+/// raw mode / 备用屏失败返回 `Err`（调用方负责提示并退出）；bracketed paste、鼠标、
+/// 键盘增强属可选能力，平台或终端不支持时降级但不报错。成功返回可供 ratatui 绘制的终端句柄。
 fn setup_terminal() -> Result<Terminal<CrosstermBackend<io::Stdout>>> {
     let mut stdout = io::stdout();
     terminal::enable_raw_mode()
         .map_err(|e| Error::msg(format!("failed to enable raw mode: {}", e)))?;
-    crossterm::execute!(
-        stdout,
-        EnterAlternateScreen,
-        crossterm::event::EnableBracketedPaste,
-    )
-    .map_err(|e| Error::msg(format!("failed to initialize terminal: {}", e)))?;
+    crossterm::execute!(stdout, EnterAlternateScreen)
+        .map_err(|e| Error::msg(format!("failed to initialize terminal: {}", e)))?;
+    // bracketed paste 属可选能力：Windows 的 legacy console API 未实现该特性
+    // （crossterm 直接返回 Unsupported），失败只意味着粘贴退化为普通输入，不应阻塞启动。
+    _ = crossterm::execute!(stdout, crossterm::event::EnableBracketedPaste);
 
     // tmux 内：全量鼠标模式 + xterm modifyOtherKeys 扩展键请求，一次写入。
     // 鼠标：prux 是全屏 mouse owner（拖选/边缘滚动/滚动条/中键复制粘贴），必须让 tmux
@@ -441,15 +441,20 @@ fn setup_terminal() -> Result<Terminal<CrosstermBackend<io::Stdout>>> {
         .and_then(|_| stdout.flush())
         .map_err(|e| Error::msg(format!("failed to setup tmux terminal: {}", e)))?;
     } else {
-        crossterm::execute!(
+        crossterm::execute!(stdout, crossterm::event::EnableMouseCapture)
+            .map_err(|e| Error::msg(format!("failed to initialize terminal: {}", e)))?;
+
+        // kitty 键盘增强协议（DISAMBIGUATE | REPORT_ALL_KEYS_AS_ESCAPE_CODES）让终端把
+        // Shift 系修饰键以 CSI-u 编码上报。Windows 的 legacy console API 未实现该协议
+        // （crossterm 恒返回 Unsupported），不支持的终端也会忽略该序列；两种情况都只
+        // 意味着拿不到扩展键，不应阻塞启动。
+        _ = crossterm::execute!(
             stdout,
-            crossterm::event::EnableMouseCapture,
             crossterm::event::PushKeyboardEnhancementFlags(
                 crossterm::event::KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
                     | crossterm::event::KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
             )
-        )
-        .map_err(|e| Error::msg(format!("failed to initialize terminal: {}", e)))?;
+        );
     }
 
     let backend = CrosstermBackend::new(stdout);
@@ -1206,9 +1211,15 @@ fn teardown_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) {
         terminal.backend_mut(),
         LeaveAlternateScreen,
         crossterm::event::DisableBracketedPaste,
-        crossterm::event::PopKeyboardEnhancementFlags
     )
     .ok();
+
+    // pop 与 push 对称：Windows legacy console API 上恒失败（该平台本就未 push 成功），
+    // 且其错误会短路 execute! 队列、连累前面的逆序列不 flush，故单独执行并忽略。
+    _ = crossterm::execute!(
+        terminal.backend_mut(),
+        crossterm::event::PopKeyboardEnhancementFlags
+    );
 
     // tmux 全量鼠标模式的逆序列 + 恢复 modifyOtherKeys（mode 0）；非 tmux 用 crossterm 全量逆序列
     if in_tmux() {
