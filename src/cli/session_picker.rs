@@ -3,7 +3,7 @@
 use crate::core::session_manager::{self, SessionMeta, list_sessions};
 use crossterm::{
     cursor::{Hide, Show},
-    event::{self, Event, KeyCode},
+    event::{self, Event, KeyCode, KeyEventKind},
     terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use std::{
@@ -329,6 +329,9 @@ pub fn pick_session(dir: &Path) -> Option<PathBuf> {
 
         match event::poll(timeout) {
             Ok(true) => match event::read() {
+                // 同 TUI 主循环：Windows legacy console 会对同一次按键同时上报
+                // Press 与 Release（KeyCode 相同），不过滤会导致「↑ 跳两行 / 回车直接选中」。
+                Ok(Event::Key(key)) if key.kind == KeyEventKind::Release => {}
                 Ok(Event::Key(key)) => match key.code {
                     KeyCode::Up | KeyCode::Char('k') => {
                         if count > 0 {

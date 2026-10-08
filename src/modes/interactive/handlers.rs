@@ -68,7 +68,7 @@ use crate::{
     },
     utils::image::ImageResizeLimits,
 };
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use std::{
     cell::RefCell,
     rc::Rc,
@@ -195,6 +195,16 @@ pub fn handle_event(shared: &Rc<RefCell<App>>, event: Event) -> KeyAction {
     let Event::Key(key) = event else {
         return KeyAction::Continue;
     };
+
+    // 只认按键按下（`Press`/`Repeat`），丢弃抬起（`Release`）：Windows 走 legacy console
+    // API 时 crossterm 的 winapi reader 会为同一次按键先后上报 Press 与 Release，且两者
+    // `KeyCode` 完全相同——不过滤就会「敲一个 a 输入框出现 aa」。
+    // 代价：Windows 上 Alt+数字小键盘 输入码位只会在 Release 里带出字符，该输入方式失效；
+    // 若保留 Release 又会与 Alt+字母 的快捷键（alt+b/alt+f/alt+d…）重复触发。
+    if key.kind == KeyEventKind::Release {
+        return KeyAction::Continue;
+    }
+
     let mut st = shared.borrow_mut();
 
     // 扩展覆盖层（FleetView / 会话查看器）：存在时接管键盘
@@ -993,6 +1003,45 @@ mod tests {
             assert_eq!(st.editor.text(), "login.txt ", "路径补全生效");
             assert!(st.dirty, "Tab 路径补全后必须置脏");
         }
+    }
+
+    /// 回归：Windows legacy console（crossterm winapi reader）对同一次按键会先后上报
+    /// Press 与 Release，两者 KeyCode 相同——只过滤 Press 之外的 kind 才能避免「敲 a 出 aa」。
+    #[test]
+    fn release_key_events_are_ignored() {
+        let shared = Rc::new(RefCell::new(App::new()));
+        handle_event(
+            &shared,
+            Event::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE)),
+        );
+        handle_event(
+            &shared,
+            Event::Key(KeyEvent::new_with_kind(
+                KeyCode::Char('a'),
+                KeyModifiers::NONE,
+                KeyEventKind::Release,
+            )),
+        );
+        assert_eq!(
+            shared.borrow().editor.text(),
+            "a",
+            "Release 不应重复插入字符"
+        );
+
+        // 功能键同理：Release 不得二次触发（如 Backspace 连删两下）
+        handle_event(
+            &shared,
+            Event::Key(KeyEvent::new_with_kind(
+                KeyCode::Backspace,
+                KeyModifiers::NONE,
+                KeyEventKind::Release,
+            )),
+        );
+        assert_eq!(
+            shared.borrow().editor.text(),
+            "a",
+            "Release 的 Backspace 应被忽略"
+        );
     }
 
     /// 回归：换行 / Ctrl+J 修改编辑器内容后也必须置脏（同 Tab 早退路径）。

@@ -19,6 +19,8 @@
 </p>
 
 > ⚠️注意：目前仅测试了`opencode-go`和`deepseek`。
+>
+> ⚠️Windows 平台限制：prux 在 Windows 上经由 `crossterm` 使用的 legacy 控制台 API 运行，该 API 既不支持 kitty 键盘协议，也不支持 bracketed paste。因此 `Shift+Enter` 无法与普通 `Enter` 区分（换行请用 `Ctrl+J`），粘贴的文本会作为普通按键输入，多行粘贴可能被逐行提交。建议在 Windows Terminal（启用 ANSI/VT）中使用。
 
 ## 简介
 

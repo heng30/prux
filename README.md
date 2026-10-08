@@ -21,6 +21,12 @@
 
 
 > ⚠️NOTE：So far only `opencode-go` and `deepseek` have been tested.
+>
+> ⚠️Windows limitations: on Windows, prux goes through the legacy console API used by `crossterm`,
+> which implements neither the kitty keyboard protocol nor bracketed paste. `Shift+Enter` therefore
+> cannot be told apart from a plain `Enter` (use `Ctrl+J` to insert a newline), and pasted text
+> arrives as ordinary keystrokes, so a multi-line paste may be submitted line by line. Running
+> inside Windows Terminal (ANSI/VT support) is recommended.
 
 
 ## Introduction
