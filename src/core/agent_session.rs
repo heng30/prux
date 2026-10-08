@@ -7924,7 +7924,7 @@ mod tests {
     }
 
     /// 端到端：后台子代理经真实接缝物化并真的跑一轮 LLM，完成后
-    /// ① 结果可经 `get_subagent_result(wait=true)` 取回；② 投递一条 `Continuation`；
+    /// ① 投递一条 `Continuation`（完整结果）；② 结果可经 `get_subagent_result(wait=true)` 取回；
     /// ③ 子会话落盘并挂在父会话之下。
     #[test]
     fn subagent_background_spawn_notifies_and_persists_child_session() {
@@ -7989,22 +7989,11 @@ mod tests {
                 .to_string();
             assert_eq!(out.details.as_ref().unwrap()["background"], true);
 
-            // ② 等它跑完（真 LLM 轮次）
-            let res = ext
-                .execute_tool_async(
-                    "get_subagent_result".to_string(),
-                    json!({ "agent_id": id, "wait": true }),
-                    ctx.clone(),
-                )
-                .await
-                .expect("get_subagent_result");
-            assert!(res.text.contains("completed"), "{}", res.text);
-            assert!(res.text.contains("child work done"), "{}", res.text);
-
-            // ③ 完成通知是一条 Continuation，携带完整结果。
-            // 通知在 `wait` 解消之后才入队（finish 先唤醒等待者、再投递通知），故轮询等待。
+            // ② 完成通知是一条 Continuation，携带完整结果。
+            // **先等通知、再读结果**：`get_subagent_result` 带 consume 语义（已读即抑制
+            // 尚未投递的通知，见 migration-subagents.md），先读会让通知永远不投递。
             let mut notified: Option<String> = None;
-            for _ in 0..100 {
+            for _ in 0..500 {
                 while let Some(r) = crate::core::extensions::take_pending_ui() {
                     if let core::extensions::ExtensionUiRequest::Continuation { message } = r {
                         notified = Some(message.text());
@@ -8020,6 +8009,18 @@ mod tests {
             assert!(text.contains("status=\"completed\""), "{text}");
             assert!(text.contains(&id), "{text}");
             assert!(text.contains("child work done"), "{text}");
+
+            // ③ 结果可经 `get_subagent_result(wait=true)` 取回（此时已终结，立即返回）
+            let res = ext
+                .execute_tool_async(
+                    "get_subagent_result".to_string(),
+                    json!({ "agent_id": id, "wait": true }),
+                    ctx.clone(),
+                )
+                .await
+                .expect("get_subagent_result");
+            assert!(res.text.contains("completed"), "{}", res.text);
+            assert!(res.text.contains("child work done"), "{}", res.text);
 
             // ④ 子会话落盘 + 挂父会话
             let sessions = session_manager::list_sessions(&sess_dir);

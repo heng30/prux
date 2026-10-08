@@ -1048,8 +1048,15 @@ mod tests {
 
     /// 项目层（`.prux/extensions/subagent.json`）**逐键**覆盖全局层：
     /// 只盖它写了的键；写坏的键回退到全局那一项（不是回退缺省）；未受信任时整层不生效。
+    ///
+    /// 用例里的 `on_session_start` 会改**进程级**的子代理会话键/定时任务 store
+    /// （并往全局 UI 队列里投通知）——不持锁就会把并行用例的 store 改指到 `default.json`。
     #[test]
     fn project_layer_overrides_global_key_by_key() {
+        let _auth = crate::test_support::AUTH_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _g = crate::extensions::subagent::test_lock();
         let _ad = crate::test_support::AgentDirGuard::temp();
         let dir = tempfile::tempdir().unwrap();
         let cwd = dir.path().join("proj");

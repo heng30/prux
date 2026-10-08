@@ -249,10 +249,17 @@ fn due_jobs_fire_through_the_manager_and_record_their_run() {
         });
         tick();
 
-        // 触发了：状态 running、记了 last_run
+        // 触发了：记了 last_run；假 runner 瞬时返回时可能已收尾（状态直接是 success），
+        // 所以这里只要求「已派发且状态已记账」，终态留给下面的轮询断言。
         let after = get(&job.id).expect("job");
-        assert_eq!(after.last_status.as_deref(), Some("running"), "{after:?}");
-        assert!(after.last_run_ms.is_some());
+        assert!(after.last_run_ms.is_some(), "{after:?}");
+        assert!(
+            matches!(
+                after.last_status.as_deref(),
+                Some("running") | Some("success")
+            ),
+            "{after:?}"
+        );
 
         // 真派发了一个后台子代理（派发在自己的任务里，稍等一下）
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);

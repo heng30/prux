@@ -1326,7 +1326,11 @@ mod tests {
     fn show_dock_request_opens_dock_panel() {
         // 扩展请求 ShowDock → 打开停靠面板（执行计划时自动显示，免手动 /dock；无锚点）。
         // 先清空进程级 UI 请求总线：其它并行测试（如 plan/goal 的 persist()）可能遗留
-        // 请求到此共享队列，断言前必须只留本测试自己的请求。
+        // 请求到此共享队列，断言前必须只留本测试自己的请求；持 AUTH 锁与它们串行，
+        // 避免清空时把别的用例（后台完成通知等）的请求一并吞掉。
+        let _auth = crate::test_support::AUTH_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         while crate::core::extensions::take_pending_ui().is_some() {}
         let st = std::rc::Rc::new(std::cell::RefCell::new(App::new()));
         st.borrow_mut().dirty = false;
@@ -1345,6 +1349,10 @@ mod tests {
     fn restart_run_drains_steer_but_keeps_follow_up_queued() {
         // 假死恢复：RestartRun 先硬中止当前回合，再把运行中 steer 与引导消息
         // 合成一批重开一轮；follow-up 保持「settle 后才发送」的语义，留在队列里不动。
+        // 共享队列：与其它取用/清空它的用例串行（同 `show_dock_request_opens_dock_panel`）。
+        let _auth = crate::test_support::AUTH_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         while crate::core::extensions::take_pending_ui().is_some() {}
         let st = std::rc::Rc::new(std::cell::RefCell::new(App::new()));
         {

@@ -212,8 +212,16 @@ mod tests {
         assert_eq!(key_from_path(""), None);
     }
 
+    /// `reset` 清空会话键与让位缓存。
+    ///
+    /// 会话键/缓存是进程级单例：与其它触碰 subagent 全局态的用例串行，
+    /// 否则会在并行用例（如定时任务 store 的 round-trip）中途把它的会话键抹掉。
     #[test]
     fn reset_clears_both_caches() {
+        let _auth = crate::test_support::AUTH_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _g = crate::extensions::subagent::test_lock();
         set_session_key(Some("s1".into()));
         with_state(|st| {
             st.verdict = Some(Verdict::StandDown);
