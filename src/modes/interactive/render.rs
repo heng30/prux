@@ -2070,7 +2070,7 @@ mod tests {
             vec![PanelItem {
                 label: "[x] footer(normal)".to_string(),
                 value: "footer(normal)".to_string(),
-                desc: "ℹ".to_string(),
+                desc: "𝒊".to_string(),
                 ..Default::default()
             }],
         );

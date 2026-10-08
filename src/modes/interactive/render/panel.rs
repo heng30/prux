@@ -419,7 +419,7 @@ fn extension_hint() -> String {
 
 /// /extension 选择面板（布局对齐 /scoped-models）：
 /// 标题 `Extension Configuration` / 副标题（当前模式 + Ctrl+S 存盘）/ 搜索行 `> ` /
-/// 列表（[x] 名称 + ℹ）/ 底部键位提示（一行放不下拆两行）+ (unsaved)。
+/// 列表（[x] 名称 + 𝒊）/ 底部键位提示（一行放不下拆两行）+ (unsaved)。
 #[allow(clippy::too_many_arguments)]
 fn extension_lines(
     app: &App,
@@ -1598,7 +1598,7 @@ pub fn render_panel_text(app: &App, width: usize) -> Vec<String> {
             continue;
         }
         if layer.kind == PanelKind::Extension {
-            // 一行：checkbox + 名称 + ℹ（无前缀箭头简化为空格）
+            // 一行：checkbox + 名称 + 𝒊（无前缀箭头简化为空格）
             let (cb, name) = split_check_label(&item.label);
             out.push(format!("{}{} {} {}", prefix, cb, name, item.desc));
         } else if layer.kind == PanelKind::ScopedModels {
@@ -2079,14 +2079,14 @@ mod tests {
                 PanelItem {
                     label: "[x] footer(normal)".to_string(),
                     value: "footer(normal)".to_string(),
-                    desc: "ℹ".to_string(),
+                    desc: "𝒊".to_string(),
                     name: String::new(),
                     ..Default::default()
                 },
                 PanelItem {
                     label: "[ ] other-ext".to_string(),
                     value: "other-ext".to_string(),
-                    desc: "ℹ".to_string(),
+                    desc: "𝒊".to_string(),
                     name: String::new(),
                     ..Default::default()
                 },
@@ -2094,7 +2094,7 @@ mod tests {
         );
         let out = render_panel_text(&app, 80);
         assert!(out[0].starts_with("→ [x] footer(normal)"), "{:?}", out[0]);
-        assert!(out[0].contains("ℹ"), "详情图标: {:?}", out[0]);
+        assert!(out[0].contains("𝒊"), "详情图标: {:?}", out[0]);
         assert!(out[1].starts_with("  [ ] other-ext"), "{:?}", out[1]);
     }
 

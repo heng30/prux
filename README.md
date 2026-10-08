@@ -18,16 +18,7 @@
   <a href="README.md">English</a> | <a href="README.zh-CN.md">简体中文</a>
 </p>
 
-
-
-> ⚠️NOTE：So far only `opencode-go` and `deepseek` have been tested.
->
-> ⚠️Windows limitations: on Windows, prux goes through the legacy console API used by `crossterm`,
-> which implements neither the kitty keyboard protocol nor bracketed paste. `Shift+Enter` therefore
-> cannot be told apart from a plain `Enter` (use `Ctrl+J` to insert a newline), and pasted text
-> arrives as ordinary keystrokes, so a multi-line paste may be submitted line by line. Running
-> inside Windows Terminal (ANSI/VT support) is recommended.
-
+> ⚠️NOTE: So far only `opencode-go` and `deepseek` have been tested.
 
 ## Introduction
 
@@ -99,6 +90,10 @@ The complete documentation is written in Chinese and lives in [`assets/docs/`](a
 ## Contributing from source
 
 Development conventions, module layering, and build details are in [`AGENTS.md`](AGENTS.md). The upstream alignment cadence is recorded in `sync.md` and [`migrations/`](migrations/).
+
+### Troubleshooting
+
+Windows limitations: under `Git Bash` on Windows, prux goes through the legacy console API used by `crossterm`, which implements neither the kitty keyboard protocol nor bracketed paste. `Shift+Enter` therefore cannot be told apart from a plain `Enter` (use `Ctrl+J` to insert a newline), and pasted text arrives as ordinary keystrokes, so a multi-line paste may be submitted line by line. Running inside Windows Terminal (ANSI/VT support) is recommended.
 
 ## License
 

@@ -30,7 +30,7 @@ pub enum PanelKind {
     LoginOauth,
     /// /logout：已存凭据的 provider 选择
     LogoutProvider,
-    /// /extension：扩展列表（checkbox + 名称 + ℹ 详情图标，空格切换启用）
+    /// /extension：扩展列表（checkbox + 名称 + 𝒊 详情图标，空格切换启用）
     Extension,
     /// /extension：二级菜单，扩展描述信息
     ExtensionDetail,

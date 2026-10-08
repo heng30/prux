@@ -37,7 +37,7 @@ pub(super) fn extension_panel_items() -> Vec<PanelItem> {
 
 impl App {
     /// 打开扩展选择面板（/extension；对齐 /model 面板布局）
-    /// 列表项格式：`[x] 名称` + ℹ 详情图标（checkbox 在 label 内，
+    /// 列表项格式：`[x] 名称` + 𝒊 详情图标（checkbox 在 label 内，
     /// 空格切换后原地更新 label，保留 filter 与选中项）。
     /// 极简模式下非本模式扩展不显示（对齐现有禁用灰化的替代方案：
     /// 大量不可交互条目占位 + 禁用色不如直接不显示）。
@@ -408,7 +408,7 @@ mod tests {
 
         let mut st = App::new();
 
-        // 打开面板：列表项 = checkbox + 名称 + ℹ
+        // 打开面板：列表项 = checkbox + 名称 + 𝒊
         st.open_extension_panel();
         assert!(st.panel.active);
         assert_eq!(st.panel.top().unwrap().kind, PanelKind::Extension);
@@ -418,7 +418,7 @@ mod tests {
             .find(|i| i.value == "panel-test-ext")
             .expect("扩展条目");
         assert_eq!(item.label, "[x] panel-test-ext");
-        assert_eq!(item.desc, "ℹ");
+        assert_eq!(item.desc, "𝒊");
         // 选中 panel-test-ext（注册表可能有其他测试注册的扩展，不能假定 selected=0）
         st.panel.top_mut().unwrap().selected = items
             .iter()
