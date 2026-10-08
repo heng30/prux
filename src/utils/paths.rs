@@ -73,6 +73,39 @@ pub fn expand_home(s: &str) -> String {
     s.to_string()
 }
 
+/// Windows 上把 `HOME` 环境变量统一成 [`dirs::home_dir`]（启动时调用一次）。
+///
+/// **不管 `HOME` 已有何值都重写**：本仓处处以 `HOME` 为 home 目录的唯一来源
+/// （[`home_dir`] → 全局 agent 目录、`~` 展开、主题 / 技能发现、项目信任……），
+/// 而各家终端给的值并不一致：PowerShell 根本**不导出** `HOME`（只有 `$HOME` 变量和
+/// `%USERPROFILE%`），git bash / MSYS 则导出 `/c/Users/xx` 这类 POSIX 形式。
+/// 于是同一台机器“换个 shell 就换一份配置”：agent 目录从 `C:\Users\xx\.prux`
+/// 变成 cwd 下的 `.\prux`（缺 HOME 时 [`home_dir`] 回退 `.`），主题 / 会话历史全对不上；
+/// 而且项目所在卷未必支持硬链接，sidecar 锁会跟着失败（见 [`crate::utils::file_lock`]）。
+/// 统一写 `dirs::home_dir()`（Windows = `SHGetKnownFolderPath(FOLDERID_Profile)`，
+/// 即 `%USERPROFILE%`）后，所有终端环境指向同一个目录，也与 pi 的
+/// `os.homedir()`（Node 在 Windows 上同样只看 profile 目录、不看 `HOME`）对齐。
+///
+/// 代价：Windows 上用户显式设置的 `HOME`（如把配置放 D 盘的便携安装）不再生效，
+/// 要用 `PRUX_AGENT_DIR` 改 agent 目录。
+///
+/// 非 Windows 平台无操作；`dirs` 也拿不到目录时保持原状。
+/// 调用方必须保证在任何线程诞生之前调用（写在 `main` 第一句），
+/// 否则 `set_var` 会与其它线程读 env 并发。
+pub fn ensure_home_env() {
+    // 非 Windows 的 shell（bash / zsh / …）都导出 HOME，且它就是约定的 home 来源。
+    if !cfg!(windows) {
+        return;
+    }
+
+    let Some(home) = dirs::home_dir().filter(|h| !h.as_os_str().is_empty()) else {
+        return;
+    };
+
+    // SAFETY: 只由 `main` 在任何线程诞生之前调用一次，此刻无并发 env 访问。
+    unsafe { std::env::set_var("HOME", home) };
+}
+
 /// HOME 目录（测试接缝：`test_support::HomeGuard`，仅测试构建存在）。
 ///
 /// 也是全局 agent 目录 [`crate::core::settings_manager::agent_dir`] 的基准目录。
@@ -306,6 +339,18 @@ pub fn normalize_dir(dir: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 非 Windows 平台不得动 `HOME`：那里 HOME 就是约定的 home 来源，
+    /// 重写成 `dirs::home_dir()` 会把用户显式设的（如 MSYS 的 `/c/Users/x`）改成别的。
+    #[cfg(not(windows))]
+    #[test]
+    fn ensure_home_env_leaves_home_alone_off_windows() {
+        let before = std::env::var_os("HOME");
+
+        ensure_home_env();
+
+        assert_eq!(std::env::var_os("HOME"), before);
+    }
 
     #[test]
     fn project_root_walks_up_to_git_dir() {

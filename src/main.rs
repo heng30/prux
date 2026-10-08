@@ -41,7 +41,7 @@ use prux::{
         self,
         app::{RepairAction, SessionRepairRequest, ZombieOperationsRequest},
     },
-    utils::paths::{expand_tilde_path, resolve_path, theme_name_from_arg},
+    utils::paths::{ensure_home_env, expand_tilde_path, resolve_path, theme_name_from_arg},
 };
 use std::{
     io::IsTerminal,
@@ -52,6 +52,10 @@ use std::{
 /// 模型选择，再按 TUI / 非交互模式分派运行。
 #[tokio::main]
 async fn main() {
+    // Windows 上把 `HOME` 统一成 `dirs::home_dir()`：PowerShell 不导出它、git bash 导出的是
+    // POSIX 形式，不统一就会「换个 shell 换一份配置」。必须在 spawn 线程之前（见 [`ensure_home_env`]）。
+    ensure_home_env();
+
     // 进程标记（子进程继承）
     unsafe {
         std::env::set_var("AI_AGENT", "prux");
