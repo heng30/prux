@@ -1,0 +1,5 @@
+---
+source: crates/mermaid-text/tests/crossings.rs
+expression: "fmt_count(\"architecture_diagram_with_sugiyama_backend\", n)"
+---
+architecture_diagram_with_sugiyama_backend: 0 crossing(s)

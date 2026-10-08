@@ -1,0 +1,5 @@
+---
+source: crates/mermaid-text/tests/crossings.rs
+expression: "fmt_count(\"dense_fan_out\", n)"
+---
+dense_fan_out: 1 crossing(s)

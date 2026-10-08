@@ -1,0 +1,11 @@
+---
+source: crates/mermaid-text/tests/regression_corpus.rs
+expression: constrained
+---
+                 optional
+┌─────────────┐            ┌───────────────────┐
+│   PARENT    │1┄┄┄┄┄┄┄┄┄┄*│       CHILD       │
+├─────────────┤            ├───────────────────┤
+│  int id PK  │            │  int id       PK  │
+└─────────────┘            │  int parentId FK  │
+                           └───────────────────┘

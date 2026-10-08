@@ -1,0 +1,6 @@
+flowchart LR
+    A[Start] --> B{Decision}
+    B -->|yes| C[Build]
+    B -->|no| D[Skip]
+    C --> E[Deploy]
+    D --> E

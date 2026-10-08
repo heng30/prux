@@ -1,0 +1,6 @@
+graph LR
+subgraph CI
+    L[Lint] ==> B[Build] ==> T[Test]
+end
+T ==>|pass| D[Deploy]
+T -.->|skip| D

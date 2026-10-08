@@ -1,0 +1,45 @@
+%YAML 1.2
+---
+# 精简 Zig 语法（供 syntect 使用）。
+# 完整版见 ziglang/sublime-zig（MIT）；
+# 这里仅覆盖 LLM 对话代码块的高频结构：函数/类型声明、关键字、内建函数、
+# 字符串/字符、数字、注释、运算符。多行行字符串（\\…\\）未实现。
+name: Zig
+file_extensions: [zig]
+scope: source.zig
+contexts:
+  main:
+    - match: '//!.*$'
+      scope: comment.line.documentation.zig
+    - match: '///.*$'
+      scope: comment.line.documentation.zig
+    - match: '//.*$'
+      scope: comment.line.double-slash.zig
+    - match: '"(?:\\.|[^"\\])*"'
+      scope: string.quoted.double.zig
+    - match: "'(?:\\\\.|[^'\\\\])'"
+      scope: string.quoted.single.zig
+    - match: '\b(0x[0-9a-fA-F](?:_?[0-9a-fA-F])*|0b[01](?:_?[01])*|0o[0-7](?:_?[0-7])*|\d(?:_?\d)*(?:\.\d(?:_?\d)*)?(?:[eE][+-]?\d(?:_?\d)*)?)\b'
+      scope: constant.numeric.zig
+    - match: '\b(fn)\s*([a-zA-Z_]\w*)'
+      scope: keyword.control.fn.zig
+      captures:
+        2: entity.name.function.zig
+    - match: '\b(?:pub\s+)?(struct|enum|union|opaque)\s+([A-Za-z_]\w*)'
+      scope: keyword.control.type.zig
+      captures:
+        2: entity.name.type.zig
+    - match: '\b(?:pub\s+)?(const|var)\s+([a-zA-Z_]\w*)\s*='
+      scope: keyword.other.decl.zig
+      captures:
+        2: variable.other.zig
+    - match: '\b(bool|void|noreturn|type|anyerror|anytype|comptime_int|comptime_float|c_char|c_short|c_ushort|c_int|c_uint|c_long|c_ulong|c_longlong|c_ulonglong|c_longdouble|c_void|f16|f32|f64|f128|i\d+|u\d+|isize|usize)\b'
+      scope: storage.type.zig
+    - match: '\b(addrspace|align|allowzero|and|anyframe|asm|async|await|break|callconv|catch|comptime|const|continue|defer|else|enum|errdefer|error|export|extern|for|if|inline|linksection|noalias|noinline|nosuspend|or|orelse|packed|pub|resume|return|suspend|switch|test|threadlocal|try|unreachable|usingnamespace|var|volatile|while)\b'
+      scope: keyword.control.zig
+    - match: '@[a-zA-Z_][a-zA-Z0-9_]*'
+      scope: support.function.builtin.zig
+    - match: '<<=|>>=|\+=|-=|\*=|/=|%=|&=|\|=|\^=|=>|==|!=|<=|>=|&&|\|\||\.\.|->|<<|>>|=|\+|-|\*|/|%|!|<|>|&|\||\^|~|\?'
+      scope: keyword.operator.zig
+    - match: '[{}()\[\].,;:]'
+      scope: punctuation.section.zig

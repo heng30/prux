@@ -1,0 +1,12 @@
+flowchart TB
+    subgraph frontend [Frontend]
+        UI[Browser UI]
+        SW[Service Worker]
+    end
+    subgraph backend [Backend]
+        API[REST API]
+        DB[(Postgres)]
+    end
+    UI --> API
+    SW --> API
+    API --> DB

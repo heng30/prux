@@ -1,0 +1,13 @@
+stateDiagram-v2
+[*] --> named_cond
+state named_cond <<choice>>
+named_cond --> Pass: ok
+named_cond --> Fail: error
+Fail --> [*]
+Pass --> Done
+Done --> [*]
+[*] --> <<choice>>
+<<choice>> --> Open: start
+<<choice>> --> Closed: stop
+Open --> [*]
+Closed --> [*]

@@ -1,0 +1,11 @@
+---
+source: crates/mermaid-text/tests/regression_corpus.rs
+expression: constrained
+---
+
+
+            ╭────────────╮
+╭─────╮     │  Line one  │
+(  ●  )────▸│  Line two  │
+╰─────╯     │ Line three │
+            ╰────────────╯

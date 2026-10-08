@@ -1,0 +1,6 @@
+graph LR
+subgraph SG[Supervisor]
+  A-->B
+  B-->|panics|A
+  C-->|creates|B
+end

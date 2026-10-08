@@ -1,0 +1,5 @@
+---
+source: crates/mermaid-text/tests/crossings.rs
+expression: "fmt_count(\"cylinder_in_flow\", n)"
+---
+cylinder_in_flow: 0 crossing(s)

@@ -1,0 +1,10 @@
+---
+source: crates/mermaid-text/tests/snapshots.rs
+assertion_line: 280
+expression: out
+---
+
+
++---+     +---+     +---+
+| A |---->| B |---->| C |
++---+     +---+     +---+

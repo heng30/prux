@@ -1,0 +1,174 @@
+[package]
+name = "prux"
+version = "1.0.2"
+edition = "2024"
+
+[profile.dev]
+lto = false
+debug = false
+opt-level = 0
+incremental = true
+
+[profile.release]
+lto = true
+strip = true
+debug = false
+panic = "abort"
+opt-level = "s"
+codegen-units = 1
+incremental = true
+
+[features]
+# 仅测试构建启用的公共接缝（集成测试通过 self dev-dependency 激活）
+test-support = []
+
+[dependencies]
+url = { version = "2.5", default-features = false }
+lru = { version = "0.18", default-features = false }
+http = { version = "1.0", default-features = false }
+dirs = { version = "7.0", default-features = false }
+sha2 = { version = "0.11", default-features = false }
+bytes = { version = "1.12", default-features = false }
+ignore = { version = "0.4", default-features = false }
+linkme = { version = "0.3", default-features = false }
+tempfile = { version = "3.27", default-features = false }
+stacksafe = { version = "1.0", default-features = false }
+thiserror = { version = "2.0", default-features = false }
+sse-stream = { version = "0.2", default-features = false }
+webbrowser = { version = "1.0", default-features = false }
+tokio-util = { version = "0.7", default-features = false }
+html2text = { version = "0.17", default-features = false }
+serde_json = { version = "1.0", default-features = false }
+async-trait = { version = "0.1", default-features = false }
+jsonschema = { version = "0.58", default-features = false }
+tiktoken-rs = { version = "0.12", default-features = false }
+futures-util = { version = "0.3", default-features = false }
+strum_macros = { version = "0.28", default-features = false }
+mermaid-text = { version = "0.57", default-features = false }
+unicode-width = { version = "0.2", default-features = false }
+http-body-util = { version = "0.1", default-features = false }
+pulldown-cmark = { version = "0.13", default-features = false }
+unicode-segmentation = { version = "1.13", default-features = false }
+unicode-normalization = { version = "0.1", default-features = false }
+
+strum = { version = "0.28", default-features = false, features = ["std"] }
+base64 = { version = "0.23", default-features = false, features = ["std"] }
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+similar = { version = "3.1", default-features = false, features = ["text"] }
+getrandom = { version = "0.4", default-features = false, features = ["std"] }
+hyper-util = { version = "0.1", default-features = false, features = ["tokio"] }
+
+clap = { version = "4.5", default-features = false, features = [
+  "std",
+  "help",
+  "usage",
+  "derive",
+  "suggestions",
+  "error-context",
+] }
+rmcp = { version = "3.1", default-features = false, features = [
+  "client",
+  "auth",
+  "transport-child-process",
+  "reqwest-tls-no-provider",
+  "transport-streamable-http-client-reqwest",
+] }
+regex = { version = "1.11", default-features = false, features = [
+  "unicode-perl",
+  "unicode-case",
+] }
+hyper = { version = "1.11", default-features = false, features = [
+  "http1",
+  "server",
+] }
+tokio = { version = "1.53", default-features = false, features = [
+  "net",
+  "sync",
+  "time",
+  "macros",
+  "io-std",
+  "io-util",
+  "process",
+  "rt-multi-thread",
+] }
+image = { version = "0.25", default-features = false, features = [
+  "png",
+  "bmp",
+  "gif",
+  "webp",
+  "jpeg",
+] }
+chrono = { version = "0.4", default-features = false, features = [
+  "std",
+  "clock",
+] }
+rustls = { version = "0.23", default-features = false, features = [
+  "aws_lc_rs",
+] }
+syntect = { version = "5.3", default-features = false, features = [
+  "yaml-load",
+  "regex-fancy",
+  "default-syntaxes",
+] }
+arboard = { version = "3.6", default-features = false, features = [
+  "image-data",
+  "wayland-data-control",
+] }
+reqwest = { version = "0.13", default-features = false, features = [
+  "json",
+  "socks",
+  "stream",
+  "rustls",
+] }
+ratatui = { version = "0.30", default-features = false, features = [
+  "crossterm",
+] }
+rquickjs = { version = "0.12", default-features = false, features = [
+  "std",
+  "macro",
+  "futures",
+  "classes",
+  "parallel",
+  "rust-alloc",
+  "properties",
+  "array-buffer",
+] }
+crossterm = { version = "0.29", default-features = false, features = [
+  "event-stream",
+] }
+ratatui-image = { version = "11.1", default-features = false, features = [
+  "crossterm",
+] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = [
+  "connect",
+  "rustls",
+] }
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.31", default-features = false, features = [
+  "fs",
+  "user",
+  "poll",
+  "signal",
+  "process",
+] }
+
+[target.'cfg(target_os = "windows")'.build-dependencies]
+embed-resource = { version = "3.0", default-features = false }
+
+[dev-dependencies]
+log = "0.4"
+tower = "0.5"
+anyhow = "1.0"
+env_logger = "0.11"
+tokio-stream = "0.1"
+prux = { path = ".", features = ["test-support"] }
+rmcp = { version = "3.1", default-features = false, features = [
+  "server",
+  "server-side-http",
+  "transport-streamable-http-server",
+  "tower",
+] }
+
+[patch.crates-io]
+mermaid-text = { path = "vendor/mermaid-text" }

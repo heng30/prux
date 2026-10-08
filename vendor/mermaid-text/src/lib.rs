@@ -1,0 +1,2398 @@
+//! # mermaid-text
+//!
+//! Render [Mermaid](https://mermaid.js.org/) `graph`/`flowchart` diagrams as
+//! Unicode box-drawing text — no browser, no image protocol, pure Rust.
+//! Intended for use in terminals, SSH sessions, CI logs, and any context where
+//! a visual diagram is useful but image rendering is unavailable.  The output
+//! is deterministic and structured, making it suitable for LLM agents that
+//! need to read and reason about diagrams.
+//!
+//! ## ASCII mode
+//!
+//! For terminals that do not support Unicode box-drawing characters (old SSH
+//! boxes, CI log viewers, fonts without the Box Drawing block), an ASCII-only
+//! rendering mode is available.  The Unicode renderer runs first and its output
+//! is then post-processed by a character-by-character substitution table that
+//! maps every non-ASCII glyph to a plain `+ - | > < v ^ * o x` equivalent.
+//!
+//! ```
+//! let out = mermaid_text::render_ascii("graph LR; A[Build] --> B[Deploy]").unwrap();
+//! assert!(out.contains("Build"));
+//! assert!(out.contains("Deploy"));
+//! // Every character in the output is plain ASCII.
+//! assert!(out.is_ascii());
+//! ```
+//!
+//! ## Quick start
+//!
+//! ```
+//! use mermaid_text::render;
+//!
+//! let src = "graph LR; A[Build] --> B[Test] --> C[Deploy]";
+//! let output = render(src).unwrap();
+//! assert!(output.contains("Build"));
+//! assert!(output.contains("Test"));
+//! assert!(output.contains("Deploy"));
+//! // The output is a multi-line Unicode string ready for printing.
+//! println!("{output}");
+//! ```
+//!
+//! ## Width-constrained rendering
+//!
+//! Pass an optional column budget so the renderer tries progressively smaller
+//! gap sizes until the output fits:
+//!
+//! ```
+//! use mermaid_text::render_with_width;
+//!
+//! let output = render_with_width(
+//!     "graph LR; A[Start] --> B[End]",
+//!     Some(80),
+//! ).unwrap();
+//! assert!(output.contains("Start"));
+//! ```
+//!
+//! ## Feature matrix
+//!
+//! | Feature | Supported |
+//! |---------|-----------|
+//! | `graph LR/TD/RL/BT` and `flowchart` keyword | yes |
+//! | Rectangle, rounded, diamond, circle nodes | yes |
+//! | Stadium, subroutine, cylinder, hexagon nodes | yes |
+//! | Asymmetric, parallelogram, trapezoid, double-circle nodes | yes |
+//! | Solid `-->`, plain `---`, dotted `-.->`, thick `==>` edges | yes |
+//! | Bidirectional `<-->`, circle `--o`, cross `--x` edges | yes |
+//! | Edge labels (`\|label\|` and `-- label -->` forms) | yes |
+//! | Subgraphs with nested subgraphs | yes |
+//! | Per-subgraph `direction` override | partial (see Limitations) |
+//! | Width-constrained compaction | yes |
+//! | A\* obstacle-aware edge routing (incl. back-edge perimeter routing) | yes |
+//! | Junction merging (`┼ ├ ┤ ┬ ┴`) | yes |
+//! | `style`, `classDef`, `click`, `linkStyle` directives | silently ignored |
+//! | `sequenceDiagram` (participants, `->>`, `-->>`, `->`, `-->`) | yes |
+//! | `pie` (with optional `showData` and `title`) | yes (rendered as horizontal bar chart) |
+//! | `erDiagram` (entities + relationships with cardinality) | yes (Phase 1 — name-only boxes) |
+//! | `journey` (user-journey, section/task tree with score bars) | yes |
+//! | `gantt` (project schedule bar chart) | yes (Phase 1 — bar chart, no excludes/status tags/milestones) |
+//! | `timeline` (vertical time-period bullet list) | yes (Phase 1 — title, sections, multi-event periods; no custom themes) |
+//! | `gitGraph` (branch/commit lane diagram) | yes (Phase 1 — normal/merge/cherry-pick commits; no custom themes or orientation) |
+//! | `mindmap` (hierarchical outline tree) | yes (Phase 1 — vertical tree with root box; all shapes normalised to text; icons silently ignored) |
+//! | `quadrantChart` (2x2 priority matrix) | yes (Phase 1 — cross-axis chart with quadrant labels and proportionally-placed data points; no custom point styling or background colours) |
+//! | `requirementDiagram` (formal requirements + elements + relationships) | yes (Phase 1 — vertical box list with relationship summary; no graphical connection lines) |
+//! | `sankey-beta` / `sankey` (directed flow between named nodes) | yes (Phase 1 — grouped-arrow list layout; proportional band routing planned for Phase 2) |
+//! | `xychart-beta` / `xychart` (bar/line chart with categorical or numeric axes) | yes (Phase 1 — last bar/line series; horizontal orientation rendered vertically; no custom colours) |
+//! | `block-beta` / `block` (fixed-width block grid with directed edges) | yes (Phase 1 — rectangle blocks only; nested blocks and vertical spans ignored; edge summary as text below grid) |
+//! | `packet-beta` / `packet` (network packet header bit-range diagram) | yes (Phase 1 — fixed 32-bit row width; no custom colours) |
+//! | `architecture-beta` / `architecture` (system architecture with groups, services, and edges) | yes (Path A — groups as subgraph containers, services as nodes, edges spatially routed via Sugiyama; port specifiers stored but deferred to Path B) |
+//!
+//! ## Limitations
+//!
+//! - **Dotted junctions render as solid** — Unicode lacks dotted T-junction and
+//!   cross glyphs, so `┄`/`┆` segments that meet other edges fall back to solid
+//!   `┼`/`├`/`┤`/`┬`/`┴` at the intersection point.
+//! - **RL/BT subgraphs do not reverse internal order** — when a subgraph
+//!   overrides the direction to RL or BT, the nodes inside the subgraph are not
+//!   reordered; they are simply laid out as if the direction were LR/TD.
+//! - **Deeply-nested alternating `direction` overrides** — each subgraph is
+//!   evaluated against the top-level graph direction only. A layout such as
+//!   LR-inside-TB-inside-LR collapses the inner LR nodes but does not propagate
+//!   the correction upward through multiple nesting levels.
+//! - **Long labels in narrow columns** — the compaction pass reduces gap
+//!   widths but cannot reflow node labels; very long labels may cause nodes to
+//!   overlap when rendering into a very narrow `max_width`.
+//!
+//! ## See also
+//!
+//! [`termaid`](https://github.com/fasouto/termaid) — the Python prior art from
+//! which several rendering techniques (direction-bit canvas, barycenter heuristic
+//! constants, subgraph border padding) were adapted.
+
+#![forbid(unsafe_code)]
+
+pub mod architecture;
+pub mod block_diagram;
+pub mod class;
+pub mod detect;
+pub mod er;
+pub mod gantt;
+pub mod git_graph;
+pub mod journey;
+pub mod layout;
+pub mod mindmap;
+pub mod packet;
+pub mod parser;
+pub mod pie;
+pub mod quadrant_chart;
+pub mod render;
+pub mod requirement_diagram;
+pub mod sankey;
+pub mod sequence;
+pub mod timeline;
+pub mod types;
+pub mod xy_chart;
+
+pub use architecture::{ArchEdge, ArchGroup, ArchService, Architecture, Port};
+pub use block_diagram::{Block, BlockDiagram, BlockEdge};
+pub use class::{
+    Attribute as ClassAttribute, Class, ClassDiagram, Member, Method, RelKind, Relation,
+    Stereotype, Visibility,
+};
+pub use er::{Attribute, AttributeKey, Cardinality, Entity, ErDiagram, LineStyle, Relationship};
+pub use gantt::{GanttDiagram, GanttSection, GanttTask};
+pub use git_graph::{Branch, Commit, CommitKind, Event as GitEvent, GitGraph};
+pub use journey::{JourneyDiagram, Section, Task};
+pub use mindmap::{Mindmap, MindmapNode};
+pub use packet::{Packet, PacketField};
+pub use pie::{PieChart, PieSlice};
+pub use quadrant_chart::{AxisLabels, QuadrantChart, QuadrantLabels, QuadrantPoint};
+pub use requirement_diagram::{
+    Element as RequirementElement, RelationshipKind, Requirement, RequirementDiagram,
+    RequirementKind, RequirementRelationship, Risk, VerifyMethod,
+};
+pub use sankey::{Sankey, SankeyFlow};
+pub use sequence::{Message, MessageStyle, Participant, SequenceDiagram};
+pub use timeline::{Timeline, TimelineEntry, TimelineSection};
+pub use types::{Direction, Edge, EdgeEndpoint, EdgeStyle, Graph, Node, NodeShape};
+pub use xy_chart::{XAxis, XyChart, XyOrientation, YAxis};
+
+use detect::DiagramKind;
+use layout::layered::{LayoutBackend, LayoutConfig};
+
+// ---------------------------------------------------------------------------
+// Error type
+// ---------------------------------------------------------------------------
+
+/// All errors that can be returned by this crate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Error {
+    /// The input string was empty or contained only whitespace/comments.
+    EmptyInput,
+    /// The diagram type (e.g. `pie`, `sequenceDiagram`) is not supported.
+    ///
+    /// The inner string is the unrecognised keyword.
+    UnsupportedDiagram(String),
+    /// A syntax error was encountered during parsing.
+    ///
+    /// The inner string is a human-readable description of the problem.
+    ParseError(String),
+    /// The rendered diagram is wider than the requested hard budget.
+    ///
+    /// Only returned when [`RenderOptions::max_width_strict`] is `true` and
+    /// [`RenderOptions::max_width`] is `Some(requested)`. `actual` is the
+    /// widest rendered line in display columns; it is always `> requested`.
+    TooWide {
+        /// The requested hard budget in display columns.
+        requested: usize,
+        /// The widest rendered line in display columns.
+        actual: usize,
+    },
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::EmptyInput => write!(f, "empty or blank input"),
+            Error::UnsupportedDiagram(kind) => {
+                write!(f, "unsupported diagram type: '{kind}'")
+            }
+            Error::ParseError(msg) => write!(f, "parse error: {msg}"),
+            Error::TooWide { requested, actual } => write!(
+                f,
+                "rendered diagram is {actual} columns wide, exceeding the strict budget of {requested}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
+
+// ---------------------------------------------------------------------------
+// Public entry points
+// ---------------------------------------------------------------------------
+
+/// Render a Mermaid diagram source string to Unicode box-drawing text.
+///
+/// This is a convenience wrapper around [`render_with_width`] that does not
+/// apply any column budget — the diagram is rendered at its natural size.
+///
+/// Both `graph` and `flowchart` keywords are accepted, with any of the four
+/// direction qualifiers: `LR`, `TD`/`TB`, `RL`, `BT`.
+///
+/// # Arguments
+///
+/// * `input` — Mermaid source string, including the header line.
+///
+/// # Returns
+///
+/// A multi-line `String` containing the diagram rendered with Unicode
+/// box-drawing characters.
+///
+/// # Errors
+///
+/// - [`Error::EmptyInput`] — `input` is blank or contains only comments
+/// - [`Error::UnsupportedDiagram`] — the diagram type is not supported
+/// - [`Error::ParseError`] — the input could not be parsed
+///
+/// # Examples
+///
+/// ```
+/// let output = mermaid_text::render("graph LR; A[Start] --> B[End]").unwrap();
+/// assert!(output.contains("Start"));
+/// assert!(output.contains("End"));
+/// ```
+///
+/// ```
+/// let output = mermaid_text::render("graph TD; A[Top] --> B[Bottom]").unwrap();
+/// assert!(output.contains("Top"));
+/// assert!(output.contains("Bottom"));
+/// ```
+pub fn render(input: &str) -> Result<String, Error> {
+    render_with_width(input, None)
+}
+
+/// Render a Mermaid diagram source string to Unicode box-drawing text,
+/// optionally compacting the output to fit within a column budget.
+///
+/// When `max_width` is `Some(n)`, the renderer tries progressively smaller
+/// gap configurations — from the default down to the minimum — and returns
+/// the first result whose longest line is ≤ `n` columns. If no configuration
+/// fits, the most compact result is returned anyway (the caller can truncate
+/// or scroll as they see fit).
+///
+/// When `max_width` is `None` the default gap configuration is used and no
+/// compaction is attempted.
+///
+/// # Arguments
+///
+/// * `input`     — Mermaid source string
+/// * `max_width` — optional column budget in terminal cells
+///
+/// # Errors
+///
+/// Same as [`render()`].
+///
+/// # Examples
+///
+/// ```
+/// let output = mermaid_text::render_with_width(
+///     "graph LR; A[Start] --> B[End]",
+///     Some(80),
+/// ).unwrap();
+/// assert!(output.contains("Start"));
+/// ```
+pub fn render_with_width(input: &str, max_width: Option<usize>) -> Result<String, Error> {
+    // 1. Detect diagram type.
+    let kind = detect::detect(input)?;
+
+    let graph = match kind {
+        DiagramKind::Sequence => {
+            // Sequence diagrams have a fixed layout; no compaction pass.
+            let diag = parser::sequence::parse(input)?;
+            return Ok(render::sequence::render(&diag));
+        }
+        DiagramKind::Pie => {
+            // Pie charts render as a horizontal bar chart — fixed layout,
+            // honours the optional width budget directly.
+            let chart = parser::pie::parse(input)?;
+            return Ok(render::pie::render(&chart, max_width));
+        }
+        DiagramKind::Er => {
+            // Entity-relationship diagrams have their own layout
+            // pipeline (no Sugiyama, no edge router).
+            let chart = parser::er::parse(input)?;
+            return Ok(render::er::render(&chart, max_width));
+        }
+        DiagramKind::Class => {
+            // Class diagrams use the layered layout with direct L-route edge
+            // painting — no Sugiyama, no shared A* grid.
+            let chart = parser::class::parse(input)?;
+            return Ok(render::class::render(&chart, max_width));
+        }
+        DiagramKind::Journey => {
+            // Journey diagrams have a fixed section/task tree layout;
+            // no compaction pass needed.
+            let diag = parser::journey::parse(input)?;
+            return Ok(render::journey::render(&diag, max_width));
+        }
+        DiagramKind::Gantt => {
+            // Gantt diagrams render as a horizontal bar chart — fixed layout,
+            // honours the optional width budget directly.
+            let diag = parser::gantt::parse(input)?;
+            return Ok(render::gantt::render(&diag, max_width));
+        }
+        DiagramKind::Timeline => {
+            // Timeline diagrams render as a vertical bullet-on-a-wire flow —
+            // fixed layout, honours the optional width budget for truncation.
+            let diag = parser::timeline::parse(input)?;
+            return Ok(render::timeline::render(&diag, max_width));
+        }
+        DiagramKind::GitGraph => {
+            // Git graph diagrams render as a lane-based commit graph —
+            // fixed layout, honours the optional width budget for id truncation.
+            let diag = parser::git_graph::parse(input)?;
+            return Ok(render::git_graph::render(&diag, max_width));
+        }
+        DiagramKind::Mindmap => {
+            // Mindmap diagrams render as a vertical tree with the root in a
+            // rounded box and children branching below — fixed layout, honours
+            // the optional width budget for text truncation.
+            let diag = parser::mindmap::parse(input)?;
+            return Ok(render::mindmap::render(&diag, max_width));
+        }
+        DiagramKind::QuadrantChart => {
+            // Quadrant chart diagrams render as a 2x2 priority matrix with
+            // labeled quadrants and proportionally-placed data points —
+            // fixed layout, honours the optional width budget.
+            let diag = parser::quadrant_chart::parse(input)?;
+            return Ok(render::quadrant_chart::render(&diag, max_width));
+        }
+        DiagramKind::RequirementDiagram => {
+            // Requirement diagrams render as labeled boxes (requirements +
+            // elements) with a relationship summary — fixed layout, honours
+            // the optional width budget for content truncation.
+            let diag = parser::requirement_diagram::parse(input)?;
+            return Ok(render::requirement_diagram::render(&diag, max_width));
+        }
+        DiagramKind::Sankey => {
+            // Sankey diagrams render as a grouped-arrow list with source
+            // nodes as headers and indented arcs — fixed layout, honours the
+            // optional width budget for line truncation.
+            let diag = parser::sankey::parse(input)?;
+            return Ok(render::sankey::render(&diag, max_width));
+        }
+        DiagramKind::XyChart => {
+            // XY chart diagrams render as a bar/line chart — fixed layout,
+            // honours the optional width budget for column scaling.
+            let diag = parser::xy_chart::parse(input)?;
+            return Ok(render::xy_chart::render(&diag, max_width));
+        }
+        DiagramKind::BlockDiagram => {
+            // Block diagrams render as a fixed-width grid of rectangle blocks
+            // with an edge summary below — fixed layout, honours the optional
+            // width budget for grid column scaling.
+            let diag = parser::block_diagram::parse(input)?;
+            return Ok(render::block_diagram::render(&diag, max_width));
+        }
+        DiagramKind::Architecture => {
+            // Architecture diagrams render as labeled group boxes containing
+            // service boxes with a connection summary below — fixed layout,
+            // honours the optional width budget for service label truncation.
+            let diag = parser::architecture::parse(input)?;
+            return Ok(render::architecture::render(&diag, max_width));
+        }
+        DiagramKind::Packet => {
+            // Packet diagrams render as a 32-bit-wide row table with field
+            // labels in their bit ranges and a ruler above each row.
+            let diag = parser::packet::parse(input)?;
+            return Ok(render::packet::render(&diag, max_width));
+        }
+        DiagramKind::Flowchart => parser::parse(input)?,
+        DiagramKind::State => {
+            // State diagrams transform into a flowchart Graph and ride the
+            // same compaction + render pipeline.
+            parser::state::parse(input)?
+        }
+    };
+
+    // 3. Render with default config first.
+    let default_cfg = LayoutConfig::default();
+    let result = render_with_config(&graph, &default_cfg);
+
+    let Some(budget) = max_width else {
+        // No width constraint — return the natural-size rendering.
+        return Ok(result);
+    };
+
+    if max_line_width(&result) <= budget {
+        return Ok(result);
+    }
+
+    // 4. Progressive compaction: try smaller gap configurations in order.
+    //    Each step reduces both the inter-layer gap and the label padding.
+    //    We try four levels; the last one is the most compact.
+    const COMPACT_CONFIGS: &[LayoutConfig] = &[
+        LayoutConfig::with_gaps(4, 2),
+        LayoutConfig::with_gaps(2, 1),
+        LayoutConfig::with_gaps(1, 0),
+    ];
+
+    // Keep the most compact output in case nothing fits.
+    let mut best = render_with_config(&graph, COMPACT_CONFIGS.last().expect("non-empty"));
+
+    for cfg in COMPACT_CONFIGS {
+        let candidate = render_with_config(&graph, cfg);
+        if max_line_width(&candidate) <= budget {
+            return Ok(candidate);
+        }
+        // Track the last attempt as the fallback.
+        best = candidate;
+    }
+
+    // 5. Label-wrap fallback: gap reduction alone couldn't meet the budget.
+    //    Estimate a target max label width that would allow the diagram to fit,
+    //    then re-render with labels wrapped to that width.
+    let actual_w = max_line_width(&best);
+    if actual_w > budget {
+        let max_lbl = max_node_label_width(&graph);
+        if max_lbl > 0 {
+            // Scale the widest label proportionally: target = max_lbl * budget /
+            // actual_w. Apply a conservative floor of 6 display columns so we
+            // never produce a degenerate single-character-per-line result.
+            let target_lbl = ((max_lbl * budget) / actual_w).max(6);
+            if target_lbl < max_lbl {
+                let wrapped = graph_with_wrapped_labels(&graph, target_lbl);
+                let min_cfg = COMPACT_CONFIGS.last().expect("non-empty");
+                let candidate = render_with_config(&wrapped, min_cfg);
+                if max_line_width(&candidate) <= budget {
+                    return Ok(candidate);
+                }
+                // Even with wrapping the diagram still overflows — return the
+                // wrapped version as best-effort (it's narrower than `best`).
+                if max_line_width(&candidate) < actual_w {
+                    best = candidate;
+                }
+            }
+        }
+    }
+
+    Ok(best)
+}
+
+/// Render a Mermaid diagram source string to **ASCII-only** text.
+///
+/// Identical to [`render`] in every way except the output is post-processed by
+/// [`to_ascii`] to replace all Unicode box-drawing and arrow glyphs with plain
+/// ASCII equivalents (`+`, `-`, `|`, `>`, `<`, `v`, `^`, `*`, `o`, `x`, `:`).
+/// Every character in the returned string is guaranteed to be `< 0x80`.
+///
+/// This is useful for:
+/// - SSH sessions to hosts without Unicode-capable terminal fonts.
+/// - CI log aggregators that strip non-ASCII bytes.
+/// - Terminals configured with legacy code pages.
+///
+/// The underlying layout and routing are identical to the Unicode renderer;
+/// only the final glyph substitution differs.
+///
+/// # Arguments
+///
+/// * `input` — Mermaid source string, including the header line.
+///
+/// # Errors
+///
+/// Same as [`render`].
+///
+/// # Examples
+///
+/// ```
+/// let out = mermaid_text::render_ascii("graph LR; A[Start] --> B[End]").unwrap();
+/// assert!(out.contains("Start"));
+/// assert!(out.contains("End"));
+/// assert!(out.is_ascii(), "non-ASCII char found");
+/// ```
+pub fn render_ascii(input: &str) -> Result<String, Error> {
+    render_ascii_with_width(input, None)
+}
+
+/// Render a Mermaid diagram source string to **ASCII-only** text, optionally
+/// compacting the output to fit within a column budget.
+///
+/// Identical to [`render_with_width`] except the final Unicode output is
+/// post-processed by [`to_ascii`]. Every character in the returned string is
+/// guaranteed to be `< 0x80`.
+///
+/// When `max_width` is `Some(n)`, the same progressive compaction as
+/// [`render_with_width`] is attempted before the ASCII substitution is applied.
+///
+/// # Arguments
+///
+/// * `input`     — Mermaid source string
+/// * `max_width` — optional column budget in terminal cells
+///
+/// # Errors
+///
+/// Same as [`render`].
+///
+/// # Examples
+///
+/// ```
+/// let out = mermaid_text::render_ascii_with_width(
+///     "graph LR; A[Start] --> B[End]",
+///     Some(80),
+/// ).unwrap();
+/// assert!(out.contains("Start"));
+/// assert!(out.is_ascii(), "non-ASCII char found");
+/// ```
+pub fn render_ascii_with_width(input: &str, max_width: Option<usize>) -> Result<String, Error> {
+    let unicode = render_with_width(input, max_width)?;
+    Ok(to_ascii(&unicode))
+}
+
+/// Bundle of optional rendering knobs accepted by [`render_with_options`].
+///
+/// All fields default to "off / unconstrained": `RenderOptions::default()`
+/// yields a result identical to [`render`].
+///
+/// ANSI color is opt-in. When `color` is `false` (the default) the output is
+/// guaranteed to contain zero ANSI escape bytes, matching the historical
+/// "deterministic, newline-delimited" contract.
+#[derive(Debug, Clone, Default)]
+pub struct RenderOptions {
+    /// Optional column budget. When `Some(n)`, progressive compaction is
+    /// attempted to keep the longest line within `n` cells.
+    ///
+    /// By default this is a **soft hint**: some diagram kinds (sequence, pie,
+    /// ER) have fixed layouts and ignore it, and even the kinds that honour it
+    /// can overflow their minimum column widths. Set [`max_width_strict`] to
+    /// turn it into a hard budget.
+    ///
+    /// [`max_width_strict`]: RenderOptions::max_width_strict
+    pub max_width: Option<usize>,
+    /// Make [`max_width`] a **hard budget** rather than a soft hint. When
+    /// `true` and `max_width` is `Some(n)`, a render whose widest line still
+    /// exceeds `n` display columns returns [`Error::TooWide`] instead of an
+    /// over-wide string — letting an embedder with a fixed panel width fall
+    /// back knowingly (e.g. to fenced source) without post-measuring every
+    /// line itself. Width is measured in display columns and ignores ANSI
+    /// escapes emitted by `color`. No effect when `max_width` is `None`.
+    ///
+    /// Off by default, so existing callers see no behaviour change.
+    ///
+    /// [`max_width`]: RenderOptions::max_width
+    pub max_width_strict: bool,
+    /// Replace Unicode box-drawing glyphs with ASCII equivalents (see
+    /// [`to_ascii`]). Composes freely with `color`.
+    pub ascii: bool,
+    /// Emit ANSI 24-bit color SGR sequences derived from `style` /
+    /// `linkStyle` directives. Off by default so existing callers see no
+    /// behaviour change.
+    pub color: bool,
+    /// Choose the layered-layout backend.
+    ///
+    /// Defaults to [`LayoutBackend::Sugiyama`] since 0.17.0 — the
+    /// `ascii-dag`-backed layout with proper crossing minimisation,
+    /// long-edge dummy nodes, and Brandes-Köpf coordinate assignment.
+    ///
+    /// Set to [`LayoutBackend::Native`] to use the in-house layered
+    /// layout explicitly (e.g. to keep byte-identical output with
+    /// pre-0.17.0 renders, or for edge-style features not yet fully
+    /// covered by the Sugiyama wrapper).
+    pub backend: LayoutBackend,
+    /// Optional explicit `(layer_gap, node_gap)` override for flowchart
+    /// and state diagrams. When set, bypasses the
+    /// `max_width`-driven compaction pipeline entirely and renders
+    /// directly with the given gaps. Lets callers expose continuous
+    /// zoom/spacing controls (e.g. a `+`/`-` keymap in a viewer) without
+    /// being limited to the three preset compaction levels.
+    ///
+    /// Ignored by sequence, pie, and erDiagram (those have their own
+    /// layout pipelines).
+    pub gaps_override: Option<(usize, usize)>,
+}
+
+/// Render a Mermaid diagram with the full set of opt-in knobs.
+///
+/// This is the most flexible public entry point. Existing helpers
+/// ([`render`], [`render_with_width`], [`render_ascii`],
+/// [`render_ascii_with_width`]) are thin wrappers over this function and
+/// remain available for callers that don't need ANSI color.
+///
+/// # Errors
+///
+/// Same as [`render`].
+///
+/// # Examples
+///
+/// ```
+/// use mermaid_text::{render_with_options, RenderOptions};
+///
+/// let opts = RenderOptions { color: true, ..Default::default() };
+/// let out = render_with_options(
+///     "graph LR\nA[Start] --> B[End]\nstyle A fill:#336,color:#fff",
+///     &opts,
+/// ).unwrap();
+/// // ANSI 24-bit color escapes are present.
+/// assert!(out.contains("\x1b[38;2;"));
+/// ```
+pub fn render_with_options(input: &str, opts: &RenderOptions) -> Result<String, Error> {
+    let kind = detect::detect(input)?;
+
+    let unicode = match kind {
+        DiagramKind::Sequence => {
+            // Sequence diagrams ignore color and width opts (no compaction
+            // pipeline, no style directives wired up yet).
+            let diag = parser::sequence::parse(input)?;
+            render::sequence::render(&diag)
+        }
+        DiagramKind::Pie => {
+            // Pie charts honour both `max_width` (bar columns scale to fit)
+            // and `color` (distinct 24-bit ANSI hues per slice).
+            let chart = parser::pie::parse(input)?;
+            if opts.color {
+                render::pie::render_color(&chart, opts.max_width)
+            } else {
+                render::pie::render(&chart, opts.max_width)
+            }
+        }
+        DiagramKind::Er => {
+            // erDiagram has its own layout pipeline; honours
+            // `max_width` (Phase 3 will use it for grid reflow).
+            let chart = parser::er::parse(input)?;
+            render::er::render(&chart, opts.max_width)
+        }
+        DiagramKind::Class => {
+            // Class diagrams use their own layout pipeline (layered + direct
+            // L-route painting). Color and compaction knobs from RenderOptions
+            // are silently ignored in v1.
+            let chart = parser::class::parse(input)?;
+            render::class::render(&chart, opts.max_width)
+        }
+        DiagramKind::Journey => {
+            // Journey diagrams have a fixed layout; color/compaction opts
+            // are not applicable.
+            let diag = parser::journey::parse(input)?;
+            render::journey::render(&diag, opts.max_width)
+        }
+        DiagramKind::Gantt => {
+            // Gantt diagrams render as a horizontal bar chart. Color opts
+            // are not applicable (monochrome only in Phase 1).
+            let diag = parser::gantt::parse(input)?;
+            render::gantt::render(&diag, opts.max_width)
+        }
+        DiagramKind::Timeline => {
+            // Timeline diagrams render as a vertical bullet-on-a-wire flow.
+            // Color opts are not applicable in Phase 1.
+            let diag = parser::timeline::parse(input)?;
+            render::timeline::render(&diag, opts.max_width)
+        }
+        DiagramKind::GitGraph => {
+            // Git graph diagrams render as a lane-based commit graph.
+            // Color opts are not applicable in Phase 1.
+            let diag = parser::git_graph::parse(input)?;
+            render::git_graph::render(&diag, opts.max_width)
+        }
+        DiagramKind::Mindmap => {
+            // Mindmap diagrams render as a vertical tree.
+            // Color opts are not applicable in Phase 1.
+            let diag = parser::mindmap::parse(input)?;
+            render::mindmap::render(&diag, opts.max_width)
+        }
+        DiagramKind::QuadrantChart => {
+            // Quadrant chart diagrams render as a 2x2 priority matrix.
+            // Color opts are not applicable in Phase 1.
+            let diag = parser::quadrant_chart::parse(input)?;
+            render::quadrant_chart::render(&diag, opts.max_width)
+        }
+        DiagramKind::RequirementDiagram => {
+            // Requirement diagrams render as labeled boxes with relationship
+            // summary. Color opts are not applicable in Phase 1.
+            let diag = parser::requirement_diagram::parse(input)?;
+            render::requirement_diagram::render(&diag, opts.max_width)
+        }
+        DiagramKind::Sankey => {
+            // Sankey diagrams render as a grouped-arrow list.
+            // Color opts are not applicable in Phase 1.
+            let diag = parser::sankey::parse(input)?;
+            render::sankey::render(&diag, opts.max_width)
+        }
+        DiagramKind::XyChart => {
+            // XY chart diagrams render as a bar/line chart.
+            // Color opts are not applicable in Phase 1.
+            let diag = parser::xy_chart::parse(input)?;
+            render::xy_chart::render(&diag, opts.max_width)
+        }
+        DiagramKind::BlockDiagram => {
+            // Block diagrams render as a fixed-width grid of rectangle blocks.
+            // Color opts are not applicable in Phase 1.
+            let diag = parser::block_diagram::parse(input)?;
+            render::block_diagram::render(&diag, opts.max_width)
+        }
+        DiagramKind::Architecture => {
+            // Architecture diagrams render as labeled group boxes containing
+            // service boxes with a connection summary below.
+            // Color opts are not applicable in Phase 1.
+            let diag = parser::architecture::parse(input)?;
+            render::architecture::render(&diag, opts.max_width)
+        }
+        DiagramKind::Packet => {
+            // Packet diagrams render as a 32-bit-wide row table with field
+            // labels in their bit ranges and a bit-number ruler above each row.
+            // Color opts are not applicable in Phase 1.
+            let diag = parser::packet::parse(input)?;
+            render::packet::render(&diag, opts.max_width)
+        }
+        DiagramKind::Flowchart => {
+            let graph = parser::parse(input)?;
+            render_flowchart_with_color(
+                &graph,
+                opts.max_width,
+                opts.color,
+                opts.backend,
+                opts.gaps_override,
+            )
+        }
+        DiagramKind::State => {
+            // State diagrams become a flowchart Graph at parse time, so the
+            // same compaction + color pipeline applies.
+            let graph = parser::state::parse(input)?;
+            render_flowchart_with_color(
+                &graph,
+                opts.max_width,
+                opts.color,
+                opts.backend,
+                opts.gaps_override,
+            )
+        }
+    };
+
+    let out = if opts.ascii {
+        to_ascii(&unicode)
+    } else {
+        unicode
+    };
+
+    // Hard width budget. When strict mode is on and a budget is set, the
+    // widest rendered line must fit or we surface `Error::TooWide` so the
+    // caller can fall back knowingly instead of post-measuring every line.
+    // Measured after the ASCII pass (ASCII substitution is width-preserving,
+    // but this also covers any future non-1:1 mapping).
+    if opts.max_width_strict
+        && let Some(budget) = opts.max_width
+    {
+        let actual = out.lines().map(visible_width).max().unwrap_or(0);
+        if actual > budget {
+            return Err(Error::TooWide {
+                requested: budget,
+                actual,
+            });
+        }
+    }
+
+    Ok(out)
+}
+
+/// Display-column width of a single line, ignoring the ANSI escape sequences
+/// that `color: true` may emit (24-bit SGR colour runs and OSC-8 hyperlinks).
+///
+/// When `color` is off the output contains zero escapes and this is exactly
+/// `UnicodeWidthStr::width`; the escape-skipping states only matter for the
+/// coloured path. Escape bytes must not count toward the width budget — they
+/// occupy no terminal cells.
+fn visible_width(line: &str) -> usize {
+    use unicode_width::UnicodeWidthChar;
+    let mut width = 0;
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            match chars.next() {
+                // CSI (e.g. SGR `\x1b[…m`): consume up to and including the
+                // final byte in the 0x40..=0x7E range.
+                Some('[') => {
+                    for f in chars.by_ref() {
+                        if ('\u{40}'..='\u{7e}').contains(&f) {
+                            break;
+                        }
+                    }
+                }
+                // OSC (e.g. OSC-8 hyperlink `\x1b]8;;…`): terminated by BEL
+                // (`\x07`) or ST (`\x1b\`).
+                Some(']') => {
+                    while let Some(f) = chars.next() {
+                        if f == '\x07' {
+                            break;
+                        }
+                        if f == '\x1b' {
+                            // Consume the `\` of the ST terminator if present.
+                            let mut lookahead = chars.clone();
+                            if lookahead.next() == Some('\\') {
+                                chars = lookahead;
+                            }
+                            break;
+                        }
+                    }
+                }
+                // Lone ESC or other escape form: contributes no width.
+                _ => {}
+            }
+            continue;
+        }
+        width += UnicodeWidthChar::width(c).unwrap_or(0);
+    }
+    width
+}
+
+/// Run the flowchart compaction pipeline and emit the chosen result with or
+/// without color. Compaction is always measured in colorless mode (ANSI
+/// escapes confuse `unicode-width`); the final pass re-renders the winning
+/// config in the caller's preferred mode.
+fn render_flowchart_with_color(
+    graph: &crate::types::Graph,
+    max_width: Option<usize>,
+    with_color: bool,
+    backend: LayoutBackend,
+    gaps_override: Option<(usize, usize)>,
+) -> String {
+    let with_backend = |c: LayoutConfig| LayoutConfig { backend, ..c };
+
+    // Explicit gap override skips the whole compaction pipeline — render
+    // directly at the requested spacing. This is the path used by the
+    // viewer's `+`/`-` modal zoom so each press maps to a deterministic
+    // layout rather than to one of three preset compaction levels.
+    if let Some((layer_gap, node_gap)) = gaps_override {
+        let cfg = with_backend(LayoutConfig::with_gaps(layer_gap, node_gap));
+        return render_with_config_color(graph, &cfg, with_color);
+    }
+
+    let compact_configs: [LayoutConfig; 3] = [
+        with_backend(LayoutConfig::with_gaps(4, 2)),
+        with_backend(LayoutConfig::with_gaps(2, 1)),
+        with_backend(LayoutConfig::with_gaps(1, 0)),
+    ];
+
+    let default_cfg = with_backend(LayoutConfig::default());
+
+    // No width constraint — natural-size rendering.
+    let Some(budget) = max_width else {
+        return render_with_config_color(graph, &default_cfg, with_color);
+    };
+
+    // Measure with the colorless renderer so SGR bytes don't skew the width.
+    let plain = render_with_config(graph, &default_cfg);
+    if max_line_width(&plain) <= budget {
+        return if with_color {
+            render_with_config_color(graph, &default_cfg, true)
+        } else {
+            plain
+        };
+    }
+
+    for cfg in &compact_configs {
+        let candidate = render_with_config(graph, cfg);
+        if max_line_width(&candidate) <= budget {
+            return if with_color {
+                render_with_config_color(graph, cfg, true)
+            } else {
+                candidate
+            };
+        }
+    }
+
+    // Label-wrap fallback: estimate a target label width and re-render.
+    let last = compact_configs.last().expect("non-empty");
+    let best_plain = render_with_config(graph, last);
+    let actual_w = max_line_width(&best_plain);
+    if actual_w > budget {
+        let max_lbl = max_node_label_width(graph);
+        if max_lbl > 0 {
+            let target_lbl = ((max_lbl * budget) / actual_w).max(6);
+            if target_lbl < max_lbl {
+                let wrapped = graph_with_wrapped_labels(graph, target_lbl);
+                let candidate = render_with_config(&wrapped, last);
+                if max_line_width(&candidate) <= budget || max_line_width(&candidate) < actual_w {
+                    return if with_color {
+                        render_with_config_color(&wrapped, last, true)
+                    } else {
+                        candidate
+                    };
+                }
+            }
+        }
+    }
+
+    // Nothing fit; emit the most compact candidate.
+    render_with_config_color(graph, last, with_color)
+}
+
+/// Convert a Unicode-rendered diagram string to its ASCII equivalent.
+///
+/// Each Unicode box-drawing or arrow glyph is replaced with the closest
+/// printable ASCII character. All other characters (spaces, alphanumerics,
+/// punctuation already in the ASCII range) pass through unchanged.
+///
+/// This function is a pure, allocation-efficient char-by-char substitution:
+/// it pre-allocates the output with the input's byte length and never
+/// revisits already-written characters.
+///
+/// # Arguments
+///
+/// * `s` — A Unicode string produced by the rendering pipeline.
+///
+/// # Returns
+///
+/// A `String` in which every character satisfies `c.is_ascii()`.
+///
+/// # Examples
+///
+/// ```
+/// use mermaid_text::to_ascii;
+///
+/// assert_eq!(to_ascii("┌─┐"), "+-+");
+/// assert_eq!(to_ascii("│A│"), "|A|");
+/// assert_eq!(to_ascii("╭─╮"), "+-+");
+/// assert_eq!(to_ascii("▸"), ">");
+/// assert_eq!(to_ascii("▾"), "v");
+/// assert_eq!(to_ascii("◇"), "*");
+/// assert_eq!(to_ascii("◆"), "#");
+/// assert_eq!(to_ascii("△"), "^");
+/// ```
+pub fn to_ascii(s: &str) -> String {
+    // Pre-allocate with the same byte length as the input. Because every
+    // Unicode glyph we substitute maps to a single ASCII byte, the output will
+    // always be <= the input in byte length (multi-byte chars shrink to 1 byte).
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        // Match against every Unicode glyph the renderer produces and map it to
+        // its ASCII equivalent. The match is exhaustive over the known glyph
+        // set; any character not listed here (ASCII text, spaces, newlines) is
+        // passed through with `ch` unchanged. Thin and thick box-drawing
+        // characters that differ in Unicode are collapsed to the same ASCII
+        // glyph because ASCII has no concept of line weight.
+        let ascii_ch = match ch {
+            // ---- Horizontal lines ----
+            '─' | '━' | '┄' => '-',
+            // ---- Vertical lines ----
+            '│' | '┃' | '┆' => '|',
+            // ---- Corners (all four styles → +) ----
+            '┌' | '┐' | '└' | '┘' => '+',
+            '╭' | '╮' | '╰' | '╯' => '+',
+            // Thick corners
+            '┏' | '┓' | '┗' | '┛' => '+',
+            // ---- T-junctions and cross ----
+            '├' | '┤' | '┬' | '┴' | '┼' => '+',
+            // Thick T-junctions and cross
+            '┣' | '┫' | '┳' | '┻' | '╋' => '+',
+            // ---- Arrow tips ----
+            '▸' => '>',
+            '◂' => '<',
+            '▾' => 'v',
+            '▴' => '^',
+            // ---- Gantt bar characters and annotation glyphs ----
+            '\u{2588}' => '#', // █ FULL BLOCK → #
+            '\u{2591}' => '.', // ░ LIGHT SHADE → .
+            '\u{2192}' => '>', // → RIGHTWARDS ARROW (used in date range "start → end")
+            // ---- Endpoint / decorator glyphs ----
+            '◇' => '*',
+            '◆' => '#',
+            '△' => '^',
+            '●' => '*',
+            '○' | '◯' => 'o',
+            '×' => 'x',
+            // ---- Exotic double-line / mixed box chars (subgraph labels etc.) ----
+            '║' | '╵' | '╷' | '╴' | '╶' => '|',
+            '═' => '-',
+            '╓' | '╖' | '╙' | '╜' | '╔' | '╗' | '╚' | '╝' => '+',
+            '╠' | '╣' | '╦' | '╩' | '╬' => '+',
+            // Pass-through: ASCII chars, spaces, newlines, labels.
+            other => other,
+        };
+        out.push(ascii_ch);
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+/// Render a pre-parsed `graph` using the given layout configuration.
+fn render_with_config(graph: &crate::types::Graph, config: &LayoutConfig) -> String {
+    render_with_config_color(graph, config, false)
+}
+
+/// Same as [`render_with_config`] but with optional ANSI color output.
+fn render_with_config_color(
+    graph: &crate::types::Graph,
+    config: &LayoutConfig,
+    with_color: bool,
+) -> String {
+    #[allow(deprecated)] // LayeredLegacy is handled explicitly as an alias for Native.
+    let layout::layered::LayoutResult { mut positions, .. } = match config.backend {
+        LayoutBackend::Sugiyama => layout::sugiyama::sugiyama_layout(graph, config),
+        // Native and LayeredLegacy both route to the in-house layered pipeline.
+        // LayeredLegacy is a deprecated alias (removed in 0.18.0); matching it
+        // here ensures callers who still pass it get the expected behaviour
+        // rather than a compile error.
+        LayoutBackend::Native | LayoutBackend::LayeredLegacy => {
+            layout::layered::layout(graph, config)
+        }
+    };
+
+    if !graph.subgraphs.is_empty() {
+        let (col_offset, row_offset) = subgraph_position_offset(graph, &positions);
+        if col_offset != 0 || row_offset != 0 {
+            for (col, row) in positions.values_mut() {
+                *col += col_offset;
+                *row += row_offset;
+            }
+        }
+    }
+
+    let sg_bounds = layout::subgraph::compute_subgraph_bounds(graph, &positions);
+    if with_color {
+        render::render_color(graph, &positions, &sg_bounds)
+    } else {
+        render::render(graph, &positions, &sg_bounds)
+    }
+}
+
+/// Compute the `(col_offset, row_offset)` shift that needs to be applied
+/// to every node position so that the innermost subgraph members have
+/// enough space above and to the left for all enclosing subgraph
+/// borders.
+///
+/// Each nesting level needs `SG_BORDER_PAD` cells of breathing room.
+/// For a node at depth `d` (inside `d` nested subgraphs), we need at
+/// least `SG_BORDER_PAD * (d + 1)` free rows/cols before the node's
+/// top-left corner so that every enclosing border can be drawn without
+/// `saturating_sub` clipping to 0.
+///
+/// Pure (read-only) so the caller can apply the same shift uniformly
+/// to all node positions.
+fn subgraph_position_offset(
+    graph: &crate::types::Graph,
+    positions: &std::collections::HashMap<String, (usize, usize)>,
+) -> (usize, usize) {
+    use layout::subgraph::SG_BORDER_PAD;
+
+    let node_sg_map = graph.node_to_subgraph();
+    let max_depth = compute_max_nesting_depth(graph);
+    let required_pad = SG_BORDER_PAD * (max_depth + 1);
+
+    let mut min_col = usize::MAX;
+    let mut min_row = usize::MAX;
+    for (node_id, &(col, row)) in positions.iter() {
+        if node_sg_map.contains_key(node_id) {
+            min_col = min_col.min(col);
+            min_row = min_row.min(row);
+        }
+    }
+    if min_col == usize::MAX {
+        return (0, 0);
+    }
+    (
+        required_pad.saturating_sub(min_col),
+        required_pad.saturating_sub(min_row),
+    )
+}
+
+/// Compute the maximum nesting depth of any subgraph in the graph.
+///
+/// A top-level subgraph has depth 0; a subgraph inside it has depth 1, etc.
+fn compute_max_nesting_depth(graph: &crate::types::Graph) -> usize {
+    fn depth_of(graph: &crate::types::Graph, sg: &crate::types::Subgraph, cur: usize) -> usize {
+        let mut max = cur;
+        for child_id in &sg.subgraph_ids {
+            if let Some(child) = graph.find_subgraph(child_id) {
+                max = max.max(depth_of(graph, child, cur + 1));
+            }
+        }
+        max
+    }
+
+    graph
+        .subgraphs
+        .iter()
+        .map(|sg| depth_of(graph, sg, 0))
+        .max()
+        .unwrap_or(0)
+}
+
+/// Return the maximum display-column width across all lines of `text`.
+///
+/// Uses [`unicode_width`] so multi-byte characters are counted correctly.
+fn max_line_width(text: &str) -> usize {
+    text.lines()
+        .map(unicode_width::UnicodeWidthStr::width)
+        .max()
+        .unwrap_or(0)
+}
+
+/// Wrap a single label string to at most `max_chars` display columns per line.
+///
+/// Splitting strategy (greedy, word-boundary preferred):
+/// 1. Split on whitespace. Accumulate words onto the current line until
+///    adding the next word would exceed `max_chars`.
+/// 2. If a single word is wider than `max_chars`, break it mid-word at
+///    exactly `max_chars` characters (hard break).
+///
+/// Returns the same string unchanged when every line already fits within
+/// `max_chars`, so callers do not need to guard the call site.
+///
+/// `max_chars` is measured in Unicode display columns (via `unicode-width`).
+/// A minimum of 1 is enforced to avoid an infinite loop on degenerate inputs.
+fn wrap_label(text: &str, max_chars: usize) -> String {
+    use unicode_width::UnicodeWidthChar;
+    use unicode_width::UnicodeWidthStr;
+
+    // Clamp to at least 1 so we never spin forever.
+    let max_chars = max_chars.max(1);
+
+    // Fast path: already fits on every existing line.
+    if text.lines().all(|l| UnicodeWidthStr::width(l) <= max_chars) {
+        return text.to_owned();
+    }
+
+    let mut out = String::with_capacity(text.len());
+    // Process each pre-existing line separately so author-inserted `\n` are
+    // preserved (the state-diagram parser already produces multi-line labels).
+    for (line_idx, line) in text.lines().enumerate() {
+        if line_idx > 0 {
+            out.push('\n');
+        }
+        if UnicodeWidthStr::width(line) <= max_chars {
+            out.push_str(line);
+            continue;
+        }
+        // Word-wrap this line.
+        let mut current_w = 0usize;
+        let mut first_word_on_line = true;
+        for word in line.split_whitespace() {
+            let word_w = UnicodeWidthStr::width(word);
+            if first_word_on_line {
+                // First word on a fresh line: always emit it (possibly with a
+                // hard mid-word break if it alone exceeds the budget).
+                if word_w <= max_chars {
+                    out.push_str(word);
+                    current_w = word_w;
+                } else {
+                    // Hard break: emit max_chars columns, then push a newline
+                    // and continue with the remainder as a new "word".
+                    let mut col = 0usize;
+                    for ch in word.chars() {
+                        let ch_w = UnicodeWidthChar::width(ch).unwrap_or(1);
+                        if col + ch_w > max_chars {
+                            out.push('\n');
+                            col = 0;
+                        }
+                        out.push(ch);
+                        col += ch_w;
+                    }
+                    current_w = col;
+                }
+                first_word_on_line = false;
+            } else {
+                // Subsequent word: fits on current line with a space separator?
+                let needed = current_w + 1 + word_w;
+                if needed <= max_chars {
+                    out.push(' ');
+                    out.push_str(word);
+                    current_w = needed;
+                } else {
+                    // Start a new line.
+                    out.push('\n');
+                    if word_w <= max_chars {
+                        out.push_str(word);
+                        current_w = word_w;
+                    } else {
+                        // Hard break within this word too.
+                        let mut col = 0usize;
+                        for ch in word.chars() {
+                            let ch_w = UnicodeWidthChar::width(ch).unwrap_or(1);
+                            if col + ch_w > max_chars {
+                                out.push('\n');
+                                col = 0;
+                            }
+                            out.push(ch);
+                            col += ch_w;
+                        }
+                        current_w = col;
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Return the widest node label width (in display columns) across all nodes
+/// in `graph`. Returns 0 for graphs with no nodes.
+fn max_node_label_width(graph: &crate::types::Graph) -> usize {
+    graph
+        .nodes
+        .iter()
+        .map(|n| n.label_width())
+        .max()
+        .unwrap_or(0)
+}
+
+/// Clone `graph` and apply `wrap_label(label, max_chars)` to every node label.
+///
+/// Only nodes whose label already exceeds `max_chars` display columns are
+/// modified; shorter labels pass through unchanged.
+fn graph_with_wrapped_labels(graph: &crate::types::Graph, max_chars: usize) -> crate::types::Graph {
+    let mut g = graph.clone();
+    for node in &mut g.nodes {
+        node.label = wrap_label(&node.label, max_chars);
+    }
+    g
+}
+
+// ---------------------------------------------------------------------------
+// Integration tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---- Rendering tests --------------------------------------------------
+
+    #[test]
+    fn render_simple_lr_flowchart() {
+        let out = render("graph LR; A-->B-->C").unwrap();
+        assert!(out.contains('A'), "missing A in:\n{out}");
+        assert!(out.contains('B'), "missing B in:\n{out}");
+        assert!(out.contains('C'), "missing C in:\n{out}");
+        // Should contain at least one right arrow
+        assert!(
+            out.contains('▸') || out.contains('-'),
+            "no arrow found in:\n{out}"
+        );
+    }
+
+    #[test]
+    fn render_simple_td_flowchart() {
+        let out = render("graph TD; A-->B").unwrap();
+        // In TD layout, A should appear on an earlier row than B.
+        // Simplest proxy: A appears before B in the string.
+        let a_pos = out.find('A').unwrap_or(usize::MAX);
+        let b_pos = out.find('B').unwrap_or(usize::MAX);
+        assert!(a_pos < b_pos, "expected A before B in TD layout:\n{out}");
+        // TD layout should have a down arrow
+        assert!(out.contains('▾'), "missing down arrow in:\n{out}");
+    }
+
+    #[test]
+    fn render_labeled_nodes() {
+        let out = render("graph LR; A[Start] --> B[End]").unwrap();
+        assert!(out.contains("Start"), "missing 'Start' in:\n{out}");
+        assert!(out.contains("End"), "missing 'End' in:\n{out}");
+        // Rectangle box corners should be present
+        assert!(
+            out.contains('┌') || out.contains('╭'),
+            "no box corner:\n{out}"
+        );
+    }
+
+    #[test]
+    fn render_edge_labels() {
+        let out = render("graph LR; A -->|yes| B").unwrap();
+        assert!(out.contains("yes"), "missing edge label 'yes' in:\n{out}");
+    }
+
+    #[test]
+    fn render_diamond_node() {
+        let out = render("graph LR; A{Decision} --> B[OK]").unwrap();
+        assert!(out.contains("Decision"), "missing 'Decision' in:\n{out}");
+        // Diamond now renders with diagonal corner characters (╱ ╲) that
+        // clearly distinguish a rhombus from a plain rectangle.
+        assert!(out.contains('╱'), "no diagonal corner '╱' in:\n{out}");
+        assert!(out.contains('╲'), "no diagonal corner '╲' in:\n{out}");
+    }
+
+    #[test]
+    fn parse_semicolons() {
+        let out = render("graph LR; A-->B; B-->C").unwrap();
+        assert!(out.contains('A'));
+        assert!(out.contains('B'));
+        assert!(out.contains('C'));
+    }
+
+    #[test]
+    fn parse_newlines() {
+        let src = "graph TD\nA[Alpha]\nB[Beta]\nA --> B";
+        let out = render(src).unwrap();
+        assert!(out.contains("Alpha"), "missing 'Alpha' in:\n{out}");
+        assert!(out.contains("Beta"), "missing 'Beta' in:\n{out}");
+    }
+
+    #[test]
+    fn unknown_diagram_type_returns_error() {
+        // An actually unsupported diagram type returns UnsupportedDiagram.
+        let err = render("notADiagramType\n  foo bar").unwrap_err();
+        assert!(
+            matches!(err, Error::UnsupportedDiagram(_)),
+            "expected UnsupportedDiagram, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn empty_input_returns_error() {
+        assert!(matches!(render(""), Err(Error::EmptyInput)));
+        assert!(matches!(render("   "), Err(Error::EmptyInput)));
+        assert!(matches!(render("\n\n"), Err(Error::EmptyInput)));
+    }
+
+    #[test]
+    fn single_node_renders() {
+        let out = render("graph LR; A[Alone]").unwrap();
+        assert!(out.contains("Alone"), "missing 'Alone' in:\n{out}");
+        assert!(out.contains('┌') || out.contains('╭'));
+    }
+
+    #[test]
+    fn cyclic_graph_doesnt_hang() {
+        // Must complete without infinite loop or stack overflow
+        let out = render("graph LR; A-->B; B-->A").unwrap();
+        assert!(out.contains('A'));
+        assert!(out.contains('B'));
+    }
+
+    #[test]
+    fn special_chars_in_labels() {
+        let out = render("graph LR; A[Hello World] --> B[Item (1)]").unwrap();
+        assert!(out.contains("Hello World"), "missing label in:\n{out}");
+        assert!(out.contains("Item (1)"), "missing label in:\n{out}");
+    }
+
+    // ---- Error path tests -------------------------------------------------
+
+    #[test]
+    fn flowchart_keyword_accepted() {
+        let out = render("flowchart LR; A-->B").unwrap();
+        assert!(out.contains('A'));
+    }
+
+    #[test]
+    fn rl_direction_accepted() {
+        let out = render("graph RL; A-->B").unwrap();
+        assert!(out.contains('A'));
+        assert!(out.contains('B'));
+    }
+
+    #[test]
+    fn bt_direction_accepted() {
+        let out = render("graph BT; A-->B").unwrap();
+        assert!(out.contains('A'));
+        assert!(out.contains('B'));
+    }
+
+    #[test]
+    fn multiple_branches() {
+        let src = "graph LR; A[Start] --> B{Decision}; B -->|Yes| C[End]; B -->|No| D[Skip]";
+        let out = render(src).unwrap();
+        assert!(out.contains("Start"), "missing 'Start':\n{out}");
+        assert!(out.contains("Decision"), "missing 'Decision':\n{out}");
+        assert!(out.contains("End"), "missing 'End':\n{out}");
+        assert!(out.contains("Skip"), "missing 'Skip':\n{out}");
+        assert!(out.contains("Yes"), "missing 'Yes':\n{out}");
+        assert!(out.contains("No"), "missing 'No':\n{out}");
+    }
+
+    #[test]
+    fn dotted_arrow_parsed() {
+        let out = render("graph LR; A-.->B").unwrap();
+        assert!(out.contains('A'));
+        assert!(out.contains('B'));
+    }
+
+    #[test]
+    fn thick_arrow_parsed() {
+        let out = render("graph LR; A==>B").unwrap();
+        assert!(out.contains('A'));
+        assert!(out.contains('B'));
+    }
+
+    #[test]
+    fn rounded_node_renders() {
+        let out = render("graph LR; A(Rounded)").unwrap();
+        assert!(out.contains("Rounded"), "missing label in:\n{out}");
+        assert!(
+            out.contains('╭') || out.contains('╰'),
+            "no rounded corners:\n{out}"
+        );
+    }
+
+    #[test]
+    fn circle_node_renders() {
+        let out = render("graph LR; A((Circle))").unwrap();
+        assert!(out.contains("Circle"), "missing label in:\n{out}");
+        // Circle uses parenthesis markers
+        assert!(
+            out.contains('(') || out.contains('╭'),
+            "no circle markers:\n{out}"
+        );
+    }
+
+    /// Real-world flowchart with subgraphs, edge labels, and various node
+    /// shapes. Verifies the parser skips mermaid keywords (`subgraph`,
+    /// `direction`, `end`) and renders the actual nodes.
+    #[test]
+    fn real_world_flowchart_with_subgraph() {
+        let src = r#"graph LR
+    subgraph Supervisor
+        direction TB
+        F[Factory] -->|creates| W[Worker]
+        W -->|panics/exits| F
+    end
+    W -->|beat| HB[Heartbeat]
+    HB --> WD[Watchdog]
+    W --> CB{Circuit Breaker}
+    CB -->|CLOSED| DB[(Database)]"#;
+        let out = render(src).expect("should parse real-world flowchart");
+        assert!(out.contains("Factory"), "missing Factory:\n{out}");
+        assert!(out.contains("Worker"), "missing Worker:\n{out}");
+        assert!(out.contains("Heartbeat"), "missing Heartbeat:\n{out}");
+        assert!(out.contains("Database"), "missing Database:\n{out}");
+        // Keywords should NOT appear as node labels.
+        assert!(
+            !out.contains("subgraph"),
+            "subgraph should be skipped:\n{out}"
+        );
+        assert!(
+            !out.contains("direction"),
+            "direction should be skipped:\n{out}"
+        );
+    }
+
+    /// Verify that multiple edges leaving the same source node in LR direction
+    /// each get a distinct exit row, eliminating the ┬┬ clustering artefact.
+    #[test]
+    fn multiple_edges_from_same_node_spread() {
+        let out = render("graph LR; A-->B; A-->C; A-->D").unwrap();
+        // Collect the row index of every right-arrow character in the output.
+        // With spreading, the three edges should each land on a distinct row.
+        let arrow_rows: Vec<usize> = out
+            .lines()
+            .enumerate()
+            .filter(|(_, line)| line.contains('▸'))
+            .map(|(i, _)| i)
+            .collect();
+        assert!(
+            arrow_rows.len() >= 3,
+            "expected at least 3 distinct arrow rows, got {arrow_rows:?}:\n{out}"
+        );
+        // All rows must be distinct (no two arrows on the same row).
+        let unique: std::collections::HashSet<_> = arrow_rows.iter().collect();
+        assert_eq!(
+            unique.len(),
+            arrow_rows.len(),
+            "duplicate arrow rows {arrow_rows:?} — edges not spread:\n{out}"
+        );
+    }
+
+    /// Verify that a long edge label is rendered in full and not truncated.
+    #[test]
+    fn long_edge_label_not_truncated() {
+        let out = render("graph LR; A-->|panics and exits cleanly| B").unwrap();
+        assert!(
+            out.contains("panics and exits cleanly"),
+            "label truncated:\n{out}"
+        );
+    }
+
+    /// Verify that two labels on edges diverging from the same TD diamond node
+    /// do not merge into a single string like `NoYes` or `YesNo`.
+    #[test]
+    fn diverging_labels_dont_collide() {
+        let out = render("graph TD; B{Ok?}; B-->|Yes|C; B-->|No|D").unwrap();
+        assert!(out.contains("Yes"), "missing 'Yes' label:\n{out}");
+        assert!(out.contains("No"), "missing 'No' label:\n{out}");
+        assert!(
+            !out.contains("NoYes") && !out.contains("YesNo"),
+            "labels collided:\n{out}"
+        );
+    }
+
+    // ---- Part A: New node shape tests ------------------------------------
+
+    #[test]
+    fn stadium_node_renders() {
+        let out = render("graph LR; A([Stadium])").unwrap();
+        assert!(out.contains("Stadium"), "missing label:\n{out}");
+        // Stadium uses rounded corners and ( / ) side markers.
+        assert!(
+            out.contains('(') || out.contains('╭'),
+            "no stadium markers:\n{out}"
+        );
+    }
+
+    #[test]
+    fn subroutine_node_renders() {
+        let out = render("graph LR; A[[Subroutine]]").unwrap();
+        assert!(out.contains("Subroutine"), "missing label:\n{out}");
+        // Subroutine adds inner │ bars next to each side border.
+        assert!(out.contains('│'), "no inner vertical bars:\n{out}");
+    }
+
+    #[test]
+    fn cylinder_node_renders() {
+        let out = render("graph LR; A[(Database)]").unwrap();
+        assert!(out.contains("Database"), "missing label:\n{out}");
+        // Cylinder uses rounded corners and an interior lip line (─ dashes)
+        // to suggest a barrel cap without a misleading T-junction divider.
+        assert!(
+            out.contains('╭') && out.contains('╰'),
+            "missing rounded corners:\n{out}",
+        );
+        assert!(out.contains('─'), "missing interior lip dashes:\n{out}",);
+    }
+
+    #[test]
+    fn hexagon_node_renders() {
+        let out = render("graph LR; A{{Hexagon}}").unwrap();
+        assert!(out.contains("Hexagon"), "missing label:\n{out}");
+        // Hexagon uses < / > markers at the vertical midpoints.
+        assert!(
+            out.contains('<') || out.contains('>'),
+            "no hexagon markers:\n{out}"
+        );
+    }
+
+    #[test]
+    fn asymmetric_node_renders() {
+        let out = render("graph LR; A>Async]").unwrap();
+        assert!(out.contains("Async"), "missing label:\n{out}");
+        // Asymmetric uses ⟩ at the right vertical midpoint.
+        assert!(out.contains('⟩'), "no asymmetric marker:\n{out}");
+    }
+
+    #[test]
+    fn parallelogram_node_renders() {
+        let out = render("graph LR; A[/Parallel/]").unwrap();
+        assert!(out.contains("Parallel"), "missing label:\n{out}");
+        // Parallelogram has ╱ markers at all four corners (lean-right).
+        assert!(out.contains('╱'), "no parallelogram slant marker:\n{out}");
+    }
+
+    #[test]
+    fn trapezoid_node_renders() {
+        let out = render("graph LR; A[/Trap\\]").unwrap();
+        assert!(out.contains("Trap"), "missing label:\n{out}");
+        // Trapezoid has ╱ at top-left and ╲ at top-right corners.
+        assert!(out.contains('╱'), "no trapezoid slant marker:\n{out}");
+    }
+
+    #[test]
+    fn double_circle_node_renders() {
+        let out = render("graph LR; A(((DblCircle)))").unwrap();
+        assert!(out.contains("DblCircle"), "missing label:\n{out}");
+        // Double circle has two concentric rounded borders.
+        let corner_count = out.chars().filter(|&c| c == '╭').count();
+        assert!(
+            corner_count >= 2,
+            "expected ≥2 rounded corners for double circle, got {corner_count}:\n{out}"
+        );
+    }
+
+    // ---- Phase 2 shape polish tests (0.25.0) --------------------------------
+
+    #[test]
+    fn stadium_label_does_not_leak_parens() {
+        let out = render("graph LR; A([Stadium])").unwrap();
+        // The `(` and `)` must appear ON the border, not inside the label
+        // region. The label row should not start with `│(` or end with `)│`.
+        // Verify the parens are present (they mark the border mid-row) but
+        // the label text itself is free of them.
+        assert!(out.contains("Stadium"), "missing label:\n{out}");
+        assert!(
+            out.contains('(') && out.contains(')'),
+            "missing stadium border parens:\n{out}"
+        );
+        // The label content must not be flanked by parens inside the border:
+        // bad form is "│( Stadium )│".
+        assert!(
+            !out.contains("│(") && !out.contains(")│"),
+            "paren inside border wall — leak detected:\n{out}"
+        );
+    }
+
+    #[test]
+    fn database_has_no_horizontal_divider() {
+        let out = render("graph LR; A[(Database)]").unwrap();
+        assert!(out.contains("Database"), "missing label:\n{out}");
+        // The old rendering used `├──┤` T-junction characters which looked
+        // like a misleading panel divider. Those must be absent.
+        assert!(
+            !out.contains('├') && !out.contains('┤'),
+            "unexpected T-junction divider in cylinder:\n{out}"
+        );
+        // Rounded corners must still be present.
+        assert!(
+            out.contains('╭') && out.contains('╰'),
+            "missing rounded corners:\n{out}"
+        );
+    }
+
+    #[test]
+    fn hexagon_has_slanted_corners_and_side_points() {
+        let out = render("graph LR; A{{Hexagon}}").unwrap();
+        assert!(out.contains("Hexagon"), "missing label:\n{out}");
+        // Top/bottom corners are `╱` / `╲` (slanted, like a rhombus).
+        assert!(
+            out.contains('╱') && out.contains('╲'),
+            "missing slanted corners:\n{out}"
+        );
+        // Left/right midpoints have `<` / `>` side-point markers.
+        assert!(
+            out.contains('<') && out.contains('>'),
+            "missing side-point markers:\n{out}"
+        );
+    }
+
+    #[test]
+    fn parallelogram_has_slanted_top_and_bottom() {
+        let out = render("graph LR; A[/Parallelogram/]").unwrap();
+        assert!(out.contains("Parallelogram"), "missing label:\n{out}");
+        // All four corners should be `╱` — consistent lean-right slant.
+        let slash_count = out.chars().filter(|&c| c == '╱').count();
+        assert!(
+            slash_count >= 4,
+            "expected ≥4 ╱ corners for lean-right parallelogram, got {slash_count}:\n{out}"
+        );
+    }
+
+    #[test]
+    fn backslash_parallelogram_parses_and_renders() {
+        let out = render("graph LR; A[\\BackSlash\\]").unwrap();
+        assert!(out.contains("BackSlash"), "missing label:\n{out}");
+        // All four corners should be `╲` — consistent lean-left slant.
+        let bslash_count = out.chars().filter(|&c| c == '╲').count();
+        assert!(
+            bslash_count >= 4,
+            "expected ≥4 ╲ corners for lean-left parallelogram, got {bslash_count}:\n{out}"
+        );
+    }
+
+    #[test]
+    fn inv_trapezoid_parses_and_renders() {
+        let out = render("graph LR; A[\\InvTrap/]").unwrap();
+        assert!(out.contains("InvTrap"), "missing label:\n{out}");
+        // Top corners are `╲` (left) and `╱` (right) — inverted hat shape.
+        assert!(
+            out.contains('╲') && out.contains('╱'),
+            "missing inverted trapezoid corner markers:\n{out}"
+        );
+    }
+
+    // ---- Part B: Edge style tests ----------------------------------------
+
+    #[test]
+    fn dotted_edge_renders_with_dotted_glyph() {
+        let out = render("graph LR; A-.->B").unwrap();
+        // Dotted horizontal should contain ┄ or dotted vertical ┆.
+        assert!(
+            out.contains('┄') || out.contains('┆'),
+            "no dotted glyph in:\n{out}"
+        );
+    }
+
+    #[test]
+    fn thick_edge_renders_with_thick_glyph() {
+        let out = render("graph LR; A==>B").unwrap();
+        assert!(
+            out.contains('━') || out.contains('┃'),
+            "no thick glyph in:\n{out}"
+        );
+    }
+
+    #[test]
+    fn bidirectional_edge_has_two_arrows() {
+        let out = render("graph LR; A<-->B").unwrap();
+        // Should contain both ◂ (pointing back to A) and ▸ (pointing to B).
+        assert!(
+            out.contains('◂') && out.contains('▸'),
+            "missing bidirectional arrows in:\n{out}"
+        );
+    }
+
+    #[test]
+    fn plain_line_edge_has_no_arrow() {
+        let out = render("graph LR; A---B").unwrap();
+        // No arrow tip characters.
+        assert!(
+            !out.contains('▸') && !out.contains('◂'),
+            "unexpected arrow in plain line:\n{out}"
+        );
+    }
+
+    #[test]
+    fn circle_endpoint_renders_circle_glyph() {
+        let out = render("graph LR; A--oB").unwrap();
+        assert!(out.contains('○'), "no circle endpoint glyph in:\n{out}");
+    }
+
+    #[test]
+    fn cross_endpoint_renders_cross_glyph() {
+        let out = render("graph LR; A--xB").unwrap();
+        assert!(out.contains('×'), "no cross endpoint glyph in:\n{out}");
+    }
+
+    // ---- Subgraph tests ---------------------------------------------------
+
+    /// A single subgraph should render with a rounded border and a label at
+    /// the top, enclosing all member nodes.
+    #[test]
+    fn subgraph_renders_with_border_and_label() {
+        let src = r#"graph LR
+    subgraph Supervisor
+        F[Factory] --> W[Worker]
+    end"#;
+        let out = render(src).unwrap();
+        assert!(out.contains("Supervisor"), "missing label:\n{out}");
+        assert!(out.contains("Factory"), "missing Factory:\n{out}");
+        assert!(out.contains("Worker"), "missing Worker:\n{out}");
+        // Subgraph uses rounded corners to distinguish from node boxes.
+        assert!(
+            out.contains('╭') || out.contains('╰'),
+            "missing rounded subgraph corner:\n{out}"
+        );
+        // The subgraph border should appear as a vertical side bar on the left.
+        assert!(out.contains('│'), "missing vertical border:\n{out}");
+    }
+
+    /// Two nested subgraphs should both show their labels and the inner border
+    /// should be visually contained within the outer one.
+    #[test]
+    fn nested_subgraphs_render() {
+        let src = r#"graph TD
+    subgraph Outer
+        subgraph Inner
+            A[A]
+        end
+        B[B]
+    end"#;
+        let out = render(src).unwrap();
+        assert!(out.contains("Outer"), "missing Outer label:\n{out}");
+        assert!(out.contains("Inner"), "missing Inner label:\n{out}");
+        assert!(out.contains('A'), "missing A:\n{out}");
+        assert!(out.contains('B'), "missing B:\n{out}");
+        // Two levels of rounded corners should appear.
+        let corner_count = out.chars().filter(|&c| c == '╭').count();
+        assert!(
+            corner_count >= 2,
+            "expected at least 2 top-left rounded corners (one per subgraph), got {corner_count}:\n{out}"
+        );
+    }
+
+    /// Node labels containing `<br/>` tags should be split into multiple
+    /// rows inside the node box, making the box taller rather than wider.
+    #[test]
+    fn html_br_in_label_creates_multi_row_node() {
+        let out =
+            render(r#"graph LR; A[first line<br/>second line<br/>third line] --> B[End]"#).unwrap();
+        assert!(out.contains("first line"), "line 1 missing:\n{out}");
+        assert!(out.contains("second line"), "line 2 missing:\n{out}");
+        assert!(out.contains("third line"), "line 3 missing:\n{out}");
+        // Each line should sit on a different row.
+        let row_of = |needle: &str| -> usize {
+            out.lines()
+                .position(|l| l.contains(needle))
+                .unwrap_or_else(|| panic!("label '{needle}' not found in:\n{out}"))
+        };
+        assert!(
+            row_of("first line") < row_of("second line"),
+            "line ordering wrong:\n{out}",
+        );
+        assert!(
+            row_of("second line") < row_of("third line"),
+            "line ordering wrong:\n{out}",
+        );
+    }
+
+    /// A single very long label line without explicit `<br/>` breaks should
+    /// be soft-wrapped at commas/spaces so the node box stays reasonable
+    /// width rather than stretching the whole diagram.
+    #[test]
+    fn long_label_without_br_is_soft_wrapped() {
+        let long = "alpha, beta, gamma, delta, epsilon, zeta, eta, theta";
+        let src = format!("graph LR; A[{long}] --> B[End]");
+        let out = render(&src).unwrap();
+        // All tokens must still appear (soft-wrap inserts newlines, not
+        // truncation).
+        for tok in [
+            "alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta",
+        ] {
+            assert!(out.contains(tok), "missing '{tok}' in:\n{out}");
+        }
+        // Diagram's longest row must be narrower than the raw unwrapped label.
+        let max_w = out
+            .lines()
+            .map(unicode_width::UnicodeWidthStr::width)
+            .max()
+            .unwrap_or(0);
+        assert!(
+            max_w < long.len() + 20,
+            "soft-wrap didn't shrink the diagram (max row={max_w}, raw label={}):\n{out}",
+            long.len(),
+        );
+    }
+
+    /// Two sibling subgraphs at the same nesting level must not overlap: each
+    /// one's bounding-box rows (in an LR layout) should be disjoint from the
+    /// others'. Before the sibling-gap fix in `layered::compute_positions`,
+    /// the second subgraph's top border would land on the first subgraph's
+    /// bottom padding row.
+    #[test]
+    fn sibling_subgraphs_do_not_overlap() {
+        let src = r#"graph LR
+    subgraph A
+        A1[a-one]
+    end
+    subgraph B
+        B1[b-one]
+    end
+    subgraph C
+        C1[c-one]
+    end
+    A1 --> X[External]
+    B1 --> X
+    C1 --> X"#;
+        let out = render(src).unwrap();
+
+        // Each subgraph draws its label inline in the top border row. Find the
+        // row index of each label and assert they are strictly increasing.
+        let row_of = |label: &str| -> usize {
+            out.lines()
+                .enumerate()
+                .find_map(|(i, l)| if l.contains(label) { Some(i) } else { None })
+                .unwrap_or_else(|| panic!("label '{label}' not found in:\n{out}"))
+        };
+
+        let row_a = row_of("─A─");
+        let row_b = row_of("─B─");
+        let row_c = row_of("─C─");
+
+        // Each subgraph occupies roughly 6 rows (top border + padding + node + padding + bottom border).
+        // Sibling borders must be at least 4 rows apart so the bottom border of the
+        // previous subgraph and the top border of the next subgraph don't share a row.
+        assert!(
+            row_b >= row_a + 4,
+            "subgraphs A and B overlap: A header at row {row_a}, B header at row {row_b}\n{out}",
+        );
+        assert!(
+            row_c >= row_b + 4,
+            "subgraphs B and C overlap: B header at row {row_b}, C header at row {row_c}\n{out}",
+        );
+    }
+
+    /// An edge that crosses a subgraph boundary should render without panicking
+    /// and the external node should appear outside the subgraph border.
+    #[test]
+    fn edge_crossing_subgraph_boundary_renders() {
+        let src = r#"graph LR
+    subgraph S
+        F[Factory] --> W[Worker]
+    end
+    W --> HB[Heartbeat]"#;
+        let out = render(src).unwrap();
+        // Heartbeat should be outside the S rectangle; edge from W to HB
+        // should exist without the whole thing hanging or panicking.
+        assert!(out.contains("Heartbeat"), "missing Heartbeat:\n{out}");
+        assert!(out.contains("Factory"), "missing Factory:\n{out}");
+        assert!(out.contains("Worker"), "missing Worker:\n{out}");
+        // The subgraph border should be present.
+        assert!(out.contains('╭'), "missing subgraph border:\n{out}");
+    }
+
+    /// `real_world_flowchart_with_subgraph` now exercises the full subgraph
+    /// pipeline — nodes inside the Supervisor subgraph should still render,
+    /// and the "subgraph"/"direction"/"end" keywords must NOT appear as labels.
+    /// (This test was present before and still passes unchanged.)
+    #[test]
+    fn subgraph_keywords_not_leaked_as_labels() {
+        let src = r#"graph LR
+    subgraph Supervisor
+        direction TB
+        F[Factory] -->|creates| W[Worker]
+        W -->|panics/exits| F
+    end
+    W -->|beat| HB[Heartbeat]"#;
+        let out = render(src).expect("should render");
+        assert!(out.contains("Factory"), "missing Factory:\n{out}");
+        assert!(out.contains("Worker"), "missing Worker:\n{out}");
+        assert!(out.contains("Heartbeat"), "missing Heartbeat:\n{out}");
+        // The subgraph label "Supervisor" appears in the border, but the
+        // bare keyword "subgraph" must not appear as a standalone label.
+        assert!(
+            !out.contains("subgraph"),
+            "bare 'subgraph' keyword leaked into output:\n{out}"
+        );
+        assert!(
+            !out.contains("direction"),
+            "bare 'direction' keyword leaked into output:\n{out}"
+        );
+    }
+
+    // ---- Sequence diagram integration tests ------------------------------
+
+    #[test]
+    fn sequence_parse_minimal() {
+        let src = "sequenceDiagram\nA->>B: hi";
+        let diag = parser::sequence::parse(src).unwrap();
+        assert_eq!(diag.participants.len(), 2, "expected 2 participants");
+        assert_eq!(diag.messages.len(), 1, "expected 1 message");
+    }
+
+    #[test]
+    fn sequence_parse_explicit_participants_with_aliases() {
+        let src = "sequenceDiagram\nparticipant W as Worker\nparticipant S as Server";
+        let diag = parser::sequence::parse(src).unwrap();
+        assert_eq!(diag.participants[0].label, "Worker");
+        assert_eq!(diag.participants[1].label, "Server");
+    }
+
+    #[test]
+    fn sequence_render_produces_participant_boxes() {
+        let src = "sequenceDiagram\nparticipant A as Alice\nparticipant B as Bob\nA->>B: Hello";
+        let out = render(src).unwrap();
+        assert!(out.contains("Alice"), "missing Alice in:\n{out}");
+        assert!(out.contains("Bob"), "missing Bob in:\n{out}");
+    }
+
+    #[test]
+    fn sequence_render_draws_lifelines() {
+        let out = render("sequenceDiagram\nA->>B: hi").unwrap();
+        assert!(out.contains('┆'), "missing lifeline in:\n{out}");
+    }
+
+    #[test]
+    fn sequence_render_solid_arrow() {
+        let out = render("sequenceDiagram\nA->>B: go").unwrap();
+        assert!(out.contains('▸'), "no solid arrowhead in:\n{out}");
+    }
+
+    #[test]
+    fn sequence_render_dashed_arrow() {
+        let out = render("sequenceDiagram\nA-->>B: back").unwrap();
+        assert!(out.contains('┄'), "no dashed glyph in:\n{out}");
+    }
+
+    #[test]
+    fn sequence_render_message_order_top_to_bottom() {
+        let out = render("sequenceDiagram\nA->>B: first\nB->>A: second").unwrap();
+        let first_row = out
+            .lines()
+            .position(|l| l.contains("first"))
+            .expect("'first' not found");
+        let second_row = out
+            .lines()
+            .position(|l| l.contains("second"))
+            .expect("'second' not found");
+        assert!(
+            first_row < second_row,
+            "'first' must appear above 'second':\n{out}"
+        );
+    }
+
+    #[test]
+    fn gantt_diagram_now_renders() {
+        // `gantt` was added in 0.20.0; must now return Ok, not an error.
+        let out =
+            render("gantt\n  dateFormat YYYY-MM-DD\n  section Phase1\n  Task :2024-01-01, 30d")
+                .unwrap();
+        assert!(out.contains("Task"), "task name missing in: {out}");
+    }
+
+    #[test]
+    fn render_existing_flowchart_unchanged() {
+        // Sanity check that adding sequence support didn't break flowcharts.
+        let out = render("graph LR; A-->B").unwrap();
+        assert!(out.contains('A'), "missing A in:\n{out}");
+        assert!(out.contains('B'), "missing B in:\n{out}");
+        assert!(
+            out.contains('▸') || out.contains('-'),
+            "no arrow in:\n{out}"
+        );
+    }
+
+    // ---- Perpendicular-direction subgraph tests ---------------------------
+
+    /// Nodes inside a `direction LR` subgraph nested in a `graph TD` parent
+    /// must all appear on the same row (they flow left-to-right, so the parent
+    /// sees them as a single horizontal band).
+    #[test]
+    fn subgraph_perpendicular_direction_lr_in_td() {
+        // Parent TD, subgraph LR.
+        let src = r#"graph TD
+    subgraph Pipeline
+        direction LR
+        A[Input] --> B[Process] --> C[Output]
+    end
+    C --> D[Finish]"#;
+        let out = render(src).unwrap();
+        assert!(out.contains("Input"), "missing Input:\n{out}");
+        assert!(out.contains("Process"), "missing Process:\n{out}");
+        assert!(out.contains("Output"), "missing Output:\n{out}");
+        assert!(out.contains("Finish"), "missing Finish:\n{out}");
+        // In the rendered output, Input/Process/Output should share a row
+        // (they're flowing LR inside a TD parent). Find each label's row and
+        // assert they're equal.
+        let row_of = |needle: &str| -> usize {
+            out.lines()
+                .position(|l| l.contains(needle))
+                .expect("label not found")
+        };
+        assert_eq!(
+            row_of("Input"),
+            row_of("Process"),
+            "Input/Process should share a row in LR subgraph:\n{out}"
+        );
+        assert_eq!(
+            row_of("Process"),
+            row_of("Output"),
+            "Process/Output should share a row in LR subgraph:\n{out}"
+        );
+    }
+
+    /// A `direction LR` subgraph inside a `graph LR` parent is the same as no
+    /// direction override — both should produce identical output.
+    #[test]
+    fn subgraph_same_direction_as_parent_unchanged() {
+        // Parent LR, subgraph LR — should be identical to when no direction
+        // is specified.
+        let a = render(
+            r#"graph LR
+    subgraph S
+        direction LR
+        A-->B
+    end"#,
+        )
+        .unwrap();
+        let b = render(
+            r#"graph LR
+    subgraph S
+        A-->B
+    end"#,
+        )
+        .unwrap();
+        assert_eq!(
+            a, b,
+            "direction LR inside graph LR should match default\nA:\n{a}\nB:\n{b}"
+        );
+    }
+
+    /// When no `direction` is declared on the subgraph, child nodes inherit
+    /// the parent graph's direction — today's behaviour must be preserved.
+    #[test]
+    fn subgraph_inherits_when_no_direction() {
+        // No direction declared — children flow in parent's direction.
+        let out = render(
+            r#"graph TD
+    subgraph S
+        A-->B-->C
+    end"#,
+        )
+        .unwrap();
+        // TD flow: A row < B row < C row.
+        let row_of = |needle: &str| -> usize {
+            out.lines()
+                .position(|l| l.contains(needle))
+                .expect("label not found")
+        };
+        assert!(
+            row_of("A") < row_of("B"),
+            "A should be above B in TD:\n{out}"
+        );
+        assert!(
+            row_of("B") < row_of("C"),
+            "B should be above C in TD:\n{out}"
+        );
+    }
+
+    // ---- ASCII mode tests -------------------------------------------------
+
+    /// The fundamental invariant: every character produced by `render_ascii`
+    /// must be in the ASCII range (code point < 128).
+    #[test]
+    fn ascii_render_has_no_unicode_box_chars() {
+        let out = render_ascii("graph LR; A[Hello] --> B[World]").unwrap();
+        for ch in out.chars() {
+            assert!(ch.is_ascii(), "non-ASCII char {ch:?} in output:\n{out}");
+        }
+    }
+
+    /// Node labels (which are pure ASCII text) must survive the substitution
+    /// pass unchanged.
+    #[test]
+    fn ascii_render_preserves_labels() {
+        let out = render_ascii("graph LR; A[Cargo] --> B[Deploy]").unwrap();
+        assert!(out.contains("Cargo"), "label 'Cargo' missing in:\n{out}");
+        assert!(out.contains("Deploy"), "label 'Deploy' missing in:\n{out}");
+    }
+
+    /// All four rounded and square corner glyphs (`╭ ╮ ╰ ╯ ┌ ┐ └ ┘`) must be
+    /// replaced with `+`.
+    #[test]
+    fn ascii_render_uses_plus_for_corners() {
+        // A Rectangle node uses ┌ ┐ └ ┘; a Rounded node uses ╭ ╮ ╰ ╯.
+        let rect_out = render_ascii("graph LR; A[Rect]").unwrap();
+        let rounded_out = render_ascii("graph LR; A(Round)").unwrap();
+        assert!(
+            rect_out.contains('+'),
+            "expected '+' for box corners in:\n{rect_out}"
+        );
+        assert!(
+            rounded_out.contains('+'),
+            "expected '+' for rounded corners in:\n{rounded_out}"
+        );
+        // Neither output should contain any Unicode box-drawing corner.
+        for ch in rect_out.chars().chain(rounded_out.chars()) {
+            assert!(
+                ch.is_ascii(),
+                "non-ASCII char {ch:?} leaked through to_ascii"
+            );
+        }
+    }
+
+    /// Arrow tips must map to the expected ASCII characters.
+    #[test]
+    fn ascii_arrow_tips_use_gt_lt_v_caret() {
+        // LR → right arrow (▸ → >)
+        let lr = render_ascii("graph LR; A-->B").unwrap();
+        assert!(lr.contains('>'), "expected '>' for LR arrow in:\n{lr}");
+
+        // TD → down arrow (▾ → v)
+        let td = render_ascii("graph TD; A-->B").unwrap();
+        assert!(td.contains('v'), "expected 'v' for TD arrow in:\n{td}");
+
+        // BT → up arrow (▴ → ^)
+        let bt = render_ascii("graph BT; A-->B").unwrap();
+        assert!(bt.contains('^'), "expected '^' for BT arrow in:\n{bt}");
+
+        // Bidirectional LR: back-tip is ◂ → <
+        let bidi = render_ascii("graph LR; A<-->B").unwrap();
+        assert!(bidi.contains('<'), "expected '<' for back-tip in:\n{bidi}");
+    }
+
+    /// Width-constrained ASCII rendering must still produce compact output and
+    /// remain entirely ASCII.
+    #[test]
+    fn ascii_render_with_width_compacts() {
+        let out = render_ascii_with_width(
+            "graph LR; A[Alpha]-->B[Bravo]-->C[Charlie]-->D[Delta]",
+            Some(60),
+        )
+        .unwrap();
+        assert!(out.contains("Alpha"), "label missing in:\n{out}");
+        assert!(
+            out.is_ascii(),
+            "non-ASCII char in width-constrained ASCII output:\n{out}"
+        );
+    }
+
+    // ---- Back-edge routing tests -------------------------------------------
+
+    /// An LR back-edge (B → A, where A is upstream of B) must exit from the
+    /// bottom of the source node and enter from the bottom of the target node,
+    /// producing an upward-pointing tip (▴) rather than the normal rightward
+    /// tip (▸).
+    ///
+    /// The key invariant is that the back-edge travels *below* both nodes
+    /// (along a perimeter corridor) so it does not cut through the centre of
+    /// the diagram.
+    #[test]
+    fn back_edge_lr_exits_bottom() {
+        // Two-node cycle: A → B (forward) and B → A (back-edge).
+        let out = render("graph LR; A-->B; B-->A").unwrap();
+        assert!(out.contains('A'), "missing A in:\n{out}");
+        assert!(out.contains('B'), "missing B in:\n{out}");
+        // The back-edge enters from below, so there must be an UP arrow (▴).
+        assert!(
+            out.contains('▴'),
+            "no up-arrow tip for LR back-edge in:\n{out}"
+        );
+        // The forward edge still has a right arrow (▸).
+        assert!(
+            out.contains('▸'),
+            "no right-arrow tip for LR forward edge in:\n{out}"
+        );
+        // The back-edge corridor runs below the nodes and the UP tip (▴)
+        // lands ON the destination box's bottom border row (replacing one
+        // `─` of the `└───┘`). 0.9.6 changed this from "tip floats one
+        // row below the box" to "tip merges into the box border" — the
+        // box reads as receiving the arrow rather than being adjacent to
+        // a disconnected glyph. Verify by finding the line with `└` and
+        // confirming `▴` appears on the same line.
+        let lines: Vec<&str> = out.lines().collect();
+        let bottom_border_row = lines
+            .iter()
+            .position(|l| l.contains('└'))
+            .expect("no `└` corner found");
+        assert!(
+            lines[bottom_border_row].contains('▴'),
+            "LR back-edge ▴ should land on the destination box's bottom border row \
+             (the line with `└`), got line {bottom_border_row}:\n{out}"
+        );
+    }
+
+    /// A TD back-edge (B → A, where A is upstream of B) must exit from the
+    /// right of the source node and enter from the right of the target node,
+    /// producing a leftward-pointing tip (◂) rather than the normal downward
+    /// tip (▾).
+    #[test]
+    fn back_edge_td_exits_right() {
+        // Two-node cycle: A → B (forward, downward) and B → A (back-edge, upward).
+        let out = render("graph TD; A-->B; B-->A").unwrap();
+        assert!(out.contains('A'), "missing A in:\n{out}");
+        assert!(out.contains('B'), "missing B in:\n{out}");
+        // The back-edge enters from the right, so there must be a LEFT arrow (◂).
+        assert!(
+            out.contains('◂'),
+            "no left-arrow tip for TD back-edge in:\n{out}"
+        );
+        // The forward edge still has a down arrow (▾).
+        assert!(
+            out.contains('▾'),
+            "no down-arrow tip for TD forward edge in:\n{out}"
+        );
+        // The ◂ tip must appear to the right of the widest node column.
+        // We check that every row containing ◂ has it to the right of where
+        // node boxes appear (i.e., after the rightmost '┘' or '┐').
+        for (i, line) in out.lines().enumerate() {
+            if let Some(arrow_col) = line.chars().position(|c| c == '◂') {
+                // Find the rightmost box character in the line by scanning in reverse.
+                let last_box_col = line
+                    .chars()
+                    .enumerate()
+                    .filter(|(_, c)| matches!(*c, '┘' | '┐' | '│'))
+                    .map(|(col, _)| col)
+                    .max()
+                    .unwrap_or(0);
+                assert!(
+                    arrow_col > last_box_col,
+                    "TD back-edge ◂ at row {i} col {arrow_col} is not to the right of box col {last_box_col}:\n{line}\nfull:\n{out}"
+                );
+            }
+        }
+    }
+
+    /// The real-world supervisor/worker feedback loop from the intuition-v2 README.
+    /// Both node labels and both edge labels must appear in the output.
+    #[test]
+    fn supervisor_worker_diagram_back_edge() {
+        let src = "graph LR\nF[Factory]-->|creates|W[Worker]\nW-->|panics/exits|F";
+        let out = render(src).unwrap();
+        assert!(out.contains("Factory"), "missing 'Factory' in:\n{out}");
+        assert!(out.contains("Worker"), "missing 'Worker' in:\n{out}");
+        assert!(
+            out.contains("creates"),
+            "missing 'creates' label in:\n{out}"
+        );
+        assert!(
+            out.contains("panics/exits"),
+            "missing 'panics/exits' label in:\n{out}"
+        );
+        // The back-edge (Worker → Factory) must exit via the perpendicular side,
+        // so ▴ (up-tip) must appear in the output.
+        assert!(
+            out.contains('▴'),
+            "no ▴ tip for Worker→Factory back-edge in:\n{out}"
+        );
+    }
+
+    /// A pure-forward diagram must not be affected by back-edge routing.
+    /// Node labels and the forward arrow tip must still appear.
+    #[test]
+    fn forward_edges_unchanged() {
+        // Three-node LR chain: all forward edges (A→B→C).
+        let out = render("graph LR; A-->B-->C").unwrap();
+        assert!(out.contains('A'), "missing A in:\n{out}");
+        assert!(out.contains('B'), "missing B in:\n{out}");
+        assert!(out.contains('C'), "missing C in:\n{out}");
+        // Forward edges use the normal ▸ tip, no ▴ should appear.
+        assert!(
+            out.contains('▸'),
+            "no ▸ tip in forward-only LR graph:\n{out}"
+        );
+        assert!(
+            !out.contains('▴'),
+            "unexpected ▴ in forward-only LR graph:\n{out}"
+        );
+    }
+
+    // ---- Width-budget label-wrap tests (0.28.0) ---------------------------
+
+    /// `render_with_width_respects_budget_via_label_wrap` — the primary regression
+    /// test for the width-budget label-wrapping feature (md-tui integration request,
+    /// https://github.com/henriklovhaug/md-tui/issues/76).
+    ///
+    /// The repro diagram has three nodes with labels wider than 80 cols combined.
+    /// After gap reduction alone fails, the label-wrap fallback must produce output
+    /// where every rendered line is <= 80 display columns.
+    #[test]
+    fn render_with_width_respects_budget_via_label_wrap() {
+        let src = "flowchart LR\n    \
+            A[A long node label that probably exceeds the budget] --> \
+            B[Another wide one] --> \
+            C[Yet another]";
+        let out = render_with_width(src, Some(80)).unwrap();
+        // All word fragments must still appear in the output.
+        assert!(
+            out.contains("long node label"),
+            "label fragment missing:\n{out}"
+        );
+        assert!(out.contains("Another"), "label fragment missing:\n{out}");
+        // Every rendered line must fit within the 80-column budget.
+        let max_w = out
+            .lines()
+            .map(unicode_width::UnicodeWidthStr::width)
+            .max()
+            .unwrap_or(0);
+        assert!(
+            max_w <= 80,
+            "output exceeds budget: max line width = {max_w}, expected <= 80:\n{out}"
+        );
+    }
+
+    /// Compact diagrams that already fit within the budget must NOT be affected
+    /// by the label-wrap fallback. Output must be byte-identical to the
+    /// natural-size rendering (no spurious wrapping introduced).
+    #[test]
+    fn compact_diagram_not_affected_by_label_wrap() {
+        let src = "graph LR\nA[Start] --> B[End]";
+        let natural = render(src).unwrap();
+        let constrained = render_with_width(src, Some(80)).unwrap();
+        assert_eq!(
+            natural, constrained,
+            "compact diagram output changed under width=80 constraint:\nnatural:\n{natural}\nconstrained:\n{constrained}"
+        );
+    }
+
+    /// `wrap_label` — unit tests for the greedy word-wrap helper.
+    #[test]
+    fn wrap_label_short_input_unchanged() {
+        assert_eq!(wrap_label("hello", 20), "hello");
+        assert_eq!(wrap_label("hello world", 20), "hello world");
+    }
+
+    #[test]
+    fn wrap_label_wraps_at_word_boundary() {
+        let result = wrap_label("hello world foo bar", 10);
+        // Each line must be <= 10 chars.
+        for line in result.lines() {
+            assert!(
+                line.len() <= 10,
+                "line too long: {line:?} in result: {result:?}"
+            );
+        }
+        // All words must appear.
+        assert!(result.contains("hello"));
+        assert!(result.contains("world"));
+        assert!(result.contains("foo"));
+        assert!(result.contains("bar"));
+    }
+
+    #[test]
+    fn wrap_label_hard_breaks_overlong_token() {
+        // A single word longer than the max must still be wrapped (hard break).
+        let result = wrap_label("abcdefghij", 4);
+        for line in result.lines() {
+            assert!(
+                line.len() <= 4,
+                "hard-break line too long: {line:?} in result: {result:?}"
+            );
+        }
+        // Reassembled must equal original (no chars dropped).
+        let reassembled: String = result.split('\n').collect();
+        assert_eq!(reassembled, "abcdefghij");
+    }
+
+    #[test]
+    fn wrap_label_preserves_existing_newlines() {
+        // Author-inserted \n (e.g. from state-diagram parser) must be kept.
+        let input = "line one\nline two\nline three";
+        let result = wrap_label(input, 30);
+        // Lines are shorter than 30 so no extra wrapping needed.
+        assert_eq!(result, input);
+    }
+}

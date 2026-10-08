@@ -1,0 +1,7 @@
+stateDiagram-v2
+    state route_check <<choice>>
+    [*] --> route_check
+    route_check --> Cached : hit
+    route_check --> Origin : miss
+    Cached --> [*]
+    Origin --> [*]

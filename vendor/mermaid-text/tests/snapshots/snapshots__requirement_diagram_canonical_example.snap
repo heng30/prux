@@ -1,0 +1,76 @@
+---
+source: crates/mermaid-text/tests/snapshots.rs
+expression: out
+---
+┌────────────────────────────────┐
+│        <<requirement>>         │
+│            test_req            │
+├────────────────────────────────┤
+│ id:           1                │
+│ text:         the test text.   │
+│ risk:         high             │
+│ verifymethod: test             │
+└────────────────────────────────┘
+
+┌────────────────────────────────┐
+│   <<functionalRequirement>>    │
+│           test_req2            │
+├────────────────────────────────┤
+│ id:           1.1              │
+│ text:         the second test… │
+│ risk:         low              │
+│ verifymethod: inspection       │
+└────────────────────────────────┘
+
+┌────────────────────────────────┐
+│   <<performanceRequirement>>   │
+│           test_req3            │
+├────────────────────────────────┤
+│ id:           1.2              │
+│ text:         the third test … │
+│ risk:         medium           │
+│ verifymethod: demonstration    │
+└────────────────────────────────┘
+
+┌────────────────────────────────┐
+│    <<interfaceRequirement>>    │
+│           test_req4            │
+├────────────────────────────────┤
+│ id:           1.2.1            │
+│ text:         the fourth test… │
+│ risk:         medium           │
+│ verifymethod: analysis         │
+└────────────────────────────────┘
+
+┌────────────────────────────────┐
+│      <<designConstraint>>      │
+│           test_req5            │
+├────────────────────────────────┤
+│ id:           1.2.2            │
+│ text:         the fifth test … │
+│ risk:         low              │
+│ verifymethod: analysis         │
+└────────────────────────────────┘
+
+╭────────────────────────────────╮
+│          test_entity           │
+├────────────────────────────────┤
+│ type: simulation               │
+╰────────────────────────────────╯
+
+╭────────────────────────────────╮
+│          test_entity2          │
+├────────────────────────────────┤
+│ type:   word doc               │
+│ docref: reqs/test_entity       │
+╰────────────────────────────────╯
+
+Relationships:
+  test_entity --[satisfies]--> test_req2
+  test_req --[traces]--> test_req2
+  test_req --[contains]--> test_req3
+  test_req3 --[contains]--> test_req4
+  test_req4 --[derives]--> test_req5
+  test_req5 --[refines]--> test_req4
+  test_entity2 --[verifies]--> test_req5
+  test_req5 --[copies]--> test_req2

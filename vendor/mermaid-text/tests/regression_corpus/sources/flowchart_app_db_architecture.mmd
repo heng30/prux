@@ -1,0 +1,6 @@
+graph LR
+    App --> DB[(PostgreSQL)]
+    App --> Cache[(Redis)]
+    App --> Queue[(RabbitMQ)]
+    Queue --> Worker[Worker]
+    Worker --> DB

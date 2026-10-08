@@ -1,0 +1,5 @@
+---
+source: crates/mermaid-text/tests/crossings.rs
+expression: "fmt_count(\"simple_chain_lr\", n)"
+---
+simple_chain_lr: 0 crossing(s)

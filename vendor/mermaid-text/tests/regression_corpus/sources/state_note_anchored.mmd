@@ -1,0 +1,8 @@
+stateDiagram-v2
+    [*] --> CircuitOpen
+    CircuitOpen --> CircuitClosed : timeout reached
+    CircuitClosed --> CircuitOpen : 5 errors
+    note right of CircuitOpen
+        Open state rejects all
+        traffic for cool-down period.
+    end note

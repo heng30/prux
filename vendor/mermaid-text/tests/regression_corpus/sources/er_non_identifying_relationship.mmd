@@ -1,0 +1,9 @@
+erDiagram
+    PARENT ||..o{ CHILD : optional
+    PARENT {
+        int id PK
+    }
+    CHILD {
+        int id PK
+        int parentId FK
+    }

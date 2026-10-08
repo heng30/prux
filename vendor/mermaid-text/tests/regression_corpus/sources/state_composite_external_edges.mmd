@@ -1,0 +1,8 @@
+stateDiagram-v2
+direction LR
+[*] --> Active
+state Active {
+Idle --> Working
+Working --> Idle
+}
+Active --> [*]

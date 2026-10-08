@@ -1,0 +1,12 @@
+stateDiagram-v2
+    [*] --> CLOSED
+    CLOSED --> OPEN : 5 consecutive failures
+    OPEN --> HALF_OPEN : probe interval elapsed
+    HALF_OPEN --> CLOSED : probe succeeds
+    HALF_OPEN --> OPEN : probe fails (increased backoff)
+
+    CLOSED : All DB calls pass through
+    CLOSED : Counting consecutive failures
+    OPEN : DB calls skipped (sleep for probe interval)
+    OPEN : No writes attempted
+    HALF_OPEN : One probe call allowed through

@@ -1,0 +1,31 @@
+---
+source: crates/mermaid-text/tests/snapshots.rs
+assertion_line: 2235
+expression: out
+---
+                   Reach and engagement of campaigns
+
+                            High Engagement
+                                   ^
+                  Need to promote  │ We should expand
+                                   │
+                                   │
+                                   │
+                       · Campaign F (0.35,0.78)
+                                   │     · Campaign C (0.57,0.69)
+                    · Campaign A (0.30,0.60)
+                                   │
+                                   │
+                                   │
+Low Reach──────────────────────────┼────────────────────────High Reach
+                                   │
+                                   │
+     Campaign E (0.40,0.34)·    Campaign D (0.78,0.34)·
+                              · Campaign B (0.45,0.23)
+                                   │
+                                   │
+                                   │
+                                   │
+                      Re-evaluate  │ May be improved
+                                   v
+                            Low Engagement

@@ -1,0 +1,8 @@
+/pi
+/tmp
+/target
+/.pi
+/.prux
+
+.mcp.json*
+.vim-bookmarks

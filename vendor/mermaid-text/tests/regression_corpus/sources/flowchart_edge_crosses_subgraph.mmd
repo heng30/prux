@@ -1,0 +1,15 @@
+graph LR
+    subgraph Infra
+        DB[(Postgres)]
+        Cache[(Redis)]
+    end
+    subgraph Services
+        API[API Server]
+        Worker[Worker]
+    end
+    API-->DB
+    API-->Cache
+    Worker-->DB
+    Worker-->Cache
+    LB[Load Balancer]-->API
+    LB-->Worker

@@ -1,0 +1,15 @@
+---
+source: crates/mermaid-text/tests/regression_corpus.rs
+expression: natural
+---
+Gantt: A Gantt Diagram (2014-01-01 → 2014-03-04, 63 days)
+
+                  Jan 01   Jan 11    Jan 21   Jan 31    Feb 10   Feb 20    Mar
+
+Section A
+  Design          ████████████████████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  [Jan 01 → Jan 30, 30d]
+  Implementation  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░██████████████████░░░░░░░░░░░░░  [Jan 31 → Feb 19, 20d]
+
+Section B
+  Testing         ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░██████████████░░░  [Feb 15 → Mar 01, 15d]
+  Deployment      ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░██  [Mar 02 → Mar 04, 3d]

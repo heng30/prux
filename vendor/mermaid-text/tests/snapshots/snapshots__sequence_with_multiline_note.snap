@@ -1,0 +1,18 @@
+---
+source: crates/mermaid-text/tests/snapshots.rs
+expression: out
+---
+ ┌────────┐             ┌───────┐
+ │  User  │             │  API  │
+ └────────┘             └───────┘
+      ┆ POST /audit         ┆
+      ──────────────────────▸
+      ┆                     ┆
+      ┆ ╭─────────────────╮ ┆
+      ┆ │ audit log entry │ ┆
+      ┆ │ recorded async  │ ┆
+      ┆ ╰─────────────────╯ ┆
+      ┆                     ┆
+ ┌────────┐             ┌───────┐
+ │  User  │             │  API  │
+ └────────┘             └───────┘

@@ -1,0 +1,16 @@
+---
+source: crates/mermaid-text/tests/regression_corpus.rs
+expression: constrained
+---
+                                               ╭───────────────╮
+                                              ▸│ CircuitClosed │
+                                              │╰───────────────╯
+╭─────╮    ╭─────────────╮────────────────────┼────────┘
+(  ●  )───▸│ CircuitOpen │          timeout reached
+╰─────╯    ╰──────▴──────╯┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┼┐
+                  │                          │┆╭───────────────────────────────╮
+                  │                          │┆│    Open state rejects all     │
+                  │                          │─│ traffic for cool-down period. │
+                  │                          │ ╰───────────────────────────────╯
+                  └──────────────────────────┘
+                                         5 errors

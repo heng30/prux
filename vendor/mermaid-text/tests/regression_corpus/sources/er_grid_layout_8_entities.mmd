@@ -1,0 +1,14 @@
+erDiagram
+    CUSTOMER ||--o{ ORDER : places
+    ORDER ||--|{ ITEM : contains
+    PRODUCT ||--o{ ITEM : describes
+    CATEGORY ||--o{ PRODUCT : groups
+    ACCOUNT ||--|| CUSTOMER : owns
+    INVOICE ||--|{ ORDER : bills
+    CUSTOMER { int id PK  string name }
+    ORDER    { int id PK  int customerId FK }
+    PRODUCT  { int id PK  string name  int categoryId FK }
+    CATEGORY { int id PK  string label }
+    ACCOUNT  { int id PK }
+    INVOICE  { int id PK }
+    ITEM     { int orderId FK  int productId FK }
