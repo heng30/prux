@@ -4826,6 +4826,8 @@ mod tests {
         }
 
         // 主题完全没定义这些键时用内置兜底色
+        // 期望值走同一个取色入口（真彩终端出 Rgb、256 色终端出 Indexed），断言不依赖运行终端
+        use crate::modes::interactive::theme::color;
         let bare = Theme {
             name: "bare".to_string(),
             vars: HashMap::new(),
@@ -4837,12 +4839,12 @@ mod tests {
         };
         assert_eq!(
             sys_level_style(MsgLevel::Info, &bare).fg,
-            Some(Color::Rgb(0x66, 0x66, 0x66)),
+            Some(color("#666666")),
             "info 回退到兜底色"
         );
         assert_eq!(
             sys_level_style(MsgLevel::Error, &bare).fg,
-            Some(Color::Rgb(0xcc, 0x66, 0x66)),
+            Some(color("#cc6666")),
             "error 回退到兜底色"
         );
     }

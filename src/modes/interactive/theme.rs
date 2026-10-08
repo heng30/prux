@@ -853,11 +853,20 @@ mod tests {
         let t = Theme::load("color-syntax");
         assert_eq!(t.name, "color-syntax");
         assert_eq!(t.appearance(), Appearance::Light, "显式 appearance 生效");
-        // oklch()/okhsl()/#rgb 都解析为具体 sRGB
+        // oklch()/okhsl()/#rgb 都解析为具体 sRGB（显式真彩：解析结果与终端能力无关）
         assert_eq!(t.get("accent", ""), "oklch(60% 0.15 250)");
-        assert_eq!(color(&t.get("text", "")), Color::Rgb(0xaa, 0xbb, 0xcc));
-        assert_eq!(color("oklch(60% 0.15 250)"), Color::Rgb(0x27, 0x84, 0xd5));
-        assert_eq!(color("okhsl(200 60% 40%)"), Color::Rgb(0x2c, 0x69, 0x6c));
+        assert_eq!(
+            color_with(&t.get("text", ""), true),
+            Color::Rgb(0xaa, 0xbb, 0xcc)
+        );
+        assert_eq!(
+            color_with("oklch(60% 0.15 250)", true),
+            Color::Rgb(0x27, 0x84, 0xd5)
+        );
+        assert_eq!(
+            color_with("okhsl(200 60% 40%)", true),
+            Color::Rgb(0x2c, 0x69, 0x6c)
+        );
         // 显式 256 色索引
         assert_eq!(color("ansi:196"), Color::Indexed(196));
         assert_eq!(fg_with("ansi:196", true), "\x1b[38;5;196m");

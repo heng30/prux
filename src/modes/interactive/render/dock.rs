@@ -198,11 +198,12 @@ mod tests {
     #[test]
     fn hex_fallback_colors_the_span() {
         use crate::modes::interactive::app::App;
-        use ratatui::style::Color;
+        use crate::modes::interactive::theme::color;
         let app = App::new();
         // agent 类型 badge：key 为空 + fallback 十六进制 → 按该色着色
+        // 期望值走同一个取色入口（真彩终端出 Rgb、256 色终端出 Indexed），断言不依赖运行终端
         let spans = dock_line_spans(&[DockSpan::hex("#DC2626", "badge")], 10, &app);
-        assert_eq!(spans[0].style.fg, Some(Color::Rgb(0xDC, 0x26, 0x26)));
+        assert_eq!(spans[0].style.fg, Some(color("#DC2626")));
         assert_eq!(spans[0].content, "badge");
         // 完全空白段仍是终端默认前景
         let spans = dock_line_spans(&[DockSpan::plain("plain")], 10, &app);

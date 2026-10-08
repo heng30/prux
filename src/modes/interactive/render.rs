@@ -1048,6 +1048,8 @@ mod tests {
         use crate::core::provider::ContentBlock;
         use ratatui::backend::TestBackend;
 
+        // 图片内容指纹就是图片协议缓存的键：本用例要求首帧必为冷缓存，
+        // 数据尺寸必须与其它用图用例不同，否则会被并行用例预热（首帧直接画出真图）
         let data = crate::test_support::png_base64_two_tone(600, 200);
         let build = |show: bool| {
             let mut app = App::new();
@@ -1120,8 +1122,10 @@ mod tests {
         };
         super::image::reset_cache();
 
+        // 尺寸与 show_images 用例错开：同一份数据会共享缓存条目，
+        // 对着已被预热的键断言“首次请求必为未命中”必然时灵时不灵
         let data: std::sync::Arc<str> =
-            std::sync::Arc::from(crate::test_support::png_base64_two_tone(600, 200).as_str());
+            std::sync::Arc::from(crate::test_support::png_base64_two_tone(600, 220).as_str());
         let key = crate::utils::terminal_image::image_key(&data);
         let size = Size::new(60, 10);
 
@@ -1820,7 +1824,8 @@ mod tests {
             "滚动后选中文本不变（钉在内容上）"
         );
         let buf = terminal.backend().buffer();
-        let sel_bg = Some(ratatui::style::Color::Rgb(0xa0, 0xa0, 0xa0));
+        // 与生产取色同入口：真彩终端为 Rgb、256 色终端为 Indexed，断言不依赖运行终端
+        let sel_bg = Some(color("#a0a0a0"));
         let row0_has = (0..50).any(|x| buf.cell((x, 0)).unwrap().style().bg == sel_bg);
         assert!(row0_has, "滚动后高亮应跟随内容出现在视口行 0");
         let row1_has = (0..50).any(|x| buf.cell((x, 1)).unwrap().style().bg == sel_bg);
@@ -1862,7 +1867,7 @@ mod tests {
             app.mouse.view_start
         );
         let buf = terminal.backend().buffer();
-        let sel_bg = Some(ratatui::style::Color::Rgb(0xa0, 0xa0, 0xa0));
+        let sel_bg = Some(color("#a0a0a0"));
         let any_sel =
             (0..10u16).any(|y| (0..50).any(|x| buf.cell((x, y)).unwrap().style().bg == sel_bg));
         assert!(!any_sel, "选择整体在视口上方时不得高亮任何行");
@@ -1877,7 +1882,7 @@ mod tests {
         let mk = |rows: usize| -> Vec<Line<'static>> {
             (0..rows).map(|i| Line::from(format!("row {i}"))).collect()
         };
-        let sel_bg = Some(ratatui::style::Color::Rgb(0xa0, 0xa0, 0xa0));
+        let sel_bg = Some(color("#a0a0a0"));
         let has_sel = |lines: &[Line<'static>]| {
             lines
                 .iter()
