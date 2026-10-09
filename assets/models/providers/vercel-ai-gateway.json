@@ -108,7 +108,16 @@
       "input": 1.3,
       "output": 7.8,
       "cacheRead": 0.13,
-      "cacheWrite": 1.625
+      "cacheWrite": 1.625,
+      "tiers": [
+        {
+          "inputTokensAbove": 127999,
+          "input": 2,
+          "output": 12,
+          "cacheRead": 0.2,
+          "cacheWrite": 2.5
+        }
+      ]
     },
     "contextWindow": 240000,
     "maxTokens": 64000,
@@ -165,7 +174,23 @@
       "input": 1.5,
       "output": 7.5,
       "cacheRead": 0.3,
-      "cacheWrite": 0
+      "cacheWrite": 0,
+      "tiers": [
+        {
+          "inputTokensAbove": 32000,
+          "input": 2.7,
+          "output": 13.5,
+          "cacheRead": 0.54,
+          "cacheWrite": 0
+        },
+        {
+          "inputTokensAbove": 128000,
+          "input": 4.5,
+          "output": 22.5,
+          "cacheRead": 0.9,
+          "cacheWrite": 0
+        }
+      ]
     },
     "contextWindow": 262144,
     "maxTokens": 65536,
@@ -234,7 +259,30 @@
       "input": 1,
       "output": 5,
       "cacheRead": 0.2,
-      "cacheWrite": 0
+      "cacheWrite": 0,
+      "tiers": [
+        {
+          "inputTokensAbove": 32000,
+          "input": 1.8,
+          "output": 9,
+          "cacheRead": 0.36,
+          "cacheWrite": 0
+        },
+        {
+          "inputTokensAbove": 128000,
+          "input": 3,
+          "output": 15,
+          "cacheRead": 0.6,
+          "cacheWrite": 0
+        },
+        {
+          "inputTokensAbove": 256000,
+          "input": 6,
+          "output": 60,
+          "cacheRead": 1.2,
+          "cacheWrite": 0
+        }
+      ]
     },
     "contextWindow": 1000000,
     "maxTokens": 65536,
@@ -257,7 +305,23 @@
       "input": 1.2,
       "output": 6,
       "cacheRead": 0.24,
-      "cacheWrite": 0
+      "cacheWrite": 0,
+      "tiers": [
+        {
+          "inputTokensAbove": 32000,
+          "input": 2.4,
+          "output": 12,
+          "cacheRead": 0.48,
+          "cacheWrite": 0
+        },
+        {
+          "inputTokensAbove": 128000,
+          "input": 3,
+          "output": 15,
+          "cacheRead": 0.6,
+          "cacheWrite": 0
+        }
+      ]
     },
     "contextWindow": 262144,
     "maxTokens": 32768,
@@ -280,7 +344,23 @@
       "input": 1.2,
       "output": 6,
       "cacheRead": 0.24,
-      "cacheWrite": 0
+      "cacheWrite": 0,
+      "tiers": [
+        {
+          "inputTokensAbove": 32000,
+          "input": 2.4,
+          "output": 12,
+          "cacheRead": 0.48,
+          "cacheWrite": 0
+        },
+        {
+          "inputTokensAbove": 128000,
+          "input": 3,
+          "output": 15,
+          "cacheRead": 0.6,
+          "cacheWrite": 0
+        }
+      ]
     },
     "contextWindow": 262144,
     "maxTokens": 32768,
@@ -303,7 +383,23 @@
       "input": 1.2,
       "output": 6,
       "cacheRead": 0.24,
-      "cacheWrite": 0
+      "cacheWrite": 0,
+      "tiers": [
+        {
+          "inputTokensAbove": 32000,
+          "input": 2.4,
+          "output": 12,
+          "cacheRead": 0.48,
+          "cacheWrite": 0
+        },
+        {
+          "inputTokensAbove": 128000,
+          "input": 3,
+          "output": 15,
+          "cacheRead": 0.6,
+          "cacheWrite": 0
+        }
+      ]
     },
     "contextWindow": 256000,
     "maxTokens": 65536,
@@ -509,7 +605,16 @@
       "input": 0.4,
       "output": 2.4,
       "cacheRead": 0.04,
-      "cacheWrite": 0.5
+      "cacheWrite": 0.5,
+      "tiers": [
+        {
+          "inputTokensAbove": 256000,
+          "input": 0.5,
+          "output": 3,
+          "cacheRead": 0.05,
+          "cacheWrite": 0.625
+        }
+      ]
     },
     "contextWindow": 1000000,
     "maxTokens": 64000,
@@ -577,7 +682,16 @@
       "input": 0.5,
       "output": 3,
       "cacheRead": 0.05,
-      "cacheWrite": 0.625
+      "cacheWrite": 0.625,
+      "tiers": [
+        {
+          "inputTokensAbove": 255999,
+          "input": 2,
+          "output": 6,
+          "cacheRead": 0.2,
+          "cacheWrite": 2.5
+        }
+      ]
     },
     "contextWindow": 1000000,
     "maxTokens": 64000,
@@ -611,7 +725,23 @@
       "input": 0.03,
       "output": 0.13,
       "cacheRead": 0.006,
-      "cacheWrite": 0.038
+      "cacheWrite": 0.038,
+      "tiers": [
+        {
+          "inputTokensAbove": 31999,
+          "input": 0.1,
+          "output": 0.4,
+          "cacheRead": 0.02,
+          "cacheWrite": 0.125
+        },
+        {
+          "inputTokensAbove": 255999,
+          "input": 0.2,
+          "output": 0.8,
+          "cacheRead": 0.04,
+          "cacheWrite": 0.25
+        }
+      ]
     },
     "contextWindow": 991000,
     "maxTokens": 64000,
@@ -668,7 +798,16 @@
       "input": 0.4,
       "output": 1.6,
       "cacheRead": 0.08,
-      "cacheWrite": 0.5
+      "cacheWrite": 0.5,
+      "tiers": [
+        {
+          "inputTokensAbove": 255999,
+          "input": 1.2,
+          "output": 4.8,
+          "cacheRead": 0.24,
+          "cacheWrite": 1.5
+        }
+      ]
     },
     "contextWindow": 1000000,
     "maxTokens": 64000,
@@ -1195,6 +1334,55 @@
     },
     "type": "chat"
   },
+  "anthropic/claude-haiku-5.5": {
+    "id": "anthropic/claude-haiku-5.5",
+    "name": "Claude Haiku 5.5",
+    "api": "anthropic-messages",
+    "baseUrl": "https://ai-gateway.vercel.sh",
+    "provider": "vercel-ai-gateway",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "compat": {
+      "allowEmptySignature": true,
+      "forceAdaptiveThinking": true,
+      "supportsTemperature": false
+    },
+    "cost": {
+      "input": 0.1,
+      "output": 0.5,
+      "cacheRead": 0.01,
+      "cacheWrite": 0.125,
+      "tiers": [
+        {
+          "inputTokensAbove": 100000,
+          "input": 0.5,
+          "output": 2.5,
+          "cacheRead": 0.05,
+          "cacheWrite": 0.625
+        }
+      ]
+    },
+    "contextWindow": 1000000,
+    "maxTokens": 128000,
+    "thinkingLevelMap": {
+      "xhigh": "xhigh",
+      "max": "max"
+    },
+    "inputLimits": {
+      "images": {
+        "resize": {
+          "maxWidth": 2000,
+          "maxHeight": 2000,
+          "maxBytes": 4718592,
+          "jpegQuality": 80
+        }
+      }
+    },
+    "type": "chat"
+  },
   "anthropic/claude-opus-4": {
     "id": "anthropic/claude-opus-4",
     "name": "Claude Opus 4",
@@ -1599,7 +1787,16 @@
       "input": 3,
       "output": 15,
       "cacheRead": 0.3,
-      "cacheWrite": 3.75
+      "cacheWrite": 3.75,
+      "tiers": [
+        {
+          "inputTokensAbove": 200000,
+          "input": 6,
+          "output": 22.5,
+          "cacheRead": 0.6,
+          "cacheWrite": 7.5
+        }
+      ]
     },
     "contextWindow": 1000000,
     "maxTokens": 64000,
@@ -1633,7 +1830,16 @@
       "input": 3,
       "output": 15,
       "cacheRead": 0.3,
-      "cacheWrite": 3.75
+      "cacheWrite": 3.75,
+      "tiers": [
+        {
+          "inputTokensAbove": 200000,
+          "input": 6,
+          "output": 22.5,
+          "cacheRead": 0.6,
+          "cacheWrite": 7.5
+        }
+      ]
     },
     "contextWindow": 1000000,
     "maxTokens": 64000,
@@ -1781,7 +1987,7 @@
     },
     "cost": {
       "input": 0.25,
-      "output": 0.9,
+      "output": 0.8,
       "cacheRead": 0,
       "cacheWrite": 0
     },
@@ -1807,7 +2013,16 @@
       "input": 0.25,
       "output": 2,
       "cacheRead": 0.05,
-      "cacheWrite": 0
+      "cacheWrite": 0,
+      "tiers": [
+        {
+          "inputTokensAbove": 128000,
+          "input": 0.5,
+          "output": 4,
+          "cacheRead": 0.05,
+          "cacheWrite": 0
+        }
+      ]
     },
     "contextWindow": 256000,
     "maxTokens": 32000,
@@ -1841,7 +2056,16 @@
       "input": 0.25,
       "output": 2,
       "cacheRead": 0.05,
-      "cacheWrite": 0
+      "cacheWrite": 0,
+      "tiers": [
+        {
+          "inputTokensAbove": 128000,
+          "input": 0.5,
+          "output": 4,
+          "cacheRead": 0.05,
+          "cacheWrite": 0
+        }
+      ]
     },
     "contextWindow": 256000,
     "maxTokens": 64000,
@@ -1958,29 +2182,6 @@
     },
     "contextWindow": 163840,
     "maxTokens": 128000,
-    "type": "chat"
-  },
-  "deepseek/deepseek-v3.1-terminus": {
-    "id": "deepseek/deepseek-v3.1-terminus",
-    "name": "DeepSeek V3.1 Terminus",
-    "api": "anthropic-messages",
-    "baseUrl": "https://ai-gateway.vercel.sh",
-    "provider": "vercel-ai-gateway",
-    "reasoning": true,
-    "input": [
-      "text"
-    ],
-    "compat": {
-      "allowEmptySignature": true
-    },
-    "cost": {
-      "input": 0.27,
-      "output": 1,
-      "cacheRead": 0.135,
-      "cacheWrite": 0
-    },
-    "contextWindow": 131072,
-    "maxTokens": 65536,
     "type": "chat"
   },
   "deepseek/deepseek-v3.2": {
@@ -2343,7 +2544,16 @@
       "input": 1.25,
       "output": 10,
       "cacheRead": 0.125,
-      "cacheWrite": 0
+      "cacheWrite": 0,
+      "tiers": [
+        {
+          "inputTokensAbove": 200000,
+          "input": 2.5,
+          "output": 15,
+          "cacheRead": 0.25,
+          "cacheWrite": 0
+        }
+      ]
     },
     "contextWindow": 1048576,
     "maxTokens": 65535,
@@ -2377,7 +2587,16 @@
       "input": 0.5,
       "output": 3,
       "cacheRead": 0.05,
-      "cacheWrite": 0
+      "cacheWrite": 0,
+      "tiers": [
+        {
+          "inputTokensAbove": 200000,
+          "input": 0.5,
+          "output": 3,
+          "cacheRead": 0.05,
+          "cacheWrite": 0
+        }
+      ]
     },
     "contextWindow": 1000000,
     "maxTokens": 65000,
@@ -2445,7 +2664,16 @@
       "input": 2,
       "output": 12,
       "cacheRead": 0.2,
-      "cacheWrite": 0
+      "cacheWrite": 0,
+      "tiers": [
+        {
+          "inputTokensAbove": 200000,
+          "input": 4,
+          "output": 18,
+          "cacheRead": 0.4,
+          "cacheWrite": 0
+        }
+      ]
     },
     "contextWindow": 1000000,
     "maxTokens": 64000,
@@ -2828,32 +3056,9 @@
       "allowEmptySignature": true
     },
     "cost": {
-      "input": 0,
-      "output": 0,
-      "cacheRead": 0,
-      "cacheWrite": 0
-    },
-    "contextWindow": 256000,
-    "maxTokens": 32000,
-    "type": "chat"
-  },
-  "inclusionai/ling-3.0-flash-sante-free": {
-    "id": "inclusionai/ling-3.0-flash-sante-free",
-    "name": "Ling 3.0 Flash Sante (Free)",
-    "api": "anthropic-messages",
-    "baseUrl": "https://ai-gateway.vercel.sh",
-    "provider": "vercel-ai-gateway",
-    "reasoning": true,
-    "input": [
-      "text"
-    ],
-    "compat": {
-      "allowEmptySignature": true
-    },
-    "cost": {
-      "input": 0,
-      "output": 0,
-      "cacheRead": 0,
+      "input": 0.075,
+      "output": 0.22,
+      "cacheRead": 0.015,
       "cacheWrite": 0
     },
     "contextWindow": 256000,
@@ -3703,6 +3908,40 @@
     },
     "type": "chat"
   },
+  "mistral/mistral-large-4": {
+    "id": "mistral/mistral-large-4",
+    "name": "Mistral Large 4",
+    "api": "anthropic-messages",
+    "baseUrl": "https://ai-gateway.vercel.sh",
+    "provider": "vercel-ai-gateway",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "compat": {
+      "allowEmptySignature": true
+    },
+    "cost": {
+      "input": 0.68,
+      "output": 2.09,
+      "cacheRead": 0.07,
+      "cacheWrite": 0
+    },
+    "contextWindow": 524288,
+    "maxTokens": 262144,
+    "inputLimits": {
+      "images": {
+        "resize": {
+          "maxWidth": 2000,
+          "maxHeight": 2000,
+          "maxBytes": 4718592,
+          "jpegQuality": 80
+        }
+      }
+    },
+    "type": "chat"
+  },
   "mistral/mistral-medium-3.5": {
     "id": "mistral/mistral-medium-3.5",
     "name": "Mistral Medium Latest",
@@ -3838,29 +4077,6 @@
     },
     "contextWindow": 131072,
     "maxTokens": 131072,
-    "type": "chat"
-  },
-  "moonshotai/kimi-k2-thinking": {
-    "id": "moonshotai/kimi-k2-thinking",
-    "name": "Kimi K2 Thinking",
-    "api": "anthropic-messages",
-    "baseUrl": "https://ai-gateway.vercel.sh",
-    "provider": "vercel-ai-gateway",
-    "reasoning": true,
-    "input": [
-      "text"
-    ],
-    "compat": {
-      "allowEmptySignature": true
-    },
-    "cost": {
-      "input": 0.47,
-      "output": 2,
-      "cacheRead": 0.141,
-      "cacheWrite": 0
-    },
-    "contextWindow": 216144,
-    "maxTokens": 216144,
     "type": "chat"
   },
   "moonshotai/kimi-k2.5": {
@@ -5261,7 +5477,16 @@
       "input": 2.5,
       "output": 15,
       "cacheRead": 0.25,
-      "cacheWrite": 0
+      "cacheWrite": 0,
+      "tiers": [
+        {
+          "inputTokensAbove": 271999,
+          "input": 5,
+          "output": 22.5,
+          "cacheRead": 0.5,
+          "cacheWrite": 0
+        }
+      ]
     },
     "contextWindow": 1050000,
     "maxTokens": 128000,
@@ -5446,7 +5671,16 @@
       "input": 30,
       "output": 180,
       "cacheRead": 0,
-      "cacheWrite": 0
+      "cacheWrite": 0,
+      "tiers": [
+        {
+          "inputTokensAbove": 271999,
+          "input": 60,
+          "output": 270,
+          "cacheRead": 0,
+          "cacheWrite": 0
+        }
+      ]
     },
     "contextWindow": 1050000,
     "maxTokens": 128000,
@@ -5483,7 +5717,16 @@
       "input": 5,
       "output": 30,
       "cacheRead": 0.5,
-      "cacheWrite": 0
+      "cacheWrite": 0,
+      "tiers": [
+        {
+          "inputTokensAbove": 271999,
+          "input": 10,
+          "output": 45,
+          "cacheRead": 1,
+          "cacheWrite": 0
+        }
+      ]
     },
     "contextWindow": 1000000,
     "maxTokens": 128000,
@@ -5557,7 +5800,16 @@
       "input": 30,
       "output": 180,
       "cacheRead": 0,
-      "cacheWrite": 0
+      "cacheWrite": 0,
+      "tiers": [
+        {
+          "inputTokensAbove": 271999,
+          "input": 60,
+          "output": 270,
+          "cacheRead": 0,
+          "cacheWrite": 0
+        }
+      ]
     },
     "contextWindow": 1000000,
     "maxTokens": 128000,
@@ -5597,7 +5849,16 @@
       "input": 0.2,
       "output": 1.2,
       "cacheRead": 0.02,
-      "cacheWrite": 0.25
+      "cacheWrite": 0.25,
+      "tiers": [
+        {
+          "inputTokensAbove": 271999,
+          "input": 0.4,
+          "output": 1.8,
+          "cacheRead": 0.04,
+          "cacheWrite": 0.5
+        }
+      ]
     },
     "contextWindow": 1050000,
     "maxTokens": 128000,
@@ -5634,7 +5895,16 @@
       "input": 0.4,
       "output": 2.4,
       "cacheRead": 0.04,
-      "cacheWrite": 0.5
+      "cacheWrite": 0.5,
+      "tiers": [
+        {
+          "inputTokensAbove": 271999,
+          "input": 0.8,
+          "output": 3.6,
+          "cacheRead": 0.08,
+          "cacheWrite": 1
+        }
+      ]
     },
     "contextWindow": 1050000,
     "maxTokens": 128000,
@@ -5671,7 +5941,16 @@
       "input": 4,
       "output": 20,
       "cacheRead": 0.4,
-      "cacheWrite": 5
+      "cacheWrite": 5,
+      "tiers": [
+        {
+          "inputTokensAbove": 271999,
+          "input": 8,
+          "output": 30,
+          "cacheRead": 0.8,
+          "cacheWrite": 10
+        }
+      ]
     },
     "contextWindow": 1050000,
     "maxTokens": 128000,
@@ -5708,7 +5987,16 @@
       "input": 8,
       "output": 40,
       "cacheRead": 0.8,
-      "cacheWrite": 10
+      "cacheWrite": 10,
+      "tiers": [
+        {
+          "inputTokensAbove": 271999,
+          "input": 16,
+          "output": 60,
+          "cacheRead": 1.6,
+          "cacheWrite": 20
+        }
+      ]
     },
     "contextWindow": 1050000,
     "maxTokens": 128000,
@@ -5745,7 +6033,16 @@
       "input": 2,
       "output": 12,
       "cacheRead": 0.2,
-      "cacheWrite": 2.5
+      "cacheWrite": 2.5,
+      "tiers": [
+        {
+          "inputTokensAbove": 271999,
+          "input": 4,
+          "output": 18,
+          "cacheRead": 0.4,
+          "cacheWrite": 5
+        }
+      ]
     },
     "contextWindow": 1050000,
     "maxTokens": 128000,
@@ -5782,7 +6079,16 @@
       "input": 4,
       "output": 24,
       "cacheRead": 0.4,
-      "cacheWrite": 5
+      "cacheWrite": 5,
+      "tiers": [
+        {
+          "inputTokensAbove": 271999,
+          "input": 8,
+          "output": 36,
+          "cacheRead": 0.8,
+          "cacheWrite": 10
+        }
+      ]
     },
     "contextWindow": 1050000,
     "maxTokens": 128000,
@@ -5819,7 +6125,16 @@
       "input": 10,
       "output": 50,
       "cacheRead": 1,
-      "cacheWrite": 12.5
+      "cacheWrite": 12.5,
+      "tiers": [
+        {
+          "inputTokensAbove": 272000,
+          "input": 20,
+          "output": 75,
+          "cacheRead": 2,
+          "cacheWrite": 25
+        }
+      ]
     },
     "contextWindow": 1050000,
     "maxTokens": 128000,
@@ -5856,7 +6171,16 @@
       "input": 20,
       "output": 100,
       "cacheRead": 2,
-      "cacheWrite": 25
+      "cacheWrite": 25,
+      "tiers": [
+        {
+          "inputTokensAbove": 272000,
+          "input": 40,
+          "output": 150,
+          "cacheRead": 4,
+          "cacheWrite": 50
+        }
+      ]
     },
     "contextWindow": 1050000,
     "maxTokens": 128000,
@@ -5893,7 +6217,16 @@
       "input": 0.1,
       "output": 0.5,
       "cacheRead": 0.01,
-      "cacheWrite": 0.125
+      "cacheWrite": 0.125,
+      "tiers": [
+        {
+          "inputTokensAbove": 272000,
+          "input": 0.2,
+          "output": 0.75,
+          "cacheRead": 0.02,
+          "cacheWrite": 0.25
+        }
+      ]
     },
     "contextWindow": 1050000,
     "maxTokens": 128000,
@@ -5930,7 +6263,16 @@
       "input": 0.2,
       "output": 1,
       "cacheRead": 0.02,
-      "cacheWrite": 0.25
+      "cacheWrite": 0.25,
+      "tiers": [
+        {
+          "inputTokensAbove": 272000,
+          "input": 0.4,
+          "output": 1.5,
+          "cacheRead": 0.04,
+          "cacheWrite": 0.5
+        }
+      ]
     },
     "contextWindow": 1050000,
     "maxTokens": 128000,
@@ -5967,7 +6309,16 @@
       "input": 2,
       "output": 10,
       "cacheRead": 0.2,
-      "cacheWrite": 2.5
+      "cacheWrite": 2.5,
+      "tiers": [
+        {
+          "inputTokensAbove": 272000,
+          "input": 4,
+          "output": 15,
+          "cacheRead": 0.4,
+          "cacheWrite": 5
+        }
+      ]
     },
     "contextWindow": 1050000,
     "maxTokens": 128000,
@@ -6004,7 +6355,16 @@
       "input": 4,
       "output": 20,
       "cacheRead": 0.4,
-      "cacheWrite": 5
+      "cacheWrite": 5,
+      "tiers": [
+        {
+          "inputTokensAbove": 272000,
+          "input": 8,
+          "output": 30,
+          "cacheRead": 0.8,
+          "cacheWrite": 10
+        }
+      ]
     },
     "contextWindow": 1050000,
     "maxTokens": 128000,
@@ -6041,7 +6401,16 @@
       "input": 2,
       "output": 10,
       "cacheRead": 0.1,
-      "cacheWrite": 2.5
+      "cacheWrite": 2.5,
+      "tiers": [
+        {
+          "inputTokensAbove": 272000,
+          "input": 4,
+          "output": 15,
+          "cacheRead": 0.2,
+          "cacheWrite": 5
+        }
+      ]
     },
     "contextWindow": 1050000,
     "maxTokens": 128000,
@@ -6078,7 +6447,16 @@
       "input": 4,
       "output": 20,
       "cacheRead": 0.2,
-      "cacheWrite": 5
+      "cacheWrite": 5,
+      "tiers": [
+        {
+          "inputTokensAbove": 272000,
+          "input": 8,
+          "output": 30,
+          "cacheRead": 0.4,
+          "cacheWrite": 10
+        }
+      ]
     },
     "contextWindow": 1050000,
     "maxTokens": 128000,
@@ -6430,9 +6808,9 @@
       "allowEmptySignature": true
     },
     "cost": {
-      "input": 0.1,
-      "output": 0.2,
-      "cacheRead": 0.01,
+      "input": 0.09,
+      "output": 0.18,
+      "cacheRead": 0.009,
       "cacheWrite": 0
     },
     "contextWindow": 1000000,
@@ -6582,7 +6960,16 @@
       "input": 5,
       "output": 30,
       "cacheRead": 0.5,
-      "cacheWrite": 0
+      "cacheWrite": 0,
+      "tiers": [
+        {
+          "inputTokensAbove": 272000,
+          "input": 10,
+          "output": 45,
+          "cacheRead": 1,
+          "cacheWrite": 0
+        }
+      ]
     },
     "contextWindow": 1000000,
     "maxTokens": 1000000,
@@ -6616,7 +7003,16 @@
       "input": 5,
       "output": 30,
       "cacheRead": 0.5,
-      "cacheWrite": 0
+      "cacheWrite": 0,
+      "tiers": [
+        {
+          "inputTokensAbove": 272000,
+          "input": 10,
+          "output": 45,
+          "cacheRead": 1,
+          "cacheWrite": 0
+        }
+      ]
     },
     "contextWindow": 1000000,
     "maxTokens": 1000000,
@@ -6752,7 +7148,16 @@
       "input": 1.25,
       "output": 2.5,
       "cacheRead": 0.2,
-      "cacheWrite": 0
+      "cacheWrite": 0,
+      "tiers": [
+        {
+          "inputTokensAbove": 200000,
+          "input": 2.5,
+          "output": 5,
+          "cacheRead": 0.4,
+          "cacheWrite": 0
+        }
+      ]
     },
     "contextWindow": 2000000,
     "maxTokens": 2000000,
@@ -6786,7 +7191,16 @@
       "input": 1.25,
       "output": 2.5,
       "cacheRead": 0.2,
-      "cacheWrite": 0
+      "cacheWrite": 0,
+      "tiers": [
+        {
+          "inputTokensAbove": 200000,
+          "input": 2.5,
+          "output": 5,
+          "cacheRead": 0.4,
+          "cacheWrite": 0
+        }
+      ]
     },
     "contextWindow": 2000000,
     "maxTokens": 2000000,
@@ -6820,7 +7234,16 @@
       "input": 1.25,
       "output": 2.5,
       "cacheRead": 0.2,
-      "cacheWrite": 0
+      "cacheWrite": 0,
+      "tiers": [
+        {
+          "inputTokensAbove": 200000,
+          "input": 2.5,
+          "output": 5,
+          "cacheRead": 0.4,
+          "cacheWrite": 0
+        }
+      ]
     },
     "contextWindow": 2000000,
     "maxTokens": 2000000,
@@ -6854,7 +7277,16 @@
       "input": 1.25,
       "output": 2.5,
       "cacheRead": 0.2,
-      "cacheWrite": 0
+      "cacheWrite": 0,
+      "tiers": [
+        {
+          "inputTokensAbove": 200000,
+          "input": 2.5,
+          "output": 5,
+          "cacheRead": 0.4,
+          "cacheWrite": 0
+        }
+      ]
     },
     "contextWindow": 2000000,
     "maxTokens": 2000000,
@@ -6888,7 +7320,16 @@
       "input": 1.25,
       "output": 2.5,
       "cacheRead": 0.2,
-      "cacheWrite": 0
+      "cacheWrite": 0,
+      "tiers": [
+        {
+          "inputTokensAbove": 200000,
+          "input": 2.5,
+          "output": 5,
+          "cacheRead": 0.4,
+          "cacheWrite": 0
+        }
+      ]
     },
     "contextWindow": 2000000,
     "maxTokens": 2000000,
@@ -6922,7 +7363,16 @@
       "input": 1.25,
       "output": 2.5,
       "cacheRead": 0.2,
-      "cacheWrite": 0
+      "cacheWrite": 0,
+      "tiers": [
+        {
+          "inputTokensAbove": 200000,
+          "input": 2.5,
+          "output": 5,
+          "cacheRead": 0.4,
+          "cacheWrite": 0
+        }
+      ]
     },
     "contextWindow": 2000000,
     "maxTokens": 2000000,
@@ -6956,7 +7406,16 @@
       "input": 1.25,
       "output": 2.5,
       "cacheRead": 0.2,
-      "cacheWrite": 0
+      "cacheWrite": 0,
+      "tiers": [
+        {
+          "inputTokensAbove": 200000,
+          "input": 2.5,
+          "output": 5,
+          "cacheRead": 0.4,
+          "cacheWrite": 0
+        }
+      ]
     },
     "contextWindow": 1000000,
     "maxTokens": 1000000,
@@ -6990,7 +7449,16 @@
       "input": 2,
       "output": 6,
       "cacheRead": 0.3,
-      "cacheWrite": 0
+      "cacheWrite": 0,
+      "tiers": [
+        {
+          "inputTokensAbove": 200000,
+          "input": 4,
+          "output": 12,
+          "cacheRead": 0.6,
+          "cacheWrite": 0
+        }
+      ]
     },
     "contextWindow": 500000,
     "maxTokens": 500000,
@@ -7024,7 +7492,16 @@
       "input": 2,
       "output": 6,
       "cacheRead": 0.5,
-      "cacheWrite": 0
+      "cacheWrite": 0,
+      "tiers": [
+        {
+          "inputTokensAbove": 200000,
+          "input": 4,
+          "output": 12,
+          "cacheRead": 1,
+          "cacheWrite": 0
+        }
+      ]
     },
     "contextWindow": 500000,
     "maxTokens": 500000,
@@ -7058,7 +7535,16 @@
       "input": 2,
       "output": 6,
       "cacheRead": 0.5,
-      "cacheWrite": 0
+      "cacheWrite": 0,
+      "tiers": [
+        {
+          "inputTokensAbove": 200000,
+          "input": 4,
+          "output": 12,
+          "cacheRead": 1,
+          "cacheWrite": 0
+        }
+      ]
     },
     "contextWindow": 500000,
     "maxTokens": 500000,
@@ -7092,7 +7578,16 @@
       "input": 1,
       "output": 2,
       "cacheRead": 0.2,
-      "cacheWrite": 0
+      "cacheWrite": 0,
+      "tiers": [
+        {
+          "inputTokensAbove": 200000,
+          "input": 2,
+          "output": 4,
+          "cacheRead": 0.4,
+          "cacheWrite": 0
+        }
+      ]
     },
     "contextWindow": 256000,
     "maxTokens": 256000,
@@ -7108,38 +7603,27 @@
     },
     "type": "chat"
   },
-  "stepfun/step-3.5-flash": {
-    "id": "stepfun/step-3.5-flash",
-    "name": "StepFun 3.5 Flash",
+  "stealth/glyph-cluster": {
+    "id": "stealth/glyph-cluster",
+    "name": "Glyph Cluster",
     "api": "anthropic-messages",
     "baseUrl": "https://ai-gateway.vercel.sh",
     "provider": "vercel-ai-gateway",
     "reasoning": true,
     "input": [
-      "text",
-      "image"
+      "text"
     ],
     "compat": {
       "allowEmptySignature": true
     },
     "cost": {
-      "input": 0.09,
-      "output": 0.3,
-      "cacheRead": 0.02,
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
       "cacheWrite": 0
     },
-    "contextWindow": 262114,
-    "maxTokens": 262114,
-    "inputLimits": {
-      "images": {
-        "resize": {
-          "maxWidth": 2000,
-          "maxHeight": 2000,
-          "maxBytes": 4718592,
-          "jpegQuality": 80
-        }
-      }
-    },
+    "contextWindow": 256000,
+    "maxTokens": 256000,
     "type": "chat"
   },
   "stepfun/step-3.7-flash": {

@@ -1,66 +1,14 @@
-//! 压缩工具函数：token 估算、对话序列化、文件操作跟踪
+//! 压缩工具函数：对话序列化与文件操作跟踪
 
-use crate::{
-    core::{
-        self,
-        provider::{AgentMessage, ContentBlock},
-    },
-    utils::tokens,
+use crate::core::{
+    self,
+    provider::{AgentMessage, ContentBlock},
 };
 use serde_json::Value;
 use std::collections::HashSet;
 
-/// 图片 token 当量（无对应 BPE 口径，按 4800 字符 ≈ 1200 token 折算）
-const ESTIMATED_IMAGE_TOKENS: u32 = 1200;
 /// 压缩序列化时工具结果保留的最大字符数，超出部分截断省略。
 const TOOL_RESULT_MAX_CHARS: usize = 2000;
-
-/// 内容块 → token（文本走 tiktoken BPE 真实计数，图片按固定当量）
-fn estimate_content_tokens(enc: &tiktoken_rs::CoreBPE, content: &[ContentBlock]) -> u32 {
-    let mut tokens = 0u32;
-    for block in content {
-        match block {
-            ContentBlock::Text { text, .. } => tokens += tokens::count(enc, text) as u32,
-            ContentBlock::Image { .. } => tokens += ESTIMATED_IMAGE_TOKENS,
-            _ => {}
-        }
-    }
-    tokens
-}
-
-/// 估算单条消息 token：text/thinking/toolCall 走 tiktoken BPE 真实计数
-/// （中英混合下比 chars/4 启发式准：中文 cl100k ≈ 0.9~1.2 token/字），
-/// 图片没有公开 BPE 口径，用固定当量。
-pub fn estimate_tokens(message: &AgentMessage) -> u32 {
-    // 历史消息没有模型上下文，统一用 cl100k（对中英混合/代码的综合偏差最小）
-    let enc = tokens::encoding_for(None);
-    match message.role.as_str() {
-        "user" | "toolResult" => estimate_content_tokens(enc, &message.content),
-        "assistant" => {
-            let mut tokens = 0u32;
-            for block in &message.content {
-                match block {
-                    ContentBlock::Text { text, .. } => tokens += tokens::count(enc, text) as u32,
-                    ContentBlock::Thinking { thinking, .. } => {
-                        tokens += tokens::count(enc, thinking) as u32
-                    }
-                    ContentBlock::ToolCall {
-                        name, arguments, ..
-                    } => {
-                        tokens += tokens::count(enc, name) as u32;
-                        tokens += tokens::count(
-                            enc,
-                            &serde_json::to_string(arguments).unwrap_or_default(),
-                        ) as u32;
-                    }
-                    _ => {}
-                }
-            }
-            tokens
-        }
-        _ => 0,
-    }
-}
 
 /// 拼接内容块里所有文本块的文本（非文本块忽略，块间不加分隔）。
 fn content_text(content: &[ContentBlock]) -> String {

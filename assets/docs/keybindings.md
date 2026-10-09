@@ -35,8 +35,8 @@
 | `tui.editor.cursorRight` | `right`, `ctrl+f` | 光标右移 |
 | `tui.editor.cursorWordLeft` | `alt+left`, `ctrl+left`, `alt+b` | 词左移 |
 | `tui.editor.cursorWordRight` | `alt+right`, `ctrl+right`, `alt+f` | 词右移 |
-| `tui.editor.cursorLineStart` | `home`, `ctrl+home`, `ctrl+a` | 行首 |
-| `tui.editor.cursorLineEnd` | `end`, `ctrl+end`, `ctrl+e` | 行尾 |
+| `tui.editor.cursorLineStart` | `home`, `ctrl+a` | 行首 |
+| `tui.editor.cursorLineEnd` | `end`, `ctrl+e` | 行尾 |
 | `tui.editor.pageUp` | `pageUp`, `ctrl+pageUp` | 编辑器翻页 |
 | `tui.editor.pageDown` | `pageDown`, `ctrl+pageDown` | 编辑器翻页 |
 | `tui.editor.deleteCharBackward` | `backspace`, `shift+backspace` | 删除前一字符 |
@@ -88,8 +88,8 @@
 | `app.editor.copy` | `alt+c` | 复制整个输入框内容 |
 | `app.message.followUp` | `alt+enter` | 排队 follow-up 消息 |
 | `app.message.dequeue` | `alt+up` | 取回排队消息 |
-| `app.message.scrollToTop` | `shift+home` | 消息区滚动到顶部 |
-| `app.message.scrollToBottom` | `shift+end` | 消息区滚动到底部（跟随最新） |
+| `app.message.scrollToTop` | `ctrl+home` | 消息区滚动到顶部 |
+| `app.message.scrollToBottom` | `ctrl+end` | 消息区滚动到底部（跟随最新） |
 | `app.message.pageUp` | `shift+pageUp` | 消息区向上翻一页 |
 | `app.message.pageDown` | `shift+pageDown` | 消息区向下翻一页 |
 | `app.clipboard.pasteImage` | `ctrl+v` | 粘贴（文本 fallback） |

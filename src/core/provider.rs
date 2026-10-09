@@ -15,6 +15,7 @@
 //! 由扩展直接调用，不经过 agent 循环。
 
 mod convert;
+mod estimate;
 mod retry;
 
 pub mod anthropic;
@@ -53,6 +54,10 @@ pub use convert::{
     BRANCH_SUMMARY_PREFIX, BRANCH_SUMMARY_SUFFIX, COMPACTION_SUMMARY_PREFIX,
     COMPACTION_SUMMARY_SUFFIX,
 };
+pub use estimate::{
+    ContextUsageEstimate, calculate_context_tokens, estimate_context_tokens,
+    estimate_request_tokens, estimate_tokens, usable_usage,
+};
 pub use images::{AssistantImages, ImageContent};
 pub use retry::DEFAULT_MAX_RETRIES;
 
@@ -72,6 +77,12 @@ pub const MAX_STREAM_BYTES: usize = 16 * 1024 * 1024;
 
 /// 工具参数 schema 里承载语法约束的私有键（由 agent 侧注入，见 `compose_tools`）。
 pub const GRAMMAR_SCHEMA_KEY: &str = concat!("x-", env!("CARGO_PKG_NAME"), "-grammar");
+
+/// 上下文安全余量（token）：为响应格式与供应商侧附加内容预留的空间。
+const CONTEXT_SAFETY_TOKENS: u32 = 4096;
+
+/// 钳制后输出上限的最小值：至少 1，避免算出 0 让请求非法（对齐 pi 的 `MIN_MAX_TOKENS`）。
+const MIN_MAX_TOKENS: u32 = 1;
 
 /// 一个语法约束工具的协议无关形式（两套 OpenAI 协议的 `custom` 工具用它）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1391,6 +1402,30 @@ impl<'a> PartialTranslator<'a> {
     }
 }
 
+/// 按模型上下文窗口钳制输出上限：`min(生效上限, 窗口 − 已用上下文 − 安全余量)`。
+///
+/// 生效上限取 `max_tokens.or(model.max_tokens)`；两者都为 `None`（显式不限制）时返回 `None`，
+/// 保持「请求体不带该字段」的原有语义。`context_window` 为 0（窗口未知）时只做下限保护。
+pub fn clamp_max_tokens_to_context(
+    model: &ModelConfig,
+    messages: &[AgentMessage],
+    system_prompt: &str,
+    tools: &[(String, String, Value)],
+    max_tokens: Option<u32>,
+) -> Option<u32> {
+    let requested = max_tokens.or(model.max_tokens)?;
+    if model.context_window == 0 {
+        return Some(requested.max(MIN_MAX_TOKENS));
+    }
+
+    let used = estimate_request_tokens(messages, system_prompt, tools);
+    let available = model
+        .context_window
+        .saturating_sub(used)
+        .saturating_sub(CONTEXT_SAFETY_TOKENS);
+    Some(requested.min(available.max(MIN_MAX_TOKENS)))
+}
+
 // 统一入口：按 ModelConfig.api 路由到各协议实现
 /// 统一流式入口：按 [`ModelConfig::api`] 路由到对应协议实现（completions / responses / anthropic / google）。
 ///
@@ -1439,6 +1474,10 @@ pub async fn stream_chat(
             model.provider
         )))
     } else {
+        // 输出上限先按上下文窗口钳制：请求上限可能大于「窗口 − 已用上下文」，这类请求会被 provider 直接拒绝。
+        let max_tokens =
+            clamp_max_tokens_to_context(model, messages, system_prompt, tools, max_tokens);
+
         // 把外部（带 partial 的事件）sink 包装成 translator，供协议层以 RawStreamEvent 消费。
         let mut translator_owner: Option<PartialTranslator>;
         let mut raw: Option<&mut PartialTranslator> = None;
@@ -1825,6 +1864,77 @@ mod tests {
         // 非推理模型只有 off
         let plain = model(false, None);
         assert_eq!(plain.supported_thinking_levels(), vec!["off"]);
+    }
+
+    /// 输出上限按「窗口 − 已用上下文 − 安全余量」钳制，且不低于 1。
+    #[test]
+    fn max_tokens_is_clamped_to_context_room() {
+        let mut m = model(false, None);
+        m.context_window = 10_000;
+        m.max_tokens = Some(64_000);
+        // 空上下文：10000 − 4096 = 5904，模型自身上限被压到这里
+        assert_eq!(
+            clamp_max_tokens_to_context(&m, &[], "", &[], None),
+            Some(5904)
+        );
+        // 显式上限低于可用户额时原样返回
+        assert_eq!(
+            clamp_max_tokens_to_context(&m, &[], "", &[], Some(1_000)),
+            Some(1_000)
+        );
+        // 上下文已吃掉全部额度：收到下限 1，而不是 0（0 会被 provider 直接拒）
+        let big = vec![AgentMessage::user_text(&"word ".repeat(20_000))];
+        assert_eq!(
+            clamp_max_tokens_to_context(&m, &big, "", &[], None),
+            Some(1)
+        );
+    }
+
+    /// 显式不限制（参数与模型都没有上限）时保持不限制：请求体仍不带该字段。
+    #[test]
+    fn clamp_keeps_explicit_no_limit() {
+        let m = model(false, None);
+        assert_eq!(clamp_max_tokens_to_context(&m, &[], "", &[], None), None);
+    }
+
+    /// 窗口未知（0）时不做上下文钳制，但仍保证下限不小于 1。
+    #[test]
+    fn clamp_skips_context_room_when_window_unknown() {
+        let mut m = model(false, None);
+        m.context_window = 0;
+        m.max_tokens = Some(10);
+        assert_eq!(
+            clamp_max_tokens_to_context(&m, &[], "", &[], None),
+            Some(10)
+        );
+        assert_eq!(
+            clamp_max_tokens_to_context(&m, &[], "", &[], Some(0)),
+            Some(1)
+        );
+    }
+
+    /// 工具声明与 system 提示也要算进已用上下文（模型看到的是它们的 JSON）。
+    #[test]
+    fn declared_tools_and_system_prompt_count_toward_context() {
+        let mut m = model(false, None);
+        m.context_window = 20_000;
+        m.max_tokens = Some(64_000);
+        let bare = clamp_max_tokens_to_context(&m, &[], "", &[], None).unwrap();
+        assert_eq!(bare, 20_000 - 4096);
+
+        let tools = vec![(
+            "read".to_string(),
+            "long description ".repeat(5_000),
+            serde_json::json!({ "type": "object" }),
+        )];
+        assert!(
+            clamp_max_tokens_to_context(&m, &[], "", &tools, None).unwrap() < bare,
+            "工具声明要占用上下文额度"
+        );
+        assert!(
+            clamp_max_tokens_to_context(&m, &[], &"s".repeat(8_000), &[], None).unwrap() < bare,
+            "system 提示要占用上下文额度"
+        );
     }
 
     #[test]

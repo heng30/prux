@@ -530,11 +530,11 @@ fn handle_app_action_key(st: &mut App, key: &KeyEvent) -> Option<EditorAction> {
     } else if kb.matches(key, "app.message.followUp") {
         st.queue_steer(true); // Alt+Enter：排队 follow-up 消息
     } else if kb.matches(key, "app.message.scrollToTop") {
-        // shift+home：消息区滚动到顶部
+        // ctrl+home：消息区滚动到顶部
         st.scroll = st.max_scroll;
         st.dirty = true;
     } else if kb.matches(key, "app.message.scrollToBottom") {
-        // shift+end：消息区滚动到底部（跟随最新）
+        // ctrl+end：消息区滚动到底部（跟随最新）
         st.scroll = 0;
         st.dirty = true;
     } else if kb.matches(key, "app.message.pageUp") {
@@ -1804,7 +1804,7 @@ mod tests {
     }
 
     #[test]
-    fn shift_home_scrolls_message_area_to_top() {
+    fn ctrl_home_scrolls_message_area_to_top() {
         let shared = Rc::new(RefCell::new(App::new()));
         {
             let mut st = shared.borrow_mut();
@@ -1813,14 +1813,14 @@ mod tests {
         }
         handle_event(
             &shared,
-            Event::Key(KeyEvent::new(KeyCode::Home, KeyModifiers::SHIFT)),
+            Event::Key(KeyEvent::new(KeyCode::Home, KeyModifiers::CONTROL)),
         );
         let st = shared.borrow_mut();
-        assert_eq!(st.scroll, 24, "shift+home 滚动到顶部");
+        assert_eq!(st.scroll, 24, "ctrl+home 滚动到顶部");
     }
 
     #[test]
-    fn shift_end_scrolls_message_area_to_bottom() {
+    fn ctrl_end_scrolls_message_area_to_bottom() {
         let shared = Rc::new(RefCell::new(App::new()));
         {
             let mut st = shared.borrow_mut();
@@ -1829,10 +1829,10 @@ mod tests {
         }
         handle_event(
             &shared,
-            Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::SHIFT)),
+            Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::CONTROL)),
         );
         let st = shared.borrow_mut();
-        assert_eq!(st.scroll, 0, "shift+end 滚动到底部（跟随最新）");
+        assert_eq!(st.scroll, 0, "ctrl+end 滚动到底部（跟随最新）");
     }
 
     #[test]

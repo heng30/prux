@@ -1,8 +1,7 @@
 //! 压缩主逻辑：阈值判断与上下文估算
 
-use super::utils::estimate_tokens;
 use crate::core::{
-    provider::{AgentMessage, Usage},
+    provider::{AgentMessage, ContextUsageEstimate, estimate_tokens},
     settings_manager,
 };
 use strum_macros::IntoStaticStr;
@@ -73,96 +72,6 @@ impl CompactionSettings {
         self.keep_recent_tokens =
             settings_manager::read_settings_compact_keep_recent_for(provider, model_id);
         self
-    }
-}
-
-/// 从 usage 计算上下文 token（优先 total_tokens，否则分项求和）
-pub fn calculate_context_tokens(usage: &Usage) -> u32 {
-    if usage.total_tokens > 0 {
-        usage.total_tokens
-    } else {
-        usage.input + usage.output + usage.cache_read + usage.cache_write
-    }
-}
-
-/// 该消息携带的、可作上下文 usage 锚点的 usage。
-///
-/// 条件：assistant 且非 error/aborted（这两者 usage 不完整）且 token > 0。
-/// 压缩后重算上下文占用、判定「新 usage 已落地」都以此为准。
-pub fn usable_usage(msg: &AgentMessage) -> Option<&Usage> {
-    if msg.role != "assistant" {
-        return None;
-    }
-
-    if msg.stop_reason.as_deref() == Some("aborted") || msg.stop_reason.as_deref() == Some("error")
-    {
-        return None;
-    }
-
-    let usage = msg.usage.as_ref()?;
-    (calculate_context_tokens(usage) > 0).then_some(usage)
-}
-
-/// 最近一条 usage 仍能描述当前上下文的 assistant（附下标）。
-///
-/// 若某条消息的时间戳晚于该 assistant（典型：压缩后插入的 compactionSummary），
-/// 说明它是在该回复『之后』插入的前缀消息，该 usage 统计的是插入前的旧上下文，
-/// 不能再用作当前上下文的锚点；此时跳过它继续向后找（压缩后的新回复 timestamp 更新，
-/// 会重新成为锚点）。全部锚点失效则返回 None，走纯 token 估算。
-fn get_last_assistant_usage_info(messages: &[AgentMessage]) -> Option<(Usage, usize)> {
-    let mut latest_prefix_timestamp: u64 = 0;
-    let mut anchor: Option<(Usage, usize)> = None;
-
-    // NOTE: 可能很消耗性能
-    for (i, msg) in messages.iter().enumerate() {
-        let usage_applies_to_prefix = msg.timestamp >= latest_prefix_timestamp;
-        if msg.role == "assistant"
-            && usage_applies_to_prefix
-            && let Some(usage) = usable_usage(msg)
-        {
-            anchor = Some((usage.clone(), i));
-        }
-        latest_prefix_timestamp = latest_prefix_timestamp.max(msg.timestamp);
-    }
-
-    anchor
-}
-
-/// 上下文tokens使用估计
-pub struct ContextUsageEstimate {
-    pub tokens: u32,                     // 总共花费的tokens
-    pub usage_tokens: u32,               // 截止最后一条assistant花费的tokens
-    pub trailing_tokens: u32,            // 最后一条assistant消息后的文本，估算使用的tokens
-    pub last_usage_index: Option<usize>, // 最后一条assistant下标
-}
-
-/// 估算当前上下文 token：以最近一条 assistant usage 为锚点 + 其后消息估算
-pub fn estimate_context_tokens(messages: &[AgentMessage]) -> ContextUsageEstimate {
-    if let Some((usage, index)) = get_last_assistant_usage_info(messages) {
-        let usage_tokens = calculate_context_tokens(&usage);
-        let mut trailing_tokens = 0;
-
-        for msg in &messages[index + 1..] {
-            trailing_tokens += estimate_tokens(msg);
-        }
-
-        ContextUsageEstimate {
-            tokens: usage_tokens + trailing_tokens,
-            usage_tokens,
-            trailing_tokens,
-            last_usage_index: Some(index),
-        }
-    } else {
-        let mut estimated = 0;
-        for msg in messages {
-            estimated += estimate_tokens(msg);
-        }
-        ContextUsageEstimate {
-            tokens: estimated,
-            usage_tokens: 0,
-            trailing_tokens: estimated,
-            last_usage_index: None,
-        }
     }
 }
 
@@ -245,7 +154,7 @@ pub fn usage_anchor_is_stale(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::provider::Usage;
+    use crate::core::provider::{Usage, estimate_context_tokens};
 
     fn assistant_with_usage(timestamp: u64, total: u32) -> AgentMessage {
         let mut m = AgentMessage::user_text("x");

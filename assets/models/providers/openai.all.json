@@ -1639,7 +1639,16 @@
       "input": 4,
       "output": 20,
       "cacheRead": 0.4,
-      "cacheWrite": 5
+      "cacheWrite": 5,
+      "tiers": [
+        {
+          "inputTokensAbove": 272000,
+          "input": 8,
+          "output": 30,
+          "cacheRead": 0.8,
+          "cacheWrite": 10
+        }
+      ]
     },
     "contextWindow": 1050000,
     "maxTokens": 128000,
@@ -2017,5 +2026,33 @@
       }
     },
     "type": "chat"
+  },
+  {
+    "type": "classifier",
+    "id": "gpt-6-luna",
+    "name": "GPT-6 Luna",
+    "api": "openai-decisions",
+    "provider": "openai",
+    "baseUrl": "https://api.openai.com/v1",
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.1,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "tiers": [
+        {
+          "inputTokensAbove": 272000,
+          "input": 0.2,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0
+        }
+      ]
+    },
+    "contextWindow": 922000
   }
 ]

@@ -1639,7 +1639,16 @@
       "input": 4,
       "output": 20,
       "cacheRead": 0.4,
-      "cacheWrite": 5
+      "cacheWrite": 5,
+      "tiers": [
+        {
+          "inputTokensAbove": 272000,
+          "input": 8,
+          "output": 30,
+          "cacheRead": 0.8,
+          "cacheWrite": 10
+        }
+      ]
     },
     "contextWindow": 1050000,
     "maxTokens": 128000,

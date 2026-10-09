@@ -411,12 +411,12 @@ pub const KEYBINDINGS: &[KeybindingDef] = &[
     },
     KeybindingDef {
         id: "tui.editor.cursorLineStart",
-        default_keys: &["home", "ctrl+home", "ctrl+a"],
+        default_keys: &["home", "ctrl+a"],
         description: "Move to line start",
     },
     KeybindingDef {
         id: "tui.editor.cursorLineEnd",
-        default_keys: &["end", "ctrl+end", "ctrl+e"],
+        default_keys: &["end", "ctrl+e"],
         description: "Move to line end",
     },
     KeybindingDef {
@@ -619,12 +619,12 @@ pub const KEYBINDINGS: &[KeybindingDef] = &[
     },
     KeybindingDef {
         id: "app.message.scrollToTop",
-        default_keys: &["shift+home"],
+        default_keys: &["ctrl+home"],
         description: "Scroll transcript to top",
     },
     KeybindingDef {
         id: "app.message.scrollToBottom",
-        default_keys: &["shift+end"],
+        default_keys: &["ctrl+end"],
         description: "Scroll transcript to bottom",
     },
     KeybindingDef {
@@ -1077,10 +1077,11 @@ mod tests {
     }
 
     #[test]
-    fn message_scroll_bindings_default_to_shift_home_end() {
+    fn message_scroll_bindings_default_to_ctrl_home_end() {
         let m = KeybindingsManager::new_default();
+        // 视口顶/底：Ctrl+Home / Ctrl+End（对齐 pi 1.1.0 的 tui.altScreen.top/bottom）
         assert!(m.matches(
-            &key(KeyCode::Home, KeyModifiers::SHIFT),
+            &key(KeyCode::Home, KeyModifiers::CONTROL),
             "app.message.scrollToTop"
         ));
         assert!(!m.matches(
@@ -1088,13 +1089,14 @@ mod tests {
             "app.message.scrollToTop"
         ));
         assert!(m.matches(
-            &key(KeyCode::End, KeyModifiers::SHIFT),
+            &key(KeyCode::End, KeyModifiers::CONTROL),
             "app.message.scrollToBottom"
         ));
         assert!(!m.matches(
             &key(KeyCode::End, KeyModifiers::NONE),
             "app.message.scrollToBottom"
         ));
+        // 编辑器行首/行尾只认 Home / End：Ctrl+Home/End 不再兼作移动光标
         assert!(m.matches(
             &key(KeyCode::Home, KeyModifiers::NONE),
             "tui.editor.cursorLineStart"
@@ -1102,6 +1104,23 @@ mod tests {
         assert!(m.matches(
             &key(KeyCode::End, KeyModifiers::NONE),
             "tui.editor.cursorLineEnd"
+        ));
+        assert!(!m.matches(
+            &key(KeyCode::Home, KeyModifiers::CONTROL),
+            "tui.editor.cursorLineStart"
+        ));
+        assert!(!m.matches(
+            &key(KeyCode::End, KeyModifiers::CONTROL),
+            "tui.editor.cursorLineEnd"
+        ));
+        // 旧的 Shift+Home / Shift+End 滚动绑定已废除
+        assert!(!m.matches(
+            &key(KeyCode::Home, KeyModifiers::SHIFT),
+            "app.message.scrollToTop"
+        ));
+        assert!(!m.matches(
+            &key(KeyCode::End, KeyModifiers::SHIFT),
+            "app.message.scrollToBottom"
         ));
     }
 

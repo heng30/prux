@@ -46,7 +46,7 @@ prux 以全屏终端界面（TUI）运行，用于读写会话、执行斜杠命
 全局开关会**覆盖**所有非 thinking 折叠块（丢弃它们的逐块状态），thinking 由 `app.thinking.toggle`（`ctrl+t`）单独控制。
 **Alt+左键**点击任一折叠块（摘要 / 技能调用 / thinking run / 工具输出）可单独展开或折叠该块；裸左键仍用于文本选择。
 
-**滚动**：`shift+home` 滚到顶、`shift+end` 滚到底（跟随最新）、`shift+pageUp` / `shift+pageDown` 按视口高度翻页；滚轮滚动消息区（指针在消息区内才生效）。
+**滚动**：`ctrl+home` 滚到顶、`ctrl+end` 滚到底（跟随最新）、`shift+pageUp` / `shift+pageDown` 按视口高度翻页；滚轮滚动消息区（指针在消息区内才生效）。
 
 ## 输入框
 

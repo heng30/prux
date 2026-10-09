@@ -23,8 +23,8 @@
 
 | 分类 | 条目 | 数量 |
 |---|---|---|
-| 🔧 必修 bug 修复 | 1.1、1.3、1.7、1.9、1.10 **已修复**；1.24 待模型同步 | 6 |
-| ⚠️ 需核对（行为已有偏差） | 1.2、1.5、1.6、1.17 **已修复**；1.18、1.29 待定 | 6 |
+| 🔧 必修 bug 修复 | 1.1、1.3、1.7、1.9、1.10、1.24 **已修复** | 6 |
+| ⚠️ 需核对（行为已有偏差） | 1.2、1.5、1.6、1.17、1.18 **已修复**；1.29 待定（靠 rmcp 默认值） | 6 |
 | ✅ 已满足 / 无此问题 | 1.11、1.12、1.13、1.14、1.16、1.19 | 6 |
 | 🆕 本区间新增、prux 缺失 | 2.1–2.8、2.10–2.14、2.16–2.18、2.22 | 17 |
 | ✅ 已满足（无需再动） | 2.9 | 1 |
@@ -32,7 +32,8 @@
 
 **最短落地路径（按性价比排序）**：
 
-1. **重跑模型目录同步**（1.24 + 2.16 + 2.17 的数据面）：把 `SUPPORTED_PROVIDERS` 补上 `azure`，
+1. **重跑模型目录同步**（1.24 + 2.16 + 2.17 的数据面）——**已完成**（见第八节）：
+   把 `SUPPORTED_PROVIDERS` 补上 `azure`，
    再 `make sync-models`，一次性拿到 Claude Haiku 5.5、GPT-6 Luna、azure 的 Foundry 条目，
    以及 OpenCode / OpenRouter / Vercel / Google / MiniMax 的 prompt-length 定价档。
 2. **可重试错误表补两条**（1.1）：`server_busy`、`servers are currently busy`，一行级改动。
@@ -84,8 +85,9 @@ UI 在 Esc / Ctrl+C、会话关闭与退出时统一取消，不必知道是哪�
 > `extensions::subagent::tests::cli_flag_workflow_file_launches_a_run` 等碰全局状态的用例
 > 会偶发失败（单独跑必过），与 `migration-v1.0.2.md` 第八/十六节记录的同源。
 
-**未做（属新增功能，不在本轮 bug 修复范围）**：1.24（模型目录同步）、2.10 的
+**未做（属新增功能，不在本轮 bug 修复范围）**：2.10 的
 `tool_execution_end.durationMs`、2.22（codemode 内联 guidelines）。
+（1.24 模型目录同步已在第二轮完成，见第八节。）
 
 ---
 
@@ -362,7 +364,13 @@ prux 的上下文估算走 `tiktoken` 真实 BPE（`src/core/compaction/utils.rs
 **建议**：这项**不是**「把 4 改成 3.5」那么简单。先在 prux 里确认自己是否需要用估算值钳制
 `max_tokens`；若要补，用 tiktoken 的调用计数而不是字符启发式，并单独写清与 pi 的差异。
 
-> **状态：未做（机制本身缺失，非数值差异）**
+> **状态：已修复**。新增 `provider::clamp_max_tokens_to_context`（`src/core/provider.rs`），
+> 在 [`stream_chat`] 分发协议前把输出上限钳到「`context_window` − 已用上下文 − 4096 安全余量」；
+> 同时把 token 估算上移到 `src/core/provider/estimate.rs`（provider 层成为唯一真源，
+> `compaction` 改为转发，避免两份算法分叉）。与 pi 的差异：pi 用 `chars / 3.5` 启发式，
+> prux 用 tiktoken BPE 真实计数，且把 system 提示与工具声明也计入（pi 的 system 在 transcript 里）。
+> 断言见 `max_tokens_is_clamped_to_context_room`、`clamp_keeps_explicit_no_limit`、
+> `clamp_skips_context_room_when_window_unknown`、`declared_tools_and_system_prompt_count_toward_context`。
 
 ---
 
@@ -401,7 +409,11 @@ OpenCode / OpenRouter / Vercel / Google / MiniMax **全部为 0**。
 
 **建议**：重跑 `make sync-models`（见 2.16 / 2.17 一起做），然后 `scripts/sync-models.py --check` 验零差异。
 
-> **状态：未做（数据待同步）**
+> **状态：已修复（数据已同步）**。`assets/models/**` 已按 pi-ai 1.1.0 重跑同步：
+> 带 `cost.tiers` 的模型从 27 条涨到 189 条（openrouter 79 / vercel-ai-gateway 49 / opencode 16 …），
+> `claude-haiku-5-5` 一并带入（2.16 数据面）。`scripts/sync-models.py --check` 零差异。
+> 注：本次同步也带入了 `openai/gpt-6-luna`（`api: openai-decisions`）——prux 未实现该协议，
+> 它会被列为可用分类器、调用时返回 `provider openai does not support classification`（见 2.17）。
 
 ---
 
@@ -734,7 +746,8 @@ Bedrock 上走 adaptive thinking + native `xhigh` + prompt caching。
 
 **建议**：重跑同步；然后核对 anthropic 的 adaptive thinking 与 mid-conversation 系统消息路径。
 
-> **状态：未做（数据面靠同步）**
+> **状态：数据面已同步**。`claude-haiku-5-5` 已进目录（含 `tiers` 定价档，见 1.24）。
+> 「对话中途系统消息 / 工具变更」仍待核对（`anthropic.rs` 是否按 pi-ai 1.1.0 的形状发送）。
 
 ---
 
@@ -833,7 +846,7 @@ prux 现有 bash 临时文件（`tools/bash.rs`）与 MCP 资源落盘需要一�
 |---|---|---|
 | 3.1 | `--tools` 语义从「整体替换」扩展为「通配 + MCP 保留 + 可选 `+/-` 修饰符」 | 见 2.1–2.3；`--tools` 的 help 文案要一并改（`src/cli/args.rs` 的 doc comment） |
 | 3.2 | `outputPad` 从「chat message output」扩为「transcript content」 | 见 2.11 |
-| 3.3 | `Home`/`End` 总是移动编辑器光标；全屏 transcript 顶/底改到 `Ctrl+Home`/`Ctrl+End`，且不再移动光标 | prux **需改**：`src/core/keybindings.rs:412-421` 的 `cursorLineStart/End` 仍含 `ctrl+home`/`ctrl+end`；transcript 顶/底现在绑在 `shift+home`/`shift+end`（`:621-629`），与 pi 不同。建议按 pi 改键位并同步键位文档 |
+| 3.3 | `Home`/`End` 总是移动编辑器光标；全屏 transcript 顶/底改到 `Ctrl+Home`/`Ctrl+End`，且不再移动光标 | **已改**：`cursorLineStart/End` 去掉 `ctrl+home`/`ctrl+end`；transcript 顶/底从 `shift+home`/`shift+end` 改为 `ctrl+home`/`ctrl+end`；文档同步。**破坏性**：旧键位不再生效 |
 | 3.4 | Azure provider 改名 + 会话兼容性 | 见 2.18；prux 从未移植，无迁移负担 |
 | 3.5 | `pi mcp login --timeout` 限制整段登录 | 见 2.15，prux 无该参数 |
 | 3.6 | `codemode` 的 `console` 输出与多 text 项分隔格式 | 见 2.7；这是**模型可见**的变化，会影响已有 prompt/评测 |
@@ -886,22 +899,61 @@ prux 现有 bash 临时文件（`tools/bash.rs`）与 MCP 资源落盘需要一�
 
 ## 六、落地检查清单
 
-- [ ] 决定 `SUPPORTED_PROVIDERS` 是否加 `azure`（2.18），加则先改后同步
-- [ ] `make sync-models` + `scripts/sync-models.py --check`（1.24 / 2.16 / 2.17 数据面）
-- [ ] 新增 `assets/changelog/v.1.1.0.md`，`Cargo.toml` version → `1.1.0`，`sync.md` → `1.1.0`
-- [ ] `RETRYABLE` 补 `server_busy` / `servers are currently busy`（1.1）
+- [x] 决定 `SUPPORTED_PROVIDERS` 是否加 `azure`（2.18）——**本轮不加**，故同步范围仍是原 34 个 provider
+- [x] `make sync-models` + `scripts/sync-models.py --check`（1.24 / 2.16 / 2.17 数据面）
+- [x] 新增 `assets/changelog/v.1.1.0.md`，`Cargo.toml` version → `1.1.0`（`sync.md` 已是 `1.1.0`）
+- [x] `RETRYABLE` 补 `server_busy` / `servers are currently busy`（1.1）
+- [x] 按上下文钳制输出上限（1.18）
 - [ ] `--tools` 通配 + MCP 保留 + `+name`/`-name` + `--no-mcp` + `-xt`（2.1 / 2.2 / 2.3）
 - [ ] codemode：输出文件模块 + `image()` 落盘（2.4 / 2.21）、`read` 图片透传（2.5）、
       lockdown（2.6）、`console` 标记与输出分隔（2.7）、`classify` images（2.8）、
       guidelines 内联（2.22）
 - [ ] `agent_settled.aborted`（2.12）、`tool_execution_end.durationMs`（2.10）、
-      `AssistantMessage.duration_ms`（2.10）、`Took` 用记录时长（1.5）
-- [ ] OAuth 刷新不因取消而丢 token（1.3）
-- [ ] MCP OAuth 可取消 + 15s 超时 + 会话关闭中止（1.7 / 2.14）
-- [ ] 切会话重置文本选择（1.9）
-- [ ] Termux 剪贴板读写（1.10）
-- [ ] 技能提示 `read` 隐藏时的降级措辞（1.6）
-- [ ] `Home`/`End` 与 `Ctrl+Home`/`Ctrl+End` 键位对齐（3.3）
-- [ ] Anthropic 登录端口占用行为核对（1.2）
-- [ ] 终端消失错误识别（1.17）
+      `AssistantMessage.duration_ms`（2.10）
+- [x] `Took` 用记录时长（1.5）
+- [x] OAuth 刷新不因取消而丢 token（1.3）
+- [x] MCP OAuth 可取消 + 15s 超时 + 会话关闭中止（1.7 / 2.14）
+- [x] 切会话重置文本选择（1.9）
+- [x] Termux 剪贴板读写（1.10）
+- [x] 技能提示 `read` 隐藏时的降级措辞（1.6）
+- [x] `Home`/`End` 与 `Ctrl+Home`/`Ctrl+End` 键位对齐（3.3）
+- [x] Anthropic 登录端口占用行为核对（1.2）
+- [x] 终端消失错误识别（1.17）
 - [ ] （可选）OSC 7501 程序状态（2.13）、`outputPad` 设置项（2.11）、`openai-decisions`（2.17）
+
+---
+
+## 八、第二轮实施记录（bug 修复收尾）
+
+本轮把第一节剩余可自主落地的 bug 全部修完，并完成数据面同步。
+
+| # | 项 | 改动位置 | 关键测试 |
+|---|---|---|---|
+| 1.18 | 输出上限按上下文钳制 | `core/provider.rs`（`clamp_max_tokens_to_context`）+ 新增 `core/provider/estimate.rs`（token 估算真源，`core/compaction` 改为转发） | `max_tokens_is_clamped_to_context_room`、`clamp_keeps_explicit_no_limit`、`clamp_skips_context_room_when_window_unknown`、`declared_tools_and_system_prompt_count_toward_context` |
+| 1.24 | 模型目录同步 | `assets/models/**`（源为本地 pi-ai 1.1.0，`cost.tiers` 由 27 条增至 189 条） | `scripts/sync-models.py --check` 零差异 |
+| 3.3 | Home/End 键位对齐 | `core/keybindings.rs`、`modes/interactive/handlers.rs`、`assets/docs/{keybindings,tui}.md` | `message_scroll_bindings_default_to_ctrl_home_end`、`ctrl_home_scrolls_message_area_to_top`、`ctrl_end_scrolls_message_area_to_bottom` |
+
+**实现要点**：
+
+- **1.18**：钳制在 `stream_chat` 进入协议分发前生效，覆盖 agent 主循环、cache warmer 与 proxy 网关三条调用路径；
+  生效上限取 `max_tokens.or(model.max_tokens)`，两者都为 `None` 时保持「请求体不带该字段」；
+  `context_window == 0`（窗口未知）时只做 `>= 1` 的下限保护。
+  与 pi 的口径差异：pi 用 `chars / 3.5` 启发式且只算 transcript，
+  prux 用 tiktoken BPE 真实计数，并额外计入 system 提示与工具声明的 JSON。
+  token 估算的实现在 `core/provider/estimate.rs`（provider 层），`core::compaction` 的
+  `estimate_tokens` / `estimate_context_tokens` / `calculate_context_tokens` / `usable_usage`
+  改为从 provider 转发，调用路径不变——否则要么重复一份算法，要么让最底层反向依赖中层。
+- **1.24**：数据由 `make sync-models` 生成，源是本地 pi-ai 1.1.0 的 `dist/providers/data/`。
+  本轮未加 `azure`（2.18 不在范围），同步范围仍是原 34 个 provider。
+  **副作用**：`openai/gpt-6-luna`（`api: openai-decisions`）随目录进入——该协议未实现，
+  它会被列为可用分类器，调用时返回 `provider openai does not support classification (api: openai-decisions)`
+  的错误结果（不崩栈）。要真正可用需要 2.17；若不想列出，需在目录加载层过滤未实现 api 的条目。
+- **3.3**：**破坏性键位变更**——`shift+home` / `shift+end` 不再滚动消息区，
+  `ctrl+home` / `ctrl+end` 不再移动编辑器光标。用户在 `keybindings.json` 里显式绑过旧键位的需自行调整。
+
+**验证**：`cargo test` 全绿（lib 3234 项 + 全部集成测试目标）；`cargo fmt --check` 通过。
+
+**版本面**：`Cargo.toml` → `1.1.0`（`Cargo.lock` 同步），新增 `assets/changelog/v.1.1.0.md`。
+changelog 正文不再沿用上一版的「产品介绍」格式，而是按本节已落地项写成变更记录
+（新增 / 变更 / 修复 三段，双语）；既有约定是版本间正文逐字节相同（`v.1.0.0.md` 与 `v.1.0.2.md`），
+本版有意打破，以让 `/changelog` 真的能回答「What's New」。
