@@ -4,7 +4,6 @@
 
 
 ## 待测
-- 最新版本检查插件
-- mcp login 功能
 - jet 路由
+- mcp login 功能
 

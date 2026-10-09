@@ -58,6 +58,5 @@ jobs:
         with:
           files: |
             ${{ env.ASSET }}
-            ${{ env.DEB_ASSET }}
 
       - run: echo "🍏 This job's status is ${{ job.status }}."
