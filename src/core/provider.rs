@@ -7,6 +7,8 @@
 //! - [`google`]:     Google generative ai（gemini 等）
 //! - [`images`]：图片生成（一次性非流式，内置 `openrouter-images`）
 //! - [`classifier`]：分类器调用（一次性非流式，内置 `typesafe-system-one`）
+//! - [`decisions`]：OpenAI Decisions 分类协议（一次性非流式，`openai-decisions`）
+//! - [`azure`]：Azure 的 endpoint / 部署名解析（请求前替换 `baseUrl`）
 //! - [`api_impls`]：扩展为自定义 `api` 名注册的图片 / 分类器实现
 //!
 //! 调用方（agent_session）只与 [`stream_chat`] / [`simple_completion`]
@@ -25,6 +27,9 @@ pub mod completions;
 pub mod google;
 pub mod images;
 pub mod responses;
+
+pub(crate) mod azure;
+pub(crate) mod decisions;
 pub(crate) mod usage;
 
 #[cfg(test)]
@@ -885,7 +890,8 @@ pub async fn generate_images(model: &ModelConfig, input: &[ImageContent]) -> Ass
 
 /// 分类器调用入口（一次性非流式）：按 [`ModelConfig::api`] 路由到分类协议实现。
 ///
-/// 分发顺序：**扩展经 [`api_impls`] 注册的实现** → 内置实现（`typesafe-system-one`）。
+/// 分发顺序：**扩展经 [`api_impls`] 注册的实现** → 内置实现（`typesafe-system-one`、
+/// `openai-decisions`）。
 /// **失败永不抛错**——模型类型不对、协议未实现、缺凭据、网络/HTTP/解析失败、
 /// 答案格式不对，都返回 `stop_reason == "error"` + `error_message` 的结果
 /// （答案格式不对但请求已发出去的情况下，`usage` 仍会带上）。
@@ -929,6 +935,7 @@ pub async fn classify(model: &ModelConfig, context: &ClassifierContext) -> Class
 
     match model.api.as_str() {
         "typesafe-system-one" => classifier::classify_typesafe_system_one(model, context).await,
+        "openai-decisions" => decisions::classify_openai_decisions(model, context).await,
         other => classifier::error_result(
             model,
             format!(
@@ -1455,7 +1462,11 @@ pub fn clamp_max_tokens_to_context(
 fn is_chat_protocol_api(api: &str) -> bool {
     matches!(
         api,
-        "openai-completions" | "openai-responses" | "anthropic-messages" | "google-generative-ai"
+        "openai-completions"
+            | "openai-responses"
+            | "azure-openai-responses"
+            | "anthropic-messages"
+            | "google-generative-ai"
     )
 }
 
@@ -1507,72 +1518,80 @@ pub async fn stream_chat(
             raw = translator_owner.as_mut();
         }
 
-        match model.api.as_str() {
-            "openai-completions" => {
-                completions::stream(
-                    model,
-                    messages,
-                    system_prompt,
-                    tools,
-                    reasoning_effort,
-                    temperature,
-                    max_tokens,
-                    raw,
-                    on_payload,
-                    tool_choice,
-                )
-                .await
+        // Azure 的 baseUrl 在目录里为空，请求前按环境变量/资源名解析（见 [`azure`]）；
+        // 非 azure 模型原样透传，解析失败与其它请求错误一样走失败流。
+        match azure::resolve_if_azure(model) {
+            Err(err) => Err(err),
+            Ok(resolved) => {
+                let model = resolved.as_ref().unwrap_or(model);
+                match model.api.as_str() {
+                    "openai-completions" => {
+                        completions::stream(
+                            model,
+                            messages,
+                            system_prompt,
+                            tools,
+                            reasoning_effort,
+                            temperature,
+                            max_tokens,
+                            raw,
+                            on_payload,
+                            tool_choice,
+                        )
+                        .await
+                    }
+                    "openai-responses" | "azure-openai-responses" => {
+                        responses::stream(
+                            model,
+                            messages,
+                            system_prompt,
+                            tools,
+                            reasoning_effort,
+                            temperature,
+                            max_tokens,
+                            raw,
+                            on_payload,
+                            tool_choice,
+                        )
+                        .await
+                    }
+                    "anthropic-messages" => {
+                        anthropic::stream(
+                            model,
+                            messages,
+                            system_prompt,
+                            tools,
+                            reasoning_effort,
+                            temperature,
+                            max_tokens,
+                            raw,
+                            on_payload,
+                            tool_choice,
+                        )
+                        .await
+                    }
+                    "google-generative-ai" => {
+                        google::stream(
+                            model,
+                            messages,
+                            system_prompt,
+                            tools,
+                            reasoning_effort,
+                            temperature,
+                            max_tokens,
+                            raw,
+                            on_payload,
+                        )
+                        .await
+                    }
+                    other => Err(Error::UnsupportedApi {
+                        api: format!(
+                            "unsupported api type: {} (provider: {})",
+                            other, model.provider
+                        ),
+                    }),
+                }
             }
-            "openai-responses" => {
-                responses::stream(
-                    model,
-                    messages,
-                    system_prompt,
-                    tools,
-                    reasoning_effort,
-                    temperature,
-                    max_tokens,
-                    raw,
-                    on_payload,
-                    tool_choice,
-                )
-                .await
-            }
-            "anthropic-messages" => {
-                anthropic::stream(
-                    model,
-                    messages,
-                    system_prompt,
-                    tools,
-                    reasoning_effort,
-                    temperature,
-                    max_tokens,
-                    raw,
-                    on_payload,
-                    tool_choice,
-                )
-                .await
-            }
-            "google-generative-ai" => {
-                google::stream(
-                    model,
-                    messages,
-                    system_prompt,
-                    tools,
-                    reasoning_effort,
-                    temperature,
-                    max_tokens,
-                    raw,
-                    on_payload,
-                )
-                .await
-            }
-            other => Err(Error::UnsupportedApi {
-                api: format!(
-                    "unsupported api type: {} (provider: {})",
-                    other, model.provider
-                ),
-            }),
         }
     };
 

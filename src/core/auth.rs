@@ -327,6 +327,7 @@ pub fn api_key_env_var(provider: &str) -> Option<&'static str> {
         "opencode" | "opencode-go" => "OPENCODE_API_KEY",
         "anthropic" => "ANTHROPIC_API_KEY",
         "ant-ling" => "ANT_LING_API_KEY",
+        "azure" => "AZURE_OPENAI_API_KEY",
         "baseten" => "BASETEN_API_KEY",
         "cerebras" => "CEREBRAS_API_KEY",
         "fireworks" => "FIREWORKS_API_KEY",

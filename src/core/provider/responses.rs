@@ -11,7 +11,7 @@
 
 use super::{
     AgentMessage, ContentBlock, Cost, ModelConfig, PartialTranslator, RawStreamEvent, StreamResult,
-    Usage,
+    Usage, azure,
     convert::{
         BRANCH_SUMMARY_PREFIX, BRANCH_SUMMARY_SUFFIX, COMPACTION_SUMMARY_PREFIX,
         COMPACTION_SUMMARY_SUFFIX, sanitize_surrogates, truncate_for_error,
@@ -63,7 +63,10 @@ fn is_chatgpt_sign_in(model: &ModelConfig) -> bool {
 
 /// Responses 接口地址：base_url 去掉尾部 '/' 后追加 `/responses`。
 fn endpoint(model: &ModelConfig) -> String {
-    format!("{}/responses", model.base_url.trim_end_matches('/'))
+    azure::with_api_version(
+        model,
+        format!("{}/responses", model.base_url.trim_end_matches('/')),
+    )
 }
 
 /// 把 id 片段规整为 Responses 接受的字符集：`[A-Za-z0-9_-]` 之外一律替换为 `_`，
@@ -1748,7 +1751,7 @@ fn build_request_body(
     let input = convert_responses_messages(messages, system_prompt, model);
 
     let mut body = Map::new();
-    body.insert("model".into(), json!(model.model_id));
+    body.insert("model".into(), json!(azure::request_model_name(model)));
     body.insert("input".into(), Value::Array(input));
     body.insert("stream".into(), json!(true));
     body.insert("store".into(), json!(false));

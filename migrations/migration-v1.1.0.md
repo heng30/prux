@@ -767,7 +767,10 @@ Bedrock 上走 adaptive thinking + native `xhigh` + prompt caching。
 dispatch 分支加到 `provider.rs:876-916` 附近；目录同步后 `gpt-6-luna` 会自动出现；
 「ChatGPT 登录时不列出」的判定加到 `model_resolver` / `/models` 的可用性过滤里。
 
-> **状态：未做**
+> **状态：已实现**。新增 `core/provider/decisions.rs`（`classify_openai_decisions`），
+> dispatch 分支在 `provider::classify`；「ChatGPT 登录不列出」落在
+> `model_resolver::classifier_hidden_by_chatgpt_sign_in`（列表与查找同一口径）。
+> 断言见 `decisions::tests::*`、`openai_classifier_listing_follows_chatgpt_sign_in`。
 
 ---
 
@@ -793,7 +796,15 @@ dispatch 分支加到 `provider.rs:876-916` 附近；目录同步后 `gpt-6-luna
 ⑤ `sync.md` 与 `/login` 注册表同步。
 若暂不接 azure，本节整条可推迟。
 
-> **状态：未做（prux 从未移植 azure）**
+> **状态：已实现（新接入）**。`SUPPORTED_PROVIDERS` 加 `azure` 并重跑同步（45 个条目）；
+> 新增 `core/provider/azure.rs`（base URL / API 版本 / 部署名解析），dispatch 前替换 `base_url`，
+> 两个协议写请求体 `model` 时改用 [`azure::request_model_name`](src/core/provider/azure.rs)；
+> `auth.rs`、`login_registry.rs` 同步。断言见 `azure::tests::*`、
+> `azure_resolves_endpoint_and_deployment_for_both_apis`。
+>
+> **与 pi 的差异（有意保留）**：prux 没有 pi 的 `azureBaseUrl` / `azureResourceName` /
+> `azureDeploymentName` 三个 SDK 选项，对应的覆盖入口是环境变量与 `models.json` 的 `baseUrl`
+> （解析失败文案据此改写）。
 
 ---
 
@@ -899,7 +910,7 @@ prux 现有 bash 临时文件（`tools/bash.rs`）与 MCP 资源落盘需要一�
 
 ## 六、落地检查清单
 
-- [x] 决定 `SUPPORTED_PROVIDERS` 是否加 `azure`（2.18）——**本轮不加**，故同步范围仍是原 34 个 provider
+- [x] 决定 `SUPPORTED_PROVIDERS` 是否加 `azure`（2.18）——**第二轮已加**，同步范围 34 → 35 个 provider
 - [x] `make sync-models` + `scripts/sync-models.py --check`（1.24 / 2.16 / 2.17 数据面）
 - [x] 新增 `assets/changelog/v.1.1.0.md`，`Cargo.toml` version → `1.1.0`（`sync.md` 已是 `1.1.0`）
 - [x] `RETRYABLE` 补 `server_busy` / `servers are currently busy`（1.1）
@@ -919,7 +930,7 @@ prux 现有 bash 临时文件（`tools/bash.rs`）与 MCP 资源落盘需要一�
 - [x] `Home`/`End` 与 `Ctrl+Home`/`Ctrl+End` 键位对齐（3.3）
 - [x] Anthropic 登录端口占用行为核对（1.2）
 - [x] 终端消失错误识别（1.17）
-- [ ] （可选）OSC 7501 程序状态（2.13）、`openai-decisions`（2.17）
+- [x] （可选）`openai-decisions`（2.17）——**第四轮已做**；OSC 7501 程序状态（2.13）仍未做
 - [x] `outputPad` 设置项（2.11）——**有意跳过**，理由见第九节；prux 的 transcript 缩进硬编码 1 列、不可配置
 
 ---
@@ -1003,3 +1014,39 @@ changelog 正文不再沿用上一版的「产品介绍」格式，而是按本�
 
 **验证**：`cargo test` 全绿（lib 3261 项 + 全部集成测试目标）；`cargo fmt --check` 通过；
 `cargo clippy --lib --tests` 只剩改动前就存在的 3 条 warning（`settings_manager` 1、`tasks/widget` 2）。
+
+---
+
+## 十、第四轮实施记录（B 档：新协议 / 新 provider）
+
+本轮落地 2.17（OpenAI Decisions 分类协议）与 2.18（azure provider 接入）。B 档两项均已完成。
+
+| # | 项 | 改动位置 | 关键测试 |
+|---|---|---|---|
+| 2.17 | `openai-decisions` 协议 | 新增 `core/provider/decisions.rs`；`provider::classify` 加分支；`retry::send_with_retry_ex` 支持 `no_retry_statuses`；`classifier::{parse_usage, token_count}` 提为 `pub(crate)` 复用 | `decisions::tests::maps_questions_to_decisions_types_and_parses_answers`、`images_become_one_user_message_with_data_urls`、`gateway_504_fails_without_retry` |
+| 2.17 | ChatGPT 登录时隐藏分类器 | `model_resolver::classifier_hidden_by_chatgpt_sign_in`；`list_models_of_type` 与 `find_model_impl` 同一口径 | `openai_classifier_listing_follows_chatgpt_sign_in` |
+| 2.18 | azure provider | 新增 `core/provider/azure.rs`；`SUPPORTED_PROVIDERS` / `auth::api_key_env_var` / `login_registry` 加 azure；`provider::stream_chat` 分发前替换 `base_url`；responses / completions 的 endpoint 与请求体 `model` 走 azure 解析 | `azure::tests::normalizes_azure_host_paths`、`base_url_prefers_env_then_resource_then_catalog`、`deployment_map_rewrites_only_azure_request_models`、`api_version_query_follows_env_and_provider`、`resolve_if_azure_passes_non_azure_through`、`azure_resolves_endpoint_and_deployment_for_both_apis` |
+| 2.18 | 目录同步 | `assets/models/**` 新增 azure 的 45 个条目（44 个 responses + 1 个 completions） | `scripts/sync-models.py --check` 零差异 |
+
+**行为/接口口径**：
+
+- **2.17**：`input` 是 `state` 的 JSON 文本；带图片时改为一条 user 消息（`input_text` + 每个图片一个
+  `input_image` 的 data URL，上限 128 张）。`bool` 问题线上转 `predicate`（Decisions 没有判据字段），
+  `true` / `false` 两侧含义并入 `instructions`。`answers` 是数组、按 `name` 对号入座，与问题顺序无关。
+- **2.17**：网关 504 **不重试**（重试同样的超长输入必然再撞），并给专属文案说明原因。
+- **2.17**：`ClassifierContext::images` 与图片生成共用 `ImageContent`；出现非图片项按错误结果返回。
+- **2.17（与 pi 的差异）**：prux 的 `questions` 是 `BTreeMap`，请求里按 id **字典序**下发
+  （pi 用对象的插入顺序）。服务端按 `name` 匹配，不影响结果；测试按同一顺序断言。
+- **2.18**：目录条目的 `baseUrl` 为空，请求前按 `AZURE_OPENAI_BASE_URL` →
+  `AZURE_OPENAI_RESOURCE_NAME` → 目录 `baseUrl`（可由 `models.json` 覆盖）解析；
+  Azure 主机上把缺省路径归一为 `/openai/v1`，非 Azure 主机（自建网关）只去尾斜杠。
+- **2.18**：请求体的 `model` 发**部署名**（`AZURE_OPENAI_DEPLOYMENT_NAME_MAP` 的 `modelId=deployment`，
+  未命中则用目录 id）；`model_id` 本身不变，响应里的模型比对仍按目录 id。
+- **2.18**：新版 `v1` 接口不加 `api-version` 查询参数；`AZURE_OPENAI_API_VERSION` 设为别的值时才追加。
+- **2.18（与 pi 的差异）**：prux 没有 pi 的三个 SDK 选项（`azureBaseUrl` / `azureResourceName` /
+  `azureDeploymentName`），对应覆盖入口是环境变量与 `models.json` 的 `baseUrl`；
+  解析失败的文案据此改写（不再提不存在的选项）。azure 只支持 API key，没有订阅登录。
+
+**验证**：`cargo test` 全绿（lib 3271 项 + 19 个集成测试目标，含 `tests/`）；
+`cargo fmt --check` 通过；`cargo clippy --lib --tests` 只剩改动前就存在的 3 条 warning
+（`settings_manager` 1、`tasks/widget` 2）。

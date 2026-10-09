@@ -34,6 +34,7 @@ pub const SUPPORTED_PROVIDERS: &[&str] = &[
     "opencode-go",
     "anthropic",
     "ant-ling",
+    "azure",
     "baseten",
     "cerebras",
     "fireworks",
@@ -737,6 +738,13 @@ fn find_model_impl(provider: &str, model_id: &str, kind: Option<ModelType>) -> R
             continue;
         }
 
+        // ChatGPT 登录态下 openai 的分类器条目不可见
+        if ModelType::from_catalog(m.get("type")) == Some(ModelType::Classifier)
+            && classifier_hidden_by_chatgpt_sign_in(provider)
+        {
+            continue;
+        }
+
         let id = m.get("id").and_then(|v| v.as_str()).unwrap_or("");
         let name = m.get("name").and_then(|v| v.as_str()).unwrap_or("");
         let matched = if pass_exact {
@@ -1022,11 +1030,23 @@ pub fn list_models(provider: &str) -> Vec<(String, String)> {
     list_models_of_type(provider, ModelType::Chat)
 }
 
+/// 当前凭据下某个 provider 的分类器条目是否应当隐藏。
+///
+/// 只有 openai 命中：Sign in with ChatGPT 只签发 Responses API 的 token，Decisions API 会拒绝它。
+pub fn classifier_hidden_by_chatgpt_sign_in(provider: &str) -> bool {
+    provider == "openai" && auth::read_oauth_credential(provider).is_some()
+}
+
 /// 指定 [`ModelType`] 的模型列表（id, 展示名）。
 ///
 /// 图片生成（[`crate::core::provider::generate_images`]）用它列 `type: image` 条目；
 /// 分类器（[`crate::core::provider::classify`]）用它列 `type: classifier` 条目。
 pub fn list_models_of_type(provider: &str, kind: ModelType) -> Vec<(String, String)> {
+    // ChatGPT 登录取到的凭据到不了 Decisions API，该登录态下列不出分类器条目
+    if kind == ModelType::Classifier && classifier_hidden_by_chatgpt_sign_in(provider) {
+        return Vec::new();
+    }
+
     let items = provider_models(provider);
 
     // 凭据携带 availableModelIds（登录时从账号拉取），过滤目录中当前账号不可用的模型
@@ -1229,6 +1249,7 @@ fn default_model_id(provider: &str) -> Option<&'static str> {
     Some(match provider {
         "ant-ling" => "Ring-2.6-1T",
         "anthropic" => "claude-opus-4-8",
+        "azure" => "gpt-5.4",
         "baseten" => "zai-org/GLM-5.2",
         "cerebras" => "gpt-oss-120b",
         "deepseek" => "deepseek-v4-pro",
@@ -1406,6 +1427,40 @@ mod tests {
         // github-copilot openai-completions：目录显式 supportsReasoningEffort=false
         let copilot = find_model("github-copilot", "kimi-k3").unwrap();
         assert!(!copilot.supports_reasoning_effort);
+    }
+
+    #[test]
+    fn openai_classifier_listing_follows_chatgpt_sign_in() {
+        let _ad = crate::test_support::AgentDirGuard::temp();
+        // 无凭据：openai 的分类器条目可见
+        let visible = list_models_of_type("openai", ModelType::Classifier);
+        assert!(
+            visible.iter().any(|(id, _)| id == "gpt-6-luna"),
+            "无凭据时 gpt-6-luna 应可见: {visible:?}"
+        );
+        assert!(find_model_of_type("openai", "gpt-6-luna", ModelType::Classifier).is_ok());
+
+        // Sign in with ChatGPT：oauth 凭据到不了 Decisions API，分类器条目应当隐藏
+        let cred = crate::core::oauth::OAuthCredential {
+            access: "x".into(),
+            refresh: "r".into(),
+            expires: u64::MAX,
+            enterprise_url: None,
+            available_model_ids: None,
+            client_id: None,
+            scopes: None,
+        };
+        crate::core::auth::write_oauth_credential("openai", &cred).unwrap();
+        assert!(
+            list_models_of_type("openai", ModelType::Classifier).is_empty(),
+            "ChatGPT 登录态下不应列出 openai 的分类器"
+        );
+        assert!(
+            find_model_of_type("openai", "gpt-6-luna", ModelType::Classifier).is_err(),
+            "ChatGPT 登录态下 openai 的分类器也不应可解析"
+        );
+        // chat 模型不受登录方式影响
+        assert!(!list_models_of_type("openai", ModelType::Chat).is_empty());
     }
 
     #[test]

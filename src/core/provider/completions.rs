@@ -2,7 +2,7 @@
 
 use super::{
     AgentMessage, ContentBlock, Cost, ModelConfig, PartialTranslator, RawStreamEvent, StreamResult,
-    Usage,
+    Usage, azure,
     convert::{
         BRANCH_SUMMARY_PREFIX, BRANCH_SUMMARY_SUFFIX, COMPACTION_SUMMARY_PREFIX,
         COMPACTION_SUMMARY_SUFFIX, sanitize_surrogates, truncate_for_error,
@@ -735,7 +735,7 @@ fn build_chat_request(
     max_tokens: Option<u32>,
 ) -> ChatRequest {
     ChatRequest {
-        model: model.model_id.clone(),
+        model: azure::request_model_name(model).into_owned(),
         messages: openai_messages.to_vec(),
         stream: true,
         max_tokens: max_tokens.or(model.max_tokens),
@@ -1566,7 +1566,10 @@ fn model_endpoint(model: &ModelConfig) -> String {
         });
 
     match base {
-        Some(b) => format!("{}/chat/completions", b.trim_end_matches('/')),
+        Some(b) => azure::with_api_version(
+            model,
+            format!("{}/chat/completions", b.trim_end_matches('/')),
+        ),
         None => model.endpoint(),
     }
 }

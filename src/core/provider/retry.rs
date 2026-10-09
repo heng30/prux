@@ -59,6 +59,20 @@ pub(crate) async fn send_with_retry(
     max_retries: u32,
     max_delay_ms: Option<u64>,
 ) -> Result<Response> {
+    send_with_retry_ex(build_request, max_retries, max_delay_ms, &[]).await
+}
+
+/// [`send_with_retry`] 的扩展形式：`no_retry_statuses` 里的状态码即使属于
+/// [`should_retry`] 认可的可重试类别，也立即返回该响应而不重试。
+///
+/// 用于「重试同样的请求必然再次失败」的网关行为，例如 OpenAI Decisions 在
+/// Cloudflare 网关前对超长输入固定回 504。
+pub(crate) async fn send_with_retry_ex(
+    build_request: impl Fn() -> RequestBuilder,
+    max_retries: u32,
+    max_delay_ms: Option<u64>,
+    no_retry_statuses: &[u16],
+) -> Result<Response> {
     let delay_cap = max_delay_ms.unwrap_or(DEFAULT_MAX_RETRY_DELAY_MS);
     let mut retries_remaining = max_retries;
     loop {
@@ -68,7 +82,8 @@ pub(crate) async fn send_with_retry(
             return Ok(response);
         }
         let headers = response.headers().clone();
-        let retryable = should_retry(status, &headers);
+        let retryable =
+            should_retry(status, &headers) && !no_retry_statuses.contains(&status.as_u16());
         let last_response = response;
         if !retryable || retries_remaining == 0 {
             return Ok(last_response);

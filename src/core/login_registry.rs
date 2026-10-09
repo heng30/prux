@@ -4,10 +4,11 @@
 //! supports_api_key 的 provider 进入 “Sign in with an API key” 列表；
 //! is_subscription 为 true 的 provider 进入 “Sign in with an account”（OAuth 订阅）列表。
 //!
-//! 协议层可用的 34 个：
+//! 协议层可用的 35 个：
 //! - 排除特殊认证 provider（amazon-bedrock / google-vertex / cloudflare-*，需多字段或 AWS/ADC 凭据）
-//! - 排除协议未实现 provider（azure-openai-responses / mistral）
+//! - 排除协议未实现 provider（mistral）
 //! - radius 为网关 provider（动态模型目录），暂不实现
+//! - azure 的 base_url 按环境变量/资源名在请求前解析，此处留空（见 `provider::azure`）
 
 /// 支持登录的 provider 信息
 #[derive(Debug, Clone, Copy)]
@@ -58,6 +59,14 @@ pub const LOGIN_PROVIDERS: &[LoginProviderInfo] = &[
         id: "ant-ling",
         name: "Ant Ling",
         base_url: "https://api.ant-ling.com/v1",
+        is_subscription: false,
+        supports_api_key: true,
+    },
+    LoginProviderInfo {
+        id: "azure",
+        name: "Azure",
+        // Azure 的地址每资源一个（AZURE_OPENAI_BASE_URL / AZURE_OPENAI_RESOURCE_NAME），无静态值
+        base_url: "",
         is_subscription: false,
         supports_api_key: true,
     },
@@ -309,11 +318,12 @@ mod tests {
 
     #[test]
     fn registry_exposes_providers() {
-        assert_eq!(LOGIN_PROVIDERS.len(), 34);
+        assert_eq!(LOGIN_PROVIDERS.len(), 35);
         assert_eq!(provider_name("deepseek"), "DeepSeek");
         assert_eq!(provider_name("opencode"), "OpenCode Zen");
         assert_eq!(provider_name("opencode-go"), "OpenCode Go");
         assert_eq!(provider_name("anthropic"), "Anthropic");
+        assert_eq!(provider_name("azure"), "Azure");
         // 新增 provider 均有展示名
         assert_eq!(provider_name("openai"), "OpenAI");
         assert_eq!(provider_name("google"), "Google");

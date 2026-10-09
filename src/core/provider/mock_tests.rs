@@ -802,3 +802,172 @@ fn simple_completion_accepts_complete_summary() {
     });
     });
 }
+
+// =========================================================================
+// azure
+// =========================================================================
+
+/// Azure 相关的四个环境变量名。
+const AZURE_ENV_NAMES: [&str; 4] = [
+    "AZURE_OPENAI_BASE_URL",
+    "AZURE_OPENAI_RESOURCE_NAME",
+    "AZURE_OPENAI_API_VERSION",
+    "AZURE_OPENAI_DEPLOYMENT_NAME_MAP",
+];
+
+/// 测试内的 Azure 环境变量暂存：清空后按需设置，drop 时还原原值并释放 env 锁。
+#[must_use = "guard 必须存活到断言结束"]
+struct AzureEnv {
+    /// 持有的叶级 env 互斥锁，串行化同进程 env 读写直到 drop。
+    _lock: std::sync::MutexGuard<'static, ()>,
+    /// 清空前的环境变量原值，drop 时逐个还原；None 表示原本未设置。
+    saved: Vec<(&'static str, Option<String>)>,
+}
+
+impl AzureEnv {
+    /// 清空全部 Azure 环境变量并按 `pairs` 设置初始值。
+    fn new(pairs: &[(&'static str, &str)]) -> Self {
+        let lock = crate::test_support::env_key_lock();
+        let saved: Vec<(&'static str, Option<String>)> = AZURE_ENV_NAMES
+            .iter()
+            .map(|n| (*n, std::env::var(n).ok()))
+            .collect();
+        let this = Self { _lock: lock, saved };
+        this.set(pairs);
+        this
+    }
+
+    /// 在已持有锁的前提下重新设置这组变量（每个用例的假服务器端口不同）。
+    fn set(&self, pairs: &[(&'static str, &str)]) {
+        for name in AZURE_ENV_NAMES {
+            unsafe { std::env::remove_var(name) };
+        }
+        for (key, value) in pairs {
+            unsafe { std::env::set_var(key, value) };
+        }
+    }
+}
+
+impl Drop for AzureEnv {
+    /// 逐个还原保存的环境变量（原本未设置的重新移除），并释放持有的 env 锁。
+    fn drop(&mut self) {
+        for (name, value) in self.saved.drain(..) {
+            match value {
+                Some(value) => unsafe { std::env::set_var(name, value) },
+                None => unsafe { std::env::remove_var(name) },
+            }
+        }
+    }
+}
+
+/// 启动假 SSE 服务器并保留**完整请求文本**（含 body），供 Azure 用例断言 URL 与请求体。
+async fn mock_server_capturing(
+    frames: Vec<&'static str>,
+) -> (String, tokio::task::JoinHandle<String>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let handle = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut buf = Vec::new();
+        let mut tmp = [0u8; 4096];
+        let mut header_end = None;
+        loop {
+            let n = socket.read(&mut tmp).await.unwrap();
+            if n == 0 {
+                break;
+            }
+            buf.extend_from_slice(&tmp[..n]);
+            if header_end.is_none() {
+                header_end = buf.windows(4).position(|w| w == b"\r\n\r\n").map(|p| p + 4);
+            }
+            if let Some(he) = header_end {
+                let head = String::from_utf8_lossy(&buf[..he]).to_lowercase();
+                let len: usize = head
+                    .lines()
+                    .find_map(|l| l.strip_prefix("content-length:"))
+                    .and_then(|v| v.trim().parse().ok())
+                    .unwrap_or(0);
+                if buf.len() >= he + len {
+                    break;
+                }
+            }
+        }
+        let request = String::from_utf8_lossy(&buf).to_string();
+        socket
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n",
+            )
+            .await
+            .unwrap();
+        for f in frames {
+            socket
+                .write_all(format!("data: {f}\n\n").as_bytes())
+                .await
+                .unwrap();
+        }
+        socket.shutdown().await.unwrap();
+        request
+    });
+    (format!("http://127.0.0.1:{}", addr.port()), handle)
+}
+
+/// Azure provider：进入协议分发前按环境变量解析 `baseUrl`（目录里为空），
+/// 请求体的 `model` 用部署名映射；responses 与 completions 两个协议共用同一套解析。
+#[test]
+fn azure_resolves_endpoint_and_deployment_for_both_apis() {
+    run_net_test(|| {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let _ad = crate::test_support::AgentDirGuard::temp();
+            let env = AzureEnv::new(&[]);
+
+            // azure-openai-responses：URL 来自 AZURE_OPENAI_BASE_URL，body.model 用部署名
+            let responses_events = vec![
+                r#"{"type":"response.created","response":{"id":"resp_1"}}"#,
+                r#"{"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg_1"}}"#,
+                r#"{"type":"response.output_text.delta","output_index":0,"delta":"ok"}"#,
+                r#"{"type":"response.output_item.done","output_index":0,"item":{"type":"message","id":"msg_1","content":[{"type":"output_text","text":"ok"}]}}"#,
+                r#"{"type":"response.completed","response":{"id":"resp_1","status":"completed","usage":{"input_tokens":5,"output_tokens":1,"total_tokens":6}}}"#,
+            ];
+            let (base, server) = mock_server_capturing(responses_events).await;
+            env.set(&[
+                ("AZURE_OPENAI_BASE_URL", base.as_str()),
+                ("AZURE_OPENAI_DEPLOYMENT_NAME_MAP", "gpt-5.4=dep-1"),
+            ]);
+
+            let mut m = model_with_base("", "azure-openai-responses");
+            m.provider = "azure".into();
+            m.model_id = "gpt-5.4".into();
+            let result = stream_chat(&m, &[], "", &[], None, None, None, None, None, None).await;
+            assert_eq!(result.message.stop_reason.as_deref(), Some("stop"));
+            let request = server.await.unwrap();
+            assert!(request.starts_with("POST /responses "), "{request}");
+            let body: serde_json::Value =
+                serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+            assert_eq!(body["model"], "dep-1");
+
+            // openai-completions：同一套 baseUrl 解析；未命中映射的目录 id 原样作为 model
+            let completions_events = vec![
+                r#"{"id":"cmpl_1","choices":[{"index":0,"delta":{"content":"ok"}}]}"#,
+                r#"{"id":"cmpl_1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}"#,
+                r#"[DONE]"#,
+            ];
+            let (base2, server2) = mock_server_capturing(completions_events).await;
+            env.set(&[
+                ("AZURE_OPENAI_BASE_URL", base2.as_str()),
+                ("AZURE_OPENAI_DEPLOYMENT_NAME_MAP", "gpt-5.4=dep-1"),
+            ]);
+
+            let mut m2 = model_with_base("", "openai-completions");
+            m2.provider = "azure".into();
+            m2.model_id = "deepseek-v4-pro".into();
+            let result = stream_chat(&m2, &[], "", &[], None, None, None, None, None, None).await;
+            assert_eq!(result.message.stop_reason.as_deref(), Some("stop"));
+            let request = server2.await.unwrap();
+            assert!(request.starts_with("POST /chat/completions "), "{request}");
+            let body: serde_json::Value =
+                serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+            assert_eq!(body["model"], "deepseek-v4-pro");
+        });
+    });
+}

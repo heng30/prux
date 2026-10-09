@@ -1,6 +1,7 @@
 [
   "ant-ling",
   "anthropic",
+  "azure",
   "baseten",
   "cerebras",
   "deepseek",

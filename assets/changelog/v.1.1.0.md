@@ -24,6 +24,13 @@ This release aligns prux with upstream pi 1.1.0.
 - **`models.classify()` accepts `images`** (rejected with an error result when the model does not
   take image input), `tool_execution_end` carries `durationMs`, streaming assistant messages carry
   `durationMs`, and `agent_settled` carries `aborted`.
+- **Azure is available as a provider (`azure`)**, serving both the Responses API and Foundry Chat
+  Completions. The endpoint is resolved per request from `AZURE_OPENAI_BASE_URL` /
+  `AZURE_OPENAI_RESOURCE_NAME`, and requests send the deployment name when
+  `AZURE_OPENAI_DEPLOYMENT_NAME_MAP` maps one.
+- **The OpenAI Decisions classifier protocol (`openai-decisions`) is implemented**, so
+  `openai/gpt-6-luna` can be used for classification. Sign in with ChatGPT does not list it:
+  that token is rejected by the Decisions API.
 
 ### Changed
 
@@ -75,6 +82,11 @@ This release aligns prux with upstream pi 1.1.0.
   与系统提示一致的信息。
 - **`models.classify()` 接受 `images`**（模型不吃图片输入时返回错误结果）；工具事件
   `tool_execution_end` 带 `durationMs`，流式 assistant 消息带 `durationMs`，`agent_settled` 带 `aborted`。
+- **新增 Azure provider（`azure`）**：同时服务 Responses API 与 Foundry Chat Completions；
+  endpoint 每次请求按 `AZURE_OPENAI_BASE_URL` / `AZURE_OPENAI_RESOURCE_NAME` 解析，
+  `AZURE_OPENAI_DEPLOYMENT_NAME_MAP` 命中时请求体发的是部署名。
+- **新增 OpenAI Decisions 分类协议（`openai-decisions`）**：`openai/gpt-6-luna` 可用于分类。
+  Sign in with ChatGPT 登录态下不会列出它——该 token 会被 Decisions API 拒绝。
 
 ### 变更
 

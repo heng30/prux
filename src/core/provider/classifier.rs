@@ -398,7 +398,8 @@ fn probabilities(value: Option<&Value>, id: &str) -> Result<BTreeMap<String, f64
 ///
 /// 两个字段都没有（或 `usage` 不是对象）时返回 None；字段不是正数时按 0 计。
 /// 即“报告了但值不合法”仍算有用量，只是那部分 token 记 0。
-fn parse_usage(value: Option<&Value>, model: &ModelConfig) -> Option<Usage> {
+/// 分类器协议（System One / OpenAI Decisions）共用这套口径。
+pub(crate) fn parse_usage(value: Option<&Value>, model: &ModelConfig) -> Option<Usage> {
     let raw = value.and_then(Value::as_object)?;
     if raw.get("input_tokens").is_none() && raw.get("output_tokens").is_none() {
         return None;
@@ -421,7 +422,7 @@ fn parse_usage(value: Option<&Value>, model: &ModelConfig) -> Option<Usage> {
 }
 
 /// token 计数：非数字、非有限或非正数一律按 0。
-fn token_count(value: Option<&Value>) -> u32 {
+pub(crate) fn token_count(value: Option<&Value>) -> u32 {
     value
         .and_then(Value::as_f64)
         .filter(|n| n.is_finite() && *n > 0.0)
