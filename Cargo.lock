@@ -143,9 +143,9 @@ dependencies = [
 
 [[package]]
 name = "ascii-dag"
-version = "0.10.3"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "023a61b280054e4156aa07c7a38dfdb3c1baa9e33475533a63cc20761eab6586"
+checksum = "c4b39df9b298a34bc644332c381bc3740e2eb95ff755b6c5318bbd86f5a4c536"
 
 [[package]]
 name = "async-lock"
@@ -1968,15 +1968,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
-name = "mermaid-text"
-version = "0.57.0"
-dependencies = [
- "ascii-dag",
- "chrono",
- "unicode-width",
-]
-
-[[package]]
 name = "micromap"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2528,6 +2519,7 @@ version = "1.0.2"
 dependencies = [
  "anyhow",
  "arboard",
+ "ascii-dag",
  "async-trait",
  "base64 0.23.1",
  "bytes",
@@ -2550,7 +2542,6 @@ dependencies = [
  "linkme",
  "log",
  "lru",
- "mermaid-text",
  "nix",
  "prux",
  "pulldown-cmark",

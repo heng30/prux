@@ -1,9 +1,0 @@
----
-source: crates/mermaid-text/tests/snapshots.rs
-assertion_line: 983
-expression: out
----
-              optional
-┌──────────┐            ┌─────────┐
-│  PARENT  │1┄┄┄┄┄┄┄┄┄┄*│  CHILD  │
-└──────────┘            └─────────┘

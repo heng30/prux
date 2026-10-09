@@ -1,5 +1,0 @@
----
-source: crates/mermaid-text/tests/crossings.rs
-expression: "fmt_count(\"back_edge_lr\", n)"
----
-back_edge_lr: 0 crossing(s)

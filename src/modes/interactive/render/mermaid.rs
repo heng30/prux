@@ -1,6 +1,6 @@
-//! Mermaid → Unicode 盒图文本（基于 mermaid-text 库）。
+//! Mermaid → Unicode 盒图文本（基于内嵌的 `crate::mermaid_text`）。
 //!
-//! 由 `mermaid-text` 统一渲染 graph/flowchart、sequenceDiagram、gantt、pie、
+//! 由 `crate::mermaid_text` 统一渲染 graph/flowchart、sequenceDiagram、gantt、pie、
 //! erDiagram 等图表类型，输出为确定性 Unicode 盒图（无需浏览器/图片协议）。
 //!
 //! 宽度约束：
@@ -19,7 +19,7 @@
 //!
 //! 无法解析 / 空输入 / 不支持的图类型同样返回 `None`。
 
-use mermaid_text::{RenderOptions, render_with_options};
+use crate::mermaid_text::{RenderOptions, render_with_options};
 
 /// 渲染 mermaid 源码为 Unicode 文本图，并限制最大行宽。
 ///

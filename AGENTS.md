@@ -28,7 +28,7 @@ git 历史以「同步 pi-vX.Y.Z」为节奏推进，与上游保持行为/文�
 | `assets/` | 编译期内嵌资源：`docs/`（中文官方文档）、`changelog/`、`models/`、`themes/`、`syntaxes/`、`banner/`、`export-html/` | 经 `embedded!` 宏 `include_str!` 内嵌，改文件即改二进制 |
 | `migrations/` | 每次对齐 pi 版本一份迁移指南（`migration-vX.Y.Z.md`），另有按功能写的迁移（plugins / prompt / subagents / tasks） | 参照现状的历史账本，动手前先读最新那份 |
 | `scripts/sync-models.py` | 从本地 pi 安装目录同步 `assets/models/` | 手改 `assets/models/**` 一定会被下次同步覆盖 |
-| `vendor/mermaid-text` | `Cargo.toml` 里 `[patch.crates-io]` 的本地 vendored 依赖 | 是第三方代码，不适用本仓注释规范 |
+| `src/mermaid_text` | 内嵌的第三方库：crates.io 上 `mermaid-text` 0.57.0 的源码副本（含上游 `README.md`），供 `modes` 把 Mermaid 渲染成 Unicode 盒图 | 是第三方代码，不适用本仓注释规范；搬入时已把上游的 `crate::` 路径改成 `crate::mermaid_text::` 并跑过 `cargo fmt`，从上游再同步时要补做这两步 |
 | `examples/` | 可运行示例（`cargo run --example cli_demo`） | 兼作 API 用法演示，改公共 API 时留意 |
 | `pi/` | **符号链接**，指向仓外的上游源码（TS / 参考实现），不在 git 索引内 | 只读参考：禁止写入、禁止纳入提交 |
 
@@ -43,6 +43,7 @@ git 历史以「同步 pi-vX.Y.Z」为节奏推进，与上游保持行为/文�
 | `extensions/` | 内置扩展（编译期静态注册），每个模块一个功能 | 依赖 `core`（trait 面）、`utils` |
 | `modes/` | 运行模式：交互 TUI（`interactive/` 下 `app.rs` / `panel.rs` / `render/` / `handlers/` / `worker.rs`） | **只向下**依赖 `core` 与 `cli` |
 | `utils/` | 通用工具：diff、mime、路径、截断、终端、网络、图片、cron、zip 等 | **不依赖 `core`** |
+| `mermaid_text/` | 内嵌第三方库：Mermaid 源码 → Unicode 盒图（上游 `mermaid-text` 0.57.0，含其内部 `parser` / `render` / `layout` 子树） | 只依赖 `ascii-dag` / `chrono` / `unicode-width`，不是本仓分层的一部分 |
 | `test_support/` | 测试接缝：线程本地目录/HOME override、超时护栏 | 仅 `cfg(test)` 或 `test-support` feature 编译 |
 
 `core` 内部三层（`src/core.rs` 顶部是唯一真源，此处摘要）：
@@ -117,7 +118,7 @@ git 历史以「同步 pi-vX.Y.Z」为节奏推进，与上游保持行为/文�
 - `fn`：说明它做什么、关键参数的语义与副作用；返回 `Option` / `Result` 时说明何时为 `None` / 何时出错。
 - `type` 别名：说明它代表什么、与底层类型的区别（若有）。
 
-例外（不要求）：`vendor/` 下的第三方代码、`tests/` 目录与 `#[cfg(test)]` 块内的测试代码。
+例外（不要求）：`src/mermaid_text/` 下的第三方代码、`tests/` 目录与 `#[cfg(test)]` 块内的测试代码。
 
 ## 提交纪律
 

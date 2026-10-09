@@ -44,7 +44,6 @@ jsonschema = { version = "0.58", default-features = false }
 tiktoken-rs = { version = "0.12", default-features = false }
 futures-util = { version = "0.3", default-features = false }
 strum_macros = { version = "0.28", default-features = false }
-mermaid-text = { version = "0.57", default-features = false }
 unicode-width = { version = "0.2", default-features = false }
 http-body-util = { version = "0.1", default-features = false }
 pulldown-cmark = { version = "0.13", default-features = false }
@@ -136,6 +135,13 @@ rquickjs = { version = "0.12", default-features = false, features = [
 crossterm = { version = "0.29", default-features = false, features = [
   "event-stream",
 ] }
+ascii-dag = { version = "0.11", default-features = false, features = [
+  "std",
+  "ports",
+  "generic",
+  "layout-vertical",
+  "layout-horizontal",
+] }
 ratatui-image = { version = "11.1", default-features = false, features = [
   "crossterm",
 ] }
@@ -169,6 +175,3 @@ rmcp = { version = "3.1", default-features = false, features = [
   "transport-streamable-http-server",
   "tower",
 ] }
-
-[patch.crates-io]
-mermaid-text = { path = "vendor/mermaid-text" }

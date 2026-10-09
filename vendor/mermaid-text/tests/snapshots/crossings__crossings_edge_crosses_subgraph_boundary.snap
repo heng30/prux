@@ -1,5 +1,0 @@
----
-source: crates/mermaid-text/tests/crossings.rs
-expression: "fmt_count(\"edge_crosses_subgraph_boundary\", n)"
----
-edge_crosses_subgraph_boundary: 8 crossing(s)

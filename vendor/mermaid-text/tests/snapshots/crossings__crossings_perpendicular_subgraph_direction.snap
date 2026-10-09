@@ -1,5 +1,0 @@
----
-source: crates/mermaid-text/tests/crossings.rs
-expression: "fmt_count(\"perpendicular_subgraph_direction\", n)"
----
-perpendicular_subgraph_direction: 0 crossing(s)

@@ -1,5 +1,0 @@
----
-source: crates/mermaid-text/tests/crossings.rs
-expression: "fmt_count(\"diamond_with_branches\", n)"
----
-diamond_with_branches: 0 crossing(s)

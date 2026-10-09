@@ -5,6 +5,8 @@
 //! - [`core`]     —— 核心：模型调用、Agent 循环、会话、压缩、工具、trait 扩展（对应 dist/core/）
 //! - [`modes`]    —— 运行模式：交互 TUI（对应 dist/modes/）
 //! - [`utils`]    —— 通用工具：diff、mime、路径、截断（对应 dist/utils/）
+//! - [`mermaid_text`] —— 内嵌的第三方库（`mermaid-text` 0.57.0 源码），把 Mermaid
+//!   源码渲染为 Unicode 盒图；不参与下面的分层，仅被 [`modes`] 使用
 //!
 //! # API 分层（参考 pi 三层架构，依赖方向必须单向向上）
 //!    1. **底层 ai**：[`core::provider`] 定义统一消息/模型/工具类型与流式调用，
@@ -23,6 +25,7 @@ pub mod error;
 pub mod extensions;
 pub mod modes;
 pub mod utils;
+pub mod vendor;
 
 // 测试接缝（线程本地 agent_dir/HOME override、超时护栏）：
 // 单元测试经 cfg(test)、集成测试经 self dev-dependency 的 test-support feature 编译。
@@ -34,6 +37,7 @@ pub use core::agent_loop::AgentLoop;
 pub use core::agent_session::Agent;
 pub use core::provider::{AgentMessage, ContentBlock, ModelConfig, StreamEvent, Usage};
 pub use core::session_manager::Session;
+pub use vendor::mermaid_text;
 
 /// 应用名（取自 Cargo 包名），用于配置目录、日志前缀等。
 pub const APP_NAME: &str = env!("CARGO_PKG_NAME");

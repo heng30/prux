@@ -1,8 +1,0 @@
-stateDiagram-v2
-    [*] --> Active
-    state Active {
-        [*] --> Idle
-        Idle --> Working : task
-        Working --> Idle : done
-    }
-    Active --> [*]

@@ -1,6 +1,0 @@
----
-source: crates/mermaid-text/tests/crossings.rs
-assertion_line: 215
-expression: "fmt_count(\"nested_subgraphs_td\", n)"
----
-nested_subgraphs_td: 0 crossing(s)

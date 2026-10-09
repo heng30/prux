@@ -1,5 +1,0 @@
----
-source: crates/mermaid-text/tests/crossings.rs
-expression: "fmt_count(\"back_edge_avoids_diagram_interior_in_td_cycle\", n)"
----
-back_edge_avoids_diagram_interior_in_td_cycle: 0 crossing(s)

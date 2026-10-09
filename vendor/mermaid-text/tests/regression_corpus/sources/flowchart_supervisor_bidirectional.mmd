@@ -1,8 +1,0 @@
-graph LR
-subgraph Supervisor
-    direction TB
-    F[Factory] -->|creates| W[Worker]
-    W -->|panics| F
-end
-W -->|beat| HB[Heartbeat]
-HB --> WD[Watchdog]
