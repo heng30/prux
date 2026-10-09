@@ -509,9 +509,50 @@ pub fn settings_load_error() -> Option<String> {
     None
 }
 
-/// `defaultTools` 的增删条目（`+name` / `-name`）
-fn is_tool_modifier(entry: &str) -> bool {
+/// `defaultTools` / `--tools` 的增删条目（`+name` / `-name`）
+pub fn is_tool_modifier(entry: &str) -> bool {
     entry.starts_with('+') || entry.starts_with('-')
+}
+
+/// 校验 `--tools` 的条目列表：要么是纯名字/通配的 allowlist，要么全是 `+name`/`-name` 增删条目
+/// （两者不可混用，且增删条目只接受精确名）。返回问题描述，合法时为 `None`。
+pub fn get_tool_list_error(entries: &[String]) -> Option<String> {
+    let modifiers = entries.iter().filter(|e| is_tool_modifier(e)).count();
+    if modifiers == 0 {
+        return None;
+    }
+
+    if modifiers < entries.len() {
+        return Some("tool names cannot be mixed with +name or -name entries".to_string());
+    }
+
+    entries.iter().find(|e| e.contains('*')).map(|pattern| {
+        format!("+name and -name entries take exact tool names, not patterns: {pattern}")
+    })
+}
+
+/// 按顺序把 `+name` / `-name` 条目应用到 `base`：`+name` 追加（尚不存在时）、`-name` 删除。
+///
+/// 非增删条目一律忽略（调用方要么先过滤，要么已经校验过没有混用）。
+pub fn apply_tool_modifiers(base: &[String], entries: &[String]) -> Vec<String> {
+    let mut tools = base.to_vec();
+    for entry in entries {
+        if !is_tool_modifier(entry) {
+            continue;
+        }
+
+        let name = &entry[1..];
+        let index = tools.iter().position(|t| t == name);
+
+        if entry.starts_with('+') {
+            if index.is_none() && !name.is_empty() {
+                tools.push(name.to_string());
+            }
+        } else if let Some(index) = index {
+            tools.remove(index);
+        }
+    }
+    tools
 }
 
 /// 合并两层 `defaultTools`：覆盖层全是 `+`/`-` 时追加到继承层（增删语义），否则整体替换。均未设置返回 `None`。
@@ -543,29 +584,13 @@ fn resolve_default_tools(entries: &[String]) -> Vec<String> {
         .cloned()
         .collect();
 
-    let mut tools: Vec<String> = if !plain.is_empty() || entries.is_empty() {
+    let base: Vec<String> = if !plain.is_empty() || entries.is_empty() {
         plain
     } else {
         DEFAULT_TOOL_NAMES.iter().map(|s| s.to_string()).collect()
     };
 
-    for entry in entries {
-        if !is_tool_modifier(entry) {
-            continue;
-        }
-
-        let name = &entry[1..];
-        let index = tools.iter().position(|t| t == name);
-
-        if entry.starts_with('+') {
-            if index.is_none() && !name.is_empty() {
-                tools.push(name.to_string());
-            }
-        } else if let Some(index) = index {
-            tools.remove(index);
-        }
-    }
-    tools
+    apply_tool_modifiers(&base, entries)
 }
 
 /// 从一份 settings 值里读 `defaultTools`；键缺失或不是数组时返回 `None`
@@ -1739,6 +1764,42 @@ mod tests {
         assert_eq!(
             resolve_default_tools(&merge_default_tools(None, Some(&s(&["+web_search"]))).unwrap()),
             s(&["read", "bash", "edit", "write", "web_search"])
+        );
+    }
+
+    /// `--tools` 的条目校验：纯名字/通配与 `+name`/`-name` 不可混用，后者只接受精确名。
+    /// 对齐 pi 的 `getToolListError()`。
+    #[test]
+    fn tool_list_validation_matches_pi() {
+        let s = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+
+        // 纯名字或纯通配：合法
+        assert_eq!(get_tool_list_error(&s(&[])), None);
+        assert_eq!(get_tool_list_error(&s(&["read", "mcp__docs__*"])), None);
+        // 纯修饰符：合法（含混合的 `+` 与 `-`）
+        assert_eq!(get_tool_list_error(&s(&["+codemode", "-write"])), None);
+        // 名字与修饰符混用：报错
+        assert_eq!(
+            get_tool_list_error(&s(&["read", "+bash"])),
+            Some("tool names cannot be mixed with +name or -name entries".to_string())
+        );
+        // 修饰符带通配：报错并回显该条目
+        assert_eq!(
+            get_tool_list_error(&s(&["+mcp__docs__*"])),
+            Some(
+                "+name and -name entries take exact tool names, not patterns: +mcp__docs__*"
+                    .to_string()
+            )
+        );
+
+        // apply_tool_modifiers：按顺序追加/移除，非修饰符条目忽略
+        assert_eq!(
+            apply_tool_modifiers(&s(&["read"]), &s(&["+bash", "-read"])),
+            s(&["bash"])
+        );
+        assert_eq!(
+            apply_tool_modifiers(&s(&["read"]), &s(&["read", "+read*"])),
+            s(&["read", "read*"])
         );
     }
 

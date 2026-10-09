@@ -4,7 +4,7 @@
 //! - 各工具文件的 `execute_*` 负责「执行」：真正的行为实现；
 //! - 工具间共享的路径规范化等辅助函数以 `pub(crate)` 提供。
 
-pub(crate) use crate::utils::paths::relativize_path;
+use super::read;
 use crate::{
     core::provider::Usage,
     error::Error,
@@ -12,6 +12,8 @@ use crate::{
 };
 use serde_json::{Value, json};
 use std::path::PathBuf;
+
+pub(crate) use crate::utils::paths::relativize_path;
 
 /// 内置工具默认启用 constrained sampling（strict-prefer JSON-schema）。
 const BUILTIN_CONSTRAINED_SAMPLING: bool = true;
@@ -367,7 +369,7 @@ fn read_def() -> ToolDef {
         }),
         execution_mode: None,
         prepare_arguments: None,
-        output_schema: None,
+        output_schema: Some(read::output_schema()),
     }
 }
 

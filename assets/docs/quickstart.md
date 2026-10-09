@@ -128,10 +128,12 @@ prux --export <session> [out.html]
 --thinking <level>      思考级别：off/minimal/low/medium/high/xhigh/max
 --models <a,b,...>      Ctrl+P 循环用的模型列表
 --list-models [搜索词]   列出可用模型
--t, --tools <列表>       工具白名单（逗号分隔）
---exclude-tools <列表>   排除指定工具
---no-tools              默认禁用全部工具
---no-builtin-tools      默认禁用内置工具
+-t, --tools <列表>        工具白名单（逗号分隔）：名字或 `*` 通配；全为 `+名` / `-名` 条目时
+                         改为在默认选择上增删；未点名的 MCP 工具仍保留（条目以 `mcp__` 开头则不保留）
+-x, --exclude-tools <列表> 排除指定工具（支持 `*` 通配，对 MCP 工具同样生效）
+--no-tools               默认禁用全部工具
+--no-builtin-tools       默认禁用内置工具
+--no-mcp                 关闭内置 MCP 支持（不连接服务器、不注入 `mcp` 工具）
 --no-extensions         本次运行禁用所有扩展（含内置）
 --skill <path>          加载 skill（可重复）
 --no-skills             关闭 skill 发现与加载

@@ -9,7 +9,7 @@
 //! 失败永不抛错：由 [`super::classify`] 把错误转成 `stop_reason: "error"` 的结果。
 
 use super::{
-    MAX_TIMEOUT_MS, ModelConfig, Usage,
+    ImageContent, MAX_TIMEOUT_MS, ModelConfig, Usage,
     convert::truncate_for_error,
     provider_extra_headers,
     retry::{DEFAULT_MAX_RETRIES, send_with_retry},
@@ -72,6 +72,12 @@ pub enum ClassifierQuestion {
 pub struct ClassifierContext {
     /// 待分类的状态对象（如 `{"message": "..."}`）。
     pub state: Value,
+    /// 与 `state` 一起判定的一组图片（每项是 `{"type":"image","data":…,"mimeType":…}`）。
+    ///
+    /// 只有目录 `input` 含 `"image"` 的模型接受它们；其它模型在 [`super::classify`] 入口就返回错误结果。
+    /// 目前唯一的协议实现 `typesafe-system-one` 本身不支持图片输入，会再拒一次。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub images: Option<Vec<ImageContent>>,
     /// 问题 id → 问题；id 由调用方自取，用于在答案里对号入座。
     pub questions: BTreeMap<String, ClassifierQuestion>,
 }
@@ -159,6 +165,15 @@ pub(crate) async fn classify_typesafe_system_one(
             model,
             format!("Provider is not configured: {}", model.provider),
         );
+    }
+
+    // 本协议只吃文本：带上图片就没法拼请求
+    if context
+        .images
+        .as_ref()
+        .is_some_and(|images| !images.is_empty())
+    {
+        return error_result(model, format!("{LABEL} does not support image input"));
     }
 
     let body = build_body(model, context);
@@ -496,6 +511,7 @@ mod tests {
     fn context() -> ClassifierContext {
         ClassifierContext {
             state: json!({ "text": "The deployment succeeded, thank you." }),
+            images: None,
             questions: BTreeMap::from([
                 (
                     "category".to_string(),
@@ -733,6 +749,45 @@ mod tests {
                         .error_message
                         .unwrap_or_default()
                         .contains("does not support classification"),
+                );
+            });
+        });
+    }
+
+    /// 2.8：模型不支持图片输入时在发请求前就给错误结果
+    /// （对齐 pi `assertClassifierInputSupported()`），支持图片的模型再交给协议自己判。
+    #[test]
+    fn image_input_requires_a_model_that_accepts_images() {
+        run_net_test(|| {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async {
+                let mut model = classifier_model("http://127.0.0.1:1");
+                assert!(
+                    !model.input.iter().any(|mode| mode == "image"),
+                    "目录里的 typesafe 分类器应当是纯文本模型: {:?}",
+                    model.input
+                );
+                let mut with_images = context();
+                with_images.images = Some(vec![ImageContent::Image {
+                    data: "AAAA".into(),
+                    mime_type: "image/png".into(),
+                }]);
+
+                let result = super::super::classify(&model, &with_images).await;
+                let expected = format!(
+                    "Model {}/{} does not accept image input",
+                    model.provider, model.model_id
+                );
+                assert_eq!(result.stop_reason, "error");
+                assert_eq!(result.error_message.as_deref(), Some(expected.as_str()));
+
+                // 模型声明支持图片后不再被入口拦，改由协议自己拒（它只吃文本）
+                model.input.push("image".into());
+                let result = super::super::classify(&model, &with_images).await;
+                assert_eq!(result.stop_reason, "error");
+                assert_eq!(
+                    result.error_message.as_deref(),
+                    Some("System One API does not support image input")
                 );
             });
         });

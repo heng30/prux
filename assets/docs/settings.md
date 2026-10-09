@@ -118,7 +118,7 @@ prux 只有全局一个配置入口，项目级 `.prux/settings.json` 用于覆�
 }
 ```
 
-项目级 `.prux/settings.json` 的 `defaultTools` 数组**替换**全局数组（含空数组 = 无内置工具但保留扩展工具）。项目列表全是 `+`/`-` 条目时改为在全局列表上增删（只增删，不替换）。CLI 的 `--tools`（严格 allowlist）、`--no-tools`（全关）、`--no-builtin-tools`（只关内置）、`--exclude-tools`（过滤）会覆盖本设置。
+项目级 `.prux/settings.json` 的 `defaultTools` 数组**替换**全局数组（含空数组 = 无内置工具但保留扩展工具）。项目列表全是 `+`/`-` 条目时改为在全局列表上增删（只增删，不替换）。CLI 的 `--tools`（allowlist，支持 `*` 通配；全为 `+`/`-` 条目时改为在默认选择上增删）、`--no-tools`（全关）、`--no-builtin-tools`（只关内置）、`--exclude-tools`（过滤，支持通配）、`--no-mcp`（关掉内置 MCP 支持）会覆盖本设置。注意 `--tools` 不再顺带挡掉 MCP 工具，除非条目以 `mcp__` 开头（或用 `--exclude-tools` / `--no-mcp` 明确关掉）。
 
 `/settings` → Built-in tools 子面板只处理内置工具，写入的是 `+name` / `-name` 增量（例如关掉 `read`、开上 `grep` 得到 `["-read", "+grep"]`）：手写的纯工具名列表不会被覆盖，条目清空时删除该键（回落默认工具集）。面板反映的是**全局 + 项目**合并后的有效状态，项目层若用纯工具名替换，面板的切换不会改变有效工具集。变更在 `/reload` 或重启后生效。
 

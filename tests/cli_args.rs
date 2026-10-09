@@ -74,6 +74,20 @@ fn parses_tool_options() {
     let c = parse(&["--no-extensions"]);
     assert!(c.no_extensions);
     assert!(!c.no_tools && !c.no_builtin_tools);
+
+    // -x 是 --exclude-tools 的短名；条目支持 `*` 通配，不在解析层展开
+    let d = parse(&["-t", "read,mcp__docs__*", "-x", "b*"]);
+    assert_eq!(d.tools, vec!["read", "mcp__docs__*"]);
+    assert_eq!(d.exclude_tools, vec!["b*"]);
+
+    // --tools 也接受 +/- 修饰符（在 main 里求值，解析层原样保留）
+    let e = parse(&["--tools", "+codemode,-write"]);
+    assert_eq!(e.tools, vec!["+codemode", "-write"]);
+
+    // --no-mcp：关闭内置 MCP 支持
+    let f = parse(&["--no-mcp"]);
+    assert!(f.no_mcp);
+    assert!(!parse(&[]).no_mcp);
 }
 
 #[test]

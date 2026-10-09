@@ -379,6 +379,7 @@ fn last_user_text(messages: &[AgentMessage]) -> String {
 fn classifier_context(prompt: &str) -> ClassifierContext {
     ClassifierContext {
         state: json!({ PROMPT_FIELD: prompt }),
+        images: None,
         questions: BTreeMap::from([(
             COMPLEXITY_ID.to_string(),
             ClassifierQuestion::Choice {

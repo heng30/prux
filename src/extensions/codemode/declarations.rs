@@ -57,10 +57,14 @@ pub fn render_tool_signature(name: &str, input: Option<&Value>, output: Option<&
     )
 }
 
-/// 工具样例：描述 + 声明（`ALL_TOOLS` 条目与 describeTool() 的返回值）。
+/// 工具样例：描述 + prompt guidelines + 声明（`ALL_TOOLS` 条目与 describeTool() 的返回值）。
+///
+/// `guidelines` 是系统提示里只对「已声明」工具展示的 prompt guidelines（见 [`crate::core::system_prompt`]）；
+/// 脚本侧也把它拼在描述后面，让 `ALL_TOOLS` / `describeTool()` 看到同样多的信息。空行与空条目直接跳过。
 pub fn render_tool_sample(
     name: &str,
     description: &str,
+    guidelines: &[String],
     input: Option<&Value>,
     output: Option<&Value>,
 ) -> String {
@@ -68,10 +72,19 @@ pub fn render_tool_sample(
         "declare const tools: {{ {} }};",
         render_tool_signature(name, input, output)
     );
+    let bullets: Vec<String> = guidelines
+        .iter()
+        .filter(|guideline| !guideline.trim().is_empty())
+        .map(|guideline| format!("- {}", guideline.trim()))
+        .collect();
+    let guidelines = if bullets.is_empty() {
+        String::new()
+    } else {
+        format!("\n\n{}", bullets.join("\n"))
+    };
     format!(
-        "{}\n\ncodemode tool declaration:\n```ts\n{}\n```",
+        "{}{guidelines}\n\ncodemode tool declaration:\n```ts\n{declaration}\n```",
         description.trim(),
-        declaration
     )
 }
 
@@ -537,10 +550,27 @@ mod tests {
             render_tool_sample(
                 "read",
                 "Read a file",
-                Some(&json!({"type": "object"})),
+                &[],
+                Some(&json!({ "type": "object" })),
                 None
             ),
             "Read a file\n\ncodemode tool declaration:\n```ts\ndeclare const tools: { read(args: { [key: string]: unknown; }): Promise<unknown>; };\n```"
+        );
+
+        // 2.22：prompt guidelines 以 `- ` 项目符号拼在描述之后（空条目跳过）
+        assert_eq!(
+            render_tool_sample(
+                "bash",
+                "Run a command",
+                &[
+                    "Inspect PI_* environment variables.".to_string(),
+                    "   ".to_string(),
+                    "  Prefer short commands.  ".to_string(),
+                ],
+                Some(&json!({ "type": "object" })),
+                None
+            ),
+            "Run a command\n\n- Inspect PI_* environment variables.\n- Prefer short commands.\n\ncodemode tool declaration:\n```ts\ndeclare const tools: { bash(args: { [key: string]: unknown; }): Promise<unknown>; };\n```"
         );
     }
 }

@@ -65,7 +65,7 @@ fn intro_section() -> String {
 const INTRO: &str = r#"Run JavaScript code to orchestrate/compose tool calls
 - Runs as the body of an async function in a fresh QuickJS sandbox: top-level `await`/`return` work; no Node, filesystem, network or timers; 256 MB heap.
 - `tools.<name>(args)` calls a nested tool (object in, object or string out) and rejects with an Error carrying its error text on failure, denial or bad arguments. Calls are real and have side effects.
-- `text(value)` / `console.log(...)` append text, `image(<base64 data URI>)` appends an image, top-level `return value` appends like `text()`, `exit()` ends it successfully.
+- `text(value)` / `console.log(...)` append output, `image(<base64 data URI>)` appends an image and saves it to a temp file (the result names its path), top-level `return value` appends like `text()`, `exit()` ends it successfully. With several text items each starts with a `==> text N/M <==` line, and `console` lines follow the other output in one `<console_output>` block.
 - `store(key, value)` / `load(key)` keep JSON values across scripts; `ALL_TOOLS` lists nested tools; `await searchTools(query, { limit, namespace })`, `await describeTool(name)`, `await describeNamespace(name)` find tools and declarations.
 - Optional first line: `// @options: {"max_output_tokens": 1000, "timeout_ms": 60000}` (output token budget, hard deadline). Docs and examples: {docs}"#;
 
@@ -129,6 +129,7 @@ fn render_tool_section(tool: &ExtensionTool) -> String {
     let sample = render_tool_sample(
         &tool.name,
         &tool.description,
+        &tool.prompt_guidelines,
         Some(&tool.parameters),
         tool.output_schema.as_ref(),
     );
@@ -341,6 +342,7 @@ pub fn build_loadout(
                     render_tool_sample(
                         &tool.name,
                         &tool.description,
+                        &tool.prompt_guidelines,
                         Some(&tool.parameters),
                         tool.output_schema.as_ref(),
                     ),
@@ -507,14 +509,18 @@ mod tests {
         }
     }
 
-    /// 2.7：固定开销（压缩后的 INTRO + Model API，不含工具声明段）压到 ~400 token 量级。
+    /// 2.7：固定开销（压缩后的 INTRO + Model API，不含工具声明段）压到 ~500 token 量级。
+    ///
+    /// 这部上限的真正意图是守「类型定义不回流描述」（见下方三条断言）；
+    /// 数值本身是量出来的：类型块搬走后曾降到 ~460，2.7 补上 image 落盘与
+    /// 输出分隔说明后升到 ~520，因此上限定在 530。
     #[test]
     fn fixed_overhead_stays_small() {
         let text = create_description(&[], &HashSet::new(), None);
         let tokens = text.chars().count().div_ceil(CHARS_PER_TOKEN);
         assert!(
-            tokens <= 470,
-            "固定开销 {tokens} token，已超出 ~400 的目标（类型定义是否又回描述里了？）: {text}"
+            tokens <= 530,
+            "固定开销 {tokens} token，已超出 ~500 的目标（类型定义是否又回描述里了？）: {text}"
         );
     }
 

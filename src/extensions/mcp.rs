@@ -67,10 +67,14 @@ use tokio_util::sync::CancellationToken;
 use url::Url;
 
 /// 扩展名（注册名，也是 `/extension` 面板里的名字）
-const EXT: &str = "mcp";
+///
+/// `--no-mcp` 按这个名字禁用内置 MCP 扩展，因此必须公开。
+pub const EXT: &str = "mcp";
 
-/// 工具名
-const TOOL: &str = "mcp";
+/// 工具名（模型看到的聚合网关工具名）
+///
+/// 必须与 [`crate::core::tool_names::MCP_GATEWAY_TOOL_NAME`] 一致（由本模块的测试守住）。
+pub const TOOL: &str = "mcp";
 
 /// 斜杠命令名
 const CMD: &str = "mcp";
@@ -1571,6 +1575,13 @@ mod tests {
         crate::test_support::AUTH_TEST_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// 聚合网关工具名与 core 的工具名判定必须同源：
+    /// core 不能依赖 extensions，故 `MCP_GATEWAY_TOOL_NAME` 是硬编码副本，由这条测试守住。
+    #[test]
+    fn gateway_tool_name_matches_core_constant() {
+        assert_eq!(TOOL, crate::core::tool_names::MCP_GATEWAY_TOOL_NAME);
     }
 
     /// pi #10565：登录在等待浏览器回调时 Esc 可立即取消，不再干等 600s。

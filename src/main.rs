@@ -106,6 +106,19 @@ async fn main() {
         core::extensions::set_all_extensions_disabled(true);
     }
 
+    // `--no-mcp`：关闭内置 MCP 支持（不连接服务器、不注入 `mcp` 工具）。
+    // 与 `--no-extensions` 同理，注册早于解析，所以这里直接禁用已注册的 mcp 扩展；
+    // 只改本次运行的内存状态，不写回 settings 的 `disabledExtensions`。
+    if parsed.no_mcp {
+        core::extensions::set_extension_enabled(extensions::mcp::EXT, false);
+    }
+
+    // `--tools` 的条目校验：纯名字/通配与 `+name`/`-name` 不可混用，后者只接受精确名。
+    if let Some(err) = core::settings_manager::get_tool_list_error(&parsed.tools) {
+        eprintln!("Invalid tools option: {err}");
+        std::process::exit(1);
+    }
+
     // 把解析出的扩展 flag 值分发给声明它的扩展（--plan → plan-mode 开启）。
     // 未启用扩展的 flag 不注入解析，此处分发天然只覆盖已启用扩展。
     for (name, value) in &extension_flags {
@@ -249,15 +262,33 @@ async fn main() {
 
     // 工具选择（默认 = settings defaultTools ?? 标准默认 read/bash/edit/write；
     // --no-tools 全关（含扩展）；--no-builtin-tools 仅关内置保留扩展；
-    // --tools 为全工具严格 allowlist；--exclude-tools 过滤结果）。
-    // `settings_default_tools` 记下启动基线，供 `/reload` 重读 settings 时只增不减地并入新工具；
-    // 命令行显式指定过工具集时为 None（`/reload` 不重读）。
+    // --tools 为全工具 allowlist（条目支持 `*` 通配；未点名的 MCP 工具仍注册但不对模型声明），
+    // 全部为 `+name`/`-name` 时改为在默认选择上增减；--exclude-tools 过滤结果）。
+    // `settings_default_tools` 记下启动基线（已套用 `--tools` 修饰符），
+    // 供 `/reload` 重读 settings 时只增不减地并入新工具；
+    // 命令行显式指定过 allowlist / --no-tools / --no-builtin-tools 时为 None（`/reload` 不重读）。
+    let mut default_tool_modifiers: Vec<String> = Vec::new();
     let (selection, settings_default_tools) = if parsed.no_tools {
         (ToolSelection::NoTools, None)
     } else if parsed.no_builtin_tools {
         (ToolSelection::NoBuiltinTools, None)
     } else if !parsed.tools.is_empty() {
-        (ToolSelection::Allowlist(parsed.tools.clone()), None)
+        if parsed
+            .tools
+            .iter()
+            .all(|t| core::settings_manager::is_tool_modifier(t))
+        {
+            // 纯 `+name`/`-name`：等价于 settings 的 defaultTools 语法，在默认选择上增减。
+            // 基线与 `settings_default_tools` 都记「已套修饰符的结果」，使 `/reload` 能按同一组修饰符重算。
+            default_tool_modifiers = parsed.tools.clone();
+            let base = read_settings_default_tools()
+                .unwrap_or_else(|| DEFAULT_TOOL_NAMES.iter().map(|s| s.to_string()).collect());
+            let names =
+                core::settings_manager::apply_tool_modifiers(&base, &default_tool_modifiers);
+            (ToolSelection::Default(names.clone()), Some(names))
+        } else {
+            (ToolSelection::Allowlist(parsed.tools.clone()), None)
+        }
     } else {
         let names = read_settings_default_tools()
             .unwrap_or_else(|| DEFAULT_TOOL_NAMES.iter().map(|s| s.to_string()).collect());
@@ -424,6 +455,7 @@ async fn main() {
     agent.model_cycle = scope_models;
     agent.model_is_fallback = model_unconfigured;
     agent.set_settings_default_tools(settings_default_tools);
+    agent.set_default_tool_modifiers(default_tool_modifiers);
 
     // @文件 → text/image；stdin + fileText + 第一条 CLI 消息合成 initialMessage
     let (file_text, file_images) =

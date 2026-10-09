@@ -95,6 +95,8 @@ pub struct ScriptGlobal {
 pub enum ScriptOutput {
     /// 文本条目
     Text(String),
+    /// console 条目（`console.log` 等）：排版时集中到末尾一个 `<console_output>` 块
+    Console(String),
     /// 图片条目：base64 数据 + mime
     Image {
         /// base64 编码的图片数据（不含 `data:` 前缀）
@@ -412,13 +414,13 @@ fn install_host_globals(
 
     let out = outputs.clone();
     let output = Function::new(ctx.clone(), move |kind: String, a: String, b: String| {
-        let item = if kind == "image" {
-            ScriptOutput::Image {
+        let item = match kind.as_str() {
+            "image" => ScriptOutput::Image {
                 data: a,
                 mime_type: b,
-            }
-        } else {
-            ScriptOutput::Text(a)
+            },
+            "console" => ScriptOutput::Console(a),
+            _ => ScriptOutput::Text(a),
         };
         out.lock().unwrap().push(item);
     })
@@ -856,12 +858,48 @@ mod tests {
             out.output,
             vec![
                 ScriptOutput::Text("a".to_string()),
-                ScriptOutput::Text("b 2".to_string()),
+                ScriptOutput::Console("b 2".to_string()),
                 ScriptOutput::Image {
                     data: "iVBORw0KGgo=".to_string(),
                     mime_type: "image/png".to_string()
                 }
             ]
+        );
+    }
+
+    /// 2.6：内建被冻结，脚本改不动原型，预置报给宿主的结果不会被污染。
+    ///
+    /// 包住脚本的箭头函数是非严格模式，给冻结对象赋值静默失败；
+    /// 只要 `toJSON` 不上身，`JSON.stringify` 就不会被换掉。
+    #[tokio::test]
+    async fn builtins_are_locked_down() {
+        let (out, _) = run_script(
+            "Array.prototype.toJSON = () => 'patched';\ntext(JSON.stringify([1, 2]));\n",
+            BTreeMap::new(),
+        )
+        .await;
+        assert!(out.ok, "{out:?}");
+        assert_eq!(
+            out.output,
+            vec![ScriptOutput::Text("[1,2]".to_string())],
+            "toJSON 补丁不应生效"
+        );
+    }
+
+    /// 冻结不能靠「把原型上的数据属性设成只读」了事：那会让 `class MyError extends Error`
+    /// 里的 `this.name = ...` 抛错（override mistake）。常见可覆写属性被转成 accessor。
+    #[tokio::test]
+    async fn locked_builtins_still_allow_instance_overrides() {
+        let (out, _) = run_script(
+            "class MyError extends Error { constructor(m) { super(m); this.name = 'MyError'; } }\n\
+             const e = new MyError('boom');\ntext(e.name + ':' + e.message);\n",
+            BTreeMap::new(),
+        )
+        .await;
+        assert!(out.ok, "{out:?}");
+        assert_eq!(
+            out.output,
+            vec![ScriptOutput::Text("MyError:boom".to_string())]
         );
     }
 

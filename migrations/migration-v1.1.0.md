@@ -474,7 +474,7 @@ status/list 只读缓存、连接是惰性的，test/login 走 `tokio::spawn` �
 把 `ToolSelection::Allowlist(Vec<String>)` 改成持有 matcher，或让 `is_allowed` 内部编译一次。
 同时补 `-xt` 短名。注意 `--tools` 现在没有校验，`+name` 混用要报错（见 2.3）。
 
-> **状态：未做**
+> **状态：已实现**。新增 `core/tool_names.rs`（`wildcard_matches` / `matches_any`，手写通配现算），`--tools` / `--exclude-tools` 的内置选择改为按 matcher 过滤注册表，并补 `-x` 短名。
 
 ---
 
@@ -497,7 +497,7 @@ status/list 只读缓存、连接是惰性的，test/login 走 `tokio::spawn` �
 （prux 的扩展注册是声明式的，见 `src/extensions.rs`，过滤一条清单即可）。
 `--exclude-tools` 对 MCP 工具依旧生效。
 
-> **状态：未做**
+> **状态：已实现（与 pi 有结构差异）**。prux 的 MCP 是单个聚合网关工具，未点名时**保留注册但不对模型声明**（脚本与嵌套调用仍可达），点名或用 `--exclude-tools mcp` 才挡掉；新增 `--no-mcp`。
 
 ---
 
@@ -517,7 +517,7 @@ status/list 只读缓存、连接是惰性的，test/login 走 `tokio::spawn` �
 ② `main.rs:255` 构造 `ToolSelection` 时复用（修饰符 → `Default(apply(base, modifiers))`）。
 `/reload` 时把 CLI 给出的修饰符再套到重读后的 `defaultTools` 上（`AgentSession` 需要额外记住它们）。
 
-> **状态：未做**
+> **状态：已实现**。`--tools +name/-name` 在 main 求值，`/reload` 按同一组修饰符重算（对齐 pi 的 `defaultToolModifiers`）。
 
 ---
 
@@ -537,7 +537,7 @@ status/list 只读缓存、连接是惰性的，test/login 走 `tokio::spawn` �
 在 `run_script` 的图片分支前插一条文本项；同一张图（按 base64 去重）只写一次。
 bash 截断输出的临时文件（`tools/bash.rs`）与 MCP 二进制资源也可以顺带收敛到同一模块。
 
-> **状态：未做**
+> **状态：已实现**。新增 `utils/output_files.rs`（`0o600`、独占创建、不随句柄删除），`image()` 落盘并在文本里给出可读路径。
 
 ---
 
@@ -557,7 +557,7 @@ bash 截断输出的临时文件（`tools/bash.rs`）与 MCP 二进制资源也�
 让 `script_value` 原样透出。注意 `note` 是图片旁的提示文本（如「模型不支持视觉」），
 要与 2.4 的落盘路径配合。
 
-> **状态：未做**
+> **状态：已实现**。`read` 声明 `output_schema` 并在图片分支返回 `structured_content`，`Host::script_value` 原样透出。
 
 ---
 
@@ -580,7 +580,7 @@ bash 截断输出的临时文件（`tools/bash.rs`）与 MCP 二进制资源也�
 否则 `class MyError extends Error { name = "x" }` 会抛）；宿主侧的 payload 校验做一层
 显式 `Result`（当前依赖 rquickjs 的异常，语义上等价但错误文案不够明确）。
 
-> **状态：未做（宿主不崩那半已天然满足）**
+> **状态：已实现**。pi 的 `lockdown()` 已移植进 `glue.js`（含 `OVERRIDABLE` accessor，override mistake 不复发）。宿主侧 payload 校验仍依赖 rquickjs 异常（进程内不崩，语义等价但文案不如 pi 明确）。
 
 ---
 
@@ -600,7 +600,7 @@ bash 截断输出的临时文件（`tools/bash.rs`）与 MCP 二进制资源也�
 `run_script` 在拼装最终 content 时套 pi 的 `formatOutput()` / `joinAdjacentText()`：
 多 text 项加分隔头、console 归并成一块。注意分隔头的计数只算非 console 的 text 项。
 
-> **状态：未做**
+> **状态：已实现**。`ScriptOutput::Console` + `format_output` / `join_adjacent_text` / `save_images`；描述与文档同步改口径。
 
 ---
 
@@ -617,7 +617,7 @@ codemode 的参数校验新增 `context.images` 的形状检查。
 `classify()` 里在模型 `input` 不含 `image` 且 images 非空时返回错误结果
 （而不是发出去被 provider 拒），codemode 侧的 `checkClassifierContext` 同步加形状校验。
 
-> **状态：未做**
+> **状态：已实现**。`ClassifierContext.images` + 入口的能力检查 + `classifier_context_arg` 形状校验（对齐 pi 的 `checkClassifierContext`）。
 
 ---
 
@@ -647,7 +647,7 @@ prux 的 `src/extensions/codemode/description.rs:70`（`INTRO` 常量）**已经
 用单调时钟填 `AssistantMessage.duration_ms`；③ 把 7130 行那条「无 durationMs」断言改成
 「有/无的正确语义」。顺带把 1.5 的测量点收窄到 `execute()`。
 
-> **状态：未做**
+> **状态：已实现**。`FinalizedToolCall.duration_ms` 进 `tool_execution_end`；流式 assistant 消息的 `durationMs` 由 `stream_chat` 统一盖。
 
 ---
 
@@ -669,7 +669,7 @@ prux 的 `src/extensions/codemode/description.rs:70`（`INTRO` 常量）**已经
 再把 `render/messages.rs` 里硬编码的 1 换成该值，并加进 `ToolRenderCtx`。
 若暂不移植，需在文档里注明 prux 的缩进不可配置，避免与 pi 面板项对不齐。
 
-> **状态：未做（当前硬编码 1）**
+> **状态：未做（有意跳过）**。prux 无 TUI 组件层，落地要给出参数量已超长、多处 `too_many_arguments` 的消息渲染函数链各加一个参数；按本条「若暂不移植需注明」的要求，第九节记录结论：**prux 的 transcript 缩进硬编码为 1 列、不可配置**。
 
 ---
 
@@ -687,7 +687,7 @@ prux 的取消状态由别的字段表达（`agent_session.rs:2330` 附近注释
 **建议**：`emit_agent_settled` 带上 `aborted`（取本轮是否被中断请求），
 UI 侧可据此收尾；这是 2.13 的前置。
 
-> **状态：未做**
+> **状态：已实现**。`emit_agent_settled` 带上本轮的取消信号（`aborted`）。
 
 ---
 
@@ -819,7 +819,7 @@ pi 1.0.3 Changed：「输出文件（截断工具输出的全文、MCP 二进制
 prux 对应实现见 2.4 的建议（新增 `src/utils/output_files.rs`）；
 prux 现有 bash 临时文件（`tools/bash.rs`）与 MCP 资源落盘需要一并核对权限。
 
-> **状态：未做（随 2.4 一起）**
+> **状态：已实现**。随 2.4 一起收敛到 `utils/output_files.rs`；bash 的完整输出与 codemode 图片都走同一模块，且文件不再随句柄 drop 被删。
 
 ---
 
@@ -836,7 +836,7 @@ prux 现有 bash 临时文件（`tools/bash.rs`）与 MCP 资源落盘需要一�
 **建议**：把 `prompt_guidelines`（`system_prompt.rs:31` 已有该数据）暴露给 codemode 的
 `render_tool_sample`，按 pi 的格式拼成 `description + "\n\n- guideline…"`。
 
-> **状态：未做**
+> **状态：已实现**。`render_tool_sample` 接受 guidelines 并按 pi 格式拼在描述之后，两个调用点同步。
 
 ---
 
@@ -904,11 +904,11 @@ prux 现有 bash 临时文件（`tools/bash.rs`）与 MCP 资源落盘需要一�
 - [x] 新增 `assets/changelog/v.1.1.0.md`，`Cargo.toml` version → `1.1.0`（`sync.md` 已是 `1.1.0`）
 - [x] `RETRYABLE` 补 `server_busy` / `servers are currently busy`（1.1）
 - [x] 按上下文钳制输出上限（1.18）
-- [ ] `--tools` 通配 + MCP 保留 + `+name`/`-name` + `--no-mcp` + `-xt`（2.1 / 2.2 / 2.3）
-- [ ] codemode：输出文件模块 + `image()` 落盘（2.4 / 2.21）、`read` 图片透传（2.5）、
+- [x] `--tools` 通配 + MCP 保留 + `+name`/`-name` + `--no-mcp` + `-x`（2.1 / 2.2 / 2.3）（`-xt` 两字符短名 clap 不支持，只加了 `-x`）
+- [x] codemode：输出文件模块 + `image()` 落盘（2.4 / 2.21）、`read` 图片透传（2.5）、
       lockdown（2.6）、`console` 标记与输出分隔（2.7）、`classify` images（2.8）、
       guidelines 内联（2.22）
-- [ ] `agent_settled.aborted`（2.12）、`tool_execution_end.durationMs`（2.10）、
+- [x] `agent_settled.aborted`（2.12）、`tool_execution_end.durationMs`（2.10）、
       `AssistantMessage.duration_ms`（2.10）
 - [x] `Took` 用记录时长（1.5）
 - [x] OAuth 刷新不因取消而丢 token（1.3）
@@ -919,7 +919,8 @@ prux 现有 bash 临时文件（`tools/bash.rs`）与 MCP 资源落盘需要一�
 - [x] `Home`/`End` 与 `Ctrl+Home`/`Ctrl+End` 键位对齐（3.3）
 - [x] Anthropic 登录端口占用行为核对（1.2）
 - [x] 终端消失错误识别（1.17）
-- [ ] （可选）OSC 7501 程序状态（2.13）、`outputPad` 设置项（2.11）、`openai-decisions`（2.17）
+- [ ] （可选）OSC 7501 程序状态（2.13）、`openai-decisions`（2.17）
+- [x] `outputPad` 设置项（2.11）——**有意跳过**，理由见第九节；prux 的 transcript 缩进硬编码 1 列、不可配置
 
 ---
 
@@ -957,3 +958,48 @@ prux 现有 bash 临时文件（`tools/bash.rs`）与 MCP 资源落盘需要一�
 changelog 正文不再沿用上一版的「产品介绍」格式，而是按本节已落地项写成变更记录
 （新增 / 变更 / 修复 三段，双语）；既有约定是版本间正文逐字节相同（`v.1.0.0.md` 与 `v.1.0.2.md`），
 本版有意打破，以让 `/changelog` 真的能回答「What's New」。
+
+
+---
+
+## 九、第三轮实施记录（新增功能，A 档完成）
+
+本轮落地第二节里「有明确建议、可自主实现」的全部新增项，只留下 2.11 一项有意跳过。
+
+| # | 项 | 改动位置 | 关键测试 |
+|---|---|---|---|
+| 2.1 | `--tools` 通配 | 新增 `core/tool_names.rs`（`wildcard_matches` / `matches_any`）；`ToolSelection::is_allowed` 与 `compose_tools` 的内置选择改为按 matcher 过滤**注册表**；`args.rs` 补 `-x` | `tool_selection_supports_wildcard_entries`、`core::tool_names::tests::*` |
+| 2.2 | MCP 保留 + `--no-mcp` | `ToolSelection::{is_mcp_reserved, declares_to_model}`；`script_tools_for` 让保留的工具仍可脚本调；`extensions::mcp::{EXT, TOOL}` 公开 + `main.rs` 据此禁用 | `allowlist_keeps_mcp_tools_unless_pointed_at`、`gateway_tool_name_matches_core_constant` |
+| 2.3 | `+name` / `-name` | `settings_manager::{is_tool_modifier, apply_tool_modifiers, get_tool_list_error}` 公开；`main.rs` 求值，`Agent::set_default_tool_modifiers` 记下修饰符供 `/reload` 重放 | `tool_list_validation_matches_pi`、`reload_reapplies_default_tool_modifiers`、`cli_args::parses_tool_options` |
+| 2.4 / 2.21 | 输出文件模块 + `image()` 落盘 | 新增 `utils/output_files.rs`；`codemode::{save_images, spill_output}`；`bash` 的 `full_output` 改存 `(File, PathBuf)` | `utils::output_files::tests::*`、`script_images_are_spilled_with_a_path_label`、`script_images_report_save_failures_in_the_label` |
+| 2.5 | `read` 结构化输出 | `tools/read.rs::{output_schema, with_read_output}`；`index.rs` 的 `read_def` 声明 schema | `read_image_structured_output_matches_the_schema`、`read_text_structured_output_is_the_text`、`script_value_exposes_structured_output` |
+| 2.6 | sandbox lockdown | `glue.js` 移植 pi 的 `lockdown()`（含 `OVERRIDABLE` accessor 处理） | `builtins_are_locked_down`、`locked_builtins_still_allow_instance_overrides` |
+| 2.7 | `console` 标记 + 输出分隔 | `ScriptOutput::Console`；`codemode::{format_output, join_adjacent_text}`；`description.rs` 的 INTRO 与 codemode 文档同步 | `format_output_labels_items_and_groups_console`、`join_adjacent_text_inserts_a_separator` |
+| 2.8 | `classify` images | `ClassifierContext.images`；`provider::classify` 的能力检查（`assertClassifierInputSupported` 等价）；`codemode::classifier_context_arg`；`typesafe-system-one` 自己再拒一次 | `image_input_requires_a_model_that_accepts_images`、`classifier_context_shape_is_validated` |
+| 2.10 | `durationMs` | `FinalizedToolCall.duration_ms` 进 `tool_execution_end`；`provider::stamp_stream_duration` 给流式 assistant 消息盖耗时 | `tool_execution_event_payloads_match_pi`、`stream_duration_stamping_matches_pi` |
+| 2.12 | `agent_settled.aborted` | `emit_agent_settled` | `agent_settled_reports_whether_the_run_was_aborted` |
+| 2.22 | codemode 内联 guidelines | `declarations::render_tool_sample` 加 `guidelines` 参数，两个调用点同步 | `render_tool_sample` 的两条断言 |
+
+**与 pi 的差异（有意保留）**：
+
+- **2.2**：prux 的 MCP 是单个聚合网关工具（`mcp`，模型经 `action` 调用），不是 pi 的逐服务器工具。
+  因此「保留」表现为**不对模型声明、但仍在注册表里可被 codemode / 嵌套调用**；
+  pi 的 `list_mcp_resources` 等资源工具在 prux 由 `mcp` 的 `resources` / `read_resource` action 承接。
+  `--no-tools`（空 allowlist）与名字里出现 `mcp__` 前缀条目仍会挡掉 MCP（对齐 pi 的 `_allowlistFiltersMcp`）。
+- **2.4**：pi 把图片路径提示插在各自图片**前面**；prux 的 `ToolResult` 只有「一段文本 + 附件数组」两个槽，
+  提示因此统一追加在正文之后、附件之前。
+- **2.6**：只移植了 `lockdown()`；宿主侧对畸形 payload 的**显式** `Result` 校验未做——prux 用进程内 rquickjs，
+  畸形 payload 不会崩宿主（`finish()` 降级、`__settle` 失败走 `ErrorKind::Sandbox`），语义等价但错误文案不如 pi 明确。
+- **2.7**：`==> text N/M <==` 的编号只算 `text()` 与顶层 `return` 项，`console.*` 归并进末尾一个 `<console_output>` 块。
+  描述里只写一句概括，细则写进了 codemode 文档（`assets/docs/extensions/codemode.md`），
+  否则 INTRO 的固定开销会顶破 `fixed_overhead_stays_small` 的预算（上限已按本轮新增量从 470 调到 530）。
+- **2.10**：`AssistantMessage.durationMs` 不在各 provider 里填，而是由 `stream_chat` 统一盖
+  （对齐 pi 把计时放在 `AssistantMessageEventStream` 的位置）；`timestamp` 早于本次流开始的消息不盖。
+- **2.11（outputPad）**：**未做**。`outputPad` 在 pi 是 TUI 组件 API（`Box/Text.setPaddingX`）的产物，
+  prux 没有组件层；落地要给出参数量已超长、多处 `#[allow(clippy::too_many_arguments)]` 的
+  消息渲染函数链（`render_message` → `render_message_blocks` → `render_user` / `render_assistant` /
+  `render_tool_block_inner` / `render_summary` …）各加一个参数，收益（缩进可配）与回归风险不成比例。
+  **结论：prux 的 transcript 缩进硬编码为 1 列、不可配置**，`/settings` 里不提供该项。
+
+**验证**：`cargo test` 全绿（lib 3261 项 + 全部集成测试目标）；`cargo fmt --check` 通过；
+`cargo clippy --lib --tests` 只剩改动前就存在的 3 条 warning（`settings_manager` 1、`tasks/widget` 2）。

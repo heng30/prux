@@ -16,6 +16,7 @@ pub mod ignore;
 pub mod image;
 pub mod mime;
 pub mod net;
+pub mod output_files;
 pub mod paths;
 pub mod proxy;
 pub mod terminal_caps;

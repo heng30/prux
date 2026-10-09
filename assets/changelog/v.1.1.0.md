@@ -7,6 +7,23 @@ This release aligns prux with upstream pi 1.1.0.
 - **Refreshed model catalog** from pi-ai 1.1.0: Claude Haiku 5.5 is now available, and
   prompt-length pricing tiers were added for OpenCode, OpenRouter, Vercel AI Gateway, Google and
   MiniMax — long-prompt requests are no longer undercharged.
+- **`--tools` accepts patterns and add/remove entries.** Entries may use `*` (for example
+  `--tools read,codemode,'mcp__radius__*'`), and an all-`+name` / `-name` list adds or removes from
+  the default selection instead of replacing it. `--tools` also keeps MCP tools unless an entry
+  starts with `mcp__`, `--no-mcp` turns built-in MCP support off entirely, and `-x` is the short
+  form of `--exclude-tools`.
+- **codemode script output is easier to read.** `image()` saves each image to an owner-only
+  (`0o600`) temp file and the result names its path; several text items are numbered
+  (`==> text N/M <==`) and `console.*` lines are grouped into one `<console_output>` block.
+- **`read` returns structured output**, so codemode scripts can show an image a nested `read`
+  returned instead of only its text.
+- **The codemode sandbox freezes the built-ins** before a script runs, so a script that patches a
+  prototype (for example `Array.prototype.toJSON`) can no longer corrupt the host-visible result.
+- **codemode tool declarations include each tool's prompt guidelines**, so `ALL_TOOLS` and
+  `describeTool()` show the same guidance the system prompt shows.
+- **`models.classify()` accepts `images`** (rejected with an error result when the model does not
+  take image input), `tool_execution_end` carries `durationMs`, streaming assistant messages carry
+  `durationMs`, and `agent_settled` carries `aborted`.
 
 ### Changed
 
@@ -46,6 +63,18 @@ This release aligns prux with upstream pi 1.1.0.
 - **模型目录刷新**（来自 pi-ai 1.1.0）：新增 Claude Haiku 5.5；OpenCode、OpenRouter、
   Vercel AI Gateway、Google、MiniMax 补上了「按 prompt 长度分档」的定价档，
   长 prompt 请求不再少算成本。
+- **`--tools` 支持通配与增删条目**：条目可用 `*`（如 `--tools read,codemode,'mcp__radius__*'`）；
+  全是 `+name` / `-name` 时改为在默认选择上增减，而不是整体替换。`--tools` 也不再顺带挡掉 MCP 工具
+  （除非条目以 `mcp__` 开头），新增 `--no-mcp` 完全关闭内置 MCP 支持，`--exclude-tools` 多了 `-x` 短名。
+- **codemode 脚本输出更好读**：`image()` 把每张图落到只有属主可读（`0o600`）的临时文件并在结果里
+  给出路径；多个文本项带 `==> text N/M <==` 编号，`console.*` 的行汇总进一个 `<console_output>` 块。
+- **`read` 返回结构化输出**：codemode 脚本可以直接展示嵌套 `read` 读到的图片，而不只是一段文本。
+- **codemode 沙箱在脚本运行前冻结内建**：脚本再改原型（如 `Array.prototype.toJSON`）也不会污染
+  宿主看到的结果。
+- **codemode 的工具声明内联各自的 prompt guidelines**：`ALL_TOOLS` 与 `describeTool()` 能看到
+  与系统提示一致的信息。
+- **`models.classify()` 接受 `images`**（模型不吃图片输入时返回错误结果）；工具事件
+  `tool_execution_end` 带 `durationMs`，流式 assistant 消息带 `durationMs`，`agent_settled` 带 `aborted`。
 
 ### 变更
 

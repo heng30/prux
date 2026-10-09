@@ -14,7 +14,6 @@ use super::{
     util::{notify_text, value_text},
 };
 use crate::{
-    APP_NAME,
     core::{
         auth,
         extensions::{
@@ -32,7 +31,9 @@ use crate::{
     },
     extensions::tool_search,
     modes::interactive::{app::App, handlers::register_slash_command},
+    utils::{output_files, truncate},
 };
+use base64::Engine as _;
 use description::CHARS_PER_TOKEN;
 use futures_util::future::BoxFuture;
 use sandbox::{SandboxRequest, ScriptError, ScriptGlobal, ScriptHost, ScriptOutput, ScriptTool};
@@ -68,6 +69,20 @@ const MODELS_CLASSIFY: &str = "models.classify";
 /// `models.generateImages` 全局名（调用记录与错误文案共用）
 const MODELS_GENERATE_IMAGES: &str = "models.generateImages";
 
+/// 脚本输出的默认 token 预算
+const DEFAULT_MAX_OUTPUT_TOKENS: u64 = 10_000;
+
+/// 脚本展示的图片类型 → 输出文件扩展名（含点）。
+///
+/// 必须覆盖沙箱 `image()` 接受的每一种类型（见 `glue.js` 的检测），
+/// 否则落盘只能报「无法保存」。
+const IMAGE_FILE_EXTENSIONS: &[(&str, &str)] = &[
+    ("image/png", ".png"),
+    ("image/jpeg", ".jpg"),
+    ("image/gif", ".gif"),
+    ("image/webp", ".webp"),
+];
+
 /// `/codemode` 子命令（顺序 = 输入框候选顺序）。
 ///
 /// 无参 = 开关设置面板（面板已展示全部配置），与 `settings` 同义，因此不声明 `settings` 之外的配置键。
@@ -81,9 +96,6 @@ const SUBCOMMANDS: &[SubcommandDef] = &[
         description: "Print the current mode and inlineBudget (config file path included)",
     },
 ];
-
-/// 脚本输出的默认 token 预算
-const DEFAULT_MAX_OUTPUT_TOKENS: u64 = 10_000;
 
 /// 自声明工厂：linkme 分布式切片
 #[linkme::distributed_slice(EXTENSION_FACTORIES)]
@@ -456,9 +468,7 @@ impl Host {
     /// 用量并入 codemode 结果（计入会话成本），调用本身也记入 `details.modelCalls`。
     async fn classify(&self, args: &[Value]) -> Result<Value, String> {
         let model = resolve_model_call(MODELS_CLASSIFY, ModelType::Classifier, args.first())?;
-        let context: ClassifierContext =
-            serde_json::from_value(args.get(1).cloned().unwrap_or(Value::Null))
-                .map_err(|e| format!("models.classify() expects a ClassifierContext: {e}"))?;
+        let context = classifier_context_arg(args.get(1))?;
 
         let index = self.begin_model_call(MODELS_CLASSIFY, &model_ref(&model));
         let _permit = self.model_call_gate.acquire().await.ok();
@@ -662,6 +672,65 @@ fn resolve_model_call(
             other.as_str()
         ),
         None => format!("Unknown {type_name} model \"{provider}/{id}\". {list_hint}"),
+    })
+}
+
+/// 校验 `models.classify()` 的上下文实参并转成 [`ClassifierContext`]。
+///
+/// 期望形状：`{ state: {...}, images?: [{ type: "image", data, mimeType }], questions: {...} }`。
+/// 形状错误在调 provider 之前就报出来，免得把「脚本写错了」说成「provider 报错」
+fn classifier_context_arg(value: Option<&Value>) -> Result<ClassifierContext, String> {
+    const EXPECTED: &str = r#"{ state: { ... }, images?: [{ type: "image", data: <base64>, mimeType }], questions: { <id>: { type: "choice" | "score" | "bool", instructions, criteria } } }"#;
+    let fail =
+        |problem: String| format!("{MODELS_CLASSIFY}() {problem}. Expected context: {EXPECTED}.");
+
+    let Some(context) = value.and_then(|v| v.as_object()) else {
+        return Err(fail(format!(
+            "expects a context object as its second argument, got {}",
+            describe_script_value(value)
+        )));
+    };
+
+    let state = context.get("state");
+    if !state.is_some_and(Value::is_object) {
+        return Err(fail(format!(
+            "context.state must be an object, got {}",
+            describe_script_value(state)
+        )));
+    }
+
+    if let Some(images) = context.get("images") {
+        let Some(blocks) = images.as_array() else {
+            return Err(fail(format!(
+                "context.images must be an array, got {}",
+                describe_script_value(Some(images))
+            )));
+        };
+        for (index, block) in blocks.iter().enumerate() {
+            let is_image_block = block.get("type").and_then(Value::as_str) == Some("image")
+                && block.get("data").and_then(Value::as_str).is_some()
+                && block.get("mimeType").and_then(Value::as_str).is_some();
+            if !is_image_block {
+                return Err(fail(format!(
+                    "context.images[{index}] must be an image block, got {}",
+                    describe_script_value(Some(block))
+                )));
+            }
+        }
+    }
+
+    match context.get("questions").and_then(Value::as_object) {
+        Some(questions) if !questions.is_empty() => {}
+        _ => {
+            return Err(fail(format!(
+                "context.questions must map question IDs to questions, got {}",
+                describe_script_value(context.get("questions"))
+            )));
+        }
+    }
+
+    serde_json::from_value(Value::Object(context.clone())).map_err(|err| {
+        format!("{MODELS_CLASSIFY}() context is malformed: {err}. Expected context: {EXPECTED}.")
     })
 }
 
@@ -884,6 +953,7 @@ async fn run_script(code: &str, ctx: ToolExecCtx) -> std::result::Result<ToolRes
                 declarations::render_tool_sample(
                     &t.name,
                     &t.description,
+                    &t.prompt_guidelines,
                     Some(&t.parameters),
                     t.output_schema.as_ref(),
                 ),
@@ -956,51 +1026,55 @@ async fn run_script(code: &str, ctx: ToolExecCtx) -> std::result::Result<ToolRes
     let outcome = sandbox::run(request, host).await;
     let wall_seconds = started.elapsed().as_secs_f64();
 
-    // 输出条目：文本拼成一段；图片变附件
-    let mut texts: Vec<String> = Vec::new();
-    let mut attachments: Vec<ToolResultAttachment> = Vec::new();
-    for item in &outcome.output {
-        match item {
-            ScriptOutput::Text(text) => texts.push(text.clone()),
-            ScriptOutput::Image { data, mime_type } => {
-                attachments.push(ToolResultAttachment {
-                    data_base64: data.clone(),
-                    mime_type: mime_type.clone(),
-                    original_size: None,
-                    converted_from: None,
-                });
-            }
-        }
+    // 输出排版：`text()` 加分隔头、`console.*` 汇总，
+    // 再把 return 值（进计数）/错误/提示（不进计数）并进去，最后截图并落盘。
+    let mut script_output: Vec<ScriptOutput> = outcome.output.clone();
+    if outcome.ok
+        && let Some(value) = &outcome.value
+    {
+        script_output.push(ScriptOutput::Text(value_text(value)));
     }
+    let mut items = format_output(&script_output);
 
     if outcome.ok {
-        if let Some(value) = &outcome.value {
-            texts.push(value_text(value));
-        }
-
         store::apply_writes(&outcome.store_writes);
 
         // 生成了图片但一张都没展示：补一条提示
         let generated = model_globals.lock().unwrap().generated_images;
-        if let Some(note) = unshown_images_note(generated, attachments.len()) {
-            texts.push(note);
+        let shown = items
+            .iter()
+            .filter(|i| matches!(i, FormattedItem::Image { .. }))
+            .count();
+        if let Some(note) = unshown_images_note(generated, shown) {
+            items.push(FormattedItem::Text(note));
         }
     } else {
-        texts.push(format!(
+        items.push(FormattedItem::Text(format!(
             "Script error:\n{}",
             format_error(
                 outcome.error.as_ref(),
                 outcome.error_kind,
                 &nested_call_summary(&ctx)
             )
-        ));
+        )));
     }
 
+    let items = join_adjacent_text(items);
+
+    // 截断只作用于文本：图片不进 token 预算，按原顺序留在文本之后
+    let texts: Vec<String> = items
+        .iter()
+        .filter_map(|item| match item {
+            FormattedItem::Text(text) => Some(text.clone()),
+            FormattedItem::Image { .. } => None,
+        })
+        .collect();
     let max_tokens = parsed
         .options
         .max_output_tokens
         .unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS);
-    let (body, full_output_path) = truncate_output(&texts, max_tokens);
+    let (mut body, full_output_path) = truncate_output(&texts, max_tokens);
+    let attachments = save_images(&items, &mut body);
 
     let header = format!(
         "Script {}\nWall time {wall_seconds:.1} seconds\nOutput:\n",
@@ -1034,6 +1108,129 @@ async fn run_script(code: &str, ctx: ToolExecCtx) -> std::result::Result<ToolRes
     }
 
     Ok(result)
+}
+
+/// 脚本输出条目在宿主侧的最终形态：一段文本或一张图片。
+enum FormattedItem {
+    /// 文本段（`text()`、顶层 `return` 值、`<console_output>` 汇总、错误与提示）
+    Text(String),
+    /// 图片条目
+    Image {
+        /// base64 编码的图片数据（不含 `data:` 前缀）
+        data: String,
+        /// mime 类型（如 `image/png`）
+        mime_type: String,
+    },
+}
+
+/// 排版脚本输出，让模型分得清条目边界（provider 会把相邻文本块直接拼起来，中间不给分隔）。
+///
+/// 多于一条文本项（`text()` / 顶层 `return`）时每项以 `==> text N/M <==` 开头；
+/// `console.*` 的行不占编号，统一汇总到末尾一个 `<console_output>` 块；图片保持原位。
+fn format_output(items: &[ScriptOutput]) -> Vec<FormattedItem> {
+    let total = items
+        .iter()
+        .filter(|item| matches!(item, ScriptOutput::Text(_)))
+        .count();
+    let mut out: Vec<FormattedItem> = Vec::new();
+    let mut console_lines: Vec<&str> = Vec::new();
+    let mut index = 0usize;
+
+    for item in items {
+        match item {
+            ScriptOutput::Image { data, mime_type } => out.push(FormattedItem::Image {
+                data: data.clone(),
+                mime_type: mime_type.clone(),
+            }),
+            ScriptOutput::Console(line) => console_lines.push(line),
+            ScriptOutput::Text(text) => {
+                index += 1;
+                out.push(FormattedItem::Text(if total > 1 {
+                    format!("==> text {index}/{total} <==\n{text}")
+                } else {
+                    text.clone()
+                }));
+            }
+        }
+    }
+
+    if !console_lines.is_empty() {
+        out.push(FormattedItem::Text(format!(
+            "<console_output>\n{}\n</console_output>",
+            console_lines.join("\n")
+        )));
+    }
+    out
+}
+
+/// 合并相邻的文本段（pi `joinAdjacentText()`）：上一段是空串或以换行结尾时直接相连，
+/// 否则补一个换行，避免两段粘成一个词。
+fn join_adjacent_text(items: Vec<FormattedItem>) -> Vec<FormattedItem> {
+    let mut joined: Vec<FormattedItem> = Vec::new();
+    for item in items {
+        match (joined.last_mut(), item) {
+            (Some(FormattedItem::Text(last)), FormattedItem::Text(text)) => {
+                if !last.is_empty() && !last.ends_with('\n') {
+                    last.push('\n');
+                }
+                last.push_str(&text);
+            }
+            (_, item) => joined.push(item),
+        }
+    }
+    joined
+}
+
+/// 把图片落盘并把路径提示追加到 `text` 末尾，返回附件列表。
+///
+/// 模型能看到图片本身，却拿不到它的字节（脚本不能写文件，`write` 只收文本），
+/// 所以每张图都要留一个可读路径。同一张图（同 base64）多次展示只落盘一次；
+/// 落盘失败（磁盘满、临时目录不可写）时把原因写进提示，而不是丢弃已经跑过的脚本结果。
+///
+/// `ToolResult` 只有「一段文本 + 附件数组」两个槽，提示因此统一追加在正文之后、附件之前。
+fn save_images(items: &[FormattedItem], text: &mut String) -> Vec<ToolResultAttachment> {
+    let mut attachments: Vec<ToolResultAttachment> = Vec::new();
+    let mut labels: HashMap<String, String> = HashMap::new();
+
+    for item in items {
+        let FormattedItem::Image { data, mime_type } = item else {
+            continue;
+        };
+
+        let label = labels
+            .entry(data.clone())
+            .or_insert_with(|| image_output_label(data, mime_type));
+        text.push('\n');
+        text.push_str(label);
+        attachments.push(ToolResultAttachment {
+            data_base64: data.clone(),
+            mime_type: mime_type.clone(),
+            original_size: None,
+            converted_from: None,
+        });
+    }
+
+    attachments
+}
+
+/// 一张图的落盘提示文本：成功时是 `[Image saved to <path> (<mime>, <size>)]`，失败时把原因一并写进括号
+fn image_output_label(data: &str, mime_type: &str) -> String {
+    let bytes = match base64::engine::general_purpose::STANDARD.decode(data) {
+        Ok(bytes) => bytes,
+        Err(err) => return format!("[Image could not be saved: invalid base64 ({err})]"),
+    };
+    let kind = format!("{mime_type}, {}", truncate::format_size(bytes.len()));
+
+    let Some((_, extension)) = IMAGE_FILE_EXTENSIONS.iter().find(|(m, _)| *m == mime_type) else {
+        return format!(
+            "[Image ({kind}) could not be saved: no file extension for image type {mime_type}]"
+        );
+    };
+
+    match output_files::write_output_file("codemode", extension, &bytes) {
+        Ok(path) => format!("[Image saved to {} ({kind})]", path.display()),
+        Err(err) => format!("[Image ({kind}) could not be saved: {err}]"),
+    }
 }
 
 /// 脚本生成了图片却一张都没展示时的提示文本；没这种情况时返回 `None`。
@@ -1145,14 +1342,9 @@ fn truncate_output(texts: &[String], max_tokens: u64) -> (String, Option<String>
 
 /// 把完整输出写到临时文件（像 bash 的截断那样，留给模型 `read` 用）。
 fn spill_output(text: &str) -> std::result::Result<String, String> {
-    let mut file = tempfile::Builder::new()
-        .prefix(&format!("{APP_NAME}-codemode-"))
-        .suffix(".txt")
-        .tempfile()
-        .map_err(|e| e.to_string())?;
-    std::io::Write::write_all(&mut file, text.as_bytes()).map_err(|e| e.to_string())?;
-    let (_file, path) = file.keep().map_err(|e| e.to_string())?;
-    Ok(path.to_string_lossy().to_string())
+    output_files::write_output_file("codemode", ".txt", text.as_bytes())
+        .map(|path| path.to_string_lossy().to_string())
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -1390,6 +1582,215 @@ mod tests {
         );
         assert!(unshown_images_note(3, 1).is_none());
         assert!(unshown_images_note(0, 0).is_none());
+    }
+
+    /// 把输出条目跑一遗排版并拼成最终文本（不含图片路径提示）。
+    fn render_text(items: &[ScriptOutput]) -> String {
+        join_adjacent_text(format_output(items))
+            .iter()
+            .filter_map(|item| match item {
+                FormattedItem::Text(text) => Some(text.clone()),
+                FormattedItem::Image { .. } => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// 2.7：多个文本项各带 `==> text N/M <==` 头（provider 会把相邻文本块直接拼起来），
+    /// `console` 行不占编号、汇总到末尾一个 `<console_output>` 块。
+    #[test]
+    fn format_output_labels_items_and_groups_console() {
+        let text = render_text(&[
+            ScriptOutput::Text("first".to_string()),
+            ScriptOutput::Console("log a".to_string()),
+            ScriptOutput::Text("second".to_string()),
+            ScriptOutput::Console("log b".to_string()),
+        ]);
+        assert!(text.contains("==> text 1/2 <==\nfirst"), "{text}");
+        assert!(text.contains("==> text 2/2 <==\nsecond"), "{text}");
+        assert!(
+            text.contains("<console_output>\nlog a\nlog b\n</console_output>"),
+            "{text}"
+        );
+        assert!(
+            text.find("<console_output>").unwrap() > text.find("second").unwrap(),
+            "console 块应排在其它输出之后: {text}"
+        );
+
+        // 只有一条文本项时不加编号头
+        let single = render_text(&[ScriptOutput::Text("only".to_string())]);
+        assert_eq!(single.trim(), "only");
+        assert!(!single.contains("==> text"), "{single}");
+    }
+
+    /// 相邻文本段之间补一个换行（除非上一段已以换行结尾），避免两段粘成一个词。
+    #[test]
+    fn join_adjacent_text_inserts_a_separator() {
+        /// 取出合并后的第一段文本（合并后只应剩一段）。
+        fn first(items: Vec<FormattedItem>) -> String {
+            match items.into_iter().next() {
+                Some(FormattedItem::Text(text)) => text,
+                _ => panic!("应合并成一段文本"),
+            }
+        }
+
+        assert_eq!(
+            first(join_adjacent_text(vec![
+                FormattedItem::Text("a".to_string()),
+                FormattedItem::Text("b".to_string()),
+            ])),
+            "a\nb"
+        );
+        assert_eq!(
+            first(join_adjacent_text(vec![
+                FormattedItem::Text("a\n".to_string()),
+                FormattedItem::Text("b".to_string()),
+            ])),
+            "a\nb"
+        );
+        // 相邻的图片不被合并
+        let items = join_adjacent_text(vec![
+            FormattedItem::Text("a".to_string()),
+            FormattedItem::Image {
+                data: "AA==".to_string(),
+                mime_type: "image/png".to_string(),
+            },
+        ]);
+        assert_eq!(items.len(), 2);
+    }
+
+    /// 脚本展示的图片会落盘，并在文本末尾留下可读路径；
+    /// 同一张图重复展示只落盘一次，但每次都留同样的提示。
+    #[test]
+    fn script_images_are_spilled_with_a_path_label() {
+        let data = base64::engine::general_purpose::STANDARD.encode(b"fake-png");
+        let items = format_output(&[
+            ScriptOutput::Image {
+                data: data.clone(),
+                mime_type: "image/png".to_string(),
+            },
+            ScriptOutput::Image {
+                data,
+                mime_type: "image/png".to_string(),
+            },
+        ]);
+
+        let mut text = String::new();
+        let attachments = save_images(&items, &mut text);
+
+        assert_eq!(attachments.len(), 2, "两次展示都是附件");
+        let labels: Vec<&str> = text
+            .lines()
+            .filter(|line| line.starts_with("[Image saved to "))
+            .collect();
+        assert_eq!(labels.len(), 2, "每张图都要留一条提示: {text}");
+        assert_eq!(labels[0], labels[1], "同一张图的提示应相同");
+        assert!(
+            labels[0].ends_with("(image/png, 8B)]"),
+            "提示形状应与 pi 一致: {}",
+            labels[0]
+        );
+
+        // 落盘内容就是图片字节（只落一次，两个提示指向同一路径）
+        let path = labels[0]
+            .trim_start_matches("[Image saved to ")
+            .split(" (")
+            .next()
+            .unwrap();
+        assert_eq!(std::fs::read(path).unwrap(), b"fake-png");
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// 没有扩展名映射的图片类型不得丢掉脚本结果，只把原因写进提示。
+    #[test]
+    fn script_images_report_save_failures_in_the_label() {
+        let items = format_output(&[ScriptOutput::Image {
+            data: base64::engine::general_purpose::STANDARD.encode(b"x"),
+            mime_type: "image/bmp".to_string(),
+        }]);
+        let mut text = String::new();
+        let attachments = save_images(&items, &mut text);
+        assert!(
+            text.contains("could not be saved: no file extension for image type image/bmp"),
+            "{text}"
+        );
+        assert_eq!(attachments.len(), 1, "附件仍要保留");
+    }
+
+    /// 2.5：带 `output_schema` 的工具把结构化输出原样交给脚本——
+    /// `read` 的图片块（`{ type, data, mimeType, note }`）因此能在 codemode 里直接用。
+    #[test]
+    fn script_value_exposes_structured_output() {
+        let mut tool = ExtensionTool::simple("read", "Read a file", json!({}), "read");
+        tool.output_schema = Some(json!({ "anyOf": [{ "type": "string" }, { "type": "object" }] }));
+        let result =
+            ToolResult::text("Read image file [image/png]").with_structured_content(json!({
+                "type": "image",
+                "data": "AAAA",
+                "mimeType": "image/png",
+                "note": "Read image file [image/png]",
+            }));
+
+        let value = Host::script_value(&result, Some(&tool)).unwrap();
+        assert_eq!(value["type"], "image");
+        assert_eq!(value["data"], "AAAA");
+        assert_eq!(value["mimeType"], "image/png");
+
+        // 没有 output_schema 的工具仍然只拿到文本
+        let plain = ExtensionTool::simple("plain", "d", json!({}), "s");
+        let value = Host::script_value(&result, Some(&plain)).unwrap();
+        assert_eq!(value, json!("Read image file [image/png]"));
+    }
+
+    /// 2.8：`models.classify()` 的 context 形状错误在调 provider 之前就报出来，
+    /// 免得把「脚本写错了」说成「provider 报错」（对齐 pi `checkClassifierContext()`）。
+    #[test]
+    fn classifier_context_shape_is_validated() {
+        let ok = json!({
+            "state": { "message": "hi" },
+            "images": [{ "type": "image", "data": "AAAA", "mimeType": "image/png" }],
+            "questions": {
+                "q": { "type": "choice", "instructions": "pick", "criteria": { "a": "A" } }
+            }
+        });
+        assert!(classifier_context_arg(Some(&ok)).is_ok());
+
+        // 不是对象
+        let err = classifier_context_arg(Some(&json!("nope"))).unwrap_err();
+        assert!(err.contains("expects a context object"), "{err}");
+
+        // state 必须是对象
+        let bad = json!({
+            "state": "x",
+            "questions": { "q": { "type": "bool", "instructions": "i", "criteria": { "true": "y", "false": "n" } } }
+        });
+        let err = classifier_context_arg(Some(&bad)).unwrap_err();
+        assert!(err.contains("context.state must be an object"), "{err}");
+
+        // images 必须是图片块数组
+        let bad = json!({
+            "state": {},
+            "images": [{ "type": "text", "text": "x" }],
+            "questions": { "q": { "type": "bool", "instructions": "i", "criteria": { "true": "y", "false": "n" } } }
+        });
+        let err = classifier_context_arg(Some(&bad)).unwrap_err();
+        assert!(
+            err.contains("context.images[0] must be an image block"),
+            "{err}"
+        );
+
+        // questions 必须非空
+        let err =
+            classifier_context_arg(Some(&json!({ "state": {}, "questions": {} }))).unwrap_err();
+        assert!(
+            err.contains("context.questions must map question IDs to questions"),
+            "{err}"
+        );
+
+        // 问题内部形状交给 serde 兜底
+        let bad = json!({ "state": {}, "questions": { "q": { "type": "nope" } } });
+        let err = classifier_context_arg(Some(&bad)).unwrap_err();
+        assert!(err.contains("context is malformed"), "{err}");
     }
 
     /// 2.5：脚本里的 `describeNamespace()` 端到端可用——按别名找到命名空间，

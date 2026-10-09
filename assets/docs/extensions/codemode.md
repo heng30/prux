@@ -33,8 +33,8 @@ return b;
 | `await models.getModelsOfType(type, provider?)` / `getAvailableOfType` / `getModelOfType` | 模型目录查询（`chat` / `image` / `classifier`）；`getAvailableOfType` 只列有凭据的 provider |
 | `await models.classify(model, context)` | 跑一次分类器（如 Jev） |
 | `await models.generateImages(model, context)` | 跑一次图片生成；结果里的 image block 用 `image()` 展示 |
-| `text(v)` / `console.log(...)` | 追加一段文本输出（非字符串按 JSON 序列化） |
-| `image(dataUriOrBlock)` | 追加一张图片（base64 `data:` URI，或 MCP / `models.generateImages()` 的 image block） |
+| `text(v)` / `console.log(...)` | 追加一段文本输出（非字符串按 JSON 序列化）。多于一条文本项时各带 `==> text N/M <==` 编号（`M` 只算 `text()` 与顶层 `return`）；`console.*` 的行不占编号，汇总在末尾一个 `<console_output>` 块里 |
+| `image(dataUriOrBlock)` | 追加一张图片（base64 `data:` URI，或 MCP / `models.generateImages()` 的 image block）；同时把图片落到临时文件，并在结果里给出它的路径供后续 `read` |
 | `store(key, value)` / `load(key)` | 跨 `codemode` 调用保存 JSON 值（`store(key, undefined)` 删除）；写入在**脚本成功**时才落盘 |
 | `exit()` | 立刻成功结束脚本（相当于顶层提前 `return`） |
 
@@ -48,8 +48,9 @@ return b;
 一张都没展示时结果里会补一条提示。
 
 限制：没有 Node、文件系统、网络、定时器（`setTimeout` 不存在），`tools` 表是冻结的，
-脚本不能起脚本（`codemode` 自己声明 `model-only`）。堆上限 256 MB，超出时脚本内抛
-`InternalError: out of memory`。
+脚本不能起脚本（`codemode` 自己声明 `model-only`）；内建（`Array.prototype`、`Object.prototype`、
+各类原型与迭代器原型）也在脚本运行前被冻结，改原型（如 `Array.prototype.toJSON = …`）不再生效；
+堆上限 256 MB，超出时脚本内抛 `InternalError: out of memory`。
 
 ## `models.*` 的类型定义
 

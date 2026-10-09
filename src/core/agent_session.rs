@@ -22,6 +22,7 @@ use crate::{
         session_v4, settings_manager,
         skills::Skill,
         system_prompt::{SystemPromptOptions, build_system_prompt},
+        tool_names,
         tools::{self, ToolError, ToolExecutionMode, ToolResult, ToolResultAttachment},
         virtual_models::{self, FailedRoute, ModelRouteReason, ModelRouteRequest},
     },
@@ -121,13 +122,42 @@ impl ToolSelection {
         ToolSelection::Default(names)
     }
 
-    /// 名称是否允许注册（allowlist 有则必须在名单内，再排除 denylist）。
+    /// 名称是否允许注册（allowlist 未命中时 MCP 工具仍保留，再排除 denylist）。
+    ///
+    /// `--tools` 不再把 MCP 一并挡掉，除非名单为空
+    /// （`--no-tools`）或点名了 `mcp__` 前缀条目（见 [`tool_names::allowlist_filters_mcp`]）。
     fn is_allowed(&self, name: &str, exclude: &[String]) -> bool {
-        (match self {
-            ToolSelection::Allowlist(list) => list.iter().any(|n| n == name),
+        if tool_names::matches_any(exclude, name) {
+            return false;
+        }
+
+        match self {
+            ToolSelection::Allowlist(entries) => {
+                tool_names::matches_any(entries, name) || self.is_mcp_reserved(name)
+            }
             ToolSelection::NoTools => false,
             ToolSelection::Default(_) | ToolSelection::NoBuiltinTools => true,
-        }) && !exclude.iter().any(|n| n == name)
+        }
+    }
+
+    /// allowlist 保留但未点名的 MCP 工具：仍注册（供 codemode 与嵌套调用），但默认不对模型声明。
+    fn is_mcp_reserved(&self, name: &str) -> bool {
+        match self {
+            ToolSelection::Allowlist(entries) => {
+                !tool_names::matches_any(entries, name)
+                    && !tool_names::allowlist_filters_mcp(entries)
+                    && tool_names::is_mcp_tool_name(name)
+            }
+            _ => false,
+        }
+    }
+
+    /// 是否对模型声明该工具。
+    ///
+    /// 被 allowlist 保留的 MCP 工具只有非 `direct` 曝光才可能被声明（由 `tool_search` 加载，
+    /// 而 deferred 能走到声明处就意味着 `tool_search` 已注册）；`direct` 曝光的保留工具不声明。
+    fn declares_to_model(&self, name: &str, exposure: ToolExposure) -> bool {
+        !self.is_mcp_reserved(name) || exposure != ToolExposure::Direct
     }
 }
 
@@ -175,17 +205,24 @@ fn compose_tools(
 
     // 扩展运行时过滤：已启用扩展可移除内置工具（如 plan-mode 禁用 edit/write）。
     // rebuild_tools 与 Agent::new 共用本函数，保证两处行为一致。
+    //
+    // allowlist 的条目是「名字或 `*` 通配」，必须拿去过滤**注册表**而不是当作名字列表，
+    // 否则 `--tools 're*'` 会得到一个字面名 `re*` 而选不出任何工具
     let mut selected: Vec<String> = match selection {
-        ToolSelection::Default(names) | ToolSelection::Allowlist(names) => names.clone(),
+        ToolSelection::Default(names) => names.clone(),
+        ToolSelection::Allowlist(_) => tools::all_tool_names()
+            .into_iter()
+            .filter(|n| selection.is_allowed(n, exclude_tools))
+            .collect(),
         ToolSelection::NoTools | ToolSelection::NoBuiltinTools => Vec::new(),
     };
     for ext in core::extensions::registered() {
         selected = ext.filter_tools(selected);
     }
 
-    // --exclude-tools：过滤内置
+    // --exclude-tools：过滤内置（条目支持 `*` 通配）
     if !exclude_tools.is_empty() {
-        selected.retain(|t| !exclude_tools.iter().any(|e| e == t));
+        selected.retain(|t| !tool_names::matches_any(exclude_tools, t));
     }
 
     let tools_defs = tools::tool_defs(&selected);
@@ -202,6 +239,10 @@ fn compose_tools(
         let own = visible_extension_tools(ext.as_ref());
         for t in own {
             if !selection.is_allowed(&t.name, exclude_tools) {
+                continue;
+            }
+            // 被 allowlist 保留但未点名的 MCP 工具只注册不对模型声明，因此也不进系统提示。
+            if !selection.declares_to_model(&t.name, t.exposure) {
                 continue;
             }
             snippets.insert(t.name.clone(), t.snippet.clone());
@@ -231,6 +272,10 @@ fn compose_tools(
         let own = visible_extension_tools(ext.as_ref());
         for t in own {
             if !selection.is_allowed(&t.name, exclude_tools) {
+                continue;
+            }
+            // 同上：保留但未点名的 MCP 工具不声明（仍留在扩展注册表里供脚本调用）。
+            if !selection.declares_to_model(&t.name, t.exposure) {
                 continue;
             }
 
@@ -323,10 +368,13 @@ fn parameters_with_grammar_sampling(schema: &Value, sampling: Option<&GrammarSam
 /// 脚本/嵌套可调的工具表（[`ToolExecCtx::script_tools`]）：
 /// 激活的内置工具 + 按 [`ToolExposure::is_script_callable`] 判定的扩展工具。
 ///
-/// `active` 是本次请求表里的工具名（内置 = 已选择、扩展 = 模型可见）。
+/// `active` 是本次请求表里的工具名（内置 = 已选择、扩展 = 模型可见）；
+/// `selection`/`exclude` 用于把「被 allowlist 保留但未声明的 MCP 工具」也算作可调。
 fn script_tools_for(
     active: &[(String, String, Value)],
     injected: &[InjectedChildTool],
+    selection: &ToolSelection,
+    exclude: &[String],
 ) -> Vec<ExtensionTool> {
     let names: Vec<&str> = active.iter().map(|(n, _, _)| n.as_str()).collect();
     let builtin_names = tools::all_tool_names();
@@ -345,9 +393,12 @@ fn script_tools_for(
             }
 
             // `direct` 工具要求已激活（否则模型也看不到它）；`codemode` 恒可调、
-            // `deferred` 需已激活，`model-only`/`hidden` 不进脚本工具表
+            // `deferred` 需已激活，`model-only`/`hidden` 不进脚本工具表。
+            // 例外：被 allowlist 保留的 MCP 工具不对模型声明，但脚本与嵌套调用仍应可达。
             let callable = if t.exposure == ToolExposure::Direct {
                 names.contains(&t.name.as_str())
+                    || (selection.is_mcp_reserved(&t.name)
+                        && !tool_names::matches_any(exclude, &t.name))
             } else {
                 t.exposure
                     .is_script_callable(is_deferred_tool_activated(&t.name))
@@ -385,6 +436,7 @@ fn apply_prepare_loadout(
             if rebuild_ctx
                 .selection
                 .is_allowed(&t.name, &rebuild_ctx.exclude_tools)
+                && rebuild_ctx.selection.declares_to_model(&t.name, t.exposure)
             {
                 declared.push(t);
             }
@@ -393,7 +445,12 @@ fn apply_prepare_loadout(
 
     let loadout = ToolLoadout {
         declared,
-        callable: script_tools_for(tools, injected),
+        callable: script_tools_for(
+            tools,
+            injected,
+            &rebuild_ctx.selection,
+            &rebuild_ctx.exclude_tools,
+        ),
     };
 
     let mut hidden: Vec<String> = Vec::new();
@@ -596,9 +653,13 @@ pub struct Agent {
     /// 工具列表重建参数（/extension 面板关闭时 rebuild_tools 用）
     pub rebuild_ctx: ToolRebuildCtx,
     /// 启动时由 settings.json `defaultTools` 解析出的工具名；`None` = 工具选择来自命令行
-    /// （`--tools` / `--no-tools` / `--no-builtin-tools`），`/reload` 不重读 settings。
+    /// （`--tools` allowlist / `--no-tools` / `--no-builtin-tools`），`/reload` 不重读 settings。
+    /// 值已套用 [`Self::settings_default_tool_modifiers`]。
     /// 见 [`Agent::reload_default_tools`]。
     settings_default_tools: Option<Vec<String>>,
+    /// 命令行 `--tools` 给出的 `+name`/`-name` 修饰符；`/reload` 重读 `defaultTools` 后按同一组顺序重放。
+    /// 非纯修饰符的命令行选择下为空。
+    settings_default_tool_modifiers: Vec<String>,
     /// 当前 thinking 级别（None = 未设置，按模型默认处理）
     pub thinking_level: Option<String>,
     /// 最近一次 LLM 调用的用量统计（token 计数等）
@@ -681,6 +742,10 @@ struct FinalizedToolCall {
     attachments: Vec<ToolResultAttachment>,
     /// afterToolCall 替换整个 content 数组
     content_override: Option<Vec<ContentBlock>>,
+    /// 工具自身耗时（毫秒，单调时钟，不含 `afterToolCall` 钩子）；
+    /// 未真正执行的调用（未知工具、被 block 的 immediate、中止）为 `None`。
+    /// 进 `tool_execution_end.durationMs` 与 `toolResult` 消息。
+    duration_ms: Option<u64>,
 }
 
 impl FinalizedToolCall {
@@ -712,6 +777,7 @@ impl FinalizedToolCall {
             is_error: true,
             attachments: Vec::new(),
             content_override: None,
+            duration_ms: None,
         }
     }
 
@@ -744,6 +810,7 @@ impl FinalizedToolCall {
             is_error: t.is_error,
             attachments: t.attachments,
             content_override: None,
+            duration_ms: None,
         }
     }
 
@@ -879,6 +946,7 @@ impl Agent {
             hidden_declarations: Vec::new(),
             rebuild_ctx: tpl.rebuild_ctx.clone(),
             settings_default_tools: None,
+            settings_default_tool_modifiers: Vec::new(),
             thinking_level: tpl.thinking_level.clone(),
             last_usage: None,
             session: None,
@@ -966,6 +1034,7 @@ impl Agent {
             hidden_declarations: hidden,
             rebuild_ctx,
             settings_default_tools: None,
+            settings_default_tool_modifiers: Vec::new(),
             thinking_level,
             last_usage: None,
             session,
@@ -999,6 +1068,12 @@ impl Agent {
         self.settings_default_tools = names;
     }
 
+    /// 记录命令行 `--tools` 的 `+name`/`-name` 修饰符（无修饰符时传空）；
+    /// 只影响 [`Self::reload_default_tools`]：`/reload` 重读 settings 后按同一组修饰符重算。
+    pub fn set_default_tool_modifiers(&mut self, modifiers: Vec<String>) {
+        self.settings_default_tool_modifiers = modifiers;
+    }
+
     /// `/reload` 后重读 settings.json 的 `defaultTools`（调用方随后自己 [`Self::rebuild_tools`]）。
     ///
     /// 只增不减：新加入 `defaultTools` 的工具并入当前选择；从 `defaultTools` 移除的工具**保持启用**，
@@ -1009,12 +1084,16 @@ impl Agent {
             return;
         };
 
-        let next = settings_manager::read_settings_default_tools().unwrap_or_else(|| {
+        let raw = settings_manager::read_settings_default_tools().unwrap_or_else(|| {
             settings_manager::DEFAULT_TOOL_NAMES
                 .iter()
                 .map(|s| s.to_string())
                 .collect()
         });
+
+        // `--tools +name/-name` 的选择要跟着 `/reload` 重算
+        let next =
+            settings_manager::apply_tool_modifiers(&raw, &self.settings_default_tool_modifiers);
 
         if let ToolSelection::Default(current) = &mut self.rebuild_ctx.selection {
             for name in next.iter().filter(|n| !previous.contains(*n)).cloned() {
@@ -2334,12 +2413,15 @@ impl Agent {
     }
 
     /// 整轮真正结束（`prompt_messages` 出口，含重试/溢出恢复的所有 `run_loop()` 尝试）时发
-    /// agent_settled（无载荷）。UI 以它为收尾边界复位忙碌态并取下一批排队消息。
+    /// agent_settled，载荷带 `aborted`（本轮是否被请求过取消）。
+    /// UI 以它为收尾边界复位忙碌态并取下一批排队消息，集成方据此区分「被取消的运行」与正常完成。
     /// 中断路径（future 被 drop）不会走到这里，由 UI 侧 `handle_cancel_prompt` 收尾。
     pub(crate) fn emit_agent_settled(&mut self) {
         // 缓存保温：streaming 模式结算即停；idle 模式转入 idle 阶段
         self.cache_warmer.on_agent_settled();
-        self.emit(json!({ "type": "agent_settled" }));
+        // 取消信号在每次 run 开始时复位（见 `reset_run_state`），所以这里读到的是本轮的结果。
+        let aborted = self.run_abort.load(Ordering::Relaxed);
+        self.emit(json!({ "type": "agent_settled", "aborted": aborted }));
     }
 
     /// 协作式取消的优雅收尾：
@@ -2680,6 +2762,7 @@ impl Agent {
                     }
                 };
                 let dur = Some(tool_start.elapsed().as_millis() as u64);
+                f.duration_ms = dur;
                 attach_nested_calls(&mut f, exec_ctx.as_ref());
                 apply_after_tool_call(&mut f, &p.name, &p.args);
                 (f, dur)
@@ -3393,19 +3476,27 @@ fn emit_start(sink: &Option<Arc<Mutex<JsonSink>>>, p: &Prepared) {
     }
 }
 
-/// 向事件 sink 发 `tool_execution_end`（携带结果与 isError）；无 sink 时不动作。
+/// 向事件 sink 发 `tool_execution_end`（携带结果、isError 与耗时）；无 sink 时不动作。
 fn emit_tool_execution_end(sink: &Option<Arc<Mutex<JsonSink>>>, f: &FinalizedToolCall) {
     if let Some(sink) = sink
         && let Ok(mut g) = sink.lock()
     {
         let fptr: &mut dyn FnMut(Value) = g.as_mut();
-        fptr(json!({
+        let mut payload = json!({
             "type": "tool_execution_end",
             "toolCallId": f.call_id(),
             "toolName": f.name,
             "result": f.to_result_json(),
             "isError": f.is_error
-        }));
+        });
+
+        // 未真正执行的调用没有耗时，字段整体省略
+        if let Some(ms) = f.duration_ms
+            && let Some(obj) = payload.as_object_mut()
+        {
+            obj.insert("durationMs".to_string(), json!(ms));
+        }
+        fptr(payload);
     }
 }
 
@@ -3802,6 +3893,8 @@ fn build_exec_ctx(
         script_tools: Arc::new(script_tools_for(
             &tpl.tools,
             &tpl.rebuild_ctx.injected_tools,
+            &tpl.rebuild_ctx.selection,
+            &tpl.rebuild_ctx.exclude_tools,
         )),
         script_call,
     }
@@ -4242,6 +4335,7 @@ fn execute_one(
 
         // 计时在钩子之前收口，只测工具本身
         let dur = Some(tool_start.elapsed().as_millis() as u64);
+        f.duration_ms = dur;
         attach_nested_calls(&mut f, exec_ctx.as_ref());
         apply_after_tool_call(&mut f, &name, &args);
         emit_tool_execution_end(&sink, &f);
@@ -4754,6 +4848,26 @@ mod tests {
         let _ = collected;
     }
 
+    /// 2.12：`agent_settled` 带 `aborted`，集成方据此区分「被取消的运行」与正常完成
+    /// （对齐 pi；取消信号在每次 run 开始复位，所以读到的就是本轮的结果）。
+    #[test]
+    fn agent_settled_reports_whether_the_run_was_aborted() {
+        let mut agent = test_agent("http://127.0.0.1:1", ".");
+        let collected: Arc<Mutex<Vec<J>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = collected.clone();
+        agent.attach_json_sink(Box::new(move |e: J| sink.lock().unwrap().push(e)));
+
+        agent.emit_agent_settled();
+        agent.request_abort();
+        agent.emit_agent_settled();
+
+        let evs = collected.lock().unwrap();
+        assert_eq!(evs.len(), 2);
+        assert_eq!(evs[0]["type"], "agent_settled");
+        assert_eq!(evs[0]["aborted"], false, "未取消的整轮: {}", evs[0]);
+        assert_eq!(evs[1]["aborted"], true, "已取消的整轮: {}", evs[1]);
+    }
+
     #[test]
     fn reset_run_state_resets_without_reallocating_abort_signal() {
         // 子代理物化时捕获的 `abort` 句柄要能跨 `prompt` 触达运行中的取消信号：
@@ -5091,6 +5205,11 @@ mod tests {
             evs.last().map(|e| e["type"].as_str()),
             Some(Some("agent_settled")),
             "agent_settled 应为最后一个事件"
+        );
+        assert_eq!(
+            evs.last().map(|e| e["aborted"].as_bool()),
+            Some(Some(false)),
+            "正常完成的整轮 aborted=false"
         );
     }
 
@@ -5515,6 +5634,148 @@ mod tests {
             !all.contains(&"write".to_string()),
             "exclude 应作用于 getAllTools: {:?}",
             all
+        );
+    }
+
+    /// `--tools` / `--exclude-tools` 的条目支持 `*` 通配（对齐 pi `createToolNameMatcher`）。
+    #[test]
+    fn tool_selection_supports_wildcard_entries() {
+        let agent = test_agent_selection(ToolSelection::Allowlist(vec!["re*".into()]), vec![]);
+        let active = agent.get_active_tools();
+        assert!(
+            active.contains(&"read".to_string()),
+            "re* 应命中 read: {active:?}"
+        );
+        assert!(!active.contains(&"bash".to_string()));
+        assert!(!active.contains(&"grep".to_string()));
+
+        let agent = test_agent_selection(
+            ToolSelection::tools(vec!["read".into(), "bash".into()]),
+            vec!["b*".into()],
+        );
+        let active = agent.get_active_tools();
+        assert!(active.contains(&"read".to_string()));
+        assert!(
+            !active.contains(&"bash".to_string()),
+            "--exclude-tools 的通配条目应生效: {active:?}"
+        );
+    }
+
+    /// `--tools` 未点名的 MCP 工具：仍注册（脚本/嵌套可调），但不对模型声明；
+    /// `--exclude-tools` 与 `mcp__` 前缀条目都能把它挡掉。
+    /// 对齐 pi 的 `_isAllowedTool()` / `_isActivatable()`。
+    #[test]
+    fn allowlist_keeps_mcp_tools_unless_pointed_at() {
+        use crate::core::extensions::{
+            Extension, ExtensionTool, register_extension, unregister_extension,
+        };
+
+        /// 以聚合网关名 `mcp` 提供工具的假扩展（真实实现见 `extensions::mcp`）。
+        struct McpGatewayProbe;
+        impl Extension for McpGatewayProbe {
+            fn name(&self) -> &str {
+                "mcp-gateway-probe"
+            }
+            fn tools(&self) -> Vec<ExtensionTool> {
+                vec![ExtensionTool::simple(
+                    tool_names::MCP_GATEWAY_TOOL_NAME,
+                    "MCP gateway",
+                    serde_json::json!({ "type": "object" }),
+                    "mcp gateway",
+                )]
+            }
+        }
+
+        let _g = crate::test_support::AUTH_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _ad = crate::test_support::AgentDirGuard::temp();
+        crate::core::settings_manager::write_disabled_extensions(&[]).ok();
+        register_extension(McpGatewayProbe);
+
+        // allowlist 只点名 read：mcp 保留在注册表里，但不进工具表与系统提示
+        let agent = test_agent_selection(ToolSelection::Allowlist(vec!["read".into()]), vec![]);
+        let active = agent.get_active_tools();
+        assert!(active.contains(&"read".to_string()));
+        assert!(
+            !active.contains(&"mcp".to_string()),
+            "未点名的 MCP 工具不得对模型声明: {active:?}"
+        );
+        assert!(
+            agent.get_all_tools().contains(&"mcp".to_string()),
+            "未点名的 MCP 工具仍应保留注册"
+        );
+        assert!(
+            !agent.system_prompt.contains("MCP gateway"),
+            "未声明的 MCP 工具不得进系统提示"
+        );
+
+        // 脚本／嵌套调用仍可达（否则「保留」等于没有）
+        let script = script_tools_for(
+            &[],
+            &[],
+            &ToolSelection::Allowlist(vec!["read".into()]),
+            &[],
+        );
+        assert!(
+            script.iter().any(|t| t.name == "mcp"),
+            "保留的 MCP 工具应对脚本可调: {:?}",
+            script.iter().map(|t| &t.name).collect::<Vec<_>>()
+        );
+
+        // --exclude-tools 命中：连注册都一起挡掉
+        let excluded = test_agent_selection(
+            ToolSelection::Allowlist(vec!["read".into()]),
+            vec!["mcp".to_string()],
+        );
+        assert!(!excluded.get_all_tools().contains(&"mcp".to_string()));
+
+        // 名单里出现 mcp__ 前缀条目：视为过滤 MCP（pi 的 _allowlistFiltersMcp）
+        let filtered = test_agent_selection(
+            ToolSelection::Allowlist(vec!["read".into(), "mcp__docs__*".into()]),
+            vec![],
+        );
+        assert!(!filtered.get_all_tools().contains(&"mcp".to_string()));
+
+        // 点名 mcp 本身：正常声明
+        let pointed = test_agent_selection(ToolSelection::Allowlist(vec!["mcp".into()]), vec![]);
+        assert!(pointed.get_active_tools().contains(&"mcp".to_string()));
+
+        assert!(unregister_extension("mcp-gateway-probe"));
+    }
+
+    /// `--tools +name/-name` 的修饰符跟着 `/reload` 重算（对齐 pi 的 `defaultToolModifiers`）。
+    #[test]
+    fn reload_reapplies_default_tool_modifiers() {
+        let _g = crate::test_support::AUTH_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _ad = crate::test_support::AgentDirGuard::temp();
+        let path = crate::core::settings_manager::agent_dir().join("settings.json");
+
+        // 启动：defaultTools = [read]，命令行 --tools +bash → 选择 [read, bash]
+        std::fs::write(&path, r#"{"defaultTools":["read"]}"#).unwrap();
+        let base = vec!["read".to_string()];
+        let modifiers = vec!["+bash".to_string()];
+        let mut agent = test_agent_selection(
+            ToolSelection::tools(settings_manager::apply_tool_modifiers(&base, &modifiers)),
+            vec![],
+        );
+        agent.set_settings_default_tools(Some(settings_manager::apply_tool_modifiers(
+            &base, &modifiers,
+        )));
+        agent.set_default_tool_modifiers(modifiers);
+
+        // /reload：defaultTools 增加 edit；修饰符重放後 next = [read, edit, bash]，
+        // 相对 previous [read, bash] 新增 edit（只增不减，顺序为「现有 + 新增」）
+        std::fs::write(&path, r#"{"defaultTools":["read","edit"]}"#).unwrap();
+        agent.reload_default_tools();
+        let ToolSelection::Default(names) = &agent.rebuild_ctx.selection else {
+            panic!("Default 选择不应被改写成其它变体");
+        };
+        assert_eq!(
+            names,
+            &vec!["read".to_string(), "bash".to_string(), "edit".to_string()]
         );
     }
 
@@ -7003,6 +7264,7 @@ mod tests {
                 converted_from: None,
             }],
             content_override: None,
+            duration_ms: None,
         };
 
         // 关闭：附件进消息
@@ -7102,8 +7364,8 @@ mod tests {
         });
     }
 
-    /// 对齐 pi：tool_execution_start/end 载荷（args=真实参数；result=AgentToolResult 对象；无 durationMs），
-    /// 且 agent_end 每次 run 只发一次。
+    /// 对齐 pi：tool_execution_start/end 载荷（args=真实参数；result=AgentToolResult 对象；
+    /// end 带工具自身耗时的 durationMs，未执行的调用不带），且 agent_end 每次 run 只发一次。
     #[test]
     fn tool_execution_event_payloads_match_pi() {
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -7137,14 +7399,18 @@ mod tests {
             assert_eq!(start["toolName"], "read");
             assert_eq!(start["args"], json!({ "path": "a.rs" }));
 
-            // tool_execution_end：result 为完整 AgentToolResult 对象（content/details），isError=false，无 durationMs
+            // tool_execution_end：result 为完整 AgentToolResult 对象（content/details），isError=false，
+            // 真实执行过的调用带 durationMs
             let end = events
                 .iter()
                 .find(|e| e["type"] == "tool_execution_end")
                 .unwrap();
             assert_eq!(end["toolCallId"], "call_1");
             assert_eq!(end["isError"], false);
-            assert!(end.get("durationMs").is_none(), "pi 无 durationMs 字段");
+            assert!(
+                end["durationMs"].as_u64().is_some(),
+                "执行过的工具应带 durationMs: {end}"
+            );
             let result = end["result"].as_object().unwrap();
             assert!(result.contains_key("content"), "result 必须是对象");
             assert!(result.contains_key("details"), "result 必须含 details");

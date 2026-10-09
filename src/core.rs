@@ -42,6 +42,7 @@ pub mod settings_manager;
 pub mod skills;
 pub mod system_prompt;
 pub mod theme_view;
+pub mod tool_names;
 pub mod tools;
 pub mod tools_manager;
 pub mod virtual_models;

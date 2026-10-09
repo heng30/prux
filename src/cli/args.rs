@@ -102,11 +102,19 @@ pub struct Args {
     pub name: Option<String>,
 
     // ---------- 工具选项 ----------
-    /// Tool whitelist (comma-separated)
+    /// Allowlist of tool names or patterns (*) to enable, comma-separated;
+    /// accepts +name / -name to add or remove from the default selection;
+    /// keeps MCP tools unless an entry starts with mcp__
     #[arg(short = 't', long, value_delimiter = ',', value_name = "LIST")]
     pub tools: Vec<String>,
-    /// Exclude the given tools (comma-separated)
-    #[arg(long = "exclude-tools", value_delimiter = ',', value_name = "LIST")]
+    /// Denylist of tool names or patterns (*) to disable, comma-separated;
+    /// applies to all tools, MCP tools included
+    #[arg(
+        short = 'x',
+        long = "exclude-tools",
+        value_delimiter = ',',
+        value_name = "LIST"
+    )]
     pub exclude_tools: Vec<String>,
     /// Disable all tools by default
     #[arg(long = "no-tools")]
@@ -114,6 +122,9 @@ pub struct Args {
     /// Disable built-in tools by default
     #[arg(long = "no-builtin-tools")]
     pub no_builtin_tools: bool,
+    /// Disable built-in MCP support: no servers connect and no MCP tools
+    #[arg(long = "no-mcp")]
+    pub no_mcp: bool,
     /// Disable every extension (including built-in ones) for this run
     #[arg(long = "no-extensions")]
     pub no_extensions: bool,

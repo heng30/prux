@@ -51,6 +51,7 @@ async fn main() -> anyhow::Result<()> {
     // 3. 三道题一起问：选择 / 评分 / 判断
     let context = ClassifierContext {
         state: json!({ "text": text }),
+        images: None,
         questions: BTreeMap::from([
             (
                 "sentiment".to_string(),

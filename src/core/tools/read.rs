@@ -174,7 +174,7 @@ pub async fn execute_read_with_ops(
         output_text = truncation.content;
     }
 
-    Ok(ToolResult::text(output_text))
+    Ok(with_read_output(ToolResult::text(output_text)))
 }
 
 /// 路径变体解析：原路径存在则直接用；否则尝试 5 个变体后取第一个存在的
@@ -239,7 +239,54 @@ fn find_am_pm(s: &str) -> Option<usize> {
 }
 
 /// 图片读取结果：缩放/转换 + base64 附件
+/// read 工具面向程序化调用方（codemode 脚本等）的输出契约：
+/// 文本文件是字符串；图片是 `{ type, data, mimeType, note }`。
+///
+/// 与 [`with_read_output`] 构造的载荷同形，两者必须同步修改。
+/// 属性不写 description（让类型在工具描述里只占一行）。
+pub(crate) fn output_schema() -> serde_json::Value {
+    serde_json::json!({
+        "anyOf": [
+            { "type": "string" },
+            {
+                "type": "object",
+                "properties": {
+                    "type": { "const": "image" },
+                    "data": { "type": "string" },
+                    "mimeType": { "type": "string" },
+                    "note": { "type": "string" }
+                },
+                "required": ["type", "data", "mimeType", "note"],
+                "additionalProperties": false
+            }
+        ]
+    })
+}
+
+/// 给 read 的结果补上结构化输出：文本文件是字符串本体，图片是
+/// `{ type, data, mimeType, note }`（`note` 是随图的提示文本，如缩放/不支持视觉的说明）。
+///
+/// codemode 脚本因此能拿到 `image()` 能直接展示的图片块，而不只是一段文本。
+fn with_read_output(result: ToolResult) -> ToolResult {
+    let value = match result.attachments.first() {
+        Some(attachment) => serde_json::json!({
+            "type": "image",
+            "data": attachment.data_base64,
+            "mimeType": attachment.mime_type,
+            "note": result.text,
+        }),
+        None => serde_json::Value::String(result.text.clone()),
+    };
+    result.with_structured_content(value)
+}
+
+/// 图片读取：解析尺寸 → 阻止发送/无法处理/不支持视觉/超限时退化成文本，否则带附件返回。
 fn read_image_result(mime: &str, bytes: &[u8], opts: &ReadImageOptions) -> ToolResult {
+    with_read_output(read_image_result_inner(mime, bytes, opts))
+}
+
+/// [`read_image_result`] 的实际实现（结构化输出由外层统一补上）。
+fn read_image_result_inner(mime: &str, bytes: &[u8], opts: &ReadImageOptions) -> ToolResult {
     let original_size = image::ImageReader::new(Cursor::new(bytes))
         .with_guessed_format()
         .ok()
@@ -350,6 +397,63 @@ mod tests {
             .decode(&r.attachments[0].data_base64)
             .unwrap();
         assert_eq!(dec.len(), make_png(64, 32).len()); // 尺寸相同（未缩放）
+    }
+
+    /// 图片的 read 结果带结构化输出，形状与 `output_schema()` 一致，
+    /// codemode 脚本因此能拿到可直接展示的图片块（对齐 pi `toReadOutput()`）。
+    #[test]
+    fn read_image_structured_output_matches_the_schema() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("pic.png");
+        std::fs::write(&p, make_png(8, 8)).unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let r = rt
+            .block_on(execute_read_with_options(
+                p.to_str().unwrap(),
+                None,
+                None,
+                dir.path().to_str().unwrap(),
+                ReadImageOptions {
+                    model_supports_images: true,
+                    ..Default::default()
+                },
+            ))
+            .unwrap();
+
+        let structured = r
+            .structured_content
+            .clone()
+            .expect("图片结果应带结构化输出");
+        assert_eq!(structured["type"], "image");
+        assert_eq!(structured["mimeType"], "image/png");
+        assert_eq!(structured["data"], r.attachments[0].data_base64);
+        assert_eq!(structured["note"], r.text, "note 应是随图的提示文本");
+        for field in ["type", "data", "mimeType", "note"] {
+            assert!(structured.get(field).is_some(), "缺少字段 {field}");
+        }
+        assert!(output_schema()["anyOf"].is_array());
+    }
+
+    /// 文本文件的 read 结果的结构化输出就是文本本体。
+    #[test]
+    fn read_text_structured_output_is_the_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("note.txt");
+        std::fs::write(&p, "hello\n").unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let r = rt
+            .block_on(execute_read_with_options(
+                p.to_str().unwrap(),
+                None,
+                None,
+                dir.path().to_str().unwrap(),
+                ReadImageOptions::default(),
+            ))
+            .unwrap();
+        assert_eq!(
+            r.structured_content,
+            Some(serde_json::Value::String(r.text.clone()))
+        );
     }
 
     #[test]

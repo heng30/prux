@@ -5,13 +5,17 @@ use crate::{
         settings_manager,
         tools::index::{ToolError, ToolResult},
     },
-    utils::truncate::{
-        self, DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, TruncatedBy, head_bytes, tail_bytes,
+    utils::{
+        output_files,
+        truncate::{
+            self, DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, TruncatedBy, head_bytes, tail_bytes,
+        },
     },
 };
 use serde_json::{Value, json};
 use std::{
     collections::HashMap,
+    fs::File,
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex as StdMutex, OnceLock,
@@ -577,8 +581,9 @@ pub(crate) struct BashOutputCollector {
     pub(crate) has_open_line: bool,
     /// 当前未结束行已接收的字节数，用于提示该行大小。
     pub(crate) current_line_bytes: usize,
-    /// 输出超限后开始写入完整内容的临时文件；未超限为 None。
-    pub(crate) full_output: Option<tempfile::NamedTempFile>,
+    /// 输出超限后开始写入完整内容的输出文件；未超限为 None。
+    /// 句柄与路径分开存：写入完成后句柄可以丢，文件要留着给模型 `read`（见 `utils::output_files`）。
+    pub(crate) full_output: Option<(File, PathBuf)>,
 }
 
 impl Clone for BashOutputCollector {
@@ -644,16 +649,12 @@ impl BashOutputCollector {
         let total_lines = self.completed_lines + if self.has_open_line { 1 } else { 0 };
         let over_limit = self.total_bytes > DEFAULT_MAX_BYTES || total_lines > DEFAULT_MAX_LINES;
         if over_limit && self.full_output.is_none() {
-            if let Ok(mut f) = tempfile::Builder::new()
-                .prefix("bash-")
-                .suffix(".log")
-                .tempfile()
-            {
-                let _ = std::io::Write::write_all(&mut f, self.tail.as_bytes());
-                self.full_output = Some(f);
+            if let Ok((mut file, path)) = output_files::create_output_file_stream("bash", ".log") {
+                _ = std::io::Write::write_all(&mut file, self.tail.as_bytes());
+                self.full_output = Some((file, path));
             }
-        } else if let Some(f) = self.full_output.as_mut() {
-            let _ = std::io::Write::write_all(f, text.as_bytes());
+        } else if let Some((f, _)) = self.full_output.as_mut() {
+            _ = std::io::Write::write_all(f, text.as_bytes());
         }
         if self.tail.len() > DEFAULT_MAX_BYTES * 2 {
             let keep = DEFAULT_MAX_BYTES * 2;
@@ -670,7 +671,7 @@ impl BashOutputCollector {
     /// 返回（输出文本, 是否省略了内容）。
     pub(crate) fn read_full_output(&self, max_bytes: usize) -> (String, bool) {
         let text = match &self.full_output {
-            Some(file) => match std::fs::read(file.path()) {
+            Some((_, path)) => match std::fs::read(path) {
                 Ok(bytes) => String::from_utf8_lossy(&bytes).to_string(),
                 Err(_) => self.tail.clone(),
             },
@@ -701,7 +702,7 @@ fn build_bash_output(collector: &BashOutputCollector) -> (String, Option<String>
     let full_output_path = collector
         .full_output
         .as_ref()
-        .map(|f| f.path().to_string_lossy().to_string());
+        .map(|(_, path)| path.to_string_lossy().to_string());
 
     let truncation = if truncated {
         let by = if tail_truncation.truncated {

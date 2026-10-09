@@ -43,6 +43,7 @@ use serde_json::Value;
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
+    time::{Duration, Instant},
 };
 use strum_macros::{EnumString, IntoStaticStr};
 
@@ -903,6 +904,22 @@ pub async fn classify(model: &ModelConfig, context: &ClassifierContext) -> Class
         );
     }
 
+    // 模型不支持图片输入时直接给错误结果，而不是把请求发出去让 provider 拒。
+    if context
+        .images
+        .as_ref()
+        .is_some_and(|images| !images.is_empty())
+        && !model.input.iter().any(|mode| mode == "image")
+    {
+        return classifier::error_result(
+            model,
+            format!(
+                "Model {}/{} does not accept image input",
+                model.provider, model.model_id
+            ),
+        );
+    }
+
     if let Some(implementation) = api_impls::classifier_impl(&model.api) {
         return match implementation.classify(model, context).await {
             Ok(result) => result,
@@ -1455,6 +1472,10 @@ pub async fn stream_chat(
     on_payload: Option<PayloadHook>,
     tool_choice: Option<&str>,
 ) -> StreamResult {
+    // 计时从进入本函数开始（“从流创建起算”）。
+    let started_epoch_ms = now_ms();
+    let started_monotonic = Instant::now();
+
     // 纯流契约：对请求/模型/运行时失败不抛错，
     // 而是把失败编码进流（发 Start(partial=失败消息) 供 agent_session collector 发 message_start），
     // 并返回 stopReason=error + errorMessage 的 assistant 消息。
@@ -1556,9 +1577,17 @@ pub async fn stream_chat(
     };
 
     match inner {
-        Ok(r) => r,
+        Ok(mut r) => {
+            stamp_stream_duration(
+                &mut r.message,
+                started_epoch_ms,
+                started_monotonic.elapsed(),
+            );
+            r
+        }
         Err(e) => {
-            let failure = failure_message(model, &e);
+            let mut failure = failure_message(model, &e);
+            stamp_stream_duration(&mut failure, started_epoch_ms, started_monotonic.elapsed());
             if let Some(sink) = on_event {
                 sink(StreamEvent::Start {
                     partial: failure.clone(),
@@ -1570,6 +1599,14 @@ pub async fn stream_chat(
                 error_message: Some(e.display_full()),
             }
         }
+    }
+}
+
+/// 给流式结果填 `durationMs`：从本次流开始到结束的单调计时；
+/// 已有值时不动，`timestamp` 早于本次流开始的消息（例如稍后取回的 deferred 结果）也不计时。
+fn stamp_stream_duration(message: &mut AgentMessage, started_epoch_ms: u64, elapsed: Duration) {
+    if message.duration_ms.is_none() && message.timestamp >= started_epoch_ms {
+        message.duration_ms = Some(elapsed.as_millis() as u64);
     }
 }
 
@@ -1631,6 +1668,33 @@ mod tests {
         assert!(track_stream_bytes(&mut total, MAX_STREAM_BYTES).is_ok());
         let err = track_stream_bytes(&mut total, 1).expect_err("越界必须报错");
         assert!(err.to_string().contains("aborted"), "got: {err}");
+    }
+
+    /// 2.10：流式结果的 `durationMs` 只在「消息确实是本次流产生的」时候填：
+    /// 已有值不动，早于本次流开始的消息（deferred / 转发）不计时。
+    #[test]
+    fn stream_duration_stamping_matches_pi() {
+        let started = 1_000u64;
+        let elapsed = Duration::from_millis(250);
+
+        let mut fresh = failure_message(&model(false, None), &Error::msg("boom"));
+        fresh.timestamp = started + 5;
+        fresh.duration_ms = None;
+        stamp_stream_duration(&mut fresh, started, elapsed);
+        assert_eq!(fresh.duration_ms, Some(250));
+
+        // 已经有耗时（协议自填）→ 不覆盖
+        let mut already = fresh.clone();
+        already.duration_ms = Some(7);
+        stamp_stream_duration(&mut already, started, elapsed);
+        assert_eq!(already.duration_ms, Some(7));
+
+        // 消息早于本次流开始 → 不填
+        let mut forwarded = fresh.clone();
+        forwarded.duration_ms = None;
+        forwarded.timestamp = started - 1;
+        stamp_stream_duration(&mut forwarded, started, elapsed);
+        assert_eq!(forwarded.duration_ms, None);
     }
 
     fn model(supports_image: bool, cost: Option<Value>) -> ModelConfig {
