@@ -163,6 +163,7 @@ mod tests {
         SystemPromptOptions {
             cwd: "/tmp/proj".to_string(),
             selected_tools: Some(vec!["read".to_string()]),
+            hidden_tools: Vec::new(),
             tool_snippets: HashMap::new(),
             prompt_guidelines: Vec::new(),
             append_system_prompt: None,

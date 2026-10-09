@@ -788,6 +788,17 @@ impl App {
     /// 状态栏临时提示默认停留时长
     pub const STATUS_MSG_TTL: Duration = Duration::from_secs(2);
 
+    /// 丢弃消息区的鼠标文本选择（含拖拽与边缘自动滚动状态）。
+    ///
+    /// 选区按「内容全局行」记录，替换 transcript 后行号会指到新内容的无关文本上。
+    /// 因此凡是用新消息流整体替换旧消息流的地方都要调用一次。
+    pub fn reset_text_selection(&mut self) {
+        self.mouse.sel = None;
+        self.mouse.dragging = false;
+        self.mouse.drag_row = None;
+        self.mouse.edge_dwell = 0;
+    }
+
     /// 构造全空的初始界面状态：无消息、无流式输出、空编辑器、默认主题，
     /// 各种待处理请求/面板均为 None；`dirty = true` 以便首帧必绘。
     pub fn new() -> Self {

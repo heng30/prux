@@ -36,6 +36,7 @@ use crate::{
 };
 use serde::Serialize;
 use std::{io::Write as _, time::Duration};
+use tokio_util::sync::CancellationToken;
 
 /// CLI 层结果（复用 mcp 扩展的错误类型）。
 type McpResult<T> = std::result::Result<T, McpError>;
@@ -575,9 +576,10 @@ async fn login(name: &str, no_browser: bool) -> McpResult<()> {
                 eprintln!("The browser did not open. Open the URL manually.");
             }
 
-            let callback = receive_callback(listener, &pending.redirect_uri)
-                .await
-                .map_err(McpError::Message)?;
+            let callback =
+                receive_callback(listener, &pending.redirect_uri, &CancellationToken::new())
+                    .await
+                    .map_err(McpError::Message)?;
             oauth::finish_login(pending, &callback).await
         }
         _ => {

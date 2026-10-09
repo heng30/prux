@@ -118,6 +118,7 @@ impl App {
                 self.banner_hidden = true;
                 self.messages = s.messages;
                 self.expand_overrides.clear(); // 切会话：逐块展开态不跨 transcript
+                self.reset_text_selection(); // 选区也不跨 transcript
                 self.context_tokens_override = None;
                 self.current_session_path = s.file.clone();
                 self.refresh_context_percent();
@@ -177,6 +178,7 @@ impl App {
                 if !n.messages.is_empty() {
                     self.messages = n.messages;
                     self.expand_overrides.clear(); // 树导航：逐块展开态不跨分支
+                    self.reset_text_selection(); // 选区也不跨分支
                     self.context_tokens_override = None;
                     self.refresh_context_percent();
                     self.invalidate_render();
@@ -195,6 +197,7 @@ impl App {
                     // 回退可能清空整条分支（回退第一条 user 消息）：无条件替换消息流。
                     self.messages = done.messages;
                     self.expand_overrides.clear(); // 逐块展开态不跨分支
+                    self.reset_text_selection(); // 选区也不跨分支
                     self.context_tokens_override = None;
                     self.editor.clear();
 
@@ -906,6 +909,26 @@ mod tests {
             app.banner_hidden,
             "切换会话（含 /new 清空消息）后 banner 应永久隐藏"
         );
+    }
+
+    #[test]
+    fn session_switch_resets_text_selection() {
+        let _sub = crate::extensions::subagent::test_lock();
+        let mut app = App::new();
+        app.mouse.sel = Some((3, 0, 5, 4));
+        app.mouse.dragging = true;
+        app.mouse.drag_row = Some(7);
+        app.mouse.edge_dwell = 2;
+        app.on_session_switched(Ok(SessionSwitched {
+            session_id: "s1".into(),
+            name: None,
+            file: None,
+            messages: vec![make_assistant("new transcript")],
+        }));
+        assert_eq!(app.mouse.sel, None, "切会话后不得残留选区");
+        assert!(!app.mouse.dragging);
+        assert_eq!(app.mouse.drag_row, None);
+        assert_eq!(app.mouse.edge_dwell, 0);
     }
 
     #[test]

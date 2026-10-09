@@ -1,7 +1,11 @@
 //! 系统剪贴板：Wayland 命令优先，fallback arboard
 
 use crate::utils::time::now_ms;
-use std::{io::Write, path::Path};
+use std::{
+    io::Write,
+    path::Path,
+    process::{Command, Stdio},
+};
 
 /// 剪贴板内部操作的返回值别名，错误统一收敛为 [`ClipboardError`]。
 type Result<T> = std::result::Result<T, ClipboardError>;
@@ -22,8 +26,7 @@ enum Osc52Result {
 /// 剪贴板操作错误
 #[derive(Debug, thiserror::Error)]
 enum ClipboardError {
-    /// 平台工具（wl-paste）失败的自由文本说明（仅 Linux）。
-    #[cfg(target_os = "linux")]
+    /// 平台工具（termux-clipboard-* / wl-paste）失败的自由文本说明。
     #[error("{0}")]
     Message(String),
 
@@ -63,6 +66,55 @@ pub fn write_clipboard(text: &str) -> std::result::Result<(), String> {
         }
     }
     Err(clipboard_failure_hint())
+}
+
+/// 是否运行在 Termux（Android）下。
+///
+/// Termux 上报的平台是 `android` 而不是 `linux`，且没有 Wayland/X11，
+/// 所以不能按 `target_os` 判断。运行时以 `TERMUX_VERSION` 为准。
+fn is_termux() -> bool {
+    std::env::var_os("TERMUX_VERSION").is_some()
+}
+
+/// 用 `termux-clipboard-get` 读取 Termux 剪贴板文本；命令缺失或退出码非 0 时返回错误。
+fn paste_from_termux_clipboard() -> Result<String> {
+    let out = std::process::Command::new("termux-clipboard-get")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()?;
+
+    if !out.status.success() {
+        return Err(ClipboardError::Message(format!(
+            "termux-clipboard-get exited with {}",
+            out.status
+        )));
+    }
+
+    Ok(String::from_utf8(out.stdout)?)
+}
+
+/// 用 `termux-clipboard-set` 写入 Termux 剪贴板文本；文本经 stdin 传入以避免 argv 长度限制。
+fn copy_to_termux_clipboard(text: &str) -> Result<()> {
+    let mut child = Command::new("termux-clipboard-set")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(text.as_bytes())?;
+    }
+
+    let status = child.wait()?;
+    if !status.success() {
+        return Err(ClipboardError::Message(format!(
+            "termux-clipboard-set exited with {}",
+            status
+        )));
+    }
+
+    Ok(())
 }
 
 /// 是否处于远程会话（SSH / mosh）：`SSH_CONNECTION`、`SSH_CLIENT`、`MOSH_CONNECTION`
@@ -122,6 +174,11 @@ fn write_osc52(text: &str) -> Osc52Result {
 /// 复制到系统剪贴板：Wayland 下 wl-copy 优先（arboard 在纯 Wayland 无可靠后端），
 /// 失败或非 Wayland 时 fallback arboard
 fn copy_to_clipboard(msg: &str) -> Result<()> {
+    // Termux 优先：它没有 Wayland/X11，arboard 必然失败
+    if is_termux() && copy_to_termux_clipboard(msg).is_ok() {
+        return Ok(());
+    }
+
     #[cfg(target_os = "linux")]
     {
         if is_wayland() && copy_to_wayland_clipboard(msg).is_ok() {
@@ -134,8 +191,15 @@ fn copy_to_clipboard(msg: &str) -> Result<()> {
     Ok(())
 }
 
-/// 从系统剪贴板读取：Wayland 下 wl-paste 优先，失败或非 Wayland 时 fallback arboard
+/// 从系统剪贴板读取：Termux 用 `termux-clipboard-get`，Wayland 下 wl-paste 优先，
+/// 失败或非 Wayland 时 fallback arboard
 fn paste_from_clipboard() -> Result<String> {
+    if is_termux()
+        && let Ok(text) = paste_from_termux_clipboard()
+    {
+        return Ok(text);
+    }
+
     #[cfg(target_os = "linux")]
     {
         if is_wayland()
@@ -390,5 +454,22 @@ mod tests {
     fn failure_hint_is_actionable() {
         // 任何平台都必须给出可操作的失败说明，而非静默成功
         assert!(clipboard_failure_hint().starts_with("Clipboard unavailable"));
+    }
+
+    #[test]
+    fn termux_detection_follows_the_env_var() {
+        // Termux 上报 android 而非 linux，只能按运行时环境变量判断（pi #10391）
+        let _lock = crate::test_support::env_key_lock();
+        let saved = std::env::var_os("TERMUX_VERSION");
+        unsafe { std::env::remove_var("TERMUX_VERSION") };
+        assert!(!is_termux());
+        unsafe { std::env::set_var("TERMUX_VERSION", "0.118") };
+        assert!(is_termux());
+        // Termux 不算 headless linux：OSC52 不作为无 Termux:API 时的兜底
+        assert!(!is_headless_linux());
+        match saved {
+            Some(v) => unsafe { std::env::set_var("TERMUX_VERSION", v) },
+            None => unsafe { std::env::remove_var("TERMUX_VERSION") },
+        }
     }
 }

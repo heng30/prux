@@ -230,6 +230,16 @@ pub fn handle_event(shared: &Rc<RefCell<App>>, event: Event) -> KeyAction {
         return action;
     }
 
+    // 空闲时 Esc：先取消可取消的后台工作（如 MCP OAuth 登录），没有在飞工作时才放行给编辑器。
+    if !st.busy
+        && keybindings::get_global().matches(&key, "app.interrupt")
+        && core::extensions::cancel_background_work() > 0
+    {
+        st.status = "cancelled background work".to_string();
+        st.dirty = true;
+        return KeyAction::Continue;
+    }
+
     // /settings 设置选择器：键盘完全让位
     if st.settings_selector.active {
         return st.handle_settings_selector_key(&key);
@@ -2539,6 +2549,35 @@ mod tests {
             "重试期间 Esc 应返回 CancelPrompt"
         );
         shared.borrow_mut().busy = false;
+    }
+
+    /// 空闲时 Esc：先取消可取消的后台工作（如 MCP OAuth 登录），不再放行给编辑器。
+    /// pi #10565：登录在每一步都能取消。
+    #[test]
+    fn idle_escape_cancels_background_work() {
+        // 登记表是进程全局的：与其它碰它的用例串行
+        let _g = crate::test_support::AUTH_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _ad = test_agent_dir();
+        let shared = Rc::new(RefCell::new(App::new()));
+        let token = tokio_util::sync::CancellationToken::new();
+        let guard = core::extensions::register_background_cancel("test-login", token.clone());
+
+        let action = handle_event(
+            &shared,
+            Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+        );
+        assert!(matches!(action, KeyAction::Continue));
+        assert!(token.is_cancelled(), "空闲时 Esc 应取消后台工作");
+
+        // 工作结束后（guard drop）Esc 不再被后台工作拦截
+        drop(guard);
+        let action = handle_event(
+            &shared,
+            Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+        );
+        assert!(matches!(action, KeyAction::Continue));
     }
 
     /// 回归：busy 时经 busy_safe 命令（如 /goal）弹出的扩展面板，键盘必须先给面板：

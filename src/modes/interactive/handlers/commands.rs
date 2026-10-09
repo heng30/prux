@@ -428,6 +428,7 @@ impl App {
         self.messages.clear();
         self.system_messages.clear();
         self.expand_overrides.clear(); // 会话切换：丢弃上一条 transcript 的逐块展开态
+        self.reset_text_selection(); // 选区不跨 transcript
         self.clear_streaming();
         self.context_tokens_override = None;
         self.current_session_path = None;

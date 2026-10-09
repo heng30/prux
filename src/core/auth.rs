@@ -621,22 +621,51 @@ pub async fn ensure_oauth_valid(provider: &str) -> Result<Option<String>> {
         .unwrap_or_else(|e| e.into_inner())
         .insert(provider.to_string(), ());
 
-    // 说明：refresh_oauth 网络层自带超时（30s connect/post）；
-    // 此处不再套 tokio timeout 以避免 future 非 Send 传播（锁在 await 前已释放）。
-    let refreshed = oauth::refresh_oauth(provider, &cred).await.map_err(|e| {
-        Error::msg(format!(
-            "OAuth token refresh failed for {}: {}. Please run /login again.",
-            provider, e
-        ))
-    })?;
+    // 刷新在**独立任务**里跑：发起方被取消（请求超时、回合中止、会话关闭）不得中断它。
+    // provider 一旦答完就可能已轮转 refresh token，丢了就再也拿不回来。
+    // 任务结束（无论成败）自己摘掉登记，避免失败/取消把该 provider 永久锁死。
+    let provider_owned = provider.to_string();
+    let cred_owned = cred.clone();
+    let handle = tokio::spawn(async move {
+        let outcome = async {
+            let refreshed = oauth::refresh_oauth(&provider_owned, &cred_owned)
+                .await
+                .map_err(|e| e.to_string())?;
+            write_oauth_credential(&provider_owned, &refreshed).map_err(|e| e.to_string())?;
+            Ok::<OAuthCredential, String>(refreshed)
+        }
+        .await;
+        clear_oauth_refresh_lock(&provider_owned);
+        outcome
+    });
 
-    locks
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .remove(provider);
+    let refreshed = match handle.await {
+        Ok(Ok(refreshed)) => refreshed,
+        Ok(Err(e)) => {
+            return Err(Error::msg(format!(
+                "OAuth token refresh failed for {}: {}. Please run /login again.",
+                provider, e
+            )));
+        }
+        Err(e) => {
+            return Err(Error::msg(format!(
+                "OAuth token refresh for {} did not complete: {}. Please run /login again.",
+                provider, e
+            )));
+        }
+    };
 
-    write_oauth_credential(provider, &refreshed)?;
     Ok(Some(refreshed.access))
+}
+
+/// 摘掉 provider 的刷新登记（刷新任务结束时调用；无论成败）。
+fn clear_oauth_refresh_lock(provider: &str) {
+    if let Some(locks) = OAUTH_REFRESH_LOCKS.get() {
+        locks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(provider);
+    }
 }
 
 /// provider 当前可用于请求的 bearer token：优先 OAuth 凭据（过期先刷新），否则 `auth.json` 的 key。
@@ -817,6 +846,47 @@ mod tests {
             let none = rt.block_on(ensure_oauth_valid("deepseek")).unwrap();
             assert!(none.is_none());
             remove_auth("anthropic").ok();
+        });
+    }
+
+    /// 刷新失败不得把 provider 永久锁死：登记必须摘掉（pi 1.0.3 / 1.1.0）。
+    /// 旧实现里 `?` 早退不会 `remove`，该 provider 之后永远拿到过期 token。
+    #[test]
+    fn failed_oauth_refresh_releases_the_lock() {
+        with_temp_agent_dir(|| {
+            let _ = std::fs::remove_file(auth_path());
+            let provider = "prux-refresh-test";
+            let cred = crate::core::oauth::OAuthCredential {
+                access: "stale-access".into(),
+                refresh: "refresh-1".into(),
+                expires: 1, // 早已过期
+                enterprise_url: None,
+                available_model_ids: None,
+                client_id: None,
+                scopes: None,
+            };
+            write_oauth_credential(provider, &cred).unwrap();
+
+            let in_flight = || {
+                OAUTH_REFRESH_LOCKS
+                    .get()
+                    .map(|l| {
+                        l.lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .contains_key(provider)
+                    })
+                    .unwrap_or(false)
+            };
+
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            // 未知 provider 的刷新实现 → 立即失败（不发网络请求）
+            assert!(rt.block_on(ensure_oauth_valid(provider)).is_err());
+            assert!(!in_flight(), "刷新结束后必须摘掉登记");
+            // 第二次仍会真的重试，而不是被残留登记挡下、返回过期 token
+            assert!(rt.block_on(ensure_oauth_valid(provider)).is_err());
+            assert!(!in_flight());
+
+            remove_auth(provider).ok();
         });
     }
 

@@ -7,7 +7,7 @@ use prux::core::prompt_templates::{
 };
 use prux::core::skills::{Skill, expand_skill_command, load_skill_from_file, load_skills};
 use prux::core::system_prompt::{
-    SystemPromptOptions, build_system_prompt, format_skills_for_prompt,
+    SkillFileReader, SystemPromptOptions, build_system_prompt, format_skills_for_prompt,
 };
 use std::path::{Path, PathBuf};
 
@@ -224,6 +224,7 @@ fn prompt_options(cwd: &str) -> SystemPromptOptions {
     SystemPromptOptions {
         cwd: cwd.to_string(),
         selected_tools: Some(vec!["read".into(), "bash".into(), "edit".into()]),
+        hidden_tools: Vec::new(),
         tool_snippets: std::collections::HashMap::from([
             ("read".into(), "read usage".to_string()),
             ("bash".into(), "bash usage".to_string()),
@@ -264,7 +265,7 @@ fn formats_skills_list() {
         skill("a", "description A", PathBuf::from("/x/a.md")),
         skill("b", "description B", PathBuf::from("/x/b.md")),
     ];
-    let out = format_skills_for_prompt(&skills);
+    let out = format_skills_for_prompt(&skills, SkillFileReader::Read);
     assert!(out.contains("a"));
     assert!(out.contains("description A"));
     assert!(out.contains("/x/a.md"));

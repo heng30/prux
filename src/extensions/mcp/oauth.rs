@@ -40,6 +40,7 @@ use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
+use tokio_util::sync::CancellationToken;
 
 /// 默认回调地址（本地回环监听）。
 pub const DEFAULT_REDIRECT_URI: &str = "http://127.0.0.1:3118/callback";
@@ -52,8 +53,8 @@ const REFRESH_LOCK_RETRY: Duration = Duration::from_millis(100);
 const REFRESH_LOCK_STALE_AGE: Duration = Duration::from_secs(20);
 /// 单次刷新请求的超时：持锁期间不能让墙钟无界增长
 const REFRESH_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
-/// OAuth HTTP 请求的默认超时（与 rmcp 内置 reqwest 客户端一致）。
-const OAUTH_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
+/// OAuth HTTP 请求的默认超时。把对授权服务器的每个请求限制在 15s，避免不响应的服务器拖住登录或刷新锁。
+const OAUTH_HTTP_TIMEOUT: Duration = Duration::from_secs(15);
 /// OAuth HTTP 响应体上限（与 rmcp 内置客户端一致）。
 const MAX_OAUTH_RESPONSE_BYTES: usize = 1024 * 1024;
 
@@ -473,6 +474,40 @@ impl OAuthHttpClient for RefreshSerializedOAuthHttpClient {
     }
 }
 
+/// 在 [`RefreshSerializedOAuthHttpClient`] 之上叠加取消：
+/// 登录被取消（Esc / 会话关闭）时立即中断在途请求，而不是等它超时。
+#[derive(Clone)]
+struct CancelAwareOAuthHttpClient {
+    /// 下层客户端（含刷新串行化）。
+    inner: Arc<RefreshSerializedOAuthHttpClient>,
+    /// 本次登录的取消信号。
+    cancel: CancellationToken,
+}
+
+impl OAuthHttpClient for CancelAwareOAuthHttpClient {
+    /// 请求与取消二选一；取消先到就立即返回取消错误。
+    ///
+    /// refresh grant 除外：它由下层按 [`REFRESH_REQUEST_TIMEOUT`] 限时，并在持跨进程刷新锁
+    /// 期间发出；中途丢弃会把锁留在原地（只靠陈旧阈值回收），所以不在这里取消它。
+    fn execute(&self, request: OAuthHttpRequest) -> OAuthHttpClientFuture<'_> {
+        if refresh_grant_token(&request).is_some() {
+            return self.inner.execute(request);
+        }
+
+        Box::pin(async move {
+            tokio::select! {
+                biased;
+                _ = self.cancel.cancelled() => {
+                    let error: OAuthHttpClientError =
+                        Box::new(std::io::Error::other("MCP OAuth sign-in was cancelled"));
+                    Err(error)
+                }
+                result = self.inner.execute(request) => result,
+            }
+        })
+    }
+}
+
 /// 从 OAuth HTTP 请求体里取出 refresh grant 的 refresh token；非刷新请求返回 `None`。
 fn refresh_grant_token(request: &OAuthHttpRequest) -> Option<String> {
     if request.request.method() != http::Method::POST {
@@ -542,6 +577,27 @@ pub async fn begin_login_with_path(
     challenge: Option<&str>,
     credential_path: Option<PathBuf>,
 ) -> Result<PendingLogin> {
+    begin_login_with_cancel(
+        server_name,
+        server_url,
+        oauth,
+        challenge,
+        credential_path,
+        None,
+    )
+    .await
+}
+
+/// [`begin_login_with_path`] 的带取消版本：`cancel` 触发时立即中断在途请求
+///（元数据发现 / 动态注册 / 授权会话启动）。
+pub async fn begin_login_with_cancel(
+    server_name: &str,
+    server_url: &str,
+    oauth: &OAuthConfig,
+    challenge: Option<&str>,
+    credential_path: Option<PathBuf>,
+    cancel: Option<CancellationToken>,
+) -> Result<PendingLogin> {
     if oauth.grant_type != OAuthGrantType::AuthorizationCode {
         bail!("MCP server `{server_name}` does not use authorization_code login")
     }
@@ -551,7 +607,14 @@ pub async fn begin_login_with_path(
         .clone()
         .unwrap_or_else(|| DEFAULT_REDIRECT_URI.to_string());
 
-    let mut manager = new_manager(server_name, server_url, oauth, credential_path).await?;
+    let mut manager = new_manager_with_cancel(
+        server_name,
+        server_url,
+        oauth,
+        credential_path,
+        cancel.clone(),
+    )
+    .await?;
 
     let mut request = AuthorizationRequest::new(&redirect_uri).with_client_name(
         oauth
@@ -588,7 +651,8 @@ pub async fn begin_login_with_path(
         // `start_authorization`：后者会无条件重新发现并用发现结果覆盖已设的 metadata
         // （rmcp 3.1 的 `AuthorizationManager::start_authorization`），所以直接建授权会话。
         Some(metadata_url) => {
-            manager.set_metadata(fetch_authorization_metadata(metadata_url).await?);
+            manager
+                .set_metadata(fetch_authorization_metadata(metadata_url, cancel.as_ref()).await?);
             let session = AuthorizationSession::new(manager, request)
                 .await
                 .map_err(|(_manager, error)| error)
@@ -643,6 +707,18 @@ pub async fn login_client_credentials_with_path(
     oauth: &OAuthConfig,
     credential_path: Option<PathBuf>,
 ) -> Result<()> {
+    login_client_credentials_with_cancel(server_name, server_url, oauth, credential_path, None)
+        .await
+}
+
+/// [`login_client_credentials_with_path`] 的带取消版本。
+pub async fn login_client_credentials_with_cancel(
+    server_name: &str,
+    server_url: &str,
+    oauth: &OAuthConfig,
+    credential_path: Option<PathBuf>,
+    cancel: Option<CancellationToken>,
+) -> Result<()> {
     if oauth.grant_type != OAuthGrantType::ClientCredentials {
         bail!("MCP server `{server_name}` does not use client_credentials")
     }
@@ -660,7 +736,7 @@ pub async fn login_client_credentials_with_path(
         .map(|value| value.split_whitespace().map(String::from).collect())
         .unwrap_or_default();
     let mut state = OAuthState::Unauthorized(
-        new_manager(server_name, server_url, oauth, credential_path).await?,
+        new_manager_with_cancel(server_name, server_url, oauth, credential_path, cancel).await?,
     );
 
     state
@@ -678,15 +754,30 @@ pub async fn login_client_credentials_with_path(
 ///
 /// 文档按 RFC 8414 / OIDC 形状解析（至少要有 `authorization_endpoint` 与 `token_endpoint`），
 /// 拉不到或解析不了就报错——配置了该字段即表示「发现流程不可信」，静默回退发现只会掩盖问题。
-async fn fetch_authorization_metadata(url: &str) -> Result<AuthorizationMetadata> {
-    let response = http_util::client_builder(None)
-        .build()
-        .context("build MCP OAuth metadata client")?
-        .get(url)
-        .timeout(Duration::from_secs(30))
-        .send()
-        .await
-        .with_context(|| format!("fetch MCP OAuth metadata from {url}"))?;
+/// `cancel` 触发时立即放弃在途请求。
+async fn fetch_authorization_metadata(
+    url: &str,
+    cancel: Option<&CancellationToken>,
+) -> Result<AuthorizationMetadata> {
+    let request = async {
+        http_util::client_builder(None)
+            .build()
+            .context("build MCP OAuth metadata client")?
+            .get(url)
+            .timeout(OAUTH_HTTP_TIMEOUT)
+            .send()
+            .await
+            .with_context(|| format!("fetch MCP OAuth metadata from {url}"))
+    };
+
+    let response = match cancel {
+        Some(cancel) => tokio::select! {
+            biased;
+            _ = cancel.cancelled() => bail!("MCP OAuth sign-in was cancelled"),
+            result = request => result?,
+        },
+        None => request.await?,
+    };
 
     let status = response.status();
     if !status.is_success() {
@@ -706,6 +797,17 @@ pub async fn new_manager(
     oauth: &OAuthConfig,
     credential_path: Option<PathBuf>,
 ) -> Result<AuthorizationManager> {
+    new_manager_with_cancel(server_name, server_url, oauth, credential_path, None).await
+}
+
+/// [`new_manager`] 的带取消版本：传了 `cancel` 时，对授权服务器的每个请求都可被 Esc / 会话关闭立即中断。
+pub async fn new_manager_with_cancel(
+    server_name: &str,
+    server_url: &str,
+    oauth: &OAuthConfig,
+    credential_path: Option<PathBuf>,
+    cancel: Option<CancellationToken>,
+) -> Result<AuthorizationManager> {
     ensure_tls_crypto_provider();
 
     let store = match credential_path {
@@ -718,15 +820,21 @@ pub async fn new_manager(
         server_name,
         server_url,
     ));
-    let client = RefreshSerializedOAuthHttpClient {
+    let serialized = RefreshSerializedOAuthHttpClient {
         inner: Arc::new(OAuthHttpExecutor::new().context("create MCP OAuth HTTP client")?),
         coordinator: coordinator.clone(),
     };
+    let client: Arc<dyn OAuthHttpClient> = match cancel {
+        Some(cancel) => Arc::new(CancelAwareOAuthHttpClient {
+            inner: Arc::new(serialized),
+            cancel,
+        }),
+        None => Arc::new(serialized),
+    };
 
-    let mut manager =
-        AuthorizationManager::new_with_oauth_http_client(server_url, Arc::new(client))
-            .await
-            .context("create MCP OAuth manager")?;
+    let mut manager = AuthorizationManager::new_with_oauth_http_client(server_url, client)
+        .await
+        .context("create MCP OAuth manager")?;
 
     manager.set_allow_missing_issuer(oauth.skip_issuer_metadata_validation);
 

@@ -1359,21 +1359,28 @@ fn spawn_logout(server: String) {
 
 /// 后台执行 OAuth 登录：传了回调 URL 时走手动完成路径，否则打开浏览器 + 本地回调监听。
 /// 结果（成功或错误）经通知回执展示。
+///
+/// 登录登记到 [`core::extensions::register_background_cancel`]：Esc / Ctrl+C 与会话关闭会取消它
 fn spawn_login(server: String, callback: Option<String>) {
+    let cancel = CancellationToken::new();
+    let _guard =
+        extensions::register_background_cancel(format!("mcp-login:{server}"), cancel.clone());
+
     tokio::spawn(async move {
-        if let Some(callback) = callback {
+        let result = match callback {
             // 用户手动粘贴回调 URL：重新构造一次 pending 并完成。
-            match finish_login_from_url(&server, &callback).await {
-                Ok(()) => notify_plain(
-                    format!("Saved OAuth credentials for MCP server `{server}`."),
-                    UiNotifyLevel::Success,
-                ),
-                Err(error) => notify_plain(error, UiNotifyLevel::Error),
-            }
+            Some(callback) => finish_login_from_url(&server, &callback).await,
+            None => login_with_browser(&server, &cancel).await,
+        };
+
+        if cancel.is_cancelled() {
+            notify_plain(
+                format!("MCP OAuth sign-in for `{server}` was cancelled."),
+                UiNotifyLevel::Info,
+            );
             return;
         }
 
-        let result = login_with_browser(&server).await;
         match result {
             Ok(()) => notify_plain(
                 format!("Saved OAuth credentials for MCP server `{server}`."),
@@ -1387,7 +1394,7 @@ fn spawn_login(server: String, callback: Option<String>) {
 /// 浏览器式 OAuth 登录：`client_credentials` 直接换令牌；否则探测授权挑战、
 /// 起本地回调监听并打开浏览器，收到回调后换取凭据。
 /// 任一步失败（超时、无法监听、回调解析失败等）返回 `Err` 文本。
-async fn login_with_browser(server: &str) -> Result<(), String> {
+async fn login_with_browser(server: &str, cancel: &CancellationToken) -> Result<(), String> {
     let cwd = cwd();
     let trusted = is_project_trusted(&cwd, &agent_dir());
     let loaded = load_config_with_declarations(&cwd, trusted)?;
@@ -1399,22 +1406,39 @@ async fn login_with_browser(server: &str) -> Result<(), String> {
     let oauth_config = entry.oauth.clone().unwrap_or_default();
 
     if oauth_config.grant_type == config::OAuthGrantType::ClientCredentials {
-        return oauth::login_client_credentials(server, &url, &oauth_config)
-            .await
-            .map_err(|e| e.to_string());
+        return oauth::login_client_credentials_with_cancel(
+            server,
+            &url,
+            &oauth_config,
+            None,
+            Some(cancel.clone()),
+        )
+        .await
+        .map_err(|e| e.to_string());
     }
 
-    let challenge = tokio::time::timeout(
-        Duration::from_secs(15),
-        manager::probe_oauth_challenge(entry),
-    )
-    .await
+    let challenge = tokio::select! {
+        biased;
+        _ = cancel.cancelled() => return Err("MCP OAuth sign-in was cancelled".to_string()),
+        result = tokio::time::timeout(
+            Duration::from_secs(15),
+            manager::probe_oauth_challenge(entry),
+        ) => result,
+    }
     .map_err(|_| "MCP OAuth discovery timed out".to_string())?
     .map_err(|e| e.to_string())?;
 
-    let pending = oauth::begin_login(server, &url, &oauth_config, challenge.as_deref())
-        .await
-        .map_err(|e| e.to_string())?;
+    let pending = oauth::begin_login_with_cancel(
+        server,
+        &url,
+        &oauth_config,
+        challenge.as_deref(),
+        None,
+        Some(cancel.clone()),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+
     let redirect_uri = pending.redirect_uri.clone();
     notify_plain(
         format!(
@@ -1437,7 +1461,7 @@ async fn login_with_browser(server: &str) -> Result<(), String> {
         );
     }
 
-    let callback = receive_callback(listener, &redirect_uri).await?;
+    let callback = receive_callback(listener, &redirect_uri, cancel).await?;
     oauth::finish_login(pending, &callback)
         .await
         .map_err(|e| e.to_string())
@@ -1500,10 +1524,19 @@ pub async fn callback_listener(redirect_uri: &str) -> Result<Option<TcpListener>
 }
 
 /// 等待浏览器回调请求（最长 600s），解析请求行里的回调地址、回写一个 200 提示页，
-/// 返回相对于 `redirect_uri` 拼好的绝对回调 URL。超时或请求非法时返回 `Err`。
-pub async fn receive_callback(listener: TcpListener, redirect_uri: &str) -> Result<String, String> {
-    let (mut socket, _) = tokio::time::timeout(Duration::from_secs(600), listener.accept())
-        .await
+/// 返回相对于 `redirect_uri` 拼好的绝对回调 URL。超时、取消或请求非法时返回 `Err`。
+pub async fn receive_callback(
+    listener: TcpListener,
+    redirect_uri: &str,
+    cancel: &CancellationToken,
+) -> Result<String, String> {
+    let accepted = tokio::select! {
+        biased;
+        _ = cancel.cancelled() => return Err("MCP OAuth sign-in was cancelled".to_string()),
+        result = tokio::time::timeout(Duration::from_secs(600), listener.accept()) => result,
+    };
+
+    let (mut socket, _) = accepted
         .map_err(|_| "MCP OAuth callback timed out".to_string())?
         .map_err(|e| e.to_string())?;
 
@@ -1538,6 +1571,18 @@ mod tests {
         crate::test_support::AUTH_TEST_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// pi #10565：登录在等待浏览器回调时 Esc 可立即取消，不再干等 600s。
+    #[tokio::test]
+    async fn receive_callback_aborts_on_cancel() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let error = receive_callback(listener, "http://127.0.0.1:1/callback", &cancel)
+            .await
+            .unwrap_err();
+        assert!(error.contains("cancelled"), "{error}");
     }
 
     #[test]

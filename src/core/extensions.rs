@@ -9,6 +9,7 @@
 //! 扩展作为独立第二层接入（先查内置、再查扩展注册表）。
 
 mod banner;
+mod cancel;
 mod dock;
 mod footer;
 mod hooks;
@@ -48,6 +49,10 @@ pub use super::{
     },
 };
 pub use banner::{BannerCtx, BannerExtension, BannerLine, BannerSpan};
+pub use cancel::{
+    BackgroundCancelGuard, background_work_count, cancel_background_work,
+    register_background_cancel,
+};
 pub use dock::{DockLine, DockSection, DockSpan, dock_sections};
 pub use footer::{FooterCtx, FooterExtension, FooterLine, FooterSpan, git_branch};
 pub use hooks::ExtensionHook;

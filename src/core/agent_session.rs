@@ -266,13 +266,8 @@ fn compose_tools(
     // 被摘掉声明的（如 `codemode.mode = only` 下的直接工具）不能还挂在提示里让模型直接调。
     let sp = build_system_prompt(&SystemPromptOptions {
         cwd: cwd.to_string(),
-        selected_tools: Some(
-            selected
-                .iter()
-                .filter(|n| !hidden.iter().any(|h| h == *n))
-                .cloned()
-                .collect(),
-        ),
+        selected_tools: Some(selected.clone()),
+        hidden_tools: hidden.clone(),
         tool_snippets: snippets,
         prompt_guidelines,
         append_system_prompt: rebuild_ctx.append_system_prompt.clone(),
@@ -2245,6 +2240,8 @@ impl Agent {
         const RETRYABLE: &[&str] = &[
             // 服务端瞬时负载 / HTTP 状态
             "overloaded",
+            "server_busy",
+            "servers are currently busy",
             "currently experiencing high demand",
             "model is at capacity",
             "rate limit",
@@ -2617,15 +2614,20 @@ impl Agent {
             emit_start(&sink, p);
 
             // 每个工具单独计时（不使用批次 batch_start.elapsed()：
-            // 顺序执行会让后续工具显示累计耗时，并行执行会让全部工具共享同一值）
+            // 顺序执行会让后续工具显示累计耗时，并行执行会让全部工具共享同一值）。
+            // 计时在 `after_tool_call` 钩子之前收口，只测工具本身（对齐 pi #10549）。
             let tool_start = Instant::now();
-            let f = if let Some(msg) = &p.immediate {
-                FinalizedToolCall::error_result(
-                    &p.call,
-                    &p.name,
-                    &p.args,
-                    msg,
-                    p.immediate_terminate,
+            let (f, dur) = if let Some(msg) = &p.immediate {
+                // 未真正执行的调用没有耗时（pi："Calls that did not run have none"）
+                (
+                    FinalizedToolCall::error_result(
+                        &p.call,
+                        &p.name,
+                        &p.args,
+                        msg,
+                        p.immediate_terminate,
+                    ),
+                    None,
                 )
             } else {
                 let on_chunk = Self::bash_chunk_callback(
@@ -2677,18 +2679,15 @@ impl Agent {
                         FinalizedToolCall::error_result(&p.call, &p.name, &p.args, &e.0, false)
                     }
                 };
+                let dur = Some(tool_start.elapsed().as_millis() as u64);
                 attach_nested_calls(&mut f, exec_ctx.as_ref());
                 apply_after_tool_call(&mut f, &p.name, &p.args);
-                f
+                (f, dur)
             };
 
             emit_tool_execution_end(&sink, &f);
 
-            self.push_tool_result_message(
-                &f,
-                tool_start.elapsed().as_millis() as u64,
-                tool_results,
-            );
+            self.push_tool_result_message(&f, dur, tool_results);
 
             self.record_tool_started(
                 run_id,
@@ -2718,9 +2717,10 @@ impl Agent {
     ) -> Vec<bool> {
         let mut locks: HashMap<String, Arc<tokio::sync::Mutex<()>>> = HashMap::new();
         // slot 存 (工具结果, 该工具自身耗时毫秒)：并行完成序各自计时，
-        // 不用批次 batch_start.elapsed()（join_all 后所有工具会共享整个批次耗时）
-        let mut slots: Vec<Option<(FinalizedToolCall, u64)>> = Vec::new();
-        let mut futs: Vec<BoxFuture<'static, (FinalizedToolCall, u64)>> = Vec::new();
+        // 不用批次 batch_start.elapsed()（join_all 后所有工具会共享整个批次耗时）；
+        // 未真正执行的调用耗时为 `None`。
+        let mut slots: Vec<Option<(FinalizedToolCall, Option<u64>)>> = Vec::new();
+        let mut futs: Vec<BoxFuture<'static, (FinalizedToolCall, Option<u64>)>> = Vec::new();
         let mut fut_slots: Vec<usize> = Vec::new();
 
         for p in prepared {
@@ -2737,7 +2737,7 @@ impl Agent {
                     p.immediate_terminate,
                 );
                 emit_tool_execution_end(&sink, &f);
-                slots.push(Some((f, 0)));
+                slots.push(Some((f, None)));
             } else {
                 // file mutation queue：edit/write 按 canonical path 串行化
                 let lock: Option<Arc<tokio::sync::Mutex<()>>> = if (p.name == "edit"
@@ -2868,7 +2868,7 @@ impl Agent {
     fn push_tool_result_message(
         &mut self,
         fin: &FinalizedToolCall,
-        duration_ms: u64,
+        duration_ms: Option<u64>,
         tool_results: &mut Vec<(ContentBlock, AgentMessage)>,
     ) {
         let content: Vec<ContentBlock> = if let Some(override_blocks) = &fin.content_override {
@@ -2927,7 +2927,7 @@ impl Agent {
             raw_stop_reason: None,
             end_turn: None,
             timestamp: now_ms(),
-            duration_ms: Some(duration_ms),
+            duration_ms,
             details: fin.details.clone(),
             citations: None,
             entry_id: None,
@@ -4153,7 +4153,7 @@ fn execute_one(
     abort: &Arc<AtomicBool>,
     tpl: &Arc<AgentTemplate>,
     branch_entries: Option<Arc<Vec<Value>>>,
-) -> BoxFuture<'static, (FinalizedToolCall, u64)> {
+) -> BoxFuture<'static, (FinalizedToolCall, Option<u64>)> {
     let call = prepared.call.clone();
     let name = prepared.name.clone();
     let args = prepared.args.clone();
@@ -4168,7 +4168,7 @@ fn execute_one(
             let f =
                 FinalizedToolCall::error_result(&call, &name, &args, "Operation aborted", false);
             emit_tool_execution_end(&sink, &f);
-            return (f, 0);
+            return (f, None);
         }
 
         // 并行 thunk 内单独计时（从执行开始到工具返回）
@@ -4239,10 +4239,13 @@ fn execute_one(
                 "details": details,
             }));
         }
+
+        // 计时在钩子之前收口，只测工具本身
+        let dur = Some(tool_start.elapsed().as_millis() as u64);
         attach_nested_calls(&mut f, exec_ctx.as_ref());
         apply_after_tool_call(&mut f, &name, &args);
         emit_tool_execution_end(&sink, &f);
-        (f, tool_start.elapsed().as_millis() as u64)
+        (f, dur)
     })
 }
 
@@ -4349,6 +4352,13 @@ mod tests {
         // Selected model is at capacity（#10278）
         assert!(Agent::is_retryable_assistant_error(
             "provider returned 429 Too Many Requests: Selected model is at capacity. Please try again later."
+        ));
+        // provider server busy（pi 1.1.0 #10543）
+        assert!(Agent::is_retryable_assistant_error(
+            "provider returned error: server_busy"
+        ));
+        assert!(Agent::is_retryable_assistant_error(
+            "The servers are currently busy, please retry"
         ));
         // Cloudflare 520（#9627）
         assert!(Agent::is_retryable_assistant_error(
@@ -6997,7 +7007,7 @@ mod tests {
 
         // 关闭：附件进消息
         let mut out = Vec::new();
-        agent.push_tool_result_message(&fin, 1, &mut out);
+        agent.push_tool_result_message(&fin, Some(1), &mut out);
         let content = &out[0].1.content;
         assert!(
             content
@@ -7009,7 +7019,7 @@ mod tests {
         // 打开：图片被丢弃，只留文本占位
         settings_manager::write_settings_images_block_images(true).unwrap();
         let mut out = Vec::new();
-        agent.push_tool_result_message(&fin, 1, &mut out);
+        agent.push_tool_result_message(&fin, Some(1), &mut out);
         settings_manager::write_settings_images_block_images(false).unwrap();
 
         let content = &out[0].1.content;
@@ -7177,6 +7187,12 @@ mod tests {
             assert_eq!(first[0]["toolName"], "no_such_tool");
             let err_text = first[0]["content"][0]["text"].as_str().unwrap();
             assert_eq!(err_text, "Tool no_such_tool not found");
+            // 未真正执行的调用没有耗时（对齐 pi："Calls that did not run have none"）
+            assert!(
+                first[0]["durationMs"].is_null(),
+                "immediate 调用不应带 durationMs: {:?}",
+                first[0]
+            );
             // start/end 均发出
             assert_eq!(
                 events
@@ -7288,6 +7304,107 @@ mod tests {
             );
             assert!(crate::core::extensions::unregister_extension(
                 "block-reads-test"
+            ));
+        });
+    }
+
+    /// pi #10549：工具耗时只测工具本身，不含 `after_tool_call` 钩子。
+    /// 钩子里睡 400ms，工具本身瞬间返回，`durationMs` 必须远小于 400。
+    #[test]
+    fn tool_duration_excludes_after_tool_call_hook() {
+        use crate::core::extensions::{AfterToolCallOutcome, ExtensionHook, ExtensionTool};
+
+        struct SlowHook;
+        impl crate::core::extensions::Extension for SlowHook {
+            fn name(&self) -> &str {
+                "slow-hook-test"
+            }
+            fn tools(&self) -> Vec<ExtensionTool> {
+                vec![ExtensionTool::simple(
+                    "slow_probe",
+                    "test",
+                    json!({ "type": "object", "properties": {} }),
+                    "",
+                )]
+            }
+            fn hooks(&self) -> Vec<ExtensionHook> {
+                vec![ExtensionHook::AfterToolCall]
+            }
+            fn execute_tool(
+                &self,
+                name: &str,
+                _args: &Value,
+            ) -> std::result::Result<tools::ToolResult, tools::ToolError> {
+                if name == "slow_probe" {
+                    Ok(tools::ToolResult::text("ok"))
+                } else {
+                    Err(tools::ToolError("unknown".to_string()))
+                }
+            }
+            fn after_tool_call_ext(
+                &self,
+                name: &str,
+                _args: &Value,
+                result_text: &str,
+                _is_error: bool,
+            ) -> std::result::Result<AfterToolCallOutcome, tools::ToolError> {
+                // 只对本测试的探针工具耗时；并发跑的其它用例的工具原样返回
+                if name != "slow_probe" {
+                    return Ok(AfterToolCallOutcome {
+                        text: result_text.to_string(),
+                        content: None,
+                        details: None,
+                        is_error: None,
+                        usage: None,
+                        terminate: None,
+                    });
+                }
+                std::thread::sleep(std::time::Duration::from_millis(400));
+                Ok(AfterToolCallOutcome {
+                    text: format!("{result_text} (hooked)"),
+                    content: None,
+                    details: None,
+                    is_error: None,
+                    usage: None,
+                    terminate: None,
+                })
+            }
+        }
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            crate::core::extensions::register_extension(SlowHook);
+            let cwd = std::env::temp_dir().to_string_lossy().to_string();
+            let (base, handle) = mock_server_multi(vec![
+                tool_call_frame("slow_probe", "{}", "call_1"),
+                text_frame("done", "cmpl_d"),
+            ])
+            .await;
+            let mut agent = test_agent(&base, &cwd);
+            let collected: std::sync::Arc<std::sync::Mutex<Vec<J>>> =
+                std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let sink = collected.clone();
+            agent.attach_json_sink(Box::new(move |e: J| sink.lock().unwrap().push(e)));
+
+            let _ = agent.prompt("hi").await.unwrap();
+            handle.await.unwrap();
+            let events = collected.lock().unwrap().clone();
+
+            let tr = events_of(&events, "turn_end")[0]["toolResults"]
+                .as_array()
+                .unwrap()
+                .clone();
+            assert_eq!(tr.len(), 1);
+            // 钩子确实跑过
+            assert_eq!(tr[0]["content"][0]["text"], "ok (hooked)");
+            let dur = tr[0]["durationMs"].as_u64().unwrap();
+            assert!(
+                dur < 300,
+                "Took 不得把 after_tool_call 钩子的 400ms 算进去，实际 {dur}ms"
+            );
+
+            assert!(crate::core::extensions::unregister_extension(
+                "slow-hook-test"
             ));
         });
     }

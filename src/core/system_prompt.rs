@@ -25,6 +25,12 @@ pub struct SystemPromptOptions {
     /// `codemode.mode = only` 摘掉全部直接声明后），此时该段渲染为 `(none)`。
     /// 两种情况的区别就是「未指定」与「显式为空」——合并成一个空 `Vec` 会让前者被后者静默覆盖。
     pub selected_tools: Option<Vec<String>>,
+    /// `selected_tools` 里**本次请求不声明**的工具（`prepare_loadout` 摘掉声明的那些）。
+    ///
+    /// 这些工具仍可经其它工具（如 `codemode`）触达，所以工具清单与行为准则里要略去它们，
+    /// 但「技能靠哪个工具加载」的提示仍需知道它们存在（降级为不点名具体工具）。
+    /// 默认为空 = `selected_tools` 全部声明。
+    pub hidden_tools: Vec<String>,
     /// 工具名 → 一句话描述，只有在此表中的工具才会列进 "Available tools"
     pub tool_snippets: HashMap<String, String>,
     /// 用户/项目追加的行为准则
@@ -62,8 +68,11 @@ pub fn build_system_prompt(options: &SystemPromptOptions) -> String {
 }
 
 /// 把可见技能渲染成 `<available_skills>` XML 段（名称 / 描述 / 路径）；无可见技能时返回空串。
+///
+/// `reader` 决定提示里怎么让模型加载技能文件：点名 `read` / 点名 `bash` / 不点名具体工具
+/// （read 与 bash 都被隐藏、只能经其它工具触达时）。
 // disable-model-invocation 的技能不进入系统提示（仅可通过 /skill:name 显式调用）
-pub fn format_skills_for_prompt(skills: &[Skill]) -> String {
+pub fn format_skills_for_prompt(skills: &[Skill], reader: SkillFileReader) -> String {
     let visible: Vec<_> = skills
         .iter()
         .filter(|s| !s.disable_model_invocation)
@@ -71,9 +80,18 @@ pub fn format_skills_for_prompt(skills: &[Skill]) -> String {
     if visible.is_empty() {
         return String::new();
     }
+    let loader_hint = match reader {
+        SkillFileReader::Read => {
+            "Use the read tool to load a skill's file when the task matches its description."
+        }
+        SkillFileReader::Bash => {
+            "Use bash to load a skill's file when the task matches its description."
+        }
+        SkillFileReader::Indirect => "Load a skill's file when the task matches its description.",
+    };
     let mut lines = vec![
         "\n\nThe following skills provide specialized instructions for specific tasks.".to_string(),
-        "Use the read tool to load a skill's file when the task matches its description.".to_string(),
+        loader_hint.to_string(),
         "When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.".to_string(),
         String::new(),
         "<available_skills>".to_string(),
@@ -125,6 +143,43 @@ fn prompt_tool_names(options: &SystemPromptOptions) -> Vec<String> {
     }
 }
 
+/// 本次请求真正**声明**给模型的工具：`prompt_tool_names` 去掉 [`SystemPromptOptions::hidden_tools`]。
+fn declared_tool_names(options: &SystemPromptOptions) -> Vec<String> {
+    prompt_tool_names(options)
+        .into_iter()
+        .filter(|name| !options.hidden_tools.iter().any(|h| h == name))
+        .collect()
+}
+
+/// 技能段提示「用哪个工具加载技能文件」。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkillFileReader {
+    /// `read` 已声明：点名 read。
+    Read,
+    /// `read` 未声明但 `bash` 已声明：点名 bash。
+    Bash,
+    /// read/bash 都未声明、但至少一个仍被选中（被隐藏，只能经其它工具触达）：不点名任何工具。
+    Indirect,
+}
+
+/// 选定技能段的加载工具：优先已声明的 `read`、其次已声明的 `bash`，
+/// 都未声明但至少一个仍在选中集里则降级为 [`SkillFileReader::Indirect`]；
+/// 两者都不在选中集里则返回 `None`（不渲染技能段）。
+fn skill_file_reader(options: &SystemPromptOptions) -> Option<SkillFileReader> {
+    let declared = declared_tool_names(options);
+    if declared.iter().any(|t| t == "read") {
+        return Some(SkillFileReader::Read);
+    }
+    if declared.iter().any(|t| t == "bash") {
+        return Some(SkillFileReader::Bash);
+    }
+    let selected = prompt_tool_names(options);
+    if selected.iter().any(|t| t == "read" || t == "bash") {
+        return Some(SkillFileReader::Indirect);
+    }
+    None
+}
+
 /// 以用户自定义提示词为基底，追加系统提示、项目上下文文件、技能段与当前工作目录。
 fn build_custom_system_prompt(
     options: &SystemPromptOptions,
@@ -132,7 +187,6 @@ fn build_custom_system_prompt(
     append_section: String,
     custom_prompt: String,
 ) -> String {
-    let has_read = prompt_tool_names(options).iter().any(|t| t == "read");
     let mut prompt = custom_prompt;
     prompt.push_str(&append_section);
     if !options.context_files.is_empty() {
@@ -146,9 +200,13 @@ fn build_custom_system_prompt(
         }
         prompt.push_str("</project_context>\n");
     }
-    if has_read && !options.skills.is_empty() {
-        prompt.push_str(&format_skills_for_prompt(&options.skills));
+
+    if let Some(reader) = skill_file_reader(options)
+        && !options.skills.is_empty()
+    {
+        prompt.push_str(&format_skills_for_prompt(&options.skills, reader));
     }
+
     prompt.push_str(&format!("\nCurrent working directory: {}\n", prompt_cwd));
     prompt.push_str(&mcp_servers_section());
     prompt
@@ -162,8 +220,10 @@ fn build_default_system_prompt(
     prompt_cwd: String,
     append_section: String,
 ) -> String {
-    // 工具清单：`None` 回落标准默认集；`Some` 原样（空列表 = 显式无工具，渲染 `(none)`）
-    let tools = prompt_tool_names(options);
+    // 工具清单：`None` 回落标准默认集；`Some` 原样（空列表 = 显式无工具，渲染 `(none)`）。
+    // 只列**本次请求真正声明**的工具：被 `prepare_loadout` 摘掉声明的（如 `codemode.mode = only`
+    // 下的直接工具）不能还挂在提示里让模型直接调。
+    let tools = declared_tool_names(options);
 
     let visible_tools: Vec<&String> = tools
         .iter()
@@ -253,9 +313,10 @@ Guidelines:
         prompt.push_str("</project_context>\n");
     }
 
-    let has_read = tools.iter().any(|t| t == "read");
-    if has_read && !options.skills.is_empty() {
-        prompt.push_str(&format_skills_for_prompt(&options.skills));
+    if let Some(reader) = skill_file_reader(options)
+        && !options.skills.is_empty()
+    {
+        prompt.push_str(&format_skills_for_prompt(&options.skills, reader));
     }
 
     prompt.push_str(&format!("\nCurrent working directory: {}", prompt_cwd));
@@ -328,6 +389,7 @@ mod tests {
         SystemPromptOptions {
             cwd: "/tmp/project".to_string(),
             selected_tools: None,
+            hidden_tools: Vec::new(),
             tool_snippets: Default::default(),
             prompt_guidelines: Vec::new(),
             append_system_prompt: None,
@@ -391,5 +453,72 @@ mod tests {
         crate::core::extensions::set_extension_enabled("mcp", false);
         let prompt = build_system_prompt(&options());
         assert!(!prompt.contains("<mcp_servers>"), "{prompt}");
+    }
+
+    /// 技能段用的测试技能。
+    fn test_skill() -> Skill {
+        Skill {
+            name: "demo".into(),
+            description: "demo skill".into(),
+            path: PathBuf::from("/s/SKILL.md"),
+            base_dir: PathBuf::from("/s"),
+            disable_model_invocation: false,
+            source: "test".into(),
+        }
+    }
+
+    /// 技能段提示点名 `read`（read 已声明）。
+    #[test]
+    fn skills_hint_names_read_when_declared() {
+        let mut opts = options();
+        opts.selected_tools = Some(vec!["read".into(), "bash".into()]);
+        opts.skills = vec![test_skill()];
+        let prompt = build_system_prompt(&opts);
+        assert!(
+            prompt.contains("Use the read tool to load a skill's file"),
+            "{prompt}"
+        );
+    }
+
+    /// read 被隐藏、bash 仍声明：技能段点名 `bash`。
+    #[test]
+    fn skills_hint_falls_back_to_bash() {
+        let mut opts = options();
+        opts.selected_tools = Some(vec!["read".into(), "bash".into()]);
+        opts.hidden_tools = vec!["read".into()];
+        opts.skills = vec![test_skill()];
+        let prompt = build_system_prompt(&opts);
+        assert!(
+            prompt.contains("Use bash to load a skill's file"),
+            "{prompt}"
+        );
+        // 隐藏的工具不进 Available tools 段
+        assert!(!prompt.contains("- read:"), "{prompt}");
+    }
+
+    /// read/bash 都被隐藏（仍被选中、只能经其它工具触达）：技能段保留但不点名任何工具。
+    #[test]
+    fn skills_hint_names_no_tool_when_reader_is_indirect() {
+        let mut opts = options();
+        opts.selected_tools = Some(vec!["read".into(), "bash".into()]);
+        opts.hidden_tools = vec!["read".into(), "bash".into()];
+        opts.skills = vec![test_skill()];
+        let prompt = build_system_prompt(&opts);
+        assert!(
+            prompt.contains("Load a skill's file when the task matches its description."),
+            "{prompt}"
+        );
+        assert!(!prompt.contains("Use the read tool"), "{prompt}");
+        assert!(!prompt.contains("Use bash to load"), "{prompt}");
+    }
+
+    /// read/bash 都不在选中集里：整段技能提示不渲染。
+    #[test]
+    fn skills_section_is_absent_without_a_reader() {
+        let mut opts = options();
+        opts.selected_tools = Some(vec!["edit".into(), "write".into()]);
+        opts.skills = vec![test_skill()];
+        let prompt = build_system_prompt(&opts);
+        assert!(!prompt.contains("<available_skills>"), "{prompt}");
     }
 }

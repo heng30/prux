@@ -197,7 +197,13 @@ pub async fn run_interactive(
     // 必须早于 crossterm 的事件流（否则回复会被当成按键吃掉），所以在这里做。
     terminal_image::prime_image_picker(settings_manager::read_settings_show_images());
 
-    let mut terminal = setup_terminal()?;
+    // 终端已经没了（关窗后在已关闭终端里恢复、tty 被撤销）：安静退出，不报错、不提示 /bug
+    let mut terminal = match setup_terminal() {
+        Ok(t) => t,
+        Err(e) if is_dead_terminal_error(&e) => return Ok(()),
+        Err(e) => return Err(e),
+    };
+
     install_shutdown_signal_handlers();
 
     // UI 任务队列：任何后台线程经 run_in_event_loop 投闭包 → 主循环这里执行。
@@ -234,7 +240,13 @@ pub async fn run_interactive(
 
     loop {
         update_terminal_title(&shared);
-        render_tick(&shared, &mut terminal)?; // 渲染（状态驱动：dirty 或忙碌时重绘）
+
+        // 终端消失时安静退出（渲染写不进去），而非把 EIO 当崩溃报给用户
+        match render_tick(&shared, &mut terminal) {
+            Ok(()) => {}
+            Err(e) if is_dead_terminal_error(&e) => break,
+            Err(e) => return Err(e),
+        }
 
         // 恢复启动、`/resume` 切换会话：首帧 Fast 渲染（无语法高亮）完成后，
         // 启动后台补全线程，用完整高亮重渲染全部历史并替换消息级缓存；
@@ -257,11 +269,18 @@ pub async fn run_interactive(
             // resize 时解析为 Event 并唤醒本分支；setup_terminal 开启的 raw mode、
             // bracketed paste、mouse capture、kitty 键盘协议保证字节可解析。
             ev = event_stream.next() => {
-                let Some(Ok(ev)) = ev else { continue };
-                if process_key_action(&shared, handle_event(&shared, ev)) {
-                    break;
+                match ev {
+                    Some(Ok(ev)) => {
+                        if process_key_action(&shared, handle_event(&shared, ev)) {
+                            break;
+                        }
+                    }
+                    // 终端消失后读流不会再给出事件；继续轮询会变成忙等，安静退出
+                    Some(Err(e)) if is_dead_terminal_io(&e) => break,
+                    _ => continue,
                 }
             }
+
             _ = tokio::time::sleep(Duration::from_millis(80)) => {
                 // SIGTERM / SIGHUP：终端或 tmux pane 被关闭、遭外部 kill。
                 // 走正常退出流程（补 interrupted 记录 + 恢复终端），不留半截会话。
@@ -318,6 +337,8 @@ pub async fn run_interactive(
 
     // 恢复终端状态（退出流程）
     clear_event_loop_tx();
+    // 退出/会话关闭：中止在飞的 MCP OAuth 登录，别让它在进程收尾时还挂着
+    core::extensions::cancel_background_work();
     // 退出前清理：当前会话为空（无用户消息）则删除
     shared.borrow_mut().delete_current_session_if_empty();
 
@@ -338,6 +359,8 @@ fn process_key_action(shared: &Rc<RefCell<App>>, action: KeyAction) -> bool {
             // 协作式中止当前回合：worker 经 oneshot 触达回合内 agent；
             // UI 本地清流式缓冲并复位 busy（agent_end 事件会补齐最终消息）。
             shared.borrow_mut().worker.abort();
+            // 可取消的后台工作（如 MCP OAuth 登录）同步中止
+            core::extensions::cancel_background_work();
             handle_cancel_prompt(shared);
             false
         }
@@ -414,10 +437,16 @@ fn update_terminal_title(shared: &Rc<RefCell<App>>) {
 /// 键盘增强属可选能力，平台或终端不支持时降级但不报错。成功返回可供 ratatui 绘制的终端句柄。
 fn setup_terminal() -> Result<Terminal<CrosstermBackend<io::Stdout>>> {
     let mut stdout = io::stdout();
-    terminal::enable_raw_mode()
-        .map_err(|e| Error::msg(format!("failed to enable raw mode: {}", e)))?;
-    crossterm::execute!(stdout, EnterAlternateScreen)
-        .map_err(|e| Error::msg(format!("failed to initialize terminal: {}", e)))?;
+    terminal::enable_raw_mode().map_err(|e| Error::Io {
+        context: "failed to enable raw mode".to_string(),
+        source: e,
+    })?;
+
+    crossterm::execute!(stdout, EnterAlternateScreen).map_err(|e| Error::Io {
+        context: "failed to initialize terminal".to_string(),
+        source: e,
+    })?;
+
     // bracketed paste 属可选能力：Windows 的 legacy console API 未实现该特性
     // （crossterm 直接返回 Unsupported），失败只意味着粘贴退化为普通输入，不应阻塞启动。
     _ = crossterm::execute!(stdout, crossterm::event::EnableBracketedPaste);
@@ -439,10 +468,17 @@ fn setup_terminal() -> Result<Terminal<CrosstermBackend<io::Stdout>>> {
             "\x1b[>4;2m\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1004h\x1b[?1006h"
         )
         .and_then(|_| stdout.flush())
-        .map_err(|e| Error::msg(format!("failed to setup tmux terminal: {}", e)))?;
+        .map_err(|e| Error::Io {
+            context: "failed to setup tmux terminal".to_string(),
+            source: e,
+        })?;
     } else {
-        crossterm::execute!(stdout, crossterm::event::EnableMouseCapture)
-            .map_err(|e| Error::msg(format!("failed to initialize terminal: {}", e)))?;
+        crossterm::execute!(stdout, crossterm::event::EnableMouseCapture).map_err(|e| {
+            Error::Io {
+                context: "failed to initialize terminal".to_string(),
+                source: e,
+            }
+        })?;
 
         // kitty 键盘增强协议（DISAMBIGUATE | REPORT_ALL_KEYS_AS_ESCAPE_CODES）让终端把
         // Shift 系修饰键以 CSI-u 编码上报。Windows 的 legacy console API 未实现该协议
@@ -458,8 +494,48 @@ fn setup_terminal() -> Result<Terminal<CrosstermBackend<io::Stdout>>> {
     }
 
     let backend = CrosstermBackend::new(stdout);
-    Terminal::new(backend)
-        .map_err(|e| Error::msg(format!("failed to initialize terminal backend: {}", e)))
+    Terminal::new(backend).map_err(|e| Error::Io {
+        context: "failed to initialize terminal backend".to_string(),
+        source: e,
+    })
+}
+
+/// 终端已经消失的错误码（`EIO` / `EPIPE` / `ENOTCONN` / `ENOTTY`）：
+/// `EIO` 是孤儿后台进程组里的 tty 读/ioctl，或挂断后写入；`EPIPE`/`ENOTCONN` 是对端已关闭；
+/// `ENOTTY` 是 tty 被撤销（macOS）。命中时安静退出，不把 EIO 当崩溃报给用户。
+fn is_dead_terminal_error(err: &Error) -> bool {
+    let mut cur: Option<&(dyn std::error::Error + 'static)> = Some(err);
+    while let Some(e) = cur {
+        if let Some(io_err) = e.downcast_ref::<io::Error>()
+            && is_dead_terminal_io(io_err)
+        {
+            return true;
+        }
+        cur = e.source();
+    }
+    false
+}
+
+/// [`is_dead_terminal_error`] 对单个 `io::Error` 的判定。
+fn is_dead_terminal_io(io_err: &io::Error) -> bool {
+    if matches!(
+        io_err.kind(),
+        io::ErrorKind::BrokenPipe | io::ErrorKind::NotConnected | io::ErrorKind::UnexpectedEof
+    ) {
+        return true;
+    }
+
+    #[cfg(unix)]
+    if let Some(code) = io_err.raw_os_error()
+        && matches!(
+            code,
+            nix::libc::EIO | nix::libc::EPIPE | nix::libc::ENOTCONN | nix::libc::ENOTTY
+        )
+    {
+        return true;
+    }
+
+    false
 }
 
 /// 初始化 TUI 共享状态：同步 agent 会话快照 + 主题/设置/信任询问等启动逻辑。
@@ -817,16 +893,20 @@ fn render_tick(
     st.theme.publish_view();
 
     if st.full_redraw {
-        terminal
-            .clear()
-            .map_err(|e| Error::msg(format!("failed to clear terminal: {}", e)))?;
+        terminal.clear().map_err(|e| Error::Io {
+            context: "failed to clear terminal".to_string(),
+            source: e,
+        })?;
         st.full_redraw = false;
         st.dirty = true;
     }
     if st.should_repaint() {
         terminal
             .draw(|f| render_frame(f, &mut st))
-            .map_err(|e| Error::msg(format!("failed to render: {}", e)))?;
+            .map_err(|e| Error::Io {
+                context: "failed to render".to_string(),
+                source: e,
+            })?;
         st.dirty = false;
     }
     Ok(())
@@ -1249,6 +1329,48 @@ mod tests {
     /// 替代全局锁 + 进程级 env 劫持（并行互不干扰、无死锁）。
     fn test_agent_dir() -> crate::test_support::AgentDirGuard {
         crate::test_support::AgentDirGuard::temp()
+    }
+
+    /// 终端消失的错误码识别：EIO/EPIPE/ENOTCONN/ENOTTY 命中，普通 IO 错误不命中（pi 1.1.0）。
+    #[test]
+    fn dead_terminal_errors_are_recognized() {
+        // 纯消息错误（错误链里没有 io::Error）不命中
+        assert!(!is_dead_terminal_error(&Error::msg("EIO")));
+        // 把底层 io::Error 格式化成 Message 会丢掉错误链：所以渲染/启动路径必须用
+        // `Error::Io { context, source }` 而不是 `Error::msg(format!("…: {e}"))`。
+        let wrapped = Error::Io {
+            context: "failed to render".to_string(),
+            source: std::io::Error::new(std::io::ErrorKind::BrokenPipe, "broken"),
+        };
+        assert!(is_dead_terminal_error(&wrapped));
+        let flattened = Error::msg(format!("failed to render: {wrapped}"));
+        assert!(!is_dead_terminal_error(&flattened));
+
+        // 平台相关的错误码（nix 只在 unix 可用）
+        #[cfg(unix)]
+        {
+            for code in [
+                nix::libc::EIO,
+                nix::libc::EPIPE,
+                nix::libc::ENOTCONN,
+                nix::libc::ENOTTY,
+            ] {
+                let err = Error::Io {
+                    context: "failed to render".to_string(),
+                    source: std::io::Error::from_raw_os_error(code),
+                };
+                assert!(
+                    is_dead_terminal_error(&err),
+                    "os error {code} 应判为终端已消失"
+                );
+            }
+
+            let eacces = Error::Io {
+                context: "failed to render".to_string(),
+                source: std::io::Error::from_raw_os_error(nix::libc::EACCES),
+            };
+            assert!(!is_dead_terminal_error(&eacces));
+        }
     }
 
     #[test]

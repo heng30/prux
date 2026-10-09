@@ -56,12 +56,14 @@ fn authorization_url(pkce: &Pkce, redirect: &str) -> String {
     format!("{}?{}", AUTHORIZE_URL, qs.join("&"))
 }
 
-/// 启动 anthropic 浏览器登录会话（同步）：生成 PKCE + 绑定固定端口回调服务器。
-/// 端口被占用时不再直接失败，而是退化为纯粘贴 redirect URL ——
-/// redirect_uri 是注册在 Anthropic 侧的固定端口，换端口也收不到回调。
+/// 启动 anthropic 浏览器登录会话（同步）：生成 PKCE + 绑定回调端口。
+/// 53692 优先（便于容器/SSH 端口转发），被占用时让 OS 另取一个空闲 loopback 端口——
+/// Anthropic 接受任意 loopback 端口；两个端口都绑不上才退化为纯粘贴 redirect URL。
 pub fn start_authorize_flow() -> Result<OAuthLogin> {
     let pkce = generate_pkce()?;
-    let server = CallbackServer::bind(CALLBACK_PORT).ok();
+    let server = CallbackServer::bind(CALLBACK_PORT)
+        .or_else(|_| CallbackServer::bind(0))
+        .ok();
     let port = server.as_ref().map(|s| s.port()).unwrap_or(CALLBACK_PORT);
     let redirect = format!("http://127.0.0.1:{}{}", port, CALLBACK_PATH);
 
@@ -251,9 +253,10 @@ mod tests {
         assert_eq!(copy["grant_type"].as_str(), Some("authorization_code"));
     }
 
-    /// pi：回调端口被占用时不再直接失败，而是退化为纯粘贴 redirect URL。
+    /// pi #10571：53692 被占用（Hyper-V/WSL 端口排除等）时回落到 OS 分配的空闲 loopback 端口，
+    /// 用**真实端口**拼 redirect_uri，而不是放弃浏览器回调。
     #[test]
-    fn occupied_callback_port_falls_back_to_manual_paste() {
+    fn occupied_callback_port_falls_back_to_a_free_loopback_port() {
         let _g = crate::test_support::AUTH_TEST_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
@@ -264,13 +267,17 @@ mod tests {
             LoginKind::AuthorizeCode {
                 server, auth_url, ..
             } => {
-                assert!(server.is_none(), "端口被占用时不应有回调服务器");
-                // 授权 URL 仍用注册在 Anthropic 侧的固定端口
-                assert!(auth_url.contains(&http::urlencode(&format!(
-                    "http://127.0.0.1:{}{}",
-                    CALLBACK_PORT,
-                    super::super::CALLBACK_PATH
-                ))));
+                let server = server.as_ref().expect("端口被占用时应回落到空闲端口");
+                let port = server.port();
+                assert_ne!(port, CALLBACK_PORT, "回落后不能还是被占用的端口");
+                assert!(
+                    auth_url.contains(&http::urlencode(&format!(
+                        "http://127.0.0.1:{}{}",
+                        port,
+                        super::super::CALLBACK_PATH
+                    ))),
+                    "授权 URL 必须用真实绑定的端口：{auth_url}"
+                );
             }
             _ => panic!("expected authorize-code flow"),
         }
