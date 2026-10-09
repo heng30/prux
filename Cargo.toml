@@ -2,6 +2,18 @@
 name = "prux"
 version = "1.0.2"
 edition = "2024"
+license = "MIT"
+readme = "README.md"
+homepage = "https://github.com/heng30/prux"
+repository = "https://github.com/heng30/prux"
+keywords = ["cli", "tui", "llm", "agent", "terminal"]
+exclude = ["screenshot/", "tests/", "examples/", "migrations/"]
+description = "A minimal terminal coding agent: TUI, built-in coding tools, and an extension system"
+categories = [
+  "command-line-interface",
+  "development-tools",
+  "artificial-intelligence",
+]
 
 [profile.dev]
 lto = false

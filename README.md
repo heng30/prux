@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="icon.png" alt="prux coding agent" width=30%>
+  <img src="https://raw.githubusercontent.com/heng30/prux/main/icon.png" alt="prux coding agent" width=30%>
 </p>
 
 <p align="center">
@@ -25,9 +25,9 @@
 `prux` is a minimal terminal coding agent. The core stays small and focused, and its capabilities are extended through extensions, skills, prompt templates, themes, and customizable keybindings. It is a Rust rewrite of [@earendil-works/pi-coding-agent](https://github.com/earendil-works/pi), staying aligned with upstream in behavior and wording for the most part.
 
 <p align="center">
-  <img src="screenshot/image.gif" alt="image demo" width="45%">
+  <img src="https://raw.githubusercontent.com/heng30/prux/main/screenshot/image.gif" alt="image demo" width="45%">
   <img width="2%">
-  <img src="screenshot/code.gif" alt="code demo" width="45%">
+  <img src="https://raw.githubusercontent.com/heng30/prux/main/screenshot/code.gif" alt="code demo" width="45%">
 </p>
 
 ## Features
@@ -41,6 +41,14 @@
 - **Built-in extensions**: MCP, subagents, codemode (QuickJS sandbox orchestration), skills, scheduled tasks, plan mode, and more.
 
 ## Installation and build
+
+Install the released binary from crates.io (requires a Rust toolchain):
+
+```bash
+cargo install prux
+```
+
+Or build from source:
 
 ```bash
 cargo build --release

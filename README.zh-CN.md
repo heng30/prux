@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="icon.png" alt="prux coding agent" width=30%>
+  <img src="https://raw.githubusercontent.com/heng30/prux/main/icon.png" alt="prux coding agent" width=30%>
 </p>
 
 <p align="center">
@@ -25,9 +25,9 @@
 `prux` 是一个极简的终端编码助手。核心保持小而专注，通过扩展、技能、提示模板、主题和可定制键位来扩展能力。它是 [@earendil-works/pi-coding-agent](https://github.com/earendil-works/pi) 的 Rust 重写，大部分行为和文案上与上游保持一致。
 
 <p align="center">
-  <img src="screenshot/image.gif" alt="image demo" width="45%">
+  <img src="https://raw.githubusercontent.com/heng30/prux/main/screenshot/image.gif" alt="image demo" width="45%">
   <img width="2%">
-  <img src="screenshot/code.gif" alt="code demo" width="45%">
+  <img src="https://raw.githubusercontent.com/heng30/prux/main/screenshot/code.gif" alt="code demo" width="45%">
 </p>
 
 ## 特性
@@ -41,6 +41,14 @@
 - **内置扩展**：MCP、子代理（subagent）、codemode（QuickJS 沙箱编排）、技能、定时任务、plan mode 等。
 
 ## 安装与构建
+
+从 crates.io 安装发布版二进制（需要 Rust 工具链）：
+
+```bash
+cargo install prux
+```
+
+或从源码构建：
 
 ```bash
 cargo build --release

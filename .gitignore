@@ -4,5 +4,6 @@
 /.pi
 /.prux
 
+todo.md
 .mcp.json*
 .vim-bookmarks
