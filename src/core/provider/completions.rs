@@ -5,7 +5,9 @@ use super::{
     Usage, azure,
     convert::{
         BRANCH_SUMMARY_PREFIX, BRANCH_SUMMARY_SUFFIX, COMPACTION_SUMMARY_PREFIX,
-        COMPACTION_SUMMARY_SUFFIX, sanitize_surrogates, truncate_for_error,
+        COMPACTION_SUMMARY_SUFFIX, collapse_mid_convo_system_messages, convert_system_message,
+        flush_pending_system_messages, instruction_role, sanitize_surrogates,
+        supports_mid_convo_system_messages, truncate_for_error,
     },
     provider_extra_headers, track_stream_bytes,
     usage::{compute_cost, parse_streaming_json},
@@ -403,20 +405,25 @@ fn close_tool_batch(
 /// 除逐条转换外还负责修补协议约束：跳过 error/aborted 的 assistant、为孤儿 tool_calls 补
 /// synthetic tool result、丢弃对不上 tool_calls 的孤儿 tool 结果，并把工具结果里的图片
 /// 延后到批次末尾补发（见 [`finish_tool_batch`]）。
+///
+/// `role == "system"` 的中途消息按模型 `compat.supportsMidConvoSystemMessages` 处理：为真时作为
+/// 原生对话中途指令下发，且**缓发**到「下一条非 toolResult 消息之前」（或序列末尾），
+/// 以免打断 `assistant(tool_calls)` 与紧随其后的 `tool` 结果；为假时跳过
+/// （由 [`collapse_mid_convo_system_messages`] 并入首部提示词）。
 pub fn convert_messages(
     messages: &[AgentMessage],
     system_prompt: &str,
     model: &ModelConfig,
 ) -> Vec<Value> {
     let mut params: Vec<Value> = Vec::new();
+    let supports_mid_convo = supports_mid_convo_system_messages(model);
+    let mut pending_system: Vec<Value> = Vec::new();
 
     if !system_prompt.is_empty() {
-        let role = if model.reasoning && model.supports_developer_role {
-            "developer"
-        } else {
-            "system"
-        };
-        params.push(json!({ "role": role, "content": sanitize_surrogates(system_prompt) }));
+        params.push(json!({
+            "role": instruction_role(model),
+            "content": sanitize_surrogates(system_prompt)
+        }));
     }
 
     // - 跳过 stopReason=error/aborted 的 assistant 消息
@@ -441,6 +448,7 @@ pub fn convert_messages(
                     batch_emitted_results,
                 );
                 batch_emitted_results = false;
+                flush_pending_system_messages(&mut params, &mut pending_system);
                 if let Some(user_msg) = convert_user_message(msg, model) {
                     params.push(user_msg);
                 }
@@ -454,6 +462,7 @@ pub fn convert_messages(
                     batch_emitted_results,
                 );
                 batch_emitted_results = false;
+                flush_pending_system_messages(&mut params, &mut pending_system);
                 if let Some(assistant_msg) =
                     convert_assistant_message(msg, model, &mut pending_tool_calls)
                 {
@@ -469,6 +478,7 @@ pub fn convert_messages(
                     batch_emitted_results,
                 );
                 batch_emitted_results = false;
+                flush_pending_system_messages(&mut params, &mut pending_system);
                 params.push(convert_summary_message(msg));
             }
             // custom 角色转 user（扩展注入消息进上下文）
@@ -481,8 +491,14 @@ pub fn convert_messages(
                     batch_emitted_results,
                 );
                 batch_emitted_results = false;
+                flush_pending_system_messages(&mut params, &mut pending_system);
                 if let Some(user_msg) = convert_user_message(msg, model) {
                     params.push(user_msg);
+                }
+            }
+            "system" => {
+                if supports_mid_convo && let Some(system_msg) = convert_system_message(msg, model) {
+                    pending_system.push(system_msg);
                 }
             }
             "toolResult" => {
@@ -522,6 +538,8 @@ pub fn convert_messages(
         model,
         batch_emitted_results,
     );
+
+    flush_pending_system_messages(&mut params, &mut pending_system);
 
     params
 }
@@ -645,7 +663,10 @@ pub(crate) async fn stream(
     let reasoning_effort = normalize_reasoning_effort(model, reasoning_effort);
     let client = http::build_client()?;
 
-    let mut openai_messages = convert_messages(messages, system_prompt, model);
+    // 不支持原生对话中途系统消息的模型：这些消息并入首部系统提示词
+    let effective_system_prompt =
+        collapse_mid_convo_system_messages(messages, system_prompt, model);
+    let mut openai_messages = convert_messages(messages, &effective_system_prompt, model);
     openai_messages.retain(|m| !m.is_null()); // 忽略空消息
 
     let mut request = build_chat_request(model, &openai_messages, tools, temperature, max_tokens);
@@ -2518,5 +2539,106 @@ mod tests {
         assert_eq!(call["custom"]["input"], "text(1)");
 
         crate::core::extensions::unregister_extension("zz-codemode-replay-probe");
+    }
+
+    /// 目录里声明 `compat.supportsMidConvoSystemMessages` 的 openai-completions 模型。
+    fn mid_convo_model() -> ModelConfig {
+        let mut m = model(false, None);
+        m.provider = "moonshotai".into();
+        m.model_id = "kimi-k2.6".into();
+        m.api = "openai-completions".into();
+        assert!(supports_mid_convo_system_messages(&m));
+        m
+    }
+
+    /// tool_calls 的 assistant 消息，用于驱动「缓发」场景。
+    fn tool_call_assistant(id: &str) -> AgentMessage {
+        let mut a = AgentMessage::user_text("");
+        a.role = "assistant".into();
+        a.content = vec![ContentBlock::ToolCall {
+            id: id.into(),
+            name: "read".into(),
+            arguments: json!({}),
+            thought_signature: None,
+            namespace: None,
+        }];
+        a
+    }
+
+    #[test]
+    fn native_mid_convo_system_messages_are_held_until_the_next_non_tool_message() {
+        // 系统消息缓发到 tool 结果之后，不打断 assistant(tool_calls) 与 tool 的配对
+        let m = mid_convo_model();
+        let mut note = AgentMessage::user_text("mid-run note");
+        note.role = "system".into();
+        let mut tr = AgentMessage::user_text("contents");
+        tr.role = "toolResult".into();
+        tr.tool_call_id = Some("call_1".into());
+        let mut a2 = AgentMessage::user_text("");
+        a2.role = "assistant".into();
+        a2.content = vec![ContentBlock::Text {
+            text: "done".into(),
+            text_signature: None,
+        }];
+
+        let out = convert_messages(&[tool_call_assistant("call_1"), note, tr, a2], "", &m);
+        let roles: Vec<&str> = out.iter().map(|v| v["role"].as_str().unwrap()).collect();
+        assert_eq!(roles, vec!["assistant", "tool", "system", "assistant"]);
+        assert_eq!(out[2]["content"], "mid-run note");
+    }
+
+    #[test]
+    fn system_before_a_missing_tool_result_lands_after_the_synthetic_result() {
+        let m = mid_convo_model();
+        let mut note = AgentMessage::user_text("late note");
+        note.role = "system".into();
+
+        let out = convert_messages(&[tool_call_assistant("call_1"), note], "", &m);
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0]["role"], "assistant");
+        assert_eq!(out[1]["role"], "tool");
+        assert_eq!(out[1]["content"], "No result provided");
+        assert_eq!(out[2]["role"], "system");
+        assert_eq!(out[2]["content"], "late note");
+    }
+
+    #[test]
+    fn held_system_message_is_flushed_before_the_user_turn() {
+        // 对齐 pi：缓存的系统消息在边界先于 user 消息落位
+        let m = mid_convo_model();
+        let mut note = AgentMessage::user_text("note");
+        note.role = "system".into();
+        let mut u = AgentMessage::user_text("next");
+        u.role = "user".into();
+
+        let out = convert_messages(&[tool_call_assistant("call_1"), note, u], "", &m);
+        let roles: Vec<&str> = out.iter().map(|v| v["role"].as_str().unwrap()).collect();
+        assert_eq!(roles, vec!["assistant", "tool", "system", "user"]);
+    }
+
+    #[test]
+    fn inline_system_messages_are_dropped_without_the_compat_flag() {
+        // provider "test" 无目录条目：系统消息不进 wire（改由提示词承载）
+        let m = model(false, None);
+        let mut note = AgentMessage::user_text("note");
+        note.role = "system".into();
+        let out = convert_messages(&[AgentMessage::user_text("hi"), note], "", &m);
+        assert!(!out.iter().any(|v| v["role"] == "system"), "{out:?}");
+    }
+
+    #[test]
+    fn collapse_folds_mid_convo_system_messages_for_unsupported_models() {
+        let mut note = AgentMessage::user_text("note");
+        note.role = "system".into();
+        let messages = vec![AgentMessage::user_text("hi"), note];
+        assert_eq!(
+            collapse_mid_convo_system_messages(&messages, "base", &model(false, None)),
+            "base\n\nnote"
+        );
+        // 支持原生中途系统消息的模型不合并
+        assert_eq!(
+            collapse_mid_convo_system_messages(&messages, "base", &mid_convo_model()),
+            "base"
+        );
     }
 }

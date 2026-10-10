@@ -339,6 +339,11 @@ pub struct OAuthConfig {
     /// 回调地址，默认 `http://127.0.0.1:3118/callback`。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub redirect_uri: Option<String>,
+    /// 动态客户端注册上报的 OIDC `application_type`（MCP SEP-837），取值 `"native"` 或 `"web"`。
+    /// 缺省时按 [`OAuthConfig::redirect_uri`] 派生：
+    /// 自定义 scheme 或 loopback 主机（RFC 8252）为 `native`，否则为 `web`。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub application_type: Option<String>,
     /// 动态客户端注册时上报的客户端名称。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_name: Option<String>,

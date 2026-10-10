@@ -13,7 +13,9 @@ use super::{
     StreamResult, Usage,
     convert::{
         BRANCH_SUMMARY_PREFIX, BRANCH_SUMMARY_SUFFIX, COMPACTION_SUMMARY_PREFIX,
-        COMPACTION_SUMMARY_SUFFIX, sanitize_surrogates, truncate_for_error,
+        COMPACTION_SUMMARY_SUFFIX, collapse_mid_convo_system_messages,
+        flush_pending_system_messages, sanitize_surrogates, supports_mid_convo_system_messages,
+        truncate_for_error,
     },
     provider_session_headers,
     retry::{DEFAULT_MAX_RETRIES, send_with_retry},
@@ -82,20 +84,6 @@ fn compat_force_adaptive_thinking(model: &ModelConfig) -> bool {
         .iter()
         .find(|m| m.get("id").and_then(|v| v.as_str()) == Some(model.model_id.as_str()))
         .and_then(|m| m.get("compat").and_then(|c| c.get("forceAdaptiveThinking")))
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false)
-}
-
-/// 模型目录 `compat.supportsMidConvoSystemMessages`：模型是否原生接受对话中途（tool_use 与
-/// tool_result 之外的普通位置）的 `role: "system"` 消息。为假时这些消息会被合并进首部系统提示词。
-fn compat_supports_mid_convo_system_messages(model: &ModelConfig) -> bool {
-    model_resolver::provider_models(&model.provider)
-        .iter()
-        .find(|m| m.get("id").and_then(|v| v.as_str()) == Some(model.model_id.as_str()))
-        .and_then(|m| {
-            m.get("compat")
-                .and_then(|c| c.get("supportsMidConvoSystemMessages"))
-        })
         .and_then(|v| v.as_bool())
         .unwrap_or(false)
 }
@@ -492,7 +480,7 @@ pub(crate) fn convert_anthropic_messages(
     let mut pending_tool_calls: Vec<(String, String)> = Vec::new(); // (归一化 id, name)
     let mut existing_tool_result_ids: HashSet<String> = HashSet::new();
     let mut params: Vec<Value> = Vec::new();
-    let supports_mid_convo = compat_supports_mid_convo_system_messages(model);
+    let supports_mid_convo = supports_mid_convo_system_messages(model);
     let mut pending_system: Vec<Value> = Vec::new();
 
     for msg in messages {
@@ -503,6 +491,7 @@ pub(crate) fn convert_anthropic_messages(
                     &mut pending_tool_calls,
                     &mut existing_tool_result_ids,
                 );
+                flush_pending_system_messages(&mut params, &mut pending_system);
                 if let Some(user_msg) = convert_anthropic_user_message(msg, model) {
                     params.push(user_msg);
                 }
@@ -564,11 +553,6 @@ pub(crate) fn convert_anthropic_messages(
     params
 }
 
-/// 把缓发的系统消息追加到 wire 消息末尾并清空缓冲（尾部无后续 assistant 时它们落在序列最后）。
-fn flush_pending_system_messages(params: &mut Vec<Value>, pending: &mut Vec<Value>) {
-    params.append(pending);
-}
-
 /// 把一条内部 `system` 消息转成 anthropic 的原生对话中途系统消息；
 /// 文本为空时返回 `None`（不发空消息）。
 fn convert_anthropic_system_message(msg: &AgentMessage) -> Option<Value> {
@@ -581,39 +565,6 @@ fn convert_anthropic_system_message(msg: &AgentMessage) -> Option<Value> {
         "role": "system",
         "content": [{ "type": "text", "text": sanitize_surrogates(&text) }],
     }))
-}
-
-/// 模型不支持原生对话中途系统消息时，把这些消息的文本按出现顺序并入系统提示词。
-///
-/// 所有系统消息回灌成一条首部系统消息，
-/// 各段以空行分隔（首部提示词单独传递，所以只追加中途的那些）。
-/// 没有中途系统消息时原样返回 `system_prompt`，不产生额外分配。
-pub(crate) fn collapse_mid_convo_system_messages(
-    messages: &[AgentMessage],
-    system_prompt: &str,
-    model: &ModelConfig,
-) -> String {
-    if compat_supports_mid_convo_system_messages(model) {
-        return system_prompt.to_string();
-    }
-
-    let extra: Vec<String> = messages
-        .iter()
-        .filter(|m| m.role == "system")
-        .map(|m| m.text())
-        .filter(|t| !t.trim().is_empty())
-        .collect();
-    if extra.is_empty() {
-        return system_prompt.to_string();
-    }
-
-    let mut parts: Vec<&str> = Vec::with_capacity(extra.len() + 1);
-    if !system_prompt.trim().is_empty() {
-        parts.push(system_prompt);
-    }
-
-    parts.extend(extra.iter().map(String::as_str));
-    parts.join("\n\n")
 }
 
 /// 把 `(name, description, parameters)` 工具定义转为 anthropic tools 数组：
@@ -1966,6 +1917,29 @@ mod tests {
         assert_eq!(out[1]["content"][0]["type"], "tool_result");
         assert_eq!(out[2]["role"], "system");
         assert_eq!(out[2]["content"][0]["text"], "late note");
+    }
+
+    #[test]
+    fn held_system_message_is_flushed_before_the_user_turn() {
+        // 对齐 pi：缓存的系统消息在边界先于 user 消息落位（紧跟在 synthetic tool 结果之后）
+        let m = model("claude-haiku-5-5");
+        let mut a = AgentMessage::user_text("");
+        a.role = "assistant".into();
+        a.content = vec![ContentBlock::ToolCall {
+            id: "toolu_1".into(),
+            name: "read".into(),
+            arguments: json!({}),
+            thought_signature: None,
+            namespace: None,
+        }];
+        let mut note = AgentMessage::user_text("note");
+        note.role = "system".into();
+        let mut u = AgentMessage::user_text("next");
+        u.role = "user".into();
+
+        let out = convert_anthropic_messages(&[a, note, u], "", &m);
+        let roles: Vec<&str> = out.iter().map(|v| v["role"].as_str().unwrap()).collect();
+        assert_eq!(roles, vec!["assistant", "user", "system", "user"]);
     }
 
     #[test]

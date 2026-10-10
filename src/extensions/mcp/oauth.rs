@@ -23,6 +23,7 @@ use crate::{
     utils::{
         file_lock::{FileLock, LockWait},
         http as http_util,
+        net::is_loopback_host,
     },
 };
 use async_trait::async_trait;
@@ -588,6 +589,24 @@ pub async fn begin_login_with_path(
     .await
 }
 
+/// 按 pi 的 SEP-837 规则从回调地址派生 `application_type`：
+/// 自定义 scheme 或 loopback 主机（RFC 8252）为 `native`，否则为 `web`；无法解析时按 `native`。
+fn derive_application_type(redirect_uri: &str) -> &'static str {
+    let Ok(url) = url::Url::parse(redirect_uri) else {
+        return "native";
+    };
+
+    if url.scheme() != "http" && url.scheme() != "https" {
+        return "native";
+    }
+
+    if is_loopback_host(url.host_str().unwrap_or_default()) {
+        "native"
+    } else {
+        "web"
+    }
+}
+
 /// [`begin_login_with_path`] 的带取消版本：`cancel` 触发时立即中断在途请求
 ///（元数据发现 / 动态注册 / 授权会话启动）。
 pub async fn begin_login_with_cancel(
@@ -621,6 +640,14 @@ pub async fn begin_login_with_cancel(
             .client_name
             .as_deref()
             .unwrap_or(&format!("{APP_NAME} MCP Client")),
+    );
+
+    // SEP-837：OIDC 服务器默认认为 `web` 并拒绝 http loopback 回调，故显式上报；配置未指定时按回调地址派生。
+    request = request.with_application_type(
+        oauth
+            .application_type
+            .clone()
+            .unwrap_or_else(|| derive_application_type(&redirect_uri).to_string()),
     );
 
     if let Some(scopes) = &oauth.scope {
@@ -960,6 +987,35 @@ mod tests {
         let mut params = BTreeMap::new();
         params.insert("state".to_string(), "attacker".to_string());
         assert!(add_authorization_params("https://example.com/auth?state=safe", &params).is_err());
+    }
+
+    #[test]
+    fn application_type_is_derived_from_the_redirect_uri() {
+        // loopback 与自定义 scheme → native（RFC 8252）
+        assert_eq!(
+            derive_application_type("http://127.0.0.1:3118/callback"),
+            "native"
+        );
+        assert_eq!(
+            derive_application_type("http://localhost:3118/callback"),
+            "native"
+        );
+        assert_eq!(
+            derive_application_type("http://[::1]:3118/callback"),
+            "native"
+        );
+        assert_eq!(derive_application_type("prux://callback"), "native");
+        // 非 loopback 的 http(s) → web
+        assert_eq!(
+            derive_application_type("https://example.com/callback"),
+            "web"
+        );
+        assert_eq!(
+            derive_application_type("http://192.168.1.5:8080/callback"),
+            "web"
+        );
+        // 无法解析时按 native（rmcp 默认）
+        assert_eq!(derive_application_type("not a url"), "native");
     }
 
     /// 起一个本地假 OAuth 服务器（元数据 + /token），返回 (base url, 关闭用的 token)。

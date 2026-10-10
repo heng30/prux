@@ -19,6 +19,11 @@ This release aligns prux with upstream pi 1.1.0.
   returned instead of only its text.
 - **The codemode sandbox freezes the built-ins** before a script runs, so a script that patches a
   prototype (for example `Array.prototype.toJSON`) can no longer corrupt the host-visible result.
+  A payload that still fails to decode now fails the run as a sandbox error (naming what broke)
+  instead of silently dropping the script's result.
+- **MCP OAuth dynamic registration sends `application_type` (MCP SEP-837)**: it is derived from the
+  redirect URI — a custom scheme or a loopback host is `native`, anything else is `web` — and
+  `oauth.applicationType` overrides it.
 - **codemode tool declarations include each tool's prompt guidelines**, so `ALL_TOOLS` and
   `describeTool()` show the same guidance the system prompt shows.
 - **`models.classify()` accepts `images`** (rejected with an error result when the model does not
@@ -55,11 +60,11 @@ This release aligns prux with upstream pi 1.1.0.
   every request to the authorization server now times out after 15s (was 30s).
 - **Skill hints degrade gracefully** when the `read` tool is hidden: they fall back to `bash`, or
   stop naming a tool, instead of being dropped or pointing at tools the model cannot use.
-- **Mid-conversation system messages reach Anthropic models that accept them.** When a transcript
-  carries a `system` message after the prompt, models whose catalog entry sets
-  `compat.supportsMidConvoSystemMessages` get it natively; it is held back to just before the next
-  assistant message so a `tool_result` still follows its `tool_use`. For other models its text is
-  merged into the leading system prompt instead of being dropped.
+- **Mid-conversation system messages reach the models that accept them** (Anthropic, OpenAI Chat
+  Completions, and OpenAI Responses). When a transcript carries a `system` message after the prompt,
+  models whose catalog entry sets `compat.supportsMidConvoSystemMessages` get it natively; it is held
+  back to just before the next non-tool message so a `tool_result` still follows its `tool_use`.
+  For other models its text is merged into the leading system prompt instead of being dropped.
 
 ### Fixed
 
@@ -87,7 +92,9 @@ This release aligns prux with upstream pi 1.1.0.
   给出路径；多个文本项带 `==> text N/M <==` 编号，`console.*` 的行汇总进一个 `<console_output>` 块。
 - **`read` 返回结构化输出**：codemode 脚本可以直接展示嵌套 `read` 读到的图片，而不只是一段文本。
 - **codemode 沙箱在脚本运行前冻结内建**：脚本再改原型（如 `Array.prototype.toJSON`）也不会污染
-  宿主看到的结果。
+  宿主看到的结果；仍解不开的载荷现在会以沙箱错误失败（并指明坏在哪），而不是静默丢掉脚本结果。
+- **MCP OAuth 动态注册上报 `application_type`（MCP SEP-837）**：按回调地址派生——自定义 scheme 或
+  loopback 主机为 `native`，其余为 `web`；`oauth.applicationType` 可覆盖。
 - **codemode 的工具声明内联各自的 prompt guidelines**：`ALL_TOOLS` 与 `describeTool()` 能看到
   与系统提示一致的信息。
 - **`models.classify()` 接受 `images`**（模型不吃图片输入时返回错误结果）；工具事件
@@ -117,9 +124,10 @@ This release aligns prux with upstream pi 1.1.0.
   对授权服务器的每个请求超时从 30s 收紧到 15s。
 - **技能提示按可用工具降级**：`read` 被隐藏时改用 `bash`，或干脆不点名具体工具，
   不再整段省略、也不再指向模型用不了的工具。
-- **对话中途的系统消息能真正下发到接受它的 Anthropic 模型**：transcript 里出现在首部提示词之后的
+- **对话中途的系统消息能真正下发到接受它的模型**（Anthropic、OpenAI Chat Completions、
+  OpenAI Responses）：transcript 里出现在首部提示词之后的
   `system` 消息，在目录带 `compat.supportsMidConvoSystemMessages` 的模型上按原生对话中途系统消息下发；
-  它会缓发到下一条 assistant 之前，保证 `tool_result` 仍紧跟 `tool_use`。其它模型上这类消息的文本
+  它会缓发到下一条非 tool 消息之前，保证 `tool_result` 仍紧跟 `tool_use`。其它模型上这类消息的文本
   并入首部系统提示词，而不是被静默丢弃。
 
 ### 修复

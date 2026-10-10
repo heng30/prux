@@ -445,7 +445,9 @@ prux 的目录结构与类型检查与 pi 不同（无 `KnownClassifierApi` 的 
 **建议**：若只做 loopback 登录，现状可用；若要支持自定义 scheme / 非 loopback redirect，
 需要在 `OAuthConfig` 增加 `application_type` 并在注册时透传。升级 rmcp 时复核默认值。
 
-> **状态：部分满足（依赖 rmcp 默认值）**
+> **状态：已实现**。`OAuthConfig` 新增 `applicationType`（可选），未指定时按 `redirectUri` 派生：
+> 自定义 scheme 或 loopback 主机（RFC 8252）为 `native`，否则 `web`，并在动态客户端注册时透传给 rmcp
+> （见第十二节）。文档见 `assets/docs/extensions/mcp.md` 的 `oauth` 字段表。
 
 ---
 
@@ -580,7 +582,9 @@ bash 截断输出的临时文件（`tools/bash.rs`）与 MCP 二进制资源也�
 否则 `class MyError extends Error { name = "x" }` 会抛）；宿主侧的 payload 校验做一层
 显式 `Result`（当前依赖 rquickjs 的异常，语义上等价但错误文案不够明确）。
 
-> **状态：已实现**。pi 的 `lockdown()` 已移植进 `glue.js`（含 `OVERRIDABLE` accessor，override mistake 不复发）。宿主侧 payload 校验仍依赖 rquickjs 异常（进程内不崩，语义等价但文案不如 pi 明确）。
+> **状态：已实现**。pi 的 `lockdown()` 已移植进 `glue.js`（含 `OVERRIDABLE` accessor，override mistake 不复发）；
+> 宿主侧对 `__done` 载荷的显式校验（返回値 / store 写入 / 错误对象）已落地，畸形载荷以 `Sandbox` 错误失败，
+> 文案对齐 pi 的 `Sandbox bridge broken: … is not valid JSON.`（见第十二节）。
 
 ---
 
@@ -750,10 +754,11 @@ Bedrock 上走 adaptive thinking + native `xhigh` + prompt caching。
 
 **建议**：重跑同步；然后核对 anthropic 的 adaptive thinking 与 mid-conversation 系统消息路径。
 
-> **状态：部分实现**。数据面（`claude-haiku-5-5` + 定价档）已在第二轮同步；本轮实现「对话中途系统消息」
-> （原生 + 回灌两条路径，见第十一节）。**未做**：`compat.supportsMidConvoEffort` 那一整簇
-> （强制 adaptive thinking + `block_binding`、逐消息 `output_config.effort` 回放、两个新 beta 头）
-> 与「对话中途工具变更」（`supportsMidConvoToolChanges`），原因与范围见第十一节。
+> **状态：已实现（含 openai 两条路径）**。第六轮把同一套语义接到 `openai-completions` 与
+> `openai-responses`（对齐 pi 的 `resolveTranscript` + `transformMessages`）；共享实现提到
+> `core/provider/convert.rs`（`compat_flag` / `supports_mid_convo_system_messages` /
+> `collapse_mid_convo_system_messages` / `flush_pending_system_messages` / `instruction_role` /
+> `convert_system_message`），anthropic 改为委托。断言见第十二节。
 
 ---
 
@@ -924,7 +929,7 @@ prux 现有 bash 临时文件（`tools/bash.rs`）与 MCP 资源落盘需要一�
 - [x] `--tools` 通配 + MCP 保留 + `+name`/`-name` + `--no-mcp` + `-x`（2.1 / 2.2 / 2.3）（`-xt` 两字符短名 clap 不支持，只加了 `-x`）
 - [x] codemode：输出文件模块 + `image()` 落盘（2.4 / 2.21）、`read` 图片透传（2.5）、
       lockdown（2.6）、`console` 标记与输出分隔（2.7）、`classify` images（2.8）、
-      guidelines 内联（2.22）
+      guidelines 内联（2.22）；宿主侧显式 payload 校验（2.6 残留）——**第六轮已做**
 - [x] `agent_settled.aborted`（2.12）、`tool_execution_end.durationMs`（2.10）、
       `AssistantMessage.duration_ms`（2.10）
 - [x] `Took` 用记录时长（1.5）
@@ -940,6 +945,8 @@ prux 现有 bash 临时文件（`tools/bash.rs`）与 MCP 资源落盘需要一�
 - [x] OSC 7501 程序状态（2.13）——**第五轮已做**
 - [~] Anthropic 对话中途系统消息（2.16）——**第五轮已做系统消息面**；
       `supportsMidConvoEffort` 簇与 `supportsMidConvoToolChanges` 有意未做（见第十一节）
+- [x] openai-completions / openai-responses 对话中途系统消息（2.16 收尾）——**第六轮已做**
+- [x] MCP `oauth.applicationType`（1.29）——**第六轮已做**
 - [x] `outputPad` 设置项（2.11）——**有意跳过**，理由见第九节；prux 的 transcript 缩进硬编码 1 列、不可配置
 
 ---
@@ -1122,4 +1129,44 @@ changelog 正文不再沿用上一版的「产品介绍」格式，而是按本�
   本轮的收录范围按迁移指南 2.16 只覆盖 anthropic；两条 openai 路径留作后续。
 
 **验证**：`cargo test` 全绿（lib 3289 项 + 全部集成测试目标）；`cargo fmt --check` 通过；
+`cargo clippy --lib --tests` 只剩改动前就存在的 3 条 warning（`settings_manager` 1、`tasks/widget` 2）。
+
+---
+
+## 十二、第六轮实施记录（A 档三项：openai 中途系统消息 / MCP application_type / codemode 载荷校验）
+
+本轮收尾第二节里三条「结构已具备、只差接线」的项。
+
+| # | 项 | 改动位置 | 关键测试 |
+|---|---|---|---|
+| 2.16 | openai-completions / openai-responses 对话中途系统消息 | 新增共享实现 `core/provider/convert.rs`（`compat_flag` / `supports_mid_convo_system_messages` / `collapse_mid_convo_system_messages` / `flush_pending_system_messages` / `instruction_role` / `convert_system_message`）；`completions.rs::{convert_messages, stream}`、`responses.rs::{convert_responses_messages, build_request_body}` 接线；anthropic 改为委托共享实现并补 user 边界 flush | `native_mid_convo_system_messages_are_held_until_the_next_non_tool_message`（两协议）、`system_before_a_missing_tool_result_lands_after_the_synthetic_result`、`held_system_message_is_flushed_before_the_user_turn`（三协议）、`inline_system_messages_are_dropped_without_the_compat_flag`（两协议）、`collapse_folds_mid_convo_system_messages_for_unsupported_models`（两协议） |
+| 1.29 | MCP `oauth.applicationType` | `extensions/mcp/config.rs::OAuthConfig` 新增字段；`extensions/mcp/oauth.rs::{derive_application_type, is_loopback_host}` + `begin_login_with_cancel` 透传 rmcp 的 `with_application_type`；文档 `assets/docs/extensions/mcp.md` | `application_type_is_derived_from_the_redirect_uri` |
+| 2.6 | codemode 宿主侧显式 payload 校验 | `extensions/codemode/sandbox.rs`：`parse_bridge_json` / `parse_script_error` / `parse_store_writes` / `bridge_broken_outcome`，`finish()` 全量显式校验 | `malformed_return_value_fails_as_a_sandbox_error`、`malformed_store_writes_fail_as_a_sandbox_error`、`malformed_script_error_fails_as_a_sandbox_error`、`valid_payloads_still_round_trip` |
+
+**2.16 实现要点（与 pi 对齐）**：
+
+- pi 的路径是 `resolveTranscript`（不支持时把中途系统消息折叠进首部）+ `transformMessages`
+  （缓发：系统消息在 `pendingToolCalls` 未结算时挂起，`closePendingToolCalls()` 时随 synthetic 结果一起吐出）。
+  prux 把前半段提到 `convert.rs::collapse_mid_convo_system_messages`，后半段在每个协议的
+  `convert_*` 里按同一模式实现：遇到 `system` 压入 `pending_system`，在**每个非 toolResult 边界**
+  （user / assistant / summary / custom）与序列末尾 flush。
+- **顺带修了 anthropic 的既有偏差**：原实现只在 assistant 与序列末尾 flush，导致
+  `[assistant(tool_use), system, user]` 这类序列里系统消息被推到 user **之后**（pi 是之前）。
+  本轮给 anthropic 的 user 分支补上 flush，三协议口径统一，并加了回归测试。
+- `instruction_role` 与 `convert_system_message` 三协议共用：completions / responses 的指令消息形状一致
+  （`{role: developer|system, content: text}`），anthropic 仍用自己的 content-block 形状。
+- openai 两侧的 `stream` / `build_request_body` 在转换前先算 `collapse_mid_convo_system_messages`，
+  与 anthropic 一致。
+
+**1.29 实现要点**：`application_type` 缺省时按 `redirectUri` 派生（对齐 pi 的 `applicationType()`）：
+自定义 scheme 或 loopback 主机（`localhost` / `127.0.0.1` / `[::1]` / `::1`）为 `native`，否则 `web`；
+无法解析时按 rmcp 默认的 `native`。client_credentials 路径不做动态注册，故不涉及。
+
+**2.6 实现要点**：`finish()` 不再用 `unwrap_or` 静默降级——返回値、store 写入数组、失败错误对象
+三者都显式校验，形状不对时以 `ErrorKind::Sandbox` 失败，文案对齐 pi：
+`Sandbox bridge broken: <detail>. The script may have modified built-ins such as a prototype's toJSON.`，
+detail 取 pi 的原文（`return value is not valid JSON` / `store writes contain a malformed entry` /
+`script error is malformed` 等）。正常载荷仍原样解析（含 store 设值 / 删除两种条目）。
+
+**验证**：`cargo test --lib` 全绿（3303 项，1 ignored）；`cargo fmt --check` 通过；
 `cargo clippy --lib --tests` 只剩改动前就存在的 3 条 warning（`settings_manager` 1、`tasks/widget` 2）。

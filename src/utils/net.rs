@@ -59,6 +59,11 @@ pub fn base_url(listen: &str) -> String {
     format!("http://{host}:{port}/v1")
 }
 
+/// loopback 主机判定：`localhost` / `127.0.0.1` / `[::1]` / `::1`。
+pub fn is_loopback_host(host: &str) -> bool {
+    matches!(host, "localhost" | "127.0.0.1" | "[::1]" | "::1")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -50,6 +50,10 @@ const MAX_OUTPUT_CHARS: usize = 16 * 1024 * 1024;
 /// 脚本输出条目数上限
 const MAX_OUTPUT_ITEMS: usize = 100_000;
 
+/// 桥载荷畸形（脚本体篡改了 `toJSON` 等内建）时统一附加的提示文案。
+const BRIDGE_BROKEN_HINT: &str =
+    "The script may have modified built-ins such as a prototype's toJSON.";
+
 /// `image()` 参数不合法时的统一提示
 const IMAGE_HELPER_EXPECTS: &str = "image expects a non-empty image URL string, an object with image_url, or a raw MCP image block";
 
@@ -517,63 +521,121 @@ async fn dispatch(host: &dyn ScriptHost, d: &Dispatch) -> (bool, String) {
     }
 }
 
+/// 把一段过桥 JSON 解析回结构化值
+fn parse_bridge_json(json: &str, what: &str) -> Result<Value, String> {
+    serde_json::from_str(json).map_err(|_| format!("{what} is not valid JSON"))
+}
+
+/// 解析失败脚本的错误对象
+fn parse_script_error(json: &str) -> Result<ScriptError, String> {
+    let parsed = parse_bridge_json(json, "script error")?;
+    let Some(obj) = parsed.as_object() else {
+        return Err("script error is not an object".to_string());
+    };
+
+    let name = obj.get("name").and_then(|v| v.as_str());
+    let message = obj.get("message").and_then(|v| v.as_str());
+    let stack = obj.get("stack").and_then(|v| v.as_str());
+    if message.is_none()
+        || (obj.contains_key("name") && name.is_none())
+        || (obj.contains_key("stack") && stack.is_none())
+    {
+        return Err("script error is malformed".to_string());
+    }
+
+    Ok(ScriptError {
+        name: name.unwrap_or("Error").to_string(),
+        message: message.unwrap_or_default().to_string(),
+        stack: stack.map(str::to_string),
+    })
+}
+
+/// 解析成功脚本的 `store()` 写入数组
+fn parse_store_writes(json: &str) -> Result<BTreeMap<String, Option<Value>>, String> {
+    if json.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+
+    let entries = parse_bridge_json(json, "store writes")?;
+    let Some(entries) = entries.as_array() else {
+        return Err("store writes are not an array".to_string());
+    };
+
+    let mut writes = BTreeMap::new();
+    for entry in entries {
+        let Some(items) = entry.as_array() else {
+            return Err("store writes contain a malformed entry".to_string());
+        };
+        let Some(key) = items.first().and_then(|v| v.as_str()) else {
+            return Err("store writes contain a malformed entry".to_string());
+        };
+
+        // 写入值以 JSON 文本过桥，这里再解析回结构化的值。
+        let value = match items.len() {
+            1 => None,
+            2 => {
+                let Some(text) = items.get(1).and_then(|v| v.as_str()) else {
+                    return Err("store writes contain a malformed entry".to_string());
+                };
+                let what = format!("store value for {key:?}");
+                Some(parse_bridge_json(text, &what)?)
+            }
+            _ => return Err("store writes contain a malformed entry".to_string()),
+        };
+        writes.insert(key.to_string(), value);
+    }
+    Ok(writes)
+}
+
+/// 桥载荷畸形时的结局：以 `sandbox` 错误失败，避免静默丢掉脚本结果。
+fn bridge_broken_outcome(detail: &str, output: Vec<ScriptOutput>) -> ScriptOutcome {
+    ScriptOutcome {
+        ok: false,
+        value: None,
+        output,
+        store_writes: BTreeMap::new(),
+        error: Some(ScriptError {
+            name: "Error".to_string(),
+            message: format!("Sandbox bridge broken: {detail}. {BRIDGE_BROKEN_HINT}"),
+            stack: None,
+        }),
+        error_kind: ErrorKind::Sandbox,
+    }
+}
+
 /// 成功/失败的 `__done` 载荷 → 结局。
+///
+/// 载荷由同一 VM 里的预置序列化（脚本可能篡改 `toJSON` 等内建），因此全部显式校验：
+/// 解不开或形状不对时以 `sandbox` 错误失败，而不是静默丢掉脚本结果。
 fn finish(done: Done, outputs: &Arc<Mutex<Vec<ScriptOutput>>>) -> ScriptOutcome {
     let output = take_outputs(outputs);
     if !done.ok {
-        let parsed: Value = serde_json::from_str(&done.payload).unwrap_or(Value::Null);
-        let name = parsed
-            .get("name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("Error")
-            .to_string();
-        let message = parsed
-            .get("message")
-            .and_then(|v| v.as_str())
-            .unwrap_or("script failed")
-            .to_string();
-        let stack = parsed
-            .get("stack")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-        return ScriptOutcome {
-            ok: false,
-            value: None,
-            output,
-            store_writes: BTreeMap::new(),
-            error: Some(ScriptError {
-                name,
-                message,
-                stack,
-            }),
-            error_kind: ErrorKind::Script,
+        return match parse_script_error(&done.payload) {
+            Ok(error) => ScriptOutcome {
+                ok: false,
+                value: None,
+                output,
+                store_writes: BTreeMap::new(),
+                error: Some(error),
+                error_kind: ErrorKind::Script,
+            },
+            Err(detail) => bridge_broken_outcome(&detail, output),
         };
     }
 
     let value = if done.payload.is_empty() {
         None
     } else {
-        serde_json::from_str(&done.payload).ok()
+        match parse_bridge_json(&done.payload, "return value") {
+            Ok(value) => Some(value),
+            Err(detail) => return bridge_broken_outcome(&detail, output),
+        }
     };
 
-    let mut writes: BTreeMap<String, Option<Value>> = BTreeMap::new();
-    if !done.writes.is_empty()
-        && let Ok(entries) = serde_json::from_str::<Vec<Value>>(&done.writes)
-    {
-        for entry in entries {
-            let Some(items) = entry.as_array() else {
-                continue;
-            };
-            let Some(key) = items.first().and_then(|v| v.as_str()) else {
-                continue;
-            };
-            // 写入值以 JSON 文本过桥，这里再解析回结构化的值。
-            let value = items.get(1).and_then(|v| v.as_str()).map(|json| {
-                serde_json::from_str(json).unwrap_or_else(|_| Value::String(json.to_string()))
-            });
-            writes.insert(key.to_string(), value);
-        }
-    }
+    let writes = match parse_store_writes(&done.writes) {
+        Ok(writes) => writes,
+        Err(detail) => return bridge_broken_outcome(&detail, output),
+    };
 
     ScriptOutcome {
         ok: true,
@@ -1118,5 +1180,78 @@ mod tests {
         )
         .await;
         assert_eq!(out.value, Some(json!([true, "function", "plain-ok"])));
+    }
+
+    /// 直接跑 `finish`（无已收集输出），用于校验过桥载荷。
+    fn finish_with(done: Done) -> ScriptOutcome {
+        finish(done, &Arc::new(Mutex::new(Vec::new())))
+    }
+
+    /// 畸形返回值（预置序列化被 `toJSON` 类补丁带歪）→ `sandbox` 错误，而非静默丢掉结果。
+    #[test]
+    fn malformed_return_value_fails_as_a_sandbox_error() {
+        let outcome = finish_with(Done {
+            ok: true,
+            payload: "not json".to_string(),
+            writes: String::new(),
+        });
+        assert!(!outcome.ok);
+        assert_eq!(outcome.error_kind, ErrorKind::Sandbox);
+        let message = outcome.error.unwrap().message;
+        assert!(
+            message.contains("return value is not valid JSON"),
+            "{message}"
+        );
+        assert!(message.contains("toJSON"), "{message}");
+    }
+
+    /// 条目形状不对的 store 写入 → `sandbox` 错误。
+    #[test]
+    fn malformed_store_writes_fail_as_a_sandbox_error() {
+        let outcome = finish_with(Done {
+            ok: true,
+            payload: String::new(),
+            writes: "[123]".to_string(),
+        });
+        assert_eq!(outcome.error_kind, ErrorKind::Sandbox);
+        assert!(
+            outcome
+                .error
+                .unwrap()
+                .message
+                .contains("store writes contain a malformed entry")
+        );
+    }
+
+    /// 形状不对的失败错误对象 → `sandbox` 错误。
+    #[test]
+    fn malformed_script_error_fails_as_a_sandbox_error() {
+        let outcome = finish_with(Done {
+            ok: false,
+            payload: "{}".to_string(),
+            writes: String::new(),
+        });
+        assert_eq!(outcome.error_kind, ErrorKind::Sandbox);
+        assert!(
+            outcome
+                .error
+                .unwrap()
+                .message
+                .contains("script error is malformed")
+        );
+    }
+
+    /// 正常载荷仍原样解析：返回值、store 设值/删除。
+    #[test]
+    fn valid_payloads_still_round_trip() {
+        let outcome = finish_with(Done {
+            ok: true,
+            payload: json!({"a": 1}).to_string(),
+            writes: json!([["k", "{\"v\":2}"], ["d"]]).to_string(),
+        });
+        assert!(outcome.ok, "{outcome:?}");
+        assert_eq!(outcome.value, Some(json!({"a": 1})));
+        assert_eq!(outcome.store_writes.get("k"), Some(&Some(json!({"v": 2}))));
+        assert_eq!(outcome.store_writes.get("d"), Some(&None));
     }
 }

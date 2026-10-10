@@ -418,6 +418,7 @@ OAuth/bearer 推断：
 | `clientId` / `clientSecret` | 预注册的客户端凭据；缺省走动态客户端注册 |
 | `scope` | 请求的 scope，空格分隔 |
 | `redirectUri` | 回调地址，默认 `http://127.0.0.1:3118/callback` |
+| `applicationType` | 动态客户端注册上报的 OIDC `application_type`（MCP SEP-837）：`native` 或 `web`；缺省时按 `redirectUri` 派生（自定义 scheme 或 loopback 为 `native`，否则 `web`） |
 | `authorizationParams` | 追加到授权 URL 的自定义查询参数（不可覆盖流程自有参数） |
 | `clientName` / `clientUri` / `logoUri` | 动态客户端注册时上报的信息 |
 | `clientRegistration` | `dynamic`（默认，RFC 7591 动态注册）或 `cimd`（Client ID Metadata Document） |
