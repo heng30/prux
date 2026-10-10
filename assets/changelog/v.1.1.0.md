@@ -71,6 +71,11 @@ This release aligns prux with upstream pi 1.1.0.
   models whose catalog entry sets `compat.supportsMidConvoSystemMessages` get it natively; it is held
   back to just before the next non-tool message so a `tool_result` still follows its `tool_use`.
   For other models its text is merged into the leading system prompt instead of being dropped.
+- **An autoresearch job now reports when it settles.** Finishing (or failing) posts a one-line
+  notice with the iteration count, tokens, duration, goal and — for a failure — the reason, so a
+  job no longer ends silently when its dock row disappears. The notice is user-facing only: the
+  job still does not inject anything into the conversation, so read a round with
+  `/agents result <id>`. Stopping a job by hand stays silent (the command already answers).
 
 ### Fixed
 
@@ -139,6 +144,9 @@ This release aligns prux with upstream pi 1.1.0.
   `system` 消息，在目录带 `compat.supportsMidConvoSystemMessages` 的模型上按原生对话中途系统消息下发；
   它会缓发到下一条非 tool 消息之前，保证 `tool_result` 仍紧跟 `tool_use`。其它模型上这类消息的文本
   并入首部系统提示词，而不是被静默丢弃。
+- **autoresearch 作业终结时会回报**：完成或失败都投一条通知（轮次、token、耗时、目标，
+  失败还带原因），作业不再在 dock 行消失时无声收场。通知只给人看，仍**不**往主会话注入消息，
+  看某一轮的结果走 `/agents result <id>`；用户自己停的作业不发（命令已经回过话）。
 
 ### 修复
 

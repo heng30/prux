@@ -20,6 +20,10 @@
 //!
 //! 停止只有两条路：`/autoresearch stop <id>`，或会话切换 / 扩展禁用时的 [`cancel_all`]。
 //!
+//! 解耦也意味着**结果不进主对话**：作业终结时只投一条人向通知（[`notify_settled`]），
+//! 不注入 `Continuation`——上百轮的作业若每轮都往主会话灌 `<subagent_result>`，
+//! 主对话与上下文都会被填满。要看某一轮走 `/agents result <agent_id>`。
+//!
 //! ## 上限与留存
 //!
 //! 活跃作业 4 个（第 5 个排队等额度）、保留 20 条、`--iterations` clamp 到 100
@@ -424,15 +428,62 @@ async fn run(
     }
 }
 
-/// 写终态并固定耗时（`error` 为 None 时保留原值：失败原因只在真失败时写）。
+/// 写终态并固定耗时（`error` 为 None 时保留原值：失败原因只在真失败时写），
+/// 随后按新终态投一条人向通知（见 [`notify_settled`]）。
 fn settle(id: JobId, status: JobStatus, error: Option<String>) {
-    update(id, |job| {
+    // 快照在锁内取、通知在锁外发：`util_notify` 会碰 UI 通道，不在持作业表锁时回调出去。
+    let snapshot = {
+        let mut list = lock_jobs();
+        let Some(job) = list.iter_mut().find(|job| job.id == id) else {
+            return;
+        };
+
         job.status = status;
         job.finished_at = Some(Instant::now());
+
         if error.is_some() {
             job.error = error;
         }
-    });
+
+        job.snapshot()
+    };
+
+    notify_settled(&snapshot);
+}
+
+/// 作业终结时给人看的通知：dock 段会随终结消失，不发就等于静默收场。
+///
+/// 只发通知，**不往主会话注入消息**：作业与主回合解耦（见模块文档），
+/// 上百轮的作业若每轮都注入 `<subagent_result>` 会把主对话灌满；
+/// 要看某一轮的完整回答走 `/agents result <agent_id>`。
+///
+/// `Stopped` 不发：那条路要么是用户自己按的 `/autoresearch stop`（命令已经回过话），
+/// 要么是会话切换 / 扩展禁用，再弹一条只是噪声。
+fn notify_settled(snapshot: &JobSnapshot) {
+    let goal = truncate_chars(&snapshot.goal, 40);
+    match snapshot.status {
+        JobStatus::Completed => util_notify(
+            &format!(
+                "autoresearch job #{} completed · {} · {} tok · {} · {goal} · /agents result {} for the answer",
+                snapshot.id,
+                progress(snapshot),
+                format_tokens(snapshot.tokens),
+                format_duration(snapshot.elapsed.as_millis() as u64),
+                snapshot.agent_id.as_deref().unwrap_or("(no record)"),
+            ),
+            UiNotifyLevel::Success,
+        ),
+        JobStatus::Failed => util_notify(
+            &format!(
+                "autoresearch job #{} failed · {} · {goal} · error: {}",
+                snapshot.id,
+                progress(snapshot),
+                truncate_chars(snapshot.error.as_deref().unwrap_or("unknown error"), 120),
+            ),
+            UiNotifyLevel::Warning,
+        ),
+        JobStatus::Queued | JobStatus::Running | JobStatus::Stopped => {}
+    }
 }
 
 /// 占一个活跃额度（满额时轮询等待）；被停则放弃且**不占**额度。
@@ -794,7 +845,9 @@ pub(crate) fn snapshot(id: JobId) -> Option<JobSnapshot> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::extensions::{SubAgentControls, SubAgentRunner, SubAgentSpec};
+    use crate::core::extensions::{
+        ExtensionUiRequest, SubAgentControls, SubAgentRunner, SubAgentSpec,
+    };
     use futures_util::future::BoxFuture;
 
     fn rt() -> tokio::runtime::Runtime {
@@ -936,17 +989,35 @@ mod tests {
         (snapshot, capture)
     }
 
-    /// 测试环境：跨测试串行锁（**最后**释放） + 临时 agent_dir（作业会写子会话记录）。
+    /// 测试环境：跨测试串行锁 + 临时 agent_dir（作业会写子会话记录）。
     ///
-    /// 字段顺序即释放顺序：先收掉临时目录，再放开测试锁。
+    /// 字段顺序即释放顺序：先收掉临时目录，再放开 manager 锁，最后放开 `AUTH_TEST_LOCK`
+    /// （与获取顺序相反）。
     struct Setup {
         /// 临时 agent_dir
         _dir: crate::test_support::AgentDirGuard,
         /// 跨测试串行锁
         _lock: super::manager::TestLock,
+        /// 全局态锁：本用例会清空**进程级**的 UI 队列（作业终结通知），
+        /// 而 plan-mode 等用例也往同一队列里写——不串行就会互相 take 走对方的请求。
+        /// 锁序与 `agent_session` 的子代理用例一致：`AUTH_TEST_LOCK` → `manager::test_lock`。
+        _auth: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl Drop for Setup {
+        /// 用例结束时把本用例排进全局 UI 队列的请求（作业终结通知）取空。
+        ///
+        /// 队列是进程级的：留着就是下一个用例的脏数据（其它模块的用例会 `take_pending_ui`
+        /// 抓到不属于自己的通知）。在锁仍持有（Drop 早于字段释放）时清，避免与并行用例抢。
+        fn drop(&mut self) {
+            while crate::core::extensions::take_pending_ui().is_some() {}
+        }
     }
 
     fn setup() -> Setup {
+        let auth = crate::test_support::AUTH_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let lock = super::manager::test_lock();
         let dir = crate::test_support::AgentDirGuard::temp();
         manager::reset_all();
@@ -955,7 +1026,42 @@ mod tests {
         Setup {
             _dir: dir,
             _lock: lock,
+            _auth: auth,
         }
+    }
+
+    /// 取走待投递的 UI 请求：返回人向通知（文本, 级别）与是否出现过 `Continuation`
+    /// （后者是「往主会话注入消息」的唯一形式，作业不该产生它）。
+    fn drain_ui() -> (Vec<(String, UiNotifyLevel)>, bool) {
+        let mut notes: Vec<(String, UiNotifyLevel)> = Vec::new();
+        let mut continuation = false;
+        while let Some(request) = crate::core::extensions::take_pending_ui() {
+            match request {
+                ExtensionUiRequest::Notify { text, level } => notes.push((text, level)),
+                ExtensionUiRequest::NotifyRich { spans, level } => notes.push((
+                    spans.into_iter().map(|span| span.text).collect::<String>(),
+                    level,
+                )),
+                ExtensionUiRequest::Continuation { .. } => continuation = true,
+                _ => {}
+            }
+        }
+        (notes, continuation)
+    }
+
+    /// 同 [`drain_ui`]，但等到至少一条通知落地为止（`settle` 先落状态、再投通知，
+    /// 两者之间有一个窗口，而测试运行时是多线程的）。
+    fn drain_settled_ui() -> (Vec<(String, UiNotifyLevel)>, bool) {
+        rt().block_on(async {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                let drained = drain_ui();
+                if !drained.0.is_empty() || Instant::now() >= deadline {
+                    return drained;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
     }
 
     #[test]
@@ -1172,6 +1278,50 @@ mod tests {
             stop(snapshot.id).is_err(),
             "已终结的作业不能再停（应报错而不是重放）"
         );
+
+        let (notes, _) = drain_ui();
+        assert!(notes.is_empty(), "用户主动停止不该再弹通知：{notes:?}");
+    }
+
+    /// 终结时投一条**人向**通知（`Completed` → Success，`Failed` → Warning 带原因），
+    /// 且**不**投 `Continuation`——作业与主回合解耦，结果不进主对话。
+    #[test]
+    fn settled_jobs_notify_the_user_without_touching_the_conversation() {
+        let _setup = setup();
+        let (done, _) = run_job(
+            vec![Reply::Text("[goal-complete]".to_string())],
+            "ship it",
+            None,
+        );
+
+        let (notes, continuation) = drain_settled_ui();
+        assert!(!continuation, "完成通知不该往主会话注入消息");
+        assert_eq!(notes.len(), 1, "一次终结只弹一条：{notes:?}");
+        let (text, level) = &notes[0];
+        assert_eq!(*level, UiNotifyLevel::Success, "{text}");
+        assert!(
+            text.contains(&format!("autoresearch job #{} completed · 1 ·", done.id)),
+            "{text}"
+        );
+        assert!(text.contains("ship it"), "{text}");
+        assert!(text.contains("/agents result"), "{text}");
+
+        let (failed, _) = run_job(
+            vec![Reply::Fail("provider exploded".to_string())],
+            "explode",
+            Some(3),
+        );
+
+        let (notes, continuation) = drain_settled_ui();
+        assert!(!continuation, "失败通知同样不该注入消息");
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        let (text, level) = &notes[0];
+        assert_eq!(*level, UiNotifyLevel::Warning, "{text}");
+        assert!(
+            text.contains(&format!("autoresearch job #{} failed · 1/3", failed.id)),
+            "{text}"
+        );
+        assert!(text.contains("provider exploded"), "{text}");
     }
 
     /// `cancel_all` 只动未终结的作业：已完成的历史留着（`/new` 后列表还在）。

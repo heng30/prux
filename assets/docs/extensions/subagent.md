@@ -466,6 +466,10 @@ You are a code reviewer. Read the diff, then report findings with file:line.
 未终结的作业同时出现在 dock 的 `Autoresearch` 段里。子代理本身照旧在 `/agents`（FleetView）里，
 可以用 `/agents result <id>` 看它的完整结果。
 
+作业**终结时会投一条通知**（轮次 / token / 耗时 / 目标，失败还带原因）——否则 dock 段一消失
+就等于无声收场。这条通知**只给人看**，不往主会话注入消息（上百轮的作业若每轮都注入
+`<subagent_result>` 会把主对话灌满）；用户自己 `/autoresearch stop` 停掉的不发。
+
 上限与 kiss 同值：**同时 4 个活跃作业**（第 5 个排队等额度）、保留 20 条、`--iterations` clamp 到 100。
 作业表是内存态（重启即丢），但子会话本身落盘，历史不丢。
 

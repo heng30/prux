@@ -280,12 +280,13 @@ TypeSafe；愿意用的话完全可以由扩展提供，但优先级低于上面
 | 随主回合中止 | 作业独立于主回合 | `workflow_owned = true` **且每轮换掉 `ctx.parent_abort`** | 只用标志不够：前台路径会经 `run_linked` 跟着父级 `parent_abort` 联动中止，所以每轮都换一个永不置位的信号 |
 | 停止路径 | `cancel` token + `child.abort()` | 停止标志 + `manager::stop(child)`，且**派发与停止信号 `select` 竞争** | 否则停止会撞在“记录还没入库”的窗口上停不掉那一轮（子代理会成孤儿跑完） |
 | 视图 | `/jobs` 专用面板 | dock 行 + `/autoresearch` 列表；子会话在 `/agents` | 不新造覆盖面板，复用 dock 与既有列表入口 |
+| 完成通知 | 靠 `/jobs` 面板自己看（无通知） | 终结时投一条**人向**通知（轮次 / token / 耗时 / 目标，失败带原因）；`Stopped` 不发 | 前台路径本身不发通知（`manager.rs`：「收尾（不发通知）」），而作业终结时 dock 段又会消失——不改就是无声收场。只发通知、不注入 `Continuation`：上百轮的作业若每轮都注入会把主对话灌满（本项为落地后的补充，不在首版记录里） |
 
 ### 4.4 验证
 
 ```bash
-cargo test --lib autoresearch          # 17 passed（16 个单测 + 1 条端到端）
-cargo test --lib extensions::subagent  # 287 passed
+cargo test --lib autoresearch          # 18 passed（17 个单测 + 1 条端到端）
+cargo test --lib extensions::subagent  # 288 passed
 cargo test --lib core::agent_session   # 97 passed
 cargo test                             # 全量绿（lib 3320 + 各集成测试二进制）
 cargo clippy --lib --all-targets       # 无新增告警（剩下的都是本次改动前就有的）
@@ -297,11 +298,12 @@ cargo clippy --lib --all-targets       # 无新增告警（剩下的都是本次
   `iteration == 2`、最后一轮结果含标记，并用 `agent_session_path(agent_id)` 取出子会话文件，
   断言同一个文件里同时有两轮的回答。第二轮能跑起来本身就要求 `resolve_resume` 在真会话文件上成立
   （假 runner 那条用例覆盖不了它）。
-- **单元**（`autoresearch::tests`，16 个）：提示词位置/无上限措辞/基线-指标-回退措辞、完成标记大小写、
+- **单元**（`autoresearch::tests`，17 个）：提示词位置/无上限措辞/基线-指标-回退措辞、完成标记大小写、
   参数解析（结尾 `--iterations` / 拒绝 0、非数字、多词、空目标）、id 写法（`3` / `#3` / `autoresearch-3` / 0 / 非数字）、
   无上下文时报错、循环到标记（两轮：第 1 轮无 resume + fork、第 2 轮 resume 同一路径、提示词带 `iteration 1/2`）、
   到上限收工、clamp 100、子代理出错即 `Failed`、停止运行中的作业、`cancel_all` 不动已终结作业、
-  dock 只列未终结作业、列表渲染（含失败原因）。
+  dock 只列未终结作业、列表渲染（含失败原因）、终结通知（`Completed` → Success / `Failed` → Warning，
+  且断言不产生 `Continuation`；用户停止不发）。
 - **未覆盖**：真实模型下的"留优退退化"行为（那由提示词约束，依赖模型质量，无法在测试里断言）；
   真终端里 dock 的观感（dock 行是纯函数，已由单测断言文本）。
 

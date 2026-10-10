@@ -8540,6 +8540,50 @@ mod tests {
                 "同一个子会话里应同时有两轮的回答（{path}）: {text}"
             );
 
+            // 终结时投一条人向通知（Success），**不**注入 `Continuation`。
+            // 等到**本作业**那条落地为止（不假设队列里恰好一条：全局队列是进程级的），
+            // 顺手把队列清干净——留一条给后续用例就是脏数据。
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            let mut notes: Vec<(String, crate::core::extensions::UiNotifyLevel)> = Vec::new();
+            let mut continuation = false;
+            loop {
+                while let Some(req) = crate::core::extensions::take_pending_ui() {
+                    match req {
+                        crate::core::extensions::ExtensionUiRequest::Notify { text, level } => {
+                            notes.push((text, level));
+                        }
+                        crate::core::extensions::ExtensionUiRequest::NotifyRich {
+                            spans,
+                            level,
+                        } => {
+                            notes.push((
+                                spans.into_iter().map(|span| span.text).collect::<String>(),
+                                level,
+                            ));
+                        }
+                        crate::core::extensions::ExtensionUiRequest::Continuation { .. } => {
+                            continuation = true;
+                        }
+                        _ => {}
+                    }
+                }
+                let settled = notes
+                    .iter()
+                    .any(|(text, _)| text.contains("make the renderer faster"));
+                if settled || std::time::Instant::now() >= deadline {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            assert!(!continuation, "作业完成不该往主会话注入消息");
+            let ours: Vec<_> = notes
+                .iter()
+                .filter(|(text, _)| text.contains("make the renderer faster"))
+                .collect();
+            assert_eq!(ours.len(), 1, "{notes:?}");
+            assert!(ours[0].0.contains("completed"), "{:?}", ours[0]);
+            assert_eq!(ours[0].1, crate::core::extensions::UiNotifyLevel::Success);
+
             crate::core::extensions::set_extension_enabled("subagent", false);
             _ = crate::core::extensions::unregister_extension("subagent");
         });
