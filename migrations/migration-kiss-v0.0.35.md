@@ -10,8 +10,17 @@
 > 最大的修订是：首版 §4 记的 autoresearch「实施记录」当时**并不存在**（仓里没有那些文件、
 > git 历史里也没有），本版 §4 换成本次真正落地的记录。
 >
+> **版本修订（第三版）**：把 §2.2 凭证导入、§2.5 跨 agent 会话恢复、§2.8 自更新、
+> §2.9 多账号池、§6.2 上下文文件五项**明确判为不实现**（理由与翻案条件集中在 §3.5–§3.9），
+> 并把剩下的待做项按 kiss 实测行为补齐落点、接缝与验证方式。
+>
+> **版本修订（第四版）**：§2.3 / §2.4 / §2.7 三项**已按第三版的设计落地为四个内置扩展**
+> （`cache-usage` / `doctor` / `btw` / `recap`，实施记录见 §4.5–§4.7）；四个都是
+> **默认不启用**、只在 `Dev` / `Creator` 扩展模式下可用。§2.7 按"旁问只在用户开口时才有动作、
+> 小结会在后台自己花 token"拆成了两个独立开关的扩展。§2.6 WebMCP 是唯一还没落地的候选功能。
+>
 > **目标**：`src/extensions/` 下的扩展（不与上游插件移植混在一起；本仓已有
-> `migration-subagents.md` / `migration-tasks.md` / `migration-kiss-plugins.md`）。
+> `migration-subagents.md` / `migration-tasks.md`）。
 > **性质**：先冻结「值得移植 / 不值得移植」的判断，再逐条落地；落地项的状态列在实施过程中回填。
 >
 > **与既有迁移文档的关系**：kiss 与 prux 是**同源重写**（都对齐 `@earendil-works/pi`），
@@ -28,26 +37,32 @@ kiss 与 prux 的功能重叠度很高，**自动化那一半基本已经对齐*
 QuickJS 沙箱、MCP、联网检索、技能与提示词模板、项目信任、缓存保温、本地 OpenAI 兼容网关，
 在 prux 里都有对应实现（对照见 §1.2）。
 
-按 `v0.0.35` 重核后，真正的差集落在三处：
+按 `v0.0.35` 重核、逐项决策并落地后，清单收口为：
 
-1. **一款 kiss 招牌能力**：autoresearch 闭环（§2.1，Tier 1，**本次已落地**，见 §4）；
-2. **一整类「可观测性与运维」能力**：凭证导入、缓存效率趋势、网络诊断、跨 agent 会话恢复、
-   真实自更新（§2.2–§2.8，Tier 2–4，待做）；
-3. **多账号池与限流切换**（§2.9，Tier 2）：`v0.0.19` 之后新加的能力，首版清单里没有它。
+- **已落地（4 项 → 5 个扩展）**：autoresearch 闭环（§2.1，`subagent` 扩展，记录见 §4.1–§4.4）、
+  缓存效率跨会话报告（§2.3 → `cache-usage`，§4.5）、
+  provider 可达性诊断（§2.4 → `doctor`，§4.6）、
+  只读旁问与一行小结（§2.7 → `btw` + `recap` 两个扩展，§4.7）。
+  新增的四个扩展一律**默认不启用**（`Dev` / `Creator` 模式），理由见各小节；
+- **待做（1 项）**：WebMCP（§2.6）——唯一还没落地的功能项（实验性 Chrome API，价值低）；
+- **明确不实现（5 项）**：外部 agent 凭证导入（§3.5）、真实自更新（§3.6）、
+  多账号池与限流切换（§3.7）、实验性上下文文件（§3.8）、跨 agent 会话恢复（§3.9）。
 
-另有三类**不该做成扩展**（§3）：对外接口（ACP / RPC / SDK）、provider 层新增（Cursor /
-Databricks / Snowflake / Bedrock）、语音输入。前两类需要进程级接线与 `core::provider` 改动，
-扩展层够不到；第三类成本与收益不匹配。
+另有四类**不该做成扩展**（§3.1–§3.4）：对外接口（ACP / RPC / SDK）、provider 层新增（Cursor /
+Databricks / Snowflake / Bedrock）、语音输入、Jev 压缩。前两类需要进程级接线与 `core::provider`
+改动，扩展层够不到；后两类成本与收益不匹配。
 
-### Tier 路线图
+### 路线图
 
 | Tier | 项 | 状态 |
 |---|---|---|
-| 1 | §2.1 autoresearch 闭环 | ✅ 已落地（§4，本次） |
-| 2 | §2.2 外部 agent 凭证导入、§2.3 缓存效率跨会话报告、§2.9 多账号池与限流切换 | 🔜 待做 |
-| 3 | §2.4 provider 可达性诊断、§2.5 跨 agent 会话恢复 | 🔜 待做 |
-| 4 | §2.6 WebMCP、§2.7 `/recap` + `/btw`、§2.8 真实自更新 | 🔜 待做 |
-| — | §3 「不做扩展」四项 | 🚫 已定案 |
+| 1 | §2.1 autoresearch 闭环 | ✅ 已落地（§4.1–§4.4） |
+| 2 | §2.3 缓存效率跨会话报告 | ✅ 已落地（§4.5，`cache-usage`） |
+| 3 | §2.4 provider 可达性诊断 | ✅ 已落地（§4.6，`doctor`） |
+| 4 | §2.7 `/recap` + `/btw` | ✅ 已落地（§4.7，`btw` + `recap` 两个扩展） |
+| 4 | §2.6 WebMCP | 🔜 待做（唯一未落地项） |
+| — | §2.2 凭证导入、§2.5 会话恢复、§2.8 自更新、§2.9 多账号池、§6.2 上下文文件 | 🚫 决定不实现（§3.5–§3.9） |
+| — | §3.1–§3.4 不做成扩展的四项 | 🚫 已定案 |
 
 ---
 
@@ -119,89 +134,101 @@ HTTP/2）时，扩展层够不到——那要动 `core/` 与 `cli/`。其余都�
 | 为什么在 subagent 扩展内 | 驱动子代理的唯一基础设施（`fleet::cached_ctx` / `manager::dispatch` / 通知 / dock 组合）都在这里；另起一个扩展只会把这些再实现一遍 |
 | 为什么不套 workflow 引擎 | workflow 运行有 **30 分钟墙钟兜底**（`bridge::MAX_WALL_MS`），而 autoresearch 是长作业——会被那个兜底掐掉 |
 
-### 2.2 外部 agent 凭证导入（Tier 2，🔜）
+### 2.2 外部 agent 凭证导入（Tier 2，🚫 决定不实现，见 §3.5）
 
 | 维度 | 内容 |
 |---|---|
 | kiss 出处 | `crates/kiss-ai/src/auth/external.rs`（`v0.0.35` 为 775 行，较 `v0.0.18` +3）：发现并导入 OpenAI Codex、Claude Code（含 macOS 钥匙串）、Pi、OpenCode、OpenClaw、Hermes 的登录态；`crates/kiss/src/auth_flow.rs` 的 `kiss auth import` |
-| prux 缺口 | 只有 `auth.json` + OAuth 登录链路（`--api-key > auth.json > OAuth > models.json > env`），**没有**从其它 agent 导入 |
-| prux 落点 | 扩展 `credentials-import`：读别人的凭据文件 → 写入 prux 的 `auth.json`；命令 `/credentials-import`（或 CLI 子命令 + 扩展 flag） |
-| 需确认的接缝 | `core/auth.rs` 里 `auth.json` 的写入**已经是公开 API**（`write_auth_key` / `write_oauth_credential`，见 `src/core/auth.rs`）——扩展不必自己拼盘，直接调它们即可，这一点首版写成“待确认”，现已确认 |
-| 价值 | 高：迁移用户的第一次体验常常卡在"还要重新登录一遍"。从 pi 导入的价值低（同源、格式大概率已兼容），价值主要在 Claude Code / Codex |
-| 工作量 | 中（读取 + 格式映射 + 校验；macOS 钥匙串要 `security` 命令） |
+| prux 现状 | 只有 `auth.json` + OAuth 登录链路（`--api-key > auth.json > OAuth > models.json > env`），**没有**从其它 agent 导入（写入 API `write_auth_key` / `write_oauth_credential` / `remove_auth` 都在 `src/core/auth.rs` 公开，技术上做得到） |
+| 决定 | 🚫 不实现。理由与翻案条件见 **§3.5** |
 
-### 2.3 缓存效率跨会话报告（Tier 2，🔜）
+### 2.3 缓存效率跨会话报告（Tier 2，✅ 已落地，见 §4.5）
 
 | 维度 | 内容 |
 |---|---|
-| kiss 出处 | `crates/kiss/src/cache.rs`（458 行）：`/cache-usage` 条形图；`all` 跨会话、`<provider>` 跨 provider；CLI `kiss cache-usage --provider/--session` |
-| prux 现状 | **只有当前会话**：`extensions/footer.rs` 的 `latest_cache_hit_rate`（`CH%`）+ 累计 `cache_read` / `cost`；`core/cache_warmer.rs` 只管"要不要保温" |
-| prux 落点 | 扩展 `cache-usage`：`on_agent_event` / `on_session_start(&[AgentMessage])` 里读 `Usage`（`cache_read` / `cache_write` / `input` / `cost.total`）→ 追加写 `agent_dir()/extensions/cache-usage.jsonl` → `/cache-usage` 命令 + `overlay_view` 画图 |
-| 价值 | 中高：长会话的账单主要就是缓存命中率，而"这个 provider 值不值得开保温"只能靠跨会话趋势回答 |
-| 工作量 | 小-中（数据就是 `Usage`；渲染照 `footer` 的表格/条形图做法） |
+| 一句话 | 把每个会话 / 每个 provider 的缓存命中率画成趋势，回答“这个 provider 值不值得开缓存保温”；kiss 的入口是 CLI `kiss cache-usage` 与 `/cache-usage` |
+| kiss 出处 | `crates/kiss/src/cache.rs`（458 行）+ CLI `kiss cache-usage`（`args.rs:210-219`、`main.rs:116-124`）+ `/cache-usage`（`interactive.rs:7276-7306`） |
+| kiss 语义（实测） | **数据源就是己方持久化的 session JSONL**（`SessionManager::entries()`，`cache.rs:120-165`）：样本取自 assistant 消息与 Compaction / BranchSummary 的 usage，去重键 `entry_id:timestamp:provider:input:read:write`（`cache.rs:172-180`）。输出三组：Total history（累积面图）→ Provider history（按 provider）→ 各会话的条形（`cache.rs:203-241`）。命中率 = `read / (input+read+write)`，行尾 `X.X% · read / total input tokens · N responses`（`cache.rs:245-259`）。图形常量 `GRAPH_WIDTH=32` / `GRAPH_HEIGHT=4`（面图纵轴 0/25/50/75/100%，`cache.rs:299-330`）、`rate_bar` 24 格 `█`/`░`（`cache.rs:261-274`）。`/cache-usage` 空参=当前会话、`all`=session_dir 全部、`[provider]`=按该 provider 过滤（过滤同时作用于总量与各会话行）；CLI 的 `--session` 支持前缀匹配与文件路径（`cache.rs:75-107`）。**没有**时间窗口参数，全量绘制 |
+| prux 现状 | 只有当前会话：`extensions/footer.rs` 的 `latest_cache_hit_rate`（`footer.rs:67-80`，公式与 kiss 相同）+ 累计 `cache_read` / `cost`；`core/cache_warmer.rs` 只管“要不要保温” |
+| prux 落点（已按此落地） | 扩展 `cache-usage`：扫会话目录（`default_session_dir`，即 `handlers/session_repair.rs:238` 用的那个）下的 `*.jsonl`，逐份交给 `Session::open_checked`（`src/core/session_manager.rs:715`）解析，取 `Usage`（`src/core/provider.rs:979`：`input` / `output` / `cache_read` / `cache_write` / `total_tokens: u32`，以及 `cost: Cost`——`Cost` 在 `:963`，`input/output/cache_read/cache_write/total: f64` 美元）→ 命中率算法直接复用 `footer.rs` 那套 → `/cache-usage [all] [provider]` 命令 + `overlay_view` 画图。**不要自建 usage 文件**：首版写的“追加写 `agent_dir()/extensions/cache-usage.jsonl`”是多余的第二份真源，prux 的会话 jsonl 本身就是 kiss 那份数据源 |
+| 接缝与约束 | `overlay_view`（`src/core/extensions.rs:757`）**每帧调用且必须同步无 I/O** → 读盘与聚合要在命令执行时算完、缓存在扩展 state 里，面板只做绘制。CLI 形态受 `cli_flags()` 限制：`CliFlagDef`（`extensions.rs:147`）只有 `name` / `description` / `takes_value`，而 `src/cli/args.rs:17` 的 `Command` 只有 `Auth` / `Mcp`——扩展**只能加 flag、加不了子命令**，所以 kiss 的 `cache-usage` 子命令在 prux 退化成 `prux --cache-usage [--cache-provider X]` 这类 flag |
+| 验证 | 单测造 2–3 份临时会话 jsonl → 断言去重、聚合维度、命中率与条形文本；渲染照 `footer` 的做法用纯函数断言；目录隔离用 `AgentDirGuard::temp()` |
+| 工作量 | 小（数据已在会话文件里，不需要新增采集） |
 
-### 2.4 provider 可达性诊断（Tier 3，🔜）
+### 2.4 provider 可达性诊断（Tier 3，✅ 已落地，见 §4.6）
 
 | 维度 | 内容 |
 |---|---|
-| kiss 出处 | `crates/kiss/src/doctor.rs`（732 行）：`kiss doctor [--summary]`，16 并发探测每个 provider 的 SSE / WebSocket / AWS event-stream / login 端点，出"防火墙白名单"表；不发送 prompt、不动凭据 |
-| prux 缺口 | 无网络诊断能力（`core/bug_report.rs` 只收集崩溃与失败轮次的诊断信息） |
-| prux 落点 | 扩展 `doctor`：读 `agent_dir()/models.json`（每条模型带 `baseUrl` / `api`，已在 `assets/models/models.json` 里确认）与 `assets/models/providers.json`（35 个 provider）→ 并发探测 → `/doctor` 命令 + 覆盖面板/自定义消息卡 |
-| 价值 | 中：企业网络下的排障利器，也是"到底是 provider 挂了还是我的网挂了"的判据 |
+| 一句话 | 一条命令体检**所有** provider 的网络可达性：哪家连不上、断在哪一层（DNS / TCP / TLS / WebSocket / SSE）、要把哪个主机放行 |
+| 谁用、什么时候用 | 公司代理 / 防火墙 / 严苛网络下的用户；以及“对话报错时，到底是 provider 挂了还是我这边的网挂了”——prux 目前**没有任何**能回答这个问题的东西（`core/bug_report.rs` 只收集崩溃与失败轮次的诊断信息，不测网） |
+| 用完能得到什么 | ① 每家 provider 的 `STATUS/PROVIDER/CONNECTION/HOST:PORT/RESULT` 明细；② `--summary` 的 `REACHABLE/SKIPPED/FAILED` 计数（拿来决定“继续排障”还是“找网络团队”）；③ Environment 段：安装形态、目录数据、登录态、代理设置；④ 退出码 0/1，可直接进脚本 |
+| kiss 出处 | `crates/kiss/src/doctor.rs`（732 行）；CLI 子命令 `kiss doctor [--summary]`（**不在** TUI 斜杠命令表里） |
+| kiss 语义（实测） | 常量 `PROBE_TIMEOUT=10s`、`PROBE_CONCURRENCY=16`（`doctor.rs:8-9`）。探 registry 里**全部** provider、不按凭据过滤（`doctor.rs:180-208`）；**请求本身不带凭据**（避免计费与日志），只有推导 base_url 时会读本地凭据（`doctor.rs:210-260`）。协议判定：SSE = `HEAD`；WebSocket = `GET` 带 `connection` / `upgrade` / `sec-websocket-version` / `key`（key 硬编码），只对 codex / azure / openai-responses（`doctor.rs:314-334`、`368-392`）；`bedrock-converse-stream` = EventStream `HEAD`；Login = 各 OAuth 端点 `HEAD`（`doctor.rs:430-480`）。**200 与 401 都记 OK**——端点在响应就说明网通，鉴权对不对是另一回事（`doctor.rs:404-428`）。退出码：本地失败或有 failed → 1（`doctor.rs:143`）。kiss **没有**自动生成“防火墙白名单”（README:310-311 只是建议把失败行交给网络团队）——本节首版写的“出防火墙白名单表”以此为准 |
+| prux 落点（已按此落地） | 扩展 `doctor`：**TUI 内的 `/doctor [summary]` 命令 + `overlay_view` 画表**。数据源：`assets/models/providers.json`（顶层字符串数组）拿 provider 名单，`find_model`（`src/core/model_resolver.rs:628`，给 `ModelEntry.api` / `ModelEntry.base_url`）或 `model_config::provider_config`（`src/core/model_config.rs:80`，给 `ProviderConfig.base_url` / `.api`）拿端点与协议；并发用 `Semaphore(16)`；HTTP 用已有的 `reqwest 0.13`（`Cargo.toml:128`），WebSocket 的 101 判定用 `tokio-tungstenite 0.30`（`Cargo.toml:160`） |
+| 形态限制 | kiss 那种“CLI 子命令 + stdout 表 + 退出码”在扩展层**做不到**：扩展只能加 flag（`cli_flags()` → `CliFlagDef`），而 flag 的语义是“启动配置”（先例是 `--subagents-workflow-file`，`extensions/subagent.rs:655-668`），不是“跑完打印就退出”。要 CLI 形态就得进 `src/cli/` 的内置子命令（core 工程）；扩展版本先把结果画进覆盖面板，`/doctor summary` 切汇总视图 |
+| 接缝与约束 | 探测必须**不发 prompt、不动凭据**（照 kiss）；`overlay_view`（`src/core/extensions.rs:757`）每帧调用且必须同步无 I/O，所以探测要在命令执行时做完、结果缓存进扩展 state。loopback 判定可复用 `utils/net.rs:63` 的 `is_loopback_host` |
+| 风险 | 探测会打到真实 provider 端点（留日志、可能触发 WAF），10s 超时与 16 并发上限要照抄，不要“顺手调大”；结果会随时间过期，面板上要带时间戳 |
+| 验证 | 不对着真网络测：把探测目标做成可注入，本地起测试 HTTP 服务分别返回 200 / 401 / 挂起，断言分类结果、汇总计数与超时行为；整段用 `run_with_timeout` 包住 |
 | 工作量 | 中（探测本身简单，工作量在端点分类与输出整形） |
 
-### 2.5 跨 agent 会话恢复（Tier 3，🔜）
+### 2.5 跨 agent 会话恢复（Tier 3，🚫 决定不实现，见 §3.9）
 
 | 维度 | 内容 |
 |---|---|
-| kiss 出处 | `crates/kiss/src/session_sources.rs`（434 行）：`/resume` 能读 KISS / Pi / Claude Code / Codex 的会话，`Ctrl+G` 切项目/全局 |
-| prux 现状 | 有 `/resume`（自己的会话）与 `/import <path>`（自己的 jsonl），**不认**别家的会话格式 |
-| prux 落点 | 两层选择：① 扩展做格式转换（Claude Code / Codex 会话 → prux jsonl）再交给已有的 `/import`，改动面最小；② 直接接管 `/resume` 的选择器，需要 core 的会话创建接口 |
-| 价值 | 中高（换工具时最痛的一步）；工作量 中（转换器本身机械，难在别家格式的版本漂移） |
+| 一句话 | kiss 的 `/resume` 选择器能直接列出并**接着用**别家 agent（Pi / Claude Code / Codex）的会话 |
+| kiss 出处 | `crates/kiss/src/session_sources.rs`（434 行）：4 个源（`session_sources.rs:13-31`、`58-75`）——KISS（`kiss_dir`）、Pi（`~/.pi/agent/sessions`）、Claude Code（`~/.claude/projects`）、Codex（`~/.codex/sessions`）；`Ctrl+G` 在 picker 内把 `global` 取反重开（`interactive.rs:6074-6078`），非 global 时按 `cwd == 当前` 过滤（`session_sources.rs:80-82`） |
+| prux 现状 | 有 `/resume`（自己的会话）与 `/import <path>`（自己的 jsonl：`handlers/commands.rs:669` → `run_import`（`handlers/session_repair.rs:238`）→ `Session::open_checked`（`session_manager.rs:715`）），**不认**别家的会话格式。技术上补齐就是写两份字段映射（Claude 取 `message.content[*].type`，Codex 取 `response_item` + `payload.type=="message"` 并过滤 `is_codex_context` 注入），再落到 `SessionManager` 的写 API |
+| 决定 | 🚫 不实现。理由与翻案条件见 **§3.9** |
 
 ### 2.6 WebMCP（Tier 4，🔜）
 
 | 维度 | 内容 |
 |---|---|
-| kiss 出处 | `crates/kiss-webmcp/`（`lib.rs` 989 + `client.rs` 170；首版写的“约 700 行”是旧数）：直连 Chrome 调试端口，把页面通过实验性 WebMCP API 暴露的工具变成 agent 工具（list / describe / call，带 origin 白名单与 100 KB 输出上限）；需要 Chrome flag |
-| prux 缺口 | 无（`web_access` 是搜索/抓取，不是"用网页上的工具"） |
-| prux 落点 | 扩展 `webmcp`：自建 CDP WebSocket 客户端 + `tools()` 动态注册 |
-| 价值 | 低-中（实验性、要求用户改 Chrome flag），但差异化明显 |
+| 一句话 | 把 Chrome 页面通过实验性 WebMCP API 暴露的工具变成 agent 工具：agent 能直接“点”你正开着的网页上的按钮 / 查它上面的数据，而不是只会抓页面文本 |
+| kiss 出处 | `crates/kiss-webmcp/`（`lib.rs` 989 + `client.rs` 170）；`/webmcp [connect|list|disconnect]` |
+| kiss 语义（实测） | 常量 `DEFAULT_CDP_PORT=9222`、`CALL_TIMEOUT=60s`、`MAX_TEXT_BYTES=100_000`（`lib.rs:20-22`），client 的 `REQUEST_TIMEOUT=10s`（`client.rs:11`）。连接：给端口时先 GET `http://127.0.0.1:{port}/json/version` 取 `webSocketDebuggerUrl`（`lib.rs:598-621`），直接给 `ws://` 时必须 loopback（`lib.rs:559-597`）。CDP 序列：`Target.setDiscoverTargets` → `Target.getTargets` → `Target.attachToTarget{flatten:true}` → `Page.enable` → `WebMCP.enable`（`lib.rs:113-118`、`314-356`）。调用：`WebMCP.invokeTool{frameId,toolName,input}` 取 `invocationId`，等广播的 `WebMCP.toolResponded`（按 `invocationId` + `sessionId` 匹配），失败/取消时发 `WebMCP.cancelInvocation`（`lib.rs:200-260`），状态分 Completed / Canceled / Error（`:265-280`）。origin 白名单：先 allow 后 deny、**deny 优先**；entry 含 `://` 比 origin，否则比 `host[:port]`（`lib.rs:531-557`），配置源 `settings.webmcp.{allowedOrigins,disallowedOrigins,cdp}`。输出超 100 KB 时按字符边界截断并追加提示（`lib.rs:741-749`）。用户要先在 Chrome 开 `#enable-webmcp-testing` / `#devtools-webmcp-support` 与 `chrome://inspect/#remote-debugging`（README:525-542） |
+| prux 现状 | 无（`web_access` 是搜索/抓取，不是“用网页上的工具”） |
+| prux 落点 | 扩展 `webmcp`：CDP 客户端用 `tokio-tungstenite 0.30`（`Cargo.toml:160`，带 `connect` + `rustls`；**当前 `src/` 里没有任何调用点**，是现成依赖，不必新增），HTTP 用 `reqwest 0.13`。工具动态注册可行：prux 的 `tools()`（`extensions.rs:407`）**每次组装工具表都会重新问**（`compose_tools`，`agent_session.rs:197`，`Agent::new` 与 `rebuild_tools`（`:1111`）都会调），连上/断开后用 `request_ui(ExtensionUiRequest::RebuildTools)`（`ui.rs:159` / `:181`）触发下一轮重建——所以“页面工具出现在工具表里、断开后消失”能做到。命令 `/webmcp [connect|list|disconnect]`，`settings()` 声明白名单与端口（对齐 kiss 的 `settings.webmcp.*`）；工具名加前缀避免与内建撞名，判定可复用 `core/tool_names.rs` |
+| 接缝与约束 | 每帧调用且必须无 I/O 的只有 `overlay_view` / `dock_lines`，那里不能碰 WebSocket；工具调用本身在扩展工具的 handler 里，是正常 I/O。`ws://` 的 loopback 校验用 `utils/net.rs:63` 的 `is_loopback_host` |
+| 风险 | 实验性 API（要靠 Chrome flag 打开），协议可能变；“没有 Chrome 就不可用”要写进文档 |
+| 验证 | 本地起一个假 CDP WebSocket 服务（就用 `tokio-tungstenite`）回放 kiss 的握手与 `toolResponded` 时序，断言工具注册、调用结果、超时与 100 KB 截断；用 `run_with_timeout` 包住 |
 | 工作量 | 中 |
 
-### 2.7 `/recap` 与 `/btw`（Tier 4，🔜）
+### 2.7 `/recap` 与 `/btw`（Tier 4，✅ 已落地为两个扩展，见 §4.7）
 
 | 维度 | 内容 |
 |---|---|
-| kiss 出处 | `crates/kiss/src/slash_commands.rs` 的本地命令表：`/recap`（单行会话小结）、`/btw`（只读旁问，不改上下文） |
-| prux 缺口 | 都没有（prux 有 `/rewind`、`goal`、`compaction`，但无"旁问"与"一行小结"） |
-| prux 落点 | 一个小扩展（或并入现有扩展）：`/btw` 走 `on_user_prompt` → `Handled`（不进 transcript）；`/recap` 用一个虚拟模型/一次性子代理出单行摘要 |
-| 价值 | 低（习惯养成型功能）；工作量 小 |
+| 一句话 | `/recap` = 输入框上方一行会话小结，空闲自动刷新；`/btw` = 只读旁问，答案弹在输入区上方，**不写会话、不进主对话** |
+| `/recap` 用起来是什么样 | 状态区（输入框上方）一行 muted 文本 `※ recap: <≤120 字的小结>`，生成中显示 `<spinner> creating recap...`（`interactive.rs:717-722`）。**默认开启**（`settings.rs:358-359`）：空闲满 5 分钟且不在跑回合就自动重刷（`AUTO_RECAP_IDLE=5min`，`interactive.rs:403`、`1033-1042`），切回终端一眼知道这个会话在干什么。`/recap now`（或空参）立刻刷一次，`/recap on` / `off` 开关，`off` 会取消正在生成的（`interactive.rs:7429-7455`）。小结是“另起一次调用”：只喂最近 12 条、12000 字的转录摘录，要求 ≤120 字单行，`max_tokens=160`，回来再 `normalize_recap` 去前缀并截到 120 字（`session_runner.rs:1341-1370`、`interactive.rs:7833-7847`） |
+| `/btw` 用起来是什么样 | `/btw 这个错误码是啥意思` → 输入区上方出现一块 `BTW` 区块：加粗标题 + 缩进的问题 + 空行 + markdown 渲染的答案 + `esc or enter closes`；进行中显示 `answering...`（`esc cancels`），失败显示 `✗ <错误>`；Esc / Enter 关闭，内容不会留在对话里（`interactive.rs:725-747`）。它的“旁”体现在三处：走 `run_ephemeral` 的**空上下文**（`session_runner.rs:1213-1277`）、system prompt 声明只读且**只装 `read` 工具**、`max_tokens=500`，且结果只进 `app.btw_panel`、**不写会话文件**（`answer_btw`，`session_runner.rs:1280-1310`）。用途是“顺手问一句，别污染上下文、别让模型顺着这句话改计划” |
+| kiss 出处 | 命令表在 `crates/kiss/src/slash_commands.rs`，分发与渲染在 `modes/interactive.rs`，模型调用在 `kiss-coding/src/session_runner.rs` |
+| prux 现状 | 都没有（prux 有 `/rewind`、goal、compaction，但既没有“旁问”也没有“一行小结”） |
+| prux 落点（已按此落地为 `btw` / `recap` 两个独立扩展） | 一个扩展（或并入现有小工具扩展）。`/btw`：`on_user_prompt` / `on_user_prompt_with_context`（`extensions.rs:528` / `:537`）返回 `UserPromptAction::Handled`（`:937`）即“认领这条输入、不进 transcript”；一次性模型调用走子代理路径（`extensions/subagent` 的 `manager::dispatch`，可限定工具集与轮次）或虚拟模型（`core/virtual_models`），结果落到 `render_custom_message` / overlay，**不写会话**。`/recap`：同样走一次性子代理，`[now|on|off]` 存扩展 settings；“空闲自动触发”需要一个节拍来源——扩展没有独立定时器接口，可选 `subagent::schedule` 的墙钟实现或 `wants_redraw()`（`extensions.rs:738`）的持续重绘节拍，这是实现时的选型点 |
+| 验证 | 假 provider 断言 `/btw` 不产生新的会话 entry（借 `agent_session_path` 那类测试接缝比对会话文件）；`/recap` 的 120 字截断与去前缀写成纯函数单测 |
+| 工作量 | 小 |
 
-### 2.8 真实自更新（Tier 4，🔜）
+### 2.8 真实自更新（Tier 4，🚫 决定不实现，见 §3.6）
 
 | 维度 | 内容 |
 |---|---|
-| kiss 出处 | `crates/kiss/src/update.rs`（`v0.0.35` 为 450 行；`v0.0.18` 是 384 行，增量是措辞重写 `11726b9 style: polish project wording`）：查 GitHub latest release → 下载对应平台的归档 → 校验 SHA-256 → 替换自身；`install.sh` / `install.ps1` 同源逻辑 |
-| prux 现状 | `extensions/update_check.rs` 只**检查**并提示，`/update open` 打开下载页 |
-| prux 落点 | 扩展 `self-update`：下载 + 解包 + 原子替换（需要引入 `self-replace` 这类依赖，或自己写 rename 交换 + 保留旧文件回滚） |
-| 风险 | 中-高：Windows 上替换运行中的 exe 有额外约束；替换失败会留下半成品安装。建议先做"下载到侧目录 + 打印替换命令"，把原子替换留作后续 |
-| 价值 | 中；工作量 中 |
+| kiss 出处 | `crates/kiss/src/update.rs`（`v0.0.35` 为 450 行；`v0.0.18` 是 384 行，增量是措辞重写 `11726b9 style: polish project wording`）：查 GitHub latest release → 下载对应平台归档 → 校验 SHA-256 → 替换自身；`install.sh` / `install.ps1` 同源逻辑 |
+| prux 现状 | `extensions/update_check.rs` 只**检查**并提示：`LATEST_API`（`update_check.rs:57`）+ `DOWNLOAD_PAGE`（`:60`），`/update open` 只是打开下载页 |
+| 决定 | 🚫 不实现。理由与翻案条件见 **§3.6** |
 
-### 2.9 多账号池与限流切换（Tier 2，🔜，重核时新增）
+### 2.9 多账号池与限流切换（Tier 2，🚫 决定不实现，见 §3.7）
 
 | 维度 | 内容 |
 |---|---|
 | kiss 出处 | `crates/kiss-ai/src/auth/accounts.rs`（697 行）+ `crates/kiss-coding/src/account_failover.rs`（89 行 + 127 行测试）+ `/accounts [list|add|use|remove]` 命令（`crates/kiss/src/modes/interactive.rs` 的 `run_accounts_command`） |
 | kiss 语义 | 同一 provider 存多个账号（池）；包装 `StreamFn`：先**扣住** `Start` 事件，若第一个真事件是池内账号的限流错误，就切下一个就绪账号并重发同一请求——agent 循环、转写与会话文件都看不到那次失败尝试 |
-| prux 缺口 | `core/auth.rs` 每个 provider **只存一份**凭据（`write_auth_key` / `read_auth_key`，`auth.json` 键即 provider）；没有池、没有账号级限流切换。重试层（`core/provider/retry.rs`）只管请求级重试，不会换凭据 |
-| prux 落点 | 两层：① `core/auth.rs` 的存储从"一 provider 一份"扩成"一 provider 一份列表"（**动 core**，且要兼容既有 `auth.json`）；② 包装层（`StreamFn` 包装、扣 `Start` 事件、限流时换账号）落在 `core/provider` 或扩展的 `provider_stream_event` 钩子上 |
-| 为什么不是纯扩展 | 换账号要重发**同一个请求**并吞掉失败事件，而 `provider_stream_event` 是只读观察点，拦不住重发；`proxy` 扩展能做协议适配，但换不了 prux 自己的登录态 |
-| 价值 | 中-高：有多个订阅/额度账号的用户遇到 429 直接掉回合，这是刚需；工作量 中-大（存储迁移 + 流包装） |
+| prux 现状 | `core/auth.rs` 每个 provider **只存一份**凭据：`auth.json` 顶层是 `{provider:{type:"api_key"|"oauth",…}}`（`auth.rs:3`），读写在 `read_auth_key`（`:70`）/ `write_auth_key`（`:263`）；没有池、没有账号级限流切换。重试层（`core/provider/retry.rs`）只管请求级重试，不会换凭据 |
+| 决定 | 🚫 不实现。理由与翻案条件见 **§3.7** |
 
----
+## 三、不做成扩展 / 决定不实现（已定案）
 
-## 三、不做成扩展（已定案）
+本节分两类：**§3.1–§3.4** 是“功能本身不做”（或虽有价值但扩展层够不到，属 core 工程）；
+**§3.5–§3.9** 是本轮逐项决策后判为不做、并给出翻案条件的五项。两类都是**决定**，
+不是“暂缓”——没有新证据就不要重新启动讨论。
 
 ### 3.1 对外接口：ACP / JSONL RPC / WebSocket RPC / 六种语言 SDK
 
@@ -222,6 +249,10 @@ Bedrock、GitHub Copilot 都做进了 `kiss-ai`。
 用已有的 `proxy` 扩展（本地 OpenAI 兼容网关）做协议适配即可桥接，不必改 provider 层。
 真要"像原生一样"再考虑进 core。
 
+**Copilot 不算缺口**：prux 的 `SUPPORTED_PROVIDERS`（`src/core/model_resolver.rs:41`）已有
+`github-copilot`，`core/oauth/copilot.rs` 也在——本节首版把 Copilot 与其它四个并列，现在只
+Cursor / Databricks / Snowflake / Bedrock 是真的没有。
+
 ### 3.3 语音输入（`/voice`）
 
 kiss 的 `crates/kiss/src/voice.rs`（592 行）支持本地 whisper.cpp 与 opt-in 云端转写。
@@ -236,9 +267,98 @@ kiss 把「压缩策略」与「思考档位选择」外包给第三方服务（
 （`on_before_compact` / `custom_summarize` / `on_boundary`），增量价值取决于用户是否订阅
 TypeSafe；愿意用的话完全可以由扩展提供，但优先级低于上面那些。
 
+### 3.5 外部 agent 凭证导入（原 §2.2）
+
+kiss 的 `kiss-ai/src/auth/external.rs`（775 行）能发现并搬运 Codex / Claude Code（含 macOS 钥匙串）/
+Pi / OpenCode / OpenClaw / Hermes 的登录态，`kiss auth import` 一条命令搞定。prux 侧技术上做得到
+（`write_auth_key` / `write_oauth_credential` / `remove_auth` 都是 `src/core/auth.rs` 的公开 API）。
+**为什么不做**：
+
+- **一次性收益 vs 长期维护**：导入只省掉“重登一次”，代价是永久跟着 5 家私有登录态格式走
+  （token 结构、路径、钥匙串条目名都会变）——kiss 那份 775 行代码就是这个成本的体现。
+- **安全面**：要读别家凭据文件，Claude Code 还要调 `security` 读钥匙串。扩展没有沙箱
+  （§1.3：扩展即进程内代码），这类“读任意凭据”的能力不该由一个内置扩展默认持有。
+- **不在主线**：pi 没有导入能力，这不是“与 pi 对齐”的一部分；prux 已有
+  `--api-key > auth.json > OAuth > models.json > env` 五条登录路径。
+- **同源无收益**：从 pi 导入更没意义（格式本来就兼容）。
+
+**翻案条件**：出现“用户因为要重登而放弃 prux”的实证，或 pi 侧先做了同名能力（那时随 pi 契约走）。
+
+### 3.6 真实自更新（原 §2.8）
+
+kiss 的 `update.rs`（450 行）会下载平台归档、校验 SHA-256、替换自身；prux 的
+`update_check.rs` 只检查并提示，`/update open` 打开下载页。
+**为什么不做**：
+
+- **没有安全的落点**：仓库里没有 `install.sh` / `install.ps1`，发布产物是
+  `prux-<version>-x86_64-<os>.tar.gz`（`.github/workflows/{linux,macos,windows}.yml`），
+  实际安装形态是“用户自己 `cargo build` 或手动解包”。自替换会让二进制与 release 来源脱钩
+  （覆盖掉用户自己构建的那份）。
+- **失败代价高于收益**：Windows 替换运行中的 exe 有额外约束，失败会留下半成品安装——
+  §2.8 自己也写了“半成品安装比不更新更糟”。
+- **收益已被覆盖**：`update-check` 已能发现新版本并一键打开下载页，而 prux 是单二进制，
+  手动替换就是几步操作。
+
+**翻案条件**：prux 提供官方安装脚本或走包管理器分发之后，自更新才有安全落点。
+
+### 3.7 多账号池与限流切换（原 §2.9）
+
+kiss 用 `auth/accounts.rs`（697 行）+ `account_failover.rs` 给一个 provider 存多个账号，
+限流时换账号重发同一请求。**为什么不做**：
+
+- **存储形状是 pi 契约**：pi 的 `packages/ai/src/auth/types.ts:36` 明写
+  「One type-tagged credential per provider — the shape of today's auth.json」，
+  prux 的 `auth.json`（`{provider:{type:"api_key"|"oauth",…}}`）与之一致。改成池 = 主动偏离 pi，
+  还要迁移老用户的文件（§五那条“老用户升级后直接掉登录”正是这个风险）。
+- **不是扩展能做的事**：换账号要重发**同一个请求**并吞掉失败事件，而 `provider_stream_event`
+  是只读观察点，拦不住重发；只能改 `core::provider` 的 `StreamFn` 包装层，属 core 工程。
+- **收益面窄**：需要“同一 provider 有多个订阅/额度”的用户才用得上；429 在 prux 已有
+  `core/provider/retry.rs` 的请求级重试兜底。
+
+**翻案条件**：pi 侧引入账号池（那时随契约实现），或有明确的用户量证据。
+
+### 3.8 实验性「模型自有上下文文件」（原 §6.2 补记）
+
+kiss 的 `kiss-coding/src/context_file.rs` 把会话上下文导出成临时 JSON 让模型改，
+改动读回后作为一次 compaction 生效（要显式开 `experimental_context_file`）。
+**为什么不做**：
+
+- 读回要往会话里写 compaction（`SessionManager::append_compaction`，`session_manager.rs:1263`），
+  而扩展拿到的是不可变的会话视图（如 `on_session_start` 的 `&Session`），没有可变句柄；
+- 会话文件的写入在 prux 是单一来源（`SessionManager`），让模型改一份 JSON 再读回等于把上下文
+  变成可被外部改写的状态，与 `core/compaction` 的分层冲突；
+- 它是 kiss 的实验特性，价值未被验证。
+
+**翻案条件**：kiss / pi 把它做稳并进入正式设置项之后。
+
+### 3.9 跨 agent 会话恢复（原 §2.5）
+
+kiss 的 `session_sources.rs`（434 行）让 `/resume` 能列出并接着用 KISS / Pi / Claude Code / Codex
+的会话（`Ctrl+G` 切项目/全局）。prux 侧技术上做得出来（两份字段映射 + 已有的 `/import`），
+但**不做**：
+
+- **语义对不齐，导进来只能“看”不能“接着用”**：prux 的会话条目带工具调用、思考块、分支与压缩
+  边界，Claude / Codex 的条目模型不同；强行映射出的历史在后续 `/compact`、`/fork`、分支切换上
+  行为不确定——半吊子的迁移比“不复用旧历史”更糟。
+- **长期维护**：两家都是私有 jsonl，版本一变就得跟着改（同 §3.5 的逻辑）。
+- **一次性收益**：换工具只发生一次；真需要旧上下文时，让用户把旧会话导成文本、或让 `/recap`
+  式的一次性摘要顶上去就够了，不需要为它写代码。
+- **不在主线**：pi 没有这个能力；prux 已有自己的 `/resume` 与 `/import`（自家格式）。
+
+**翻案条件**：Claude Code / Codex 把会话格式文档化并稳定下来，或 pi 侧先做了同样的事。
+
 ---
 
-## 四、实施记录：autoresearch（本次真正落地）
+## 四、实施记录
+
+### 4.0 总览
+
+| 小节 | 落地项 | 承载扩展 |
+|---|---|---|
+| §4.1–§4.4 | §2.1 autoresearch 闭环 | `subagent`（`subagent/autoresearch.rs`） |
+| §4.5 | §2.3 缓存效率跨会话报告 | `cache-usage`（新） |
+| §4.6 | §2.4 provider 可达性诊断 | `doctor`（新） |
+| §4.7 | §2.7 `/recap` + `/btw` | `btw` + `recap`（两个新扩展） |
 
 > 首版这一节记的是一次**并不存在的落地**：按当时的描述去仓里找，`autoresearch.rs`、
 > `forget_ctx_for_test()`、那条端到端用例都不存在，`git log --all` 里也没有任何相关提交。
@@ -309,19 +429,144 @@ cargo clippy --lib --all-targets       # 无新增告警（剩下的都是本次
 
 ---
 
-## 五、后续动手前的检查项
+### 4.5 cache-usage（§2.3 落地）
 
-1. **`auth.json` 的写入路径**（§2.2）：已确认 `core/auth.rs` 有公开写入 API
-   （`write_auth_key` / `write_oauth_credential` / `remove_auth`）——扩展直接调即可，不必自拼盘。
-   真正要当心的是"导入的凭据要不要覆盖既有登录态"（建议只在目标 provider 尚未登录时写，或让用户确认）。
-2. **别家会话格式的版本漂移**（§2.5）：Claude Code / Codex 的 jsonl 结构会变，转换器要
-   容错并在解析失败时明确报"哪个字段没认出来"，不要静默丢消息。
-3. **自更新的原子性**（§2.8）：先做"下载 + 校验 + 打印替换命令"，把原子替换留到有跨平台
-   验证手段之后——半成品安装比不更新更糟。
-4. **多账号的存储迁移**（§2.9）：改 `auth.json` 形状时要兼容既有单凭据格式，
-   否则老用户升级后直接掉登录。
-5. **changelog**：每次落地都要在 `assets/changelog/v.<Cargo.toml version>.md` 里记一笔
-   （缺文件会编译失败；`core::changelog::VERSION` 取自 `Cargo.toml`）。
+| 文件 | 内容 |
+|---|---|
+| `src/extensions/cache_usage.rs`（新增，约 1190 行含测试） | 会话扫描与去重、`Report` 聚合、条形图 / sparkline、覆盖面板与滚动、10 个单测 |
+| `src/extensions.rs` | `pub mod cache_usage;` + `pub const PRIORITY_CACHE_USAGE: u32 = 66;` |
+| `assets/docs/extensions.md` | 内置扩展表新增 `cache-usage` 行 + `### cache-usage` 一节 |
+| `assets/changelog/v.1.1.0.md` | 中英各一条 |
+| `tests/extensions_registry.rs` | 扩展计数 20 → 24、补 `cache-usage` 默认不启用断言 |
+
+默认状态：**不启用**，只在 `Dev` / `Creator` 扩展模式下可用（属排查工具，不抢行为）。
+
+用法：`/cache-usage`（当前会话）、`/cache-usage all`（`agent_dir()/sessions` 下全部工程）、
+`/cache-usage all <provider>`。面板 = 总量条形图（24 格）+ 32 格命中率趋势 sparkline +
+各 provider 分列（≥2 个时）+ 各会话分列（`all` 时按 token 总量取前 12）；
+↑↓ / PageUp / PageDown / Home / End 滚动，Esc 关闭；扫描期间显示 `scanning sessions…`。
+
+| 项 | kiss | prux 实现 | 说明 |
+|---|---|---|---|
+| 数据源 | 己方 session JSONL 的 `SessionManager::entries()` | 同一份会话 jsonl（`Session::open_checked` + `SessionState::entries()`） | 首版设计的"自建 `cache-usage.jsonl`"被否掉：不留第二份真源 |
+| 命中率 | `read / (input + read + write)` | 同 | 与 `footer` 底栏同式 |
+| 样本 | assistant 消息 + `Compaction` / `BranchSummary` 的 usage | 同 | |
+| 去重键 | 条目 id + 时间戳 + provider + 用量 | 同 | fork 出来的会话文件会重复包含父会话条目 |
+| 趋势图 | 32×4 累积面图 | 32 格 sparkline（8 档块字符） | 省行数、便于单测；语义相同（左旧右新） |
+| CLI | `kiss cache-usage [--session ID\|FILE] [--provider ID]` | **未做** | 扩展只能加 flag、加不了子命令（`src/cli/args.rs` 的 `Command` 只有 `auth` / `mcp`）；要 CLI 形态得进 `src/cli/` |
+| 扫描范围 | 全量 | 最新 200 份会话文件 | 防 `all` 在多年历史里卡住（扫描走 `spawn_blocking`，UI 不冻） |
+| provider 归属 | 样本自带 provider | 消息的 `provider`；缺失时回退到最近的 `ModelChange` 或上一条带 provider 的 assistant 消息 | 旧会话里 `Compaction` 条目常常没有 provider |
+
+### 4.6 doctor（§2.4 落地）
+
+| 文件 | 内容 |
+|---|---|
+| `src/extensions/doctor.rs`（新增，约 1030 行含测试） | 探测目标枚举、并发探测、状态/错误分类、明细与汇总渲染、environment 段、13 个单测 |
+| `src/extensions.rs` | `pub mod doctor;` + `pub const PRIORITY_DOCTOR: u32 = 64;` |
+| `assets/docs/extensions.md` | 表格行 + `### doctor` 一节 |
+| `assets/changelog/v.1.1.0.md` | 中英各一条 |
+| `tests/extensions_registry.rs` | 补 `doctor` 默认不启用断言 |
+
+默认状态：**不启用**，只在 `Dev` / `Creator` 扩展模式下可用。
+
+用法：`/doctor`（明细）与 `/doctor summary`（计数 + 失败清单）；面板末尾固定附 environment 段。
+
+| 项 | kiss | prux 实现 | 说明 |
+|---|---|---|---|
+| 探测协议 | SSE `HEAD` / WebSocket `GET` / AWS event-stream / OAuth login 端点，四种分类 | 只探 chat 端点的 `HEAD` | prux 目录里只有 5 种 chat 协议（`anthropic-messages` / `openai-responses` / `openai-completions` / `azure-openai-responses` / `google-generative-ai`），没有 WS / event-stream 形态 |
+| 目标范围 | `registry.all()` 全部 provider | `catalog_providers()` 里每个 provider 的第一个 chat 模型 | 同"全覆盖、不按凭据过滤" |
+| 凭据 | 请求不带凭据，只有推导 base_url 时读本地凭据 | 完全不读凭据（base_url 来自目录） | |
+| 可达判定 | 200 / 401 | **任何 HTTP 响应都算可达**（2xx / 401 / 403 / 405 不加附注，其它标 `status not OK`） | kiss 探的是真实 API 路径，404 于它意味着「端点不对」；prux 探的是 base URL，「路径无处理器」不算网络故障——防火墙白名单要的正是「这个主机出不出得去」 |
+| 超时 / 并发 | 10s / 16 | 同（常量照抄） | |
+| 输出 | 明细表 + `--summary` 表 + Environment 段 | 覆盖面板（明细 / summary 两档）+ environment 段 | 面板代替 stdout 表 |
+| 退出码 | 有 failed → 1 | **无**（TUI 内命令没有退出码语义） | |
+| 离线 | 无此概念 | `runtime::offline()` 时不发请求，只显示 environment 段 + `offline mode: network probes skipped` | |
+| environment 段 | install / catalog / auth / proxy | 程序名与版本、`agent_dir()`、探测目标数、三个代理变量 set/unset（**不回显值**） | 代理值里可能带凭据 |
+
+### 4.7 btw + recap（§2.7 落地，两个扩展）
+
+| 文件 | 内容 |
+|---|---|
+| `src/extensions/recap_btw.rs`（新增，模块根） | 声明 `shared` / `btw` / `recap` 三个子模块并说明为什么拆开 |
+| `src/extensions/recap_btw/shared.rs`（新增） | 两者共用：会话 id 槽、转录摘录、折行、一次性请求（`spawn_one_shot`）、5 个单测 |
+| `src/extensions/recap_btw/btw.rs`（新增） | `btw` 扩展：`/btw` 命令、`BTW` 面板、7 个单测 |
+| `src/extensions/recap_btw/recap.rs`（新增） | `recap` 扩展：`/recap` 命令、停靠行、空闲 tick、设置落盘、11 个单测 |
+| `src/extensions.rs` | `pub mod recap_btw;` + `PRIORITY_BTW = 63` / `PRIORITY_RECAP = 62` |
+| `assets/docs/extensions.md` | 表格两行 + `### btw` / `### recap` 两节 + 默认关闭清单补 `btw`、`recap` |
+| `assets/changelog/v.1.1.0.md` | 中英各一条（改动说明里与其它两个新扩展合并成一条） |
+| `tests/extensions_registry.rs` | 计数 20 → 24，并加 `btw` / `recap` 默认不启用断言 |
+
+**为什么拆成两个扩展**：`/btw` 只在用户显式发起时才有动作（不问就不花钱），而 `/recap`
+开启后会在**空闲时自动**发起请求（要花 token）。把两个开关绑在一起，等于"想用旁问就得接受
+后台自动花钱"，是把两种不同代价的行为捆在一块。拆开后各自的 `default_enabled()` 与
+扩展设置也互不干扰；共用逻辑（摘录 / 折行 / 一次性请求）放在同模块的 `shared.rs` 里，
+不会分叉成两套语义。
+
+默认状态：两个都**不启用**，只在 `Dev` / `Creator` 扩展模式下可用。
+
+用法：`/btw <问题>`、`/recap [now|on|off]`。
+
+| 项 | kiss | prux 实现 | 说明 |
+|---|---|---|---|
+| `/btw` 上下文 | `transcript_excerpt(4 条, 4000 字)` + 只装 `read` 工具 | 同样 4 条 / 4000 字，**不给任何工具** | 一次性请求本来不带工具，安全面更小 |
+| `/btw` 执行 | `run_ephemeral`（空上下文新开一次） | `provider::simple_completion`（非流式一次性请求） | 都不写会话文件 |
+| `/btw` 展示 | `app.btw_panel`（输入区上方，esc / enter 关闭） | `OverlaySize::Inline` 覆盖面板（Esc / Enter 关闭） | 位置与关闭语义一致 |
+| `/recap` 展示 | 状态区一行 `※ recap: …` | 停靠面板（dock）一行 | dock 就是"状态栏上方"，语义等价 |
+| `/recap` 生成 | 12 条 / 12000 字摘录，≤120 字，`max_tokens=160` | 同，另做前缀/引号清洗 + 硬截断（省略号不占配额） | |
+| 空闲触发 | TUI 事件循环判 5 分钟 | 30 秒 tick 后台任务（"代际"退出，同 `subagent::schedule`） | 扩展没有独立定时器接口 |
+| 默认开关 | 默认开启 | **整个扩展默认不启用**；启用后 `autoRecap` 默认 on，可关 | 自动小结要花 token，不该由框架替用户决定 |
+| 设置落盘 | kiss settings | `agent_dir()/extensions/recap.json` 的 `autoRecap`，也可在扩展设置面板改 | 扩展自己的配置文件 |
+| 模型选择 | kiss 用会话当前模型 | 当前 provider/model；兜底取摘录里最后一条带 `provider`/`model` 的 assistant 消息 | 不引入虚拟模型 |
+
+### 4.8 验证（§4.5–§4.7）
+
+```bash
+cargo test --lib cache_usage             # 10 passed
+cargo test --lib doctor                  # 13 passed
+cargo test --lib recap_btw               # 23 passed（shared 5 + btw 7 + recap 11）
+cargo test --test extensions_registry    # 2 passed（计数 20 → 24、注册序、默认启用断言）
+cargo test                               # 全量绿（lib 3361 + 各集成测试二进制）
+cargo clippy --all-targets               # 新代码零告警（残留告警都在本次改动之前）
+cargo fmt --check                        # 通过
+```
+
+- **cache-usage**：条形成比例、命中率口径（含 0 分母）、sparkline 分档与左侧补位、参数解析
+  （`all` / provider / 两个 provider 报错）、真实临时会话文件的聚合与 fork 去重、provider 过滤、
+  报告行文本、面板认领与滚动封顶、禁用清状态。
+- **doctor**：`host[:port]` 解析（含 userinfo / 端口 / IPv6 方括号）、状态码分类
+  （2xx / 401 / 403 / 405 可达，404 / 500 不可达）、错误分类（超时 vs 连接失败）、
+  detail / summary / environment 行文本（含"只显示 set/unset"）、未知子命令提示、
+  面板认领与滚动、禁用清状态；**本地 TcpListener** 覆盖 200 / 401 / 挂起 / 连接拒绝四种真实探测
+  （`run_with_timeout` 包住，全程不联网）。
+- **shared**（5）：摘录条数 / 字符上限 / 空文本跳过、`(provider, model)` 兜底提取、折行、
+  TUI 镜像优先于快照、无 tokio 运行时时 `spawn_one_shot` 返回错误而不是 panic。
+- **btw**（7）：无问题提示用法、无型号提示、正常开面板（面板文本含问题与错误）、迟到答案在面板
+  关闭后丢弃、禁用清状态、命令与模式声明（`Dev` / `Creator` + 默认不启用）、会话切换收面板。
+- **recap**（11）：前缀/引号清洗与硬截断、空闲判定矩阵、停靠行 spinner → 小结文本、
+  `/recap on|off` 落盘与非法子命令、`now` 在缺型号 / 缺历史时提示、设置面板读值与
+  `apply_setting` 校验、`transform_context` 快照、禁用清状态、命令与模式声明、会话切换复位
+  但保留设置。
+- **未覆盖**：真实模型下 `/btw` / `/recap` 的回答质量（取决于模型，无法断言）；真终端里
+  dock 与面板的观感（行文本已由单测断言）。`all` 模式对真实历史会话的耗时（本次只在
+  临时目录的小样本上测过）；`/doctor` 只验证了本地测试服务与三个真实端点（本机网络受限，
+  没能逐一核对 35 个 provider 的 `HEAD` 行为）；四个新扩展在 `Dev` / `Creator` 模式下的
+  面板可见性只由 `tests/extensions_registry.rs` 的注册表断言覆盖，没在真 TUI 里点过。
+- **已知限制**：自动小结的摘录快照是在 `transform_context`（每次 LLM 调用前）刷新的，
+  而该钩子不带 `agentScope`——主 agent 与子代理的调用会共享这份快照，最后一次写入者生效。
+  手动 `/recap` 与 `/btw` 不受影响：它们直接读 `App.messages`。
+
+## 五、落地后的收尾检查
+
+1. **渲染与 I/O 的边界**：三个新扩展都守住了——覆盖面板 / 停靠行只画缓存在 state 里的数据，
+   读盘、聚合、网络探测分别在命令执行时、`spawn_blocking` 或 `spawn` 里完成（§4.5–§4.7）。
+2. **changelog**：`assets/changelog/v.1.1.0.md` 中英各加三条（本仓规定缺文件会编译失败）。
+3. **扩展文档**：`assets/docs/extensions.md` 加了四行表格 + 四节说明，并把 `cache-usage`、
+   `doctor`、`btw`、`recap` 都登记进"默认关闭"清单。
+4. **测试**：新增代码共 46 个单测（cache-usage 10 / doctor 13 / btw 7 / recap 11 / shared 5），
+   另有 `tests/extensions_registry.rs` 的注册计数与顺序断言随扩展数更新（20 → 24），
+   并逐个断言四个新扩展**默认不启用**。
+5. **默认状态**：四个新扩展都是 `default_enabled() == false` + `modes() == [Dev, Creator]`，
+   与 `hang-detect` / `notify` / `rewind` / `jet` / `codemode` 等既有可选扩展同一档。
 
 ---
 
@@ -336,6 +581,7 @@ cargo clippy --lib --all-targets       # 无新增告警（剩下的都是本次
 | §4.3 参数形式 | 声称 `-n` / `--iterations=N` 也认 | kiss 只认**结尾**的 `--iterations N`；prux 同样只认这一种（不额外放宽，以免同一串输入在两边的语义不同） |
 | §2.8 行数 | `update.rs` 384 行 | `v0.0.35` 是 450 行（`v0.0.18` 确实是 384；增量来自 `11726b9`） |
 | §2.6 行数 | webmcp "约 700 行" | `lib.rs` 989 + `client.rs` 170 |
+| §2.4 输出 | 探测结果里出“防火墙白名单”表 | kiss **不生成**白名单（`doctor.rs` 无此逻辑，README:310-311 只是建议把失败行交给网络团队）；本轮已按实测改写 §2.4 |
 
 其余行数（`cache.rs` 458、`doctor.rs` 732、`session_sources.rs` 434、`jev.rs` 1090、`subagents.rs` 917、
 `external.rs` 772@v0.0.18）逐一核对无误。
@@ -347,18 +593,18 @@ cargo clippy --lib --all-targets       # 无新增告警（剩下的都是本次
 | kiss 文件 | 变动 | 对本档的影响 |
 |---|---|---|
 | `kiss-coding/src/iterative.rs`、`kiss/src/job_ui.rs` | **未改** | §2.1 的语义描述与 §4.3 的对齐表仍然成立（autoresearch 是本次落地的基准） |
-| `kiss/src/cache.rs`、`doctor.rs`、`session_sources.rs`、`kiss-coding/src/jev.rs`、`kiss-coding/src/subagents.rs` | **未改** | §2.3 / §2.4 / §2.5 / §1.2 的对照仍然成立 |
-| `kiss-ai/src/auth/external.rs` | +3 行 | §2.2 成立 |
+| `kiss/src/cache.rs`、`doctor.rs`、`session_sources.rs`、`kiss-coding/src/jev.rs`、`kiss-coding/src/subagents.rs` | **未改** | §2.3 / §2.4 / §1.2 的对照仍然成立；§2.5 的事实成立，但结论已改为不实现（§3.9） |
+| `kiss-ai/src/auth/external.rs` | +3 行 | §2.2 的事实成立，但结论已改为不实现（§3.5） |
 | `kiss/src/modes/acp.rs` | +25 行 | §3.1 的结论（新运行模式，不是扩展）不变 |
 | `kiss-webmcp/src/lib.rs` | +5 行 | §2.6 成立 |
-| `kiss/src/update.rs` | 措辞重写（384→450） | §2.8 成立 |
+| `kiss/src/update.rs` | 措辞重写（384→450） | §2.8 的事实成立，但结论已改为不实现（§3.6） |
 
 新增能力（首版清单里没有，重核时补入）：
 
 | kiss 新增 | 是什么 | 判断 |
 |---|---|---|
-| `kiss-ai/src/auth/accounts.rs` + `kiss-coding/src/account_failover.rs` + `/accounts` | 同一 provider 多账号池，限流时切换并重发 | 真缺口，已补入 **§2.9**（Tier 2） |
-| `kiss-coding/src/context_file.rs` | 实验性"模型自有上下文"：把会话上下文导出到临时 JSON，模型可改，改动读回后作为一次 compaction 生效（设 `experimental_context_file` 开启） | **暂不列项**：读回需要 `SessionManager` 的写入口（`append_compaction`），扩展够不到；而且它是实验特性，价值待观察 |
+| `kiss-ai/src/auth/accounts.rs` + `kiss-coding/src/account_failover.rs` + `/accounts` | 同一 provider 多账号池，限流时切换并重发 | 真缺口，补入 **§2.9**；后续判为不实现（§3.7） |
+| `kiss-coding/src/context_file.rs` | 实验性"模型自有上下文"：把会话上下文导出到临时 JSON，模型可改，改动读回后作为一次 compaction 生效（设 `experimental_context_file` 开启） | **🚫 决定不实现**，理由与翻案条件见 §3.8 |
 | `kiss/src/terminal_hosts.rs` + OSC 7501 | 向终端宿主上报程序状态（宿主 IPC 命令队列） | **已覆盖**：prux 已有 OSC 7501 程序状态（`modes/interactive/program_status.rs`），机制不同（直报终端 vs 转发宿主），不需要移植 |
 | `/voice`、`/config voice-language` | 本地/云端语音听写 | 已在 §3.3 定案不做；这里只是补记它们已是正式斜杠命令 |
 | 项目信任门移除（`refactor!: remove the project trust gate`） | kiss 删掉了项目信任门 | 与 prux 的 pi 契约无关：prux 的项目信任对齐的是 pi，不跟 kiss 走 |
@@ -367,4 +613,5 @@ cargo clippy --lib --all-targets       # 无新增告警（剩下的都是本次
 
 - §1.2 的"已覆盖"对照、§1.3 的扩展能力边界（可注册/可画 UI/可挂钩子/不能改 provider 层）都没变；
 - §3 的四项"不做成扩展"（ACP/RPC/SDK、新 provider、语音、Jev）依旧成立，理由也依旧成立；
-- §2.2–§2.8 的优先级与工作量估计不变（除了 §2.9 是新补的 Tier 2）。
+- §2.3 / §2.4 / §2.7 的落点与估计在落地时基本成立（§4.5–§4.7）；§2.2 / §2.5 / §2.8 / §2.9
+  与 §6.2 的上下文文件判为不实现，理由与翻案条件集中在 §3.5–§3.9。

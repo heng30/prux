@@ -49,6 +49,10 @@ core::extensions::register_banner_extension(extensions::banner::Banner::new());
 | `skills` | 扩展 | 统一的技能管理面板（`/skills`）：列出全部技能（含尚未落盘的扩展技能），空格切草稿、`Ctrl+S` 写 `settings.json` 的 `skills` 过滤数组并重建 skill 工具、回车看详情（SKILL.md 头信息 + 来源 + 路径）。随二进制分发的**扩展技能**（`assets/skills/**`，编译期内嵌）默认不落盘，开启时「检查并创建」到 `agent_dir()/skills/<name>/**`（已存在不覆盖）。**默认启用**。详见 [skills.md](skills.md) |
 | `downloader` | 扩展 | 外部工具（`fd` / `rg`）的安装与状态展示：`/download fd\|rg` 缺失时直接下载、已存在时弹选择面板（重装 / 取消）、下载中只提示、未知工具与多余参数报错；裸 `/download` 切换本扩展的 dock 段显隐（对齐 plan-mode `/todos`、proxy `/proxy`，不控制整个面板），段内每行是「状态点 + 工具名 + 版本 + 位置」（仅 PATH 命中的系统副本会标 `(system)`）。**默认启用**（工具可用性属于开箱能力）；禁用只影响该命令与 dock 段，启动时的缺失检测与提示（不自动下载）不受影响 |
 | `update-check` | 扩展 | 启动时异步检查 GitHub 最新 release（`heng30/prux`），有新版本就在**输入框下方**弹出选择面板（`Open download page` / `Ignore` / `Don't ask again`；↑↓ 选择、Enter 确认、Esc/Ctrl+C 关闭）。`Ignore` 只关掉本次提示，`Don't ask again` 把版本写进 `settings.json` 的 `skipUpdateVersion`（只抑制该版本，之后更新的版本仍会提示）。`--offline`/`PRUX_OFFLINE` 跳过检查，网络失败静默。**默认启用**。另提供 `/update check`（异步检查并在聊天区输出当前/新版本与下载地址）与 `/update open`（直接打开最新 release 下载页，不比较版本） |
+| `cache-usage` | 扩展 | 历史会话的 prompt cache 命中率：`/cache-usage [all] [<provider>]`。数据源就是会话文件里的 `Usage`（assistant 消息 + compaction / branch_summary 条目），命中率口径 `cacheRead / (input + cacheRead + cacheWrite)`——与底栏同式。空参只统计**当前会话**，`all` 统计全部已存会话（`agent_dir()/sessions` 下各工程合并，按修改时间取最新 200 份），`<provider>` 只统计该 provider 的样本（provider 是跨会话概念，因此同样读全部已存会话）。覆盖面板画总量条形图（24 格）+ 24 档趋势 sparkline + 各 provider / 各会话分列；fork 出来的重复条目按「条目 id + 时间戳 + provider + 用量」去重。只读会话文件，不发网络请求。**默认不启用**（`Dev` / `Creator` 模式） |
+| `doctor` | 扩展 | provider 网络可达性诊断：`/doctor [summary]` 对目录里每个 provider 的第一个 chat 模型发一个**不带凭据**的 `HEAD`（并发上限 16、单请求 10s），判定链路是否通——**有 HTTP 响应就算网络可达**（探的是 base URL，`404` / `405` 这类「路径没处理器」的响应同样证明连接与 TLS 都通：`2xx` / `401` / `403` / `405` 是预期结果，其它状态码标 `status not OK`），只有请求本身失败才记 `timeout` / `dns error` / `connect error`；`/doctor summary` 只给可达/失败计数与失败清单。面板末尾的 environment 段给出版本、`agent_dir()`、探测目标数与 `HTTP_PROXY` / `HTTPS_PROXY` / `http_proxy` 的 set/unset（**不回显值**）。`--offline` / `PRUX_OFFLINE` 不发请求，只显示 environment 段。**默认不启用**（`Dev` / `Creator` 模式） |
+| `btw` | 扩展 | 只读旁问：`/btw <问题>` 把答案渲染在输入区上方的 `BTW` 面板里（Esc / Enter 关闭），**不进会话、不改上下文**——送给模型的只有最近 4 条 / 4000 字以内的摘录加一段只读系统提示（一次性请求，不带工具、不写会话；答案晚到时若面板已关就丢弃）。**默认不启用**（`Dev` / `Creator` 模式） |
+| `recap` | 扩展 | 一行会话小结：`/recap [now|on|off]` 在停靠面板里显示 `※ recap: …`（≤120 字，去前缀/引号后硬截断），默认开启自动小结、空闲 5 分钟重刷一次（30 秒一拍的后台任务判断），开关存在 `agent_dir()/extensions/recap.json` 的 `autoRecap`（也可在扩展设置面板改）。**默认不启用**（`Dev` / `Creator` 模式）：开启后空闲即会发起模型请求 |
 | `doc-helper` | 扩展 | 精简系统提示词：启用后从默认系统提示词移除整段 prux 文档描述（README/docs/examples 指针 + 主题映射），改用 `/help <question>` 按需提问——把**同一段**文档描述当作一条普通 user 消息投出（不动系统提示词，保护缓存命中率）；无参 `/help` 只列出文档主题。**默认不启用**，需在 `/extension` 面板开启 |
 | `plan-mode` | 扩展 | 只读探索模式：禁用 `edit`/`write`、`bash` 白名单、`Plan:` 编号步骤 + `[DONE:n]` 进度跟踪（`/plan [text]`、`/todos`、`Alt+P`、`--plan`）。**默认不启用**，需在 `/extension` 面板开启 |
 | `goal` | 扩展 | 持久化自主目标（移植自 pi-goal v0.1.7）：`/goal [--tokens 50k] <objective>` 设置长期目标，agent 持续工作直到完成/暂停/清除/预算耗尽。裸 `/goal` 开关停靠面板，`/goal pause\|resume\|clear` 换挡；提供 `create_goal`/`get_goal`/`update_goal` 工具。**默认不启用**，需在 `/extension` 面板开启 |
@@ -67,6 +71,49 @@ core::extensions::register_banner_extension(extensions::banner::Banner::new());
 | `debug-provider` | 扩展 | `/debug-provider`：供应商原始流事件查看器，订阅 `ProviderStreamEvent`，每轮 assistant 消息结束时渲染一张卡片（provider/model/api + 捕获条数 + 事件摘要）并把整份载荷落成会话条目。**默认不启用**（仅 `Dev` 模式可用） |
 
 > `subagent` 是功能最多的内置扩展，单独一篇文档：[extensions/subagent.md](extensions/subagent.md)——心智模型（三条派发路径）、运行环境与隔离、agent 类型与 frontmatter 键、工作流、设置键及其相互关系、界面、定时任务、事件与 RPC。
+
+### cache-usage
+
+`/cache-usage [all] [<provider>]` 把会话历史里的 token 用量聚合成 prompt cache 命中率报告。三条聚合轴：
+
+- **总量**：命中率条形图 + `read / 总输入 token` + 响应条数 + 费用，下面是按时间排序的命中率趋势 sparkline（32 格，左旧右新）；
+- **各 provider**：同一份样本按 provider 分列（`/cache-usage <provider>` 只保留该 provider 的样本）；
+- **各会话**：扫多个会话时列出 token 总量最高的前 12 个会话。
+
+扫描范围三选一：空参 = **当前会话**；`all` = **全部已存会话**（所有 provider）；`<provider>` = **该 provider**（provider 是跨会话概念，只在当前会话里找它基本等于无参统计，因此也读全部已存会话）。后两者读 `agent_dir()/sessions` 下 **最新 200 份**会话文件（各工程目录合并后按修改时间排序）。扫描在 `spawn_blocking` 里做，面板先显示 `scanning sessions…`；面板打开期间 ↑↓ / PageUp / PageDown / Home / End 滚动。会话文件解析失败（不可修复或需要修复）就跳过，不会因为一份坏文件整份失败。
+
+命中率只统计**带用量**的条目；fork / clone 出来的会话文件会重复包含父会话的条目，因此同一份样本按「条目 id + 时间戳 + provider + 用量」去重（与 kiss `crates/kiss/src/cache.rs` 同口径）。
+
+### doctor
+
+网络体检，回答「连不上到底是 provider 挂了还是我这边网络/防火墙的事」：
+
+- 探测目标是**目录里每个 provider 的第一个 chat 模型**的 `baseUrl`，请求是 `HEAD`、**不带任何凭据**（不产生计费与日志噪音）；
+- **有 HTTP 响应就算可达**：`2xx` / `401` / `403` / `405` 是预期结果，其它状态码标 `status not OK`
+  （网络通了但服务端答案不对，是另一类问题）；
+- 只有请求本身失败才算不可达：超时 → `timeout`；DNS 失败 → `dns error`；连接失败 → `connect error`；
+- 并发 16、单请求 10s 超时、不发 prompt；
+- `--offline` / `PRUX_OFFLINE`：不发任何请求，只显示 environment 段并提示 `offline mode: network probes skipped`。
+
+environment 段包含程序名与版本、`agent_dir()`、探测目标数、三个代理变量是 set 还是 unset（**只报有无，不回显值**——值里可能带凭据）。
+
+### btw
+
+**`/btw <问题>`**：只读旁问。答案是**独立的一次性请求**（`provider::simple_completion`），
+上下文只有最近 4 条消息、4000 字以内的摘录，以及一段"只读、只依据摘录、别装作用工具"的系统提示；
+结果渲染在输入区上方的 `BTW` 面板里（生成中显示 spinner，失败显示 `✗ 原因`，Esc / Enter 关闭）。
+它**不写会话文件、不进 transcript**，因此不会改变主模型接下来看到的历史。
+
+### recap
+
+**`/recap [now|on|off]`**：停靠面板里的一行会话小结（`※ recap: …`，≤120 字，模型偶尔回的前缀/引号会被清洗掉）。
+默认开启自动小结：空闲 5 分钟（30 秒一拍的后台任务，`subagent::schedule` 同款"代际"退出）后自动重刷一次，
+`now` 立即刷、`off` 关掉并取消进行中的生成。开关存在 `agent_dir()/extensions/recap.json` 的 `autoRecap`，
+也可以在 `/extension` 面板的扩展设置里改。
+
+小结与旁问都用**主模型**（当前会话的 provider/model；摘录里最后一条带 `provider`/`model` 的 assistant
+消息作兜底），不引入虚拟模型。两者是独立扩展、独立开关：旁问只在用户显式发起时才有动作，
+而小结会在后台自动花 token。摘录、折行与一次性请求由两者共用的 `recap_btw/shared.rs` 提供。
 
 ### loop-detect
 
@@ -598,7 +645,7 @@ banner 扩展**互斥**：注册/面板切换时启用一个会自动禁用其�
 ## settings 与启用状态
 
 - **`disabledExtensions`**：settings.json 中禁用的扩展名数组。注册时据此恢复初始状态（对默认启用的扩展 = 关闭）；/extension 面板切换后写回**全局**。项目 `.prux/settings.json` 里的同名字段与全局取并集（只在本项目禁用某内置扩展；未受信任的项目不生效）。
-- **`enabledExtensions`**：settings.json 中显式启用的扩展名数组，仅对声明 [`default_enabled() == false`] 的默认可选扩展（`plan-mode`、`goal`、`web-access`、`proxy`、`doc-helper`、`subagent`、`loop-detect`、`hang-detect`、`notify`、`rewind`、`codemode`、`mcp`、`jet`、`tasks`、`debug-provider`）有意义。这些扩展注册后默认禁用，必须在此列出（或经 `/extension` 面板开启）才参与钩子/工具/命令分发；关闭时从列表移除（回到默认态）。项目层同样与全局取并集（项目可自行开启默认关闭的扩展）；两层冲突时禁用优先（与 `disabledExtensions` 的并集语义一致）。
+- **`enabledExtensions`**：settings.json 中显式启用的扩展名数组，仅对声明 [`default_enabled() == false`] 的默认可选扩展（`plan-mode`、`goal`、`web-access`、`proxy`、`doc-helper`、`subagent`、`loop-detect`、`hang-detect`、`notify`、`rewind`、`codemode`、`mcp`、`jet`、`tasks`、`debug-provider`、`cache-usage`、`doctor`、`btw`、`recap`）有意义。这些扩展注册后默认禁用，必须在此列出（或经 `/extension` 面板开启）才参与钩子/工具/命令分发；关闭时从列表移除（回到默认态）。项目层同样与全局取并集（项目可自行开启默认关闭的扩展）；两层冲突时禁用优先（与 `disabledExtensions` 的并集语义一致）。
 - **`extensionMode`**：`"minimal"`、`"dev"`、`"creator"`、`"all"`（默认，兜底全集）。`All` 是兜底模式，所有扩展隐式属于它；扩展声明的模式（如 `Minimal`）表示“该级别及以上可用”，列出多个（如 `[Dev, Creator]`）则覆盖两个并排模式。是运行时过滤层，不触碰各扩展 enabled 状态；切回全部模式即恢复原状。
 
 settings 相关键见 [settings.md](settings.md)。修改 settings 后重启生效；`/reload` 会重新接线扩展并重建工具列表与系统提示，但无法加载新编译的扩展代码。

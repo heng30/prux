@@ -10,9 +10,11 @@
 pub(crate) mod util;
 
 pub mod banner;
+pub mod cache_usage;
 pub mod codemode;
 pub mod debug_provider;
 pub mod doc_helper;
+pub mod doctor;
 pub mod downloader;
 pub mod extra_themes;
 pub mod footer;
@@ -24,6 +26,7 @@ pub mod mcp;
 pub mod notify;
 pub mod plan_mode;
 pub mod proxy;
+pub mod recap_btw;
 pub mod rewind;
 pub mod skills;
 pub mod subagent;
@@ -67,6 +70,14 @@ pub const PRIORITY_WEB_ACCESS: u32 = 70;
 pub const PRIORITY_MCP: u32 = 69;
 /// skills 扩展技能管理（`/skills` 面板）扩展的注册优先级。
 pub const PRIORITY_SKILLS: u32 = 65;
+/// cache-usage prompt cache 命中率统计扩展的注册优先级。
+pub const PRIORITY_CACHE_USAGE: u32 = 66;
+/// btw 只读旁问扩展的注册优先级。
+pub const PRIORITY_BTW: u32 = 63;
+/// recap 一行会话小结扩展的注册优先级。
+pub const PRIORITY_RECAP: u32 = 62;
+/// doctor provider 可达性诊断扩展的注册优先级。
+pub const PRIORITY_DOCTOR: u32 = 64;
 /// downloader 外部依赖下载扩展的注册优先级。
 pub const PRIORITY_DOWNLOADER: u32 = 60;
 /// update-check 启动时版本检查扩展的注册优先级。

@@ -226,8 +226,11 @@ pub fn sync(st: &mut App, cols: u16) {
 
     // 更新前的内容长度与贴底判定：新增内容到达时，只有原本就在底部才继续贴底
     // （覆盖层没有持久 follow；上滚即停止跟随，与主页一致）。
+    // “在底部”还要求上一帧内容**本身已能滚动**（`prev_len > viewport`）：占位 / 短内容
+    // （如 `scanning…` 一行）总是满足 `scroll + viewport >= len`，若一并算作贴底，
+    // 内容一次性换成整份报告时会被拉到结尾，打开面板看到的是报告末尾而不是开头。
     let prev_len = state.len();
-    let was_at_bottom = state.scroll + state.viewport() >= prev_len;
+    let was_at_bottom = prev_len > state.viewport() && state.scroll + state.viewport() >= prev_len;
 
     // 消息行：带缓存渲染（追加式列表只渲染新增项）
     let mut cache = std::mem::take(&mut state.msg_cache);
@@ -1034,6 +1037,65 @@ mod tests {
     }
 
     /// 滚动条拖动映射：覆盖层是顶部偏移语义（track 顶 = 内容开头）。
+    /// 占位内容一次性换成整份报告：应停在开头，而不是被拉到结尾。
+    #[test]
+    fn replaced_content_starts_at_the_top() {
+        use crate::core::extensions::{
+            Extension, ExtensionHook, register_extension, unregister_extension,
+        };
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        /// 报告是否已就绪（占位 → 全量内容的换代开关）。
+        static READY: AtomicBool = AtomicBool::new(false);
+
+        struct GrowExt;
+
+        impl Extension for GrowExt {
+            fn name(&self) -> &str {
+                "overlay-grow-test-ext"
+            }
+            fn tools(&self) -> Vec<crate::core::extensions::ExtensionTool> {
+                Vec::new()
+            }
+            fn hooks(&self) -> Vec<ExtensionHook> {
+                vec![ExtensionHook::Overlay]
+            }
+            fn overlay_view(&self, id: u64, _cols: u16) -> Option<OverlayView> {
+                if id != 1_000_088 {
+                    return None;
+                }
+                let rows = if READY.load(Ordering::SeqCst) { 40 } else { 1 };
+                Some(OverlayView {
+                    lines: (0..rows)
+                        .map(|i| vec![DockSpan::plain(format!("line-{i}"))])
+                        .collect(),
+                    size: OverlaySize::Panel { max_rows: 12 },
+                    ..OverlayView::inline("t", Vec::new(), 12)
+                })
+            }
+        }
+
+        let _auth = crate::test_support::AUTH_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        register_extension(GrowExt);
+        READY.store(false, Ordering::SeqCst);
+
+        let mut st = App::new();
+        let v = extensions::overlay_view(1_000_088, 80).expect("认领");
+        open(&mut st, 1_000_088, v);
+        sync(&mut st, 80); // 占位帧：只有 1 行
+        assert_eq!(st.overlay.as_ref().unwrap().scroll, 0);
+
+        READY.store(true, Ordering::SeqCst);
+        sync(&mut st, 80); // 报告就绪：内容一次变长到 40 行
+        let state = st.overlay.as_ref().unwrap();
+        assert!(state.max_scroll() > 0, "报告应超出视口（否则本用例无效）");
+        assert_eq!(state.scroll, 0, "内容换代后应停在报告开头");
+
+        unregister_extension("overlay-grow-test-ext");
+    }
+
     #[test]
     fn overlay_scrollbar_drag_maps_to_top_offset() {
         let mut st = with_overlay(1, view(120, None));

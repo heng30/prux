@@ -48,6 +48,26 @@ This release aligns prux with upstream pi 1.1.0.
   run at a time, `/autoresearch` lists them, `/autoresearch stop <id>` stops one, and a job keeps
   running when you press `Esc` (stop it explicitly).
 
+- **`/cache-usage` reports prompt cache hit rates** from saved sessions, with three peer scopes:
+  no argument reads the current session, `all` reads every saved session (all providers), and a
+  provider name reports just that provider — which also reads every saved session, since a provider
+  spans sessions while a single session often uses only one. The panel shows
+  the total bar, a hit-rate sparkline over time, and per-provider / per-session bars; entries that
+  forked sessions duplicate are counted once. It never makes network requests.
+- **`/doctor` checks provider reachability** with one credential-free `HEAD` per provider
+  (16 at a time, 10s each). Any HTTP response means the network path is fine — `2xx`, `401`, `403`
+  and `405` are the expected answers, anything else is flagged `status not OK` — and only a failing
+  request is listed as unreachable (`timeout` / `dns error` / `connect error`). `/doctor summary`
+  prints the counts and the failures, the panel ends with an environment block (version, agent
+  directory, proxy variables as set/unset only), and `--offline` skips the probes entirely.
+- **`/btw` asks a read-only side question and `/recap` shows a one-line session summary.** `/btw`
+  answers in a panel from a short excerpt through one independent request — nothing is added to the
+  conversation — while `/recap [now|on|off]` puts a one-line summary in the dock and refreshes it
+  after 5 minutes idle. They are separate extensions on purpose: `/btw` only acts when you ask,
+  `/recap` spends tokens on its own.
+- **These four new extensions are disabled by default** and live in the `Dev` and `Creator`
+  extension modes: `cache-usage`, `doctor`, `btw`, `recap` (turn them on in the `/extension` panel).
+
 ### Changed
 
 - **Output limits are clamped to the context window.** Before a request is sent, `max_tokens` is
@@ -86,6 +106,10 @@ This release aligns prux with upstream pi 1.1.0.
 - Clipboard read/write works under Termux (`termux-clipboard-get` / `termux-clipboard-set`).
 - A vanished terminal (`EIO` / `EPIPE` / `ENOTCONN` / `ENOTTY`) now exits quietly instead of
   crashing while reading input or rendering.
+- Overlay content that is replaced wholesale (a `scanning…` placeholder giving way to a report)
+  stays at the top instead of jumping to the end.
+- The scrollbar of panel-style overlays is aligned with the content area (its track started one row
+  too low), so the thumb reaches the first line.
 
 ## 中文
 
@@ -124,6 +148,23 @@ This release aligns prux with upstream pi 1.1.0.
   回答以 `[goal-complete]` 收尾或到达轮次上限即收工。同时最多 4 个作业，`/autoresearch` 列作业，
   `/autoresearch stop <id>` 停一个；作业不随 `Esc` 一起停（要停得显式停）。
 
+- **新增 `/cache-usage`**：把会话历史里的 token 用量汇总成 prompt cache 命中率报告，
+  范围三选一（同级）：空参 = 当前会话，`all` = 全部已存会话（所有 provider），
+  `<provider>` = 该 provider——provider 是跨会话概念，因此也读全部已存会话。
+  面板显示总量条形图、命中率趋势 sparkline
+  与各 provider / 各会话分列；fork 会话里重复的条目只计一次。全程只读会话文件，不发网络请求。
+- **新增 `/doctor`**：provider 网络可达性诊断。对每个 provider 发一个**不带凭据**的 `HEAD`
+  （并发 16、单请求 10s）：**有 HTTP 响应就算网通**（`2xx` / `401` / `403` / `405` 是预期结果，
+  其它状态码标 `status not OK`），只有请求本身失败才列入不可达（`timeout` / `dns error` /
+  `connect error`）。`/doctor summary` 只给计数与失败清单，面板末尾的 environment 段列出程序
+  版本、`agent_dir()`、探测目标数与代理变量的 set/unset（不回显值）；`--offline` 不发请求。
+- **新增 `/btw` 与 `/recap`**：`/btw <问题>` 是只读旁问——答案渲染在输入区上方的面板里，
+  上下文只有一小段摘录、走独立的一次性请求，**不进会话、不改上下文**；
+  `/recap [now|on|off]` 在停靠面板里显示一行会话小结（≤120 字），空闲 5 分钟后自动重刷。
+  两者**刻意拆成两个扩展**：旁问只在你开口时才有动作，小结会在后台自己花 token。
+- **这四个新扩展都默认不启用**，且只在 `Dev` / `Creator` 扩展模式下可用：
+  `cache-usage`、`doctor`、`btw`、`recap`（在 `/extension` 面板里开启）。
+
 ### 变更
 
 - **输出上限按上下文窗口钳制**：请求发出前，`max_tokens` 会被压到
@@ -155,3 +196,5 @@ This release aligns prux with upstream pi 1.1.0.
 - 切换会话、分支、回退时重置文本选择，旧选区不再命中无关文本。
 - Termux 下剪贴板读写可用（`termux-clipboard-get` / `termux-clipboard-set`）。
 - 终端消失（`EIO` / `EPIPE` / `ENOTCONN` / `ENOTTY`）时安静退出，不再在读取输入或渲染时报错崩栈。
+- 覆盖层内容一次性换代（占位提示 → 正式内容）时停在开头，不再被“贴底跟随”拉到结尾。
+- 面板式覆盖层的滚动条与内容区对齐（此前 track 起点偏低一行），thumb 拖到顶端就是第一行。

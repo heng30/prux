@@ -199,7 +199,8 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App, _size: OverlaySize) 
     }
 
     // 内容视窗（`lines` 预渲染行在前，`messages` 渲染行在后）
-    let content_y = area.y + 1 + border_rows as u16 + header_rows as u16;
+    // 顶部占位：面板样式的顶部分割线 + 空行（`border_rows` = 2），其余样式的标题行（1 行）。
+    let content_y = area.y + border_rows.max(1) as u16 + header_rows as u16;
     let dock_len = state.view.lines.len();
     let mut content: Vec<Line<'static>> = Vec::with_capacity(content_rows);
     let mut visible_text: Vec<String> = Vec::with_capacity(content_rows);
@@ -769,6 +770,12 @@ mod tests {
             "面板样式无标题行: {rows:?}"
         );
         assert_eq!(app.overlay.as_ref().unwrap().content_rows, 6);
+        // 滚动条 track 与内容区对齐：顶端就是内容首行（rows[2]）
+        assert_eq!(
+            app.overlay.as_ref().unwrap().sel.content_y,
+            2,
+            "面板内容区起点应在分割线 + 空行之后"
+        );
     }
 
     /// 滚到底时 thumb 应贴 track 底（不再离底一个 thumb 高度）。

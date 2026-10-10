@@ -35,6 +35,10 @@ fn register_all_collects_and_sorts_slices() {
     for n in [
         "plan-mode",
         "goal",
+        "cache-usage",
+        "doctor",
+        "btw",
+        "recap",
         "subagent",
         "tasks",
         "loop-detect",
@@ -62,8 +66,8 @@ fn register_all_collects_and_sorts_slices() {
 
     prux::extensions::register_all();
 
-    // 分布式切片确实汇聚：20 个工具扩展 + 3 个底栏扩展
-    assert_eq!(extension_count(), 20, "普通扩展应全被切片收集");
+    // 分布式切片确实汇聚：24 个工具扩展 + 3 个底栏扩展
+    assert_eq!(extension_count(), 24, "普通扩展应全被切片收集");
     assert_eq!(footer_extension_count(), 3, "footer 扩展应全被切片收集");
 
     // plan-mode / goal / subagent / tasks / web-access / proxy / doc-helper / notify 是声明 default_enabled() == false 的默认可选扩展：
@@ -110,6 +114,24 @@ fn register_all_collects_and_sorts_slices() {
         is_extension_enabled("downloader"),
         "downloader 应默认启用（提供 /download 命令）"
     );
+    // cache-usage / doctor / btw / recap 都声明 default_enabled() == false
+    // （Dev / Creator 模式下的排查与探索工具，默认不抢行为）
+    assert!(
+        !is_extension_enabled("cache-usage"),
+        "cache-usage 应默认不启用（Dev / Creator 工具）"
+    );
+    assert!(
+        !is_extension_enabled("doctor"),
+        "doctor 应默认不启用（Dev / Creator 工具）"
+    );
+    assert!(
+        !is_extension_enabled("btw"),
+        "btw 应默认不启用（Dev / Creator 工具）"
+    );
+    assert!(
+        !is_extension_enabled("recap"),
+        "recap 应默认不启用（空闲会自动发起小结请求）"
+    );
     // update-check 默认启用（版本提示属于开箱能力）
     assert!(
         is_extension_enabled("update-check"),
@@ -139,7 +161,8 @@ fn register_all_collects_and_sorts_slices() {
     prux::core::extensions::set_extension_enabled("tool-search", true);
     prux::core::extensions::set_extension_enabled("jet", true);
 
-    // 普通扩展全部注册且按 priority 降序
+    // 普通扩展全部注册且按 priority 降序（默认关闭的 cache-usage:66 / doctor:64 /
+    // btw:63 / recap:62 / codemode:39 与 skills:65 不在其中：本用例没启用它们）
     // （extra-themes:100 → goal:90 → plan-mode:85 → tasks:80 → subagent:78 → loop-detect:75
     //   → notify:74 → hang-detect:73 → proxy:72 → rewind:71 → web-access:70 → mcp:69
     //   → skills:65 → downloader:60 → update-check:55 → doc-helper:50 → debug-provider:45

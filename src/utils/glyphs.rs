@@ -76,3 +76,9 @@ pub const DEF_SPINNER_DENSE: &[&str] = &["⣾", "⣽", "⣻", "⢿", "⡿", "⣟
 pub const DEF_SPINNER: &[&str] = &["✳", "✴", "✵", "✶", "✷", "✸", "✹", "✺", "✻", "✼", "✽"];
 /// 状态栏忙碌、重试提示、agent 运行图标共用（10 帧）
 pub const DEF_SPINNER_BRAILLE: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+/// sparkline 的 8 档块字符，下标 0 对应最低一档。
+pub const DEF_SPARK_BLOCKS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+/// 条形图的实心格。
+pub const DEF_BAR_FULL: char = '█';
+/// 条形图的空心格。
+pub const DEF_BAR_EMPTY: char = '░';
