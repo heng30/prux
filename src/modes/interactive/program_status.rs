@@ -8,6 +8,7 @@ use crate::utils::terminal_colors;
 use base64::Engine as _;
 use serde_json::Value;
 use std::time::Duration;
+use strum_macros::IntoStaticStr;
 
 /// 支持查询序列：支持该协议的终端会原样回一个同样的序列。
 pub(crate) const PROGRAM_STATUS_QUERY: &str = "\x1b]7501;?\x1b\\";
@@ -27,8 +28,9 @@ const MAX_MESSAGE_BYTES: usize = 2048;
 /// 退出时撤销已上报状态的序列（终端据此清掉状态栏）。
 pub const PROGRAM_STATUS_CLEAR: &str = "\x1b]7501;state=clear\x1b\\";
 
-/// OSC 7501 报告的状态取值。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// OSC 7501 报告的状态取值；与协议字符串的互转由 `strum` 派生（全小写，见 [`ProgramState::as_str`]）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, IntoStaticStr)]
+#[strum(serialize_all = "lowercase")]
 pub enum ProgramState {
     /// 没有任何运行在进行。
     Idle,
@@ -45,18 +47,13 @@ pub enum ProgramState {
 impl ProgramState {
     /// 协议里的状态字段取值。
     fn as_str(self) -> &'static str {
-        match self {
-            ProgramState::Idle => "idle",
-            ProgramState::Working => "working",
-            ProgramState::Blocked => "blocked",
-            ProgramState::Done => "done",
-            ProgramState::Error => "error",
-        }
+        self.into()
     }
 }
 
-/// `blocked` 状态在等什么；其它状态不带该字段。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// `blocked` 状态在等什么；其它状态不带该字段；与协议字符串的互转由 `strum` 派生（全小写）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, IntoStaticStr)]
+#[strum(serialize_all = "lowercase")]
 pub enum BlockedKind {
     /// 等用户授权（权限确认）。
     Permission,
@@ -69,11 +66,7 @@ pub enum BlockedKind {
 impl BlockedKind {
     /// 协议里的 `kind` 字段取值。
     fn as_str(self) -> &'static str {
-        match self {
-            BlockedKind::Permission => "permission",
-            BlockedKind::Question => "question",
-            BlockedKind::Auth => "auth",
-        }
+        self.into()
     }
 }
 
@@ -159,11 +152,13 @@ pub fn format_program_status(status: &ProgramStatus) -> String {
     {
         pairs.push(format!("app={app}"));
     }
+
     if status.state == ProgramState::Blocked
         && let Some(kind) = status.kind
     {
         pairs.push(format!("kind={}", kind.as_str()));
     }
+
     let sanitized = replace_control_characters(status.message.as_deref().unwrap_or(""));
     let message = truncate_utf8(sanitized.trim(), MAX_MESSAGE_BYTES);
     if !message.is_empty() {
@@ -210,10 +205,8 @@ pub fn detect_program_status_support() -> bool {
 
 /// 把 agent 会话事件与对话框状态翻译成 OSC 7501 上报。
 ///
-/// 与 pi 的 `ProgramStatusReporter` 同构：`run_active` / `compacting` 决定是否 `working`，
+/// `run_active` / `compacting` 决定是否 `working`，
 /// 最近一条 assistant 响应决定回合结果，`agent_settled` 把回合结果落到静止状态。
-/// 差异：pi 用按来源键控的 `blocked` 表，prux 的 TUI 一次只有一个模态，
-/// 因此阻塞状态由调用方每帧从当前面板派生后写入。
 pub struct ProgramStatusReporter {
     /// 终端是否上报（无支持时 `report()` 只做去重，不产生待写序列）。
     supported: bool,
@@ -288,9 +281,11 @@ impl ProgramStatusReporter {
                 let Some(message) = event.get("message") else {
                     return;
                 };
+
                 if message.get("role").and_then(|v| v.as_str()) != Some("assistant") {
                     return;
                 }
+
                 self.run_result =
                     if message.get("stopReason").and_then(|v| v.as_str()) == Some("error") {
                         ProgramStatus {
@@ -372,6 +367,7 @@ impl ProgramStatusReporter {
         if self.last_report.as_deref() == Some(key.as_str()) {
             return;
         }
+
         self.last_report = Some(key);
         if self.supported {
             self.pending = Some(format_program_status(&status));
@@ -398,6 +394,7 @@ impl ProgramStatusReporter {
                 message: Some(blocked.message.clone()),
             };
         }
+
         if self.compacting {
             return ProgramStatus {
                 state: ProgramState::Working,
@@ -406,11 +403,13 @@ impl ProgramStatusReporter {
                 message: Some("Compacting context".to_string()),
             };
         }
+
         let status = if self.run_active {
             plain_status(ProgramState::Working)
         } else {
             self.resting_status.clone()
         };
+
         // 工作中与完成都把会话名作为说明
         if matches!(status.state, ProgramState::Working | ProgramState::Done) {
             return ProgramStatus {
