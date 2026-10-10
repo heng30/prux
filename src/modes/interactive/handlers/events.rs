@@ -122,6 +122,9 @@ impl App {
                 self.context_tokens_override = None;
                 self.current_session_path = s.file.clone();
                 self.refresh_context_percent();
+                // OSC 7501：上一个会话的回合状态不跨会话
+                self.program_status.set_session_name(s.name.clone());
+                self.program_status.reset();
 
                 core::extensions::dispatch_session_switched(s.file.as_deref(), &self.messages);
 
@@ -487,6 +490,9 @@ impl App {
         } else {
             core::extensions::dispatch_agent_event(event);
         }
+
+        // OSC 7501：事件驱动回合/压缩状态（去重后产生待写序列，由事件循环写出）
+        self.program_status.handle_event(event);
 
         match ty {
             "agent_start" => self.clear_routed_model(),

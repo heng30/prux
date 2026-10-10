@@ -13,7 +13,8 @@ use super::{
     editor::Editor,
     handlers::RetryUi,
     overlay::OverlayState,
-    panel::Panel,
+    panel::{Panel, PanelKind},
+    program_status::{BlockedKind, BlockedStatus, ProgramStatusReporter},
     render::image::ImageRect,
     render::messages::{BlockId, CachedMsg, EditRenderData, ToolResultView},
     theme::Theme,
@@ -595,6 +596,8 @@ pub struct App {
     pub pending_refresh: VecDeque<String>,
     /// agent actor：UI → worker 命令句柄。闭包内可直接 `ui.worker.send(...)` 发命令。
     pub worker: WorkerHandle,
+    /// OSC 7501 程序状态翻译器：把 agent 事件与当前面板翻译成终端状态上报。
+    pub program_status: ProgramStatusReporter,
     /// /resume、/session 会话选择器
     pub session_selector: SessionSelector,
     /// /settings 设置选择器
@@ -799,6 +802,32 @@ impl App {
         self.mouse.edge_dwell = 0;
     }
 
+    /// 当前是否有对话框在等用户（OSC 7501 的 `blocked` 状态）。
+    ///
+    /// 只把**扩展对话框**（`PanelKind::Custom`）与**登录流程**算作阻塞；
+    /// 项目信任、会话修复等内置确认面板不上报。每次上报前从当前栈顶面板派生，
+    /// 所以不需要在各面板开关处成对维护。
+    pub fn program_status_blocked(&self) -> Option<BlockedStatus> {
+        if self.ext_settings.visible {
+            return Some(BlockedStatus::new(
+                BlockedKind::Question,
+                self.ext_settings.ext.clone(),
+            ));
+        }
+
+        let layer = self.panel.top()?;
+        let kind = match layer.kind {
+            PanelKind::LoginAuthType
+            | PanelKind::LoginProvider
+            | PanelKind::LoginMethod
+            | PanelKind::LoginKey
+            | PanelKind::LoginOauth => BlockedKind::Auth,
+            PanelKind::Custom(_) => BlockedKind::Question,
+            _ => return None,
+        };
+        Some(BlockedStatus::new(kind, layer.title.clone()))
+    }
+
     /// 构造全空的初始界面状态：无消息、无流式输出、空编辑器、默认主题，
     /// 各种待处理请求/面板均为 None；`dirty = true` 以便首帧必绘。
     pub fn new() -> Self {
@@ -905,6 +934,7 @@ impl App {
             runtime_steer_inbox: Arc::new(Mutex::new(VecDeque::new())),
             pending_refresh: VecDeque::new(),
             worker: WorkerHandle::null(),
+            program_status: ProgramStatusReporter::new(false),
             session_selector: SessionSelector::new(),
             settings_selector: SettingsSelector::new(),
             ext_settings: ExtSettingsPanel::new(),
@@ -1140,6 +1170,45 @@ pub struct SessionStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn program_status_blocked_only_covers_extension_and_login_dialogs() {
+        let mut app = App::new();
+        assert!(app.program_status_blocked().is_none());
+
+        // 内置面板（/model 等）不算阻塞
+        app.panel
+            .open(PanelKind::Model, "Models".to_string(), Vec::new());
+        assert!(app.program_status_blocked().is_none());
+
+        // 登录面板 → auth
+        app.panel.open(
+            PanelKind::LoginKey,
+            "Login to Anthropic".to_string(),
+            Vec::new(),
+        );
+        let blocked = app.program_status_blocked().unwrap();
+        assert_eq!(blocked.kind, BlockedKind::Auth);
+        assert_eq!(blocked.message, "Login to Anthropic");
+
+        // 扩展选择面板 → question
+        app.panel.open(
+            PanelKind::Custom(1),
+            "Pick a branch".to_string(),
+            Vec::new(),
+        );
+        let blocked = app.program_status_blocked().unwrap();
+        assert_eq!(blocked.kind, BlockedKind::Question);
+        assert_eq!(blocked.message, "Pick a branch");
+
+        // 扩展设置面板 → question
+        app.panel.cancel();
+        app.ext_settings.visible = true;
+        app.ext_settings.ext = "tasks".to_string();
+        let blocked = app.program_status_blocked().unwrap();
+        assert_eq!(blocked.kind, BlockedKind::Question);
+        assert_eq!(blocked.message, "tasks");
+    }
 
     #[test]
     fn compact_instructions_flow_to_next_action() {

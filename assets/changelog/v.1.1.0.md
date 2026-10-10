@@ -31,6 +31,11 @@ This release aligns prux with upstream pi 1.1.0.
 - **The OpenAI Decisions classifier protocol (`openai-decisions`) is implemented**, so
   `openai/gpt-6-luna` can be used for classification. Sign in with ChatGPT does not list it:
   that token is rejected by the Decisions API.
+- **prux reports its state to the terminal** with the Program Status Protocol (OSC 7501): terminals
+  and agent dashboards that answer the protocol's support query see `working`, `blocked` (an
+  extension dialog or login is waiting), `done`, `error`, or `idle`. Reports hold only the session
+  name, dialog titles, and the first line of errors — never prompts or model output.
+  `PRUX_PROGRAM_STATUS=1` reports without asking, `=0` turns it off.
 
 ### Changed
 
@@ -50,6 +55,11 @@ This release aligns prux with upstream pi 1.1.0.
   every request to the authorization server now times out after 15s (was 30s).
 - **Skill hints degrade gracefully** when the `read` tool is hidden: they fall back to `bash`, or
   stop naming a tool, instead of being dropped or pointing at tools the model cannot use.
+- **Mid-conversation system messages reach Anthropic models that accept them.** When a transcript
+  carries a `system` message after the prompt, models whose catalog entry sets
+  `compat.supportsMidConvoSystemMessages` get it natively; it is held back to just before the next
+  assistant message so a `tool_result` still follows its `tool_use`. For other models its text is
+  merged into the leading system prompt instead of being dropped.
 
 ### Fixed
 
@@ -87,6 +97,10 @@ This release aligns prux with upstream pi 1.1.0.
   `AZURE_OPENAI_DEPLOYMENT_NAME_MAP` 命中时请求体发的是部署名。
 - **新增 OpenAI Decisions 分类协议（`openai-decisions`）**：`openai/gpt-6-luna` 可用于分类。
   Sign in with ChatGPT 登录态下不会列出它——该 token 会被 Decisions API 拒绝。
+- **prux 用 OSC 7501 程序状态协议向终端上报自身状态**：应答过支持查询的终端 / agent 面板
+  能看到 `working`、`blocked`（扩展对话框或登录在等用户）、`done`、`error`、`idle`。
+  上报只含会话名、对话框标题与错误首行，**绝不包含 prompt 或模型输出**。
+  `PRUX_PROGRAM_STATUS=1` 不查询直接上报，`=0` 完全关闭。
 
 ### 变更
 
@@ -103,6 +117,10 @@ This release aligns prux with upstream pi 1.1.0.
   对授权服务器的每个请求超时从 30s 收紧到 15s。
 - **技能提示按可用工具降级**：`read` 被隐藏时改用 `bash`，或干脆不点名具体工具，
   不再整段省略、也不再指向模型用不了的工具。
+- **对话中途的系统消息能真正下发到接受它的 Anthropic 模型**：transcript 里出现在首部提示词之后的
+  `system` 消息，在目录带 `compat.supportsMidConvoSystemMessages` 的模型上按原生对话中途系统消息下发；
+  它会缓发到下一条 assistant 之前，保证 `tool_result` 仍紧跟 `tool_use`。其它模型上这类消息的文本
+  并入首部系统提示词，而不是被静默丢弃。
 
 ### 修复
 

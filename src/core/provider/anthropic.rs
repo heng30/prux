@@ -86,6 +86,20 @@ fn compat_force_adaptive_thinking(model: &ModelConfig) -> bool {
         .unwrap_or(false)
 }
 
+/// 模型目录 `compat.supportsMidConvoSystemMessages`：模型是否原生接受对话中途（tool_use 与
+/// tool_result 之外的普通位置）的 `role: "system"` 消息。为假时这些消息会被合并进首部系统提示词。
+fn compat_supports_mid_convo_system_messages(model: &ModelConfig) -> bool {
+    model_resolver::provider_models(&model.provider)
+        .iter()
+        .find(|m| m.get("id").and_then(|v| v.as_str()) == Some(model.model_id.as_str()))
+        .and_then(|m| {
+            m.get("compat")
+                .and_then(|c| c.get("supportsMidConvoSystemMessages"))
+        })
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+}
+
 /// 模型是否接受无 signature 的 thinking 块重放（Fireworks / Vercel 等兼容端点）。
 /// 开启时保留 thinking 块并发送空 signature；关闭时降级为文本。
 fn compat_allow_empty_signature(model: &ModelConfig) -> bool {
@@ -433,7 +447,7 @@ fn push_anthropic_tool_result(
 /// cache_control 挂在最后一个 user 消息的最后块上。
 fn apply_anthropic_cache_control(params: &mut [Value]) {
     if let Some(last) = params.last_mut()
-        && last.get("role") == Some(&json!("user"))
+        && matches!(last.get("role"), Some(Value::String(r)) if r == "user" || r == "system")
         && let Some(content) = last.get_mut("content")
     {
         let attach = |block: &mut Value| {
@@ -463,6 +477,11 @@ fn apply_anthropic_cache_control(params: &mut [Value]) {
 
 /// 生成 anthropic wire 消息数组（不含 system）。
 /// 公共规则：synthetic tool results、跳过 error/aborted、tool call id 归一化配对。
+///
+/// `role == "system"` 的消息按模型能力处理：目录 `compat.supportsMidConvoSystemMessages` 为真时。
+/// 作为原生对话中途系统消息下发，否则跳过（由 [`collapse_mid_convo_system_messages`] 并入首部提示词）。
+/// 原生路径下系统消息**缓发**到「下一条 assistant 消息之前」（或序列末尾），
+/// 因为 anthropic 要求 `tool_result` 紧跟 `tool_use`，夹在中间的系统消息会被拒。
 pub(crate) fn convert_anthropic_messages(
     messages: &[AgentMessage],
     _system_prompt: &str,
@@ -473,6 +492,8 @@ pub(crate) fn convert_anthropic_messages(
     let mut pending_tool_calls: Vec<(String, String)> = Vec::new(); // (归一化 id, name)
     let mut existing_tool_result_ids: HashSet<String> = HashSet::new();
     let mut params: Vec<Value> = Vec::new();
+    let supports_mid_convo = compat_supports_mid_convo_system_messages(model);
+    let mut pending_system: Vec<Value> = Vec::new();
 
     for msg in messages {
         match msg.role.as_str() {
@@ -487,11 +508,14 @@ pub(crate) fn convert_anthropic_messages(
                 }
             }
             "assistant" => {
+                // 先补齐 synthetic tool result，再释放缓发的系统消息：
+                // tool_result 必须紧跟在 tool_use 之后，系统消息只能落在其结果之后
                 insert_synthetic_tool_results(
                     &mut params,
                     &mut pending_tool_calls,
                     &mut existing_tool_result_ids,
                 );
+                flush_pending_system_messages(&mut params, &mut pending_system);
                 if let Some(assistant_msg) = convert_anthropic_assistant_message(
                     msg,
                     model,
@@ -517,6 +541,13 @@ pub(crate) fn convert_anthropic_messages(
                     &mut existing_tool_result_ids,
                 );
             }
+            "system" => {
+                if supports_mid_convo
+                    && let Some(system_msg) = convert_anthropic_system_message(msg)
+                {
+                    pending_system.push(system_msg);
+                }
+            }
             _ => {}
         }
     }
@@ -527,9 +558,62 @@ pub(crate) fn convert_anthropic_messages(
         &mut existing_tool_result_ids,
     );
 
+    flush_pending_system_messages(&mut params, &mut pending_system);
     apply_anthropic_cache_control(&mut params);
 
     params
+}
+
+/// 把缓发的系统消息追加到 wire 消息末尾并清空缓冲（尾部无后续 assistant 时它们落在序列最后）。
+fn flush_pending_system_messages(params: &mut Vec<Value>, pending: &mut Vec<Value>) {
+    params.append(pending);
+}
+
+/// 把一条内部 `system` 消息转成 anthropic 的原生对话中途系统消息；
+/// 文本为空时返回 `None`（不发空消息）。
+fn convert_anthropic_system_message(msg: &AgentMessage) -> Option<Value> {
+    let text = msg.text();
+    if text.trim().is_empty() {
+        return None;
+    }
+
+    Some(json!({
+        "role": "system",
+        "content": [{ "type": "text", "text": sanitize_surrogates(&text) }],
+    }))
+}
+
+/// 模型不支持原生对话中途系统消息时，把这些消息的文本按出现顺序并入系统提示词。
+///
+/// 所有系统消息回灌成一条首部系统消息，
+/// 各段以空行分隔（首部提示词单独传递，所以只追加中途的那些）。
+/// 没有中途系统消息时原样返回 `system_prompt`，不产生额外分配。
+pub(crate) fn collapse_mid_convo_system_messages(
+    messages: &[AgentMessage],
+    system_prompt: &str,
+    model: &ModelConfig,
+) -> String {
+    if compat_supports_mid_convo_system_messages(model) {
+        return system_prompt.to_string();
+    }
+
+    let extra: Vec<String> = messages
+        .iter()
+        .filter(|m| m.role == "system")
+        .map(|m| m.text())
+        .filter(|t| !t.trim().is_empty())
+        .collect();
+    if extra.is_empty() {
+        return system_prompt.to_string();
+    }
+
+    let mut parts: Vec<&str> = Vec::with_capacity(extra.len() + 1);
+    if !system_prompt.trim().is_empty() {
+        parts.push(system_prompt);
+    }
+
+    parts.extend(extra.iter().map(String::as_str));
+    parts.join("\n\n")
 }
 
 /// 把 `(name, description, parameters)` 工具定义转为 anthropic tools 数组：
@@ -1393,7 +1477,10 @@ pub(crate) async fn stream(
     let supports_temperature = compat_supports_temperature(model);
 
     let client = http::build_client()?;
-    let messages_wire = convert_anthropic_messages(messages, system_prompt, model);
+    // 不支持原生对话中途系统消息的模型：这些消息并入首部系统提示词
+    let effective_system_prompt =
+        collapse_mid_convo_system_messages(messages, system_prompt, model);
+    let messages_wire = convert_anthropic_messages(messages, &effective_system_prompt, model);
 
     // 仅当模型不支持 eager_input_streaming 时才发 fine-grained beta（opencode 网关照收）
     let eager_input_streaming = compat_supports_eager_input_streaming(model);
@@ -1402,7 +1489,7 @@ pub(crate) async fn stream(
     let mut body_json = build_anthropic_body(
         model,
         AnthropicBuildConfig {
-            system_prompt,
+            system_prompt: &effective_system_prompt,
             messages_wire,
             tools,
             reasoning_effort: reasoning_effort.as_deref(),
@@ -1822,6 +1909,118 @@ mod tests {
         assert_eq!(last["content"][0]["type"], "tool_result");
         assert_eq!(last["content"][0]["tool_use_id"], "toolu_1");
         assert_eq!(last["content"][0]["content"], "contents");
+    }
+
+    #[test]
+    fn native_mid_convo_system_messages_are_held_until_the_next_assistant() {
+        // 目录 compat.supportsMidConvoSystemMessages=true 的模型：系统消息原样下发，
+        // 但缓发到下一条 assistant 之前（anthropic 要求 tool_result 紧跟 tool_use）
+        let m = model("claude-haiku-5-5");
+        let mut a1 = AgentMessage::user_text("");
+        a1.role = "assistant".into();
+        a1.content = vec![ContentBlock::ToolCall {
+            id: "toolu_1".into(),
+            name: "read".into(),
+            arguments: json!({}),
+            thought_signature: None,
+            namespace: None,
+        }];
+        let mut note = AgentMessage::user_text("mid-run note");
+        note.role = "system".into();
+        let mut tr = AgentMessage::user_text("contents");
+        tr.role = "toolResult".into();
+        tr.tool_call_id = Some("toolu_1".into());
+        let mut a2 = AgentMessage::user_text("");
+        a2.role = "assistant".into();
+        a2.content = vec![ContentBlock::Text {
+            text: "done".into(),
+            text_signature: None,
+        }];
+
+        let out = convert_anthropic_messages(&[a1, note, tr, a2], "", &m);
+        let roles: Vec<&str> = out.iter().map(|v| v["role"].as_str().unwrap()).collect();
+        assert_eq!(roles, vec!["assistant", "user", "system", "assistant"]);
+        assert_eq!(out[2]["content"][0]["type"], "text");
+        assert_eq!(out[2]["content"][0]["text"], "mid-run note");
+    }
+
+    #[test]
+    fn system_before_a_missing_tool_result_lands_after_the_synthetic_result() {
+        // 没有真实 tool result：synthetic 补位必须先出，系统消息落在它之后
+        let m = model("claude-haiku-5-5");
+        let mut a = AgentMessage::user_text("");
+        a.role = "assistant".into();
+        a.content = vec![ContentBlock::ToolCall {
+            id: "toolu_1".into(),
+            name: "read".into(),
+            arguments: json!({}),
+            thought_signature: None,
+            namespace: None,
+        }];
+        let mut note = AgentMessage::user_text("late note");
+        note.role = "system".into();
+
+        let out = convert_anthropic_messages(&[a, note], "", &m);
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0]["role"], "assistant");
+        assert_eq!(out[1]["content"][0]["type"], "tool_result");
+        assert_eq!(out[2]["role"], "system");
+        assert_eq!(out[2]["content"][0]["text"], "late note");
+    }
+
+    #[test]
+    fn inline_system_messages_are_dropped_without_the_compat_flag() {
+        // claude-sonnet-4-5（opencode）无该兼容位：系统消息不进 wire（改由提示词承载）
+        let m = model("claude-sonnet-4-5");
+        let mut note = AgentMessage::user_text("note");
+        note.role = "system".into();
+        let out = convert_anthropic_messages(&[AgentMessage::user_text("hi"), note], "", &m);
+        assert!(!out.iter().any(|v| v["role"] == "system"), "{out:?}");
+    }
+
+    #[test]
+    fn collapse_joins_inline_system_messages_into_the_prompt() {
+        let unsupported = model("claude-sonnet-4-5");
+        let mut a = AgentMessage::user_text("first");
+        a.role = "system".into();
+        let mut b = AgentMessage::user_text("second");
+        b.role = "system".into();
+        let messages = vec![AgentMessage::user_text("hi"), a, b];
+        assert_eq!(
+            collapse_mid_convo_system_messages(&messages, "base", &unsupported),
+            "base\n\nfirst\n\nsecond"
+        );
+        // 没有中途系统消息时原样返回
+        assert_eq!(
+            collapse_mid_convo_system_messages(
+                &[AgentMessage::user_text("hi")],
+                "base",
+                &unsupported
+            ),
+            "base"
+        );
+
+        // 支持原生中途系统消息的模型不合并
+        let supported = model("claude-haiku-5-5");
+        assert_eq!(
+            collapse_mid_convo_system_messages(&messages, "base", &supported),
+            "base"
+        );
+    }
+
+    #[test]
+    fn trailing_system_message_gets_cache_control() {
+        // 缓存断点落在最后一条 user / system 消息上
+        let m = model("claude-haiku-5-5");
+        let mut note = AgentMessage::user_text("note");
+        note.role = "system".into();
+        let out = convert_anthropic_messages(&[AgentMessage::user_text("hi"), note], "", &m);
+        let last = out.last().unwrap();
+        assert_eq!(last["role"], "system");
+        assert!(
+            last["content"][0].get("cache_control").is_some(),
+            "{last:?}"
+        );
     }
 
     #[test]

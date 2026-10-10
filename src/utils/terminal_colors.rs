@@ -229,12 +229,10 @@ pub fn parse_terminal_colors(bytes: &[u8]) -> TerminalColors {
 fn query_allowed() -> bool {
     #[cfg(unix)]
     {
-        use std::io::IsTerminal;
         match std::env::var(ENV_OVERRIDE).ok().as_deref() {
-            Some("0") | Some("false") | Some("no") => return false,
-            _ => {}
+            Some("0") | Some("false") | Some("no") => false,
+            _ => terminal_is_tty(),
         }
-        std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
     }
 
     // 非 unix 无带超时的 fd 轮询实现：宁可不查（不向终端写无意义序列）
@@ -242,6 +240,13 @@ fn query_allowed() -> bool {
     {
         return false;
     }
+}
+
+/// stdin 与 stdout 都是 TTY（查询终端能力的前提）。
+#[cfg(unix)]
+fn terminal_is_tty() -> bool {
+    use std::io::IsTerminal;
+    std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
 }
 
 /// 进程内缓存的终端配色。
@@ -273,35 +278,58 @@ pub fn query_terminal_colors_with_timeout(timeout: Duration) -> TerminalColors {
         return TerminalColors::default();
     }
 
-    let Some(_raw) = RawModeGuard::acquire() else {
-        return TerminalColors::default();
-    };
+    parse_terminal_colors(&query_terminal_replies(&query_string(), timeout))
+}
 
+/// 向终端写入 `query` 并在 `timeout` 内读取回复，直到收到 DA1 哨兵或超时。
+///
+/// 查询串必须以 DA1（`CSI c`）结尾：所有终端都会回 DA1 且按顺序回复，因此它标志回复结束。
+/// 返回累积的原始字节（未解析）；stdin/stdout 不是 TTY、非 Unix 平台、开启 raw 模式失败或写入
+/// 失败时返回空。会短暂开关 raw 模式（否则行缓冲会把回复攒到换行、echo 会把回复打到屏幕上），
+/// 因此调用方必须保证在 TUI 接管输入**之前**执行。
+pub(crate) fn query_terminal_replies(query: &str, timeout: Duration) -> Vec<u8> {
+    #[cfg(not(unix))]
     {
-        let mut stdout = std::io::stdout();
-        if stdout.write_all(query_string().as_bytes()).is_err() || stdout.flush().is_err() {
-            return TerminalColors::default();
-        }
+        let _ = (query, timeout);
+        Vec::new()
     }
 
-    let deadline = Instant::now() + timeout;
-    let mut buf: Vec<u8> = Vec::new();
-    let mut chunk = [0u8; 1024];
-
-    loop {
-        match read_available(deadline, &mut chunk) {
-            Some(0) => break,
-            Some(n) => buf.extend_from_slice(&chunk[..n]),
-            None => break,
+    #[cfg(unix)]
+    {
+        if !terminal_is_tty() {
+            return Vec::new();
         }
 
-        // 收到 DA1（或超时）即认为配色/外观回复结束
-        if saw_device_attributes(buf.clone()) {
-            break;
+        let Some(_raw) = RawModeGuard::acquire() else {
+            return Vec::new();
+        };
+
+        {
+            let mut stdout = std::io::stdout();
+            if stdout.write_all(query.as_bytes()).is_err() || stdout.flush().is_err() {
+                return Vec::new();
+            }
         }
+
+        let deadline = Instant::now() + timeout;
+        let mut buf: Vec<u8> = Vec::new();
+        let mut chunk = [0u8; 1024];
+
+        loop {
+            match read_available(deadline, &mut chunk) {
+                Some(0) => break,
+                Some(n) => buf.extend_from_slice(&chunk[..n]),
+                None => break,
+            }
+
+            // 收到 DA1（或超时）即认为回复结束
+            if saw_device_attributes(buf.clone()) {
+                break;
+            }
+        }
+
+        buf
     }
-
-    parse_terminal_colors(&buf)
 }
 
 /// 缓冲区里是否已经出现 DA1 回复

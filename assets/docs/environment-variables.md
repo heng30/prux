@@ -61,6 +61,7 @@ fi
 | `PRUX_MODEL` | 覆盖默认模型（优先级：`--model` > 该变量 > settings） |
 | `PRUX_CACHE_RETENTION` | 选择扩展的 provider 提示缓存（Anthropic 语义）档位：`long` 用 1 小时长期缓存，`none`/`off` 关闭缓存，其余（含未设置）用目录里的短档 TTL |
 | `PRUX_HYPERLINKS` | 覆盖 OSC 8 超链接探测，取值 `1`/`0`/`auto` |
+| `PRUX_PROGRAM_STATUS` | 覆盖 OSC 7501 程序状态：`1` 不查询直接上报，`0` 关闭上报；其余取值仅在终端应答支持查询后上报，详见 [tui.md](tui.md) 的「程序状态」 |
 | `PRUX_TERMINAL_COLORS` | 设为 `0`/`false`/`no` 关闭启动时的终端配色查询（OSC 10/11/4），此时 `system` 主题改用索引兜底色 |
 | `PRUX_IMAGE_PROTOCOL` | 强制内联图片的图形协议，取值 `kitty`/`iterm2`/`sixel`/`halfblocks`/`none`（`none`/`0` 等于关闭内联图片）；仅在 `showImages` 开启时有意义，详见 [settings.md](settings.md) 的「内联图片」 |
 | `PRUX_TRUE_COLOR` | 覆盖真彩色探测，取值 `1`/`0`/`auto` |

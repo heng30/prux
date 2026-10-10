@@ -16,6 +16,7 @@ pub mod line_input;
 pub mod oauth_flow;
 pub mod overlay;
 pub mod panel;
+pub mod program_status;
 pub mod render;
 pub mod session_selector;
 pub mod settings_selector;
@@ -65,6 +66,7 @@ use crossterm::{
     terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use futures_util::StreamExt;
+use program_status::ProgramStatusReporter;
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::{
     cell::RefCell,
@@ -197,6 +199,9 @@ pub async fn run_interactive(
     // 必须早于 crossterm 的事件流（否则回复会被当成按键吃掉），所以在这里做。
     terminal_image::prime_image_picker(settings_manager::read_settings_show_images());
 
+    // OSC 7501 程序状态：同样要读写 stdin 探测支持，必须早于事件流。
+    let program_status_supported = program_status::detect_program_status_support();
+
     // 终端已经没了（关窗后在已关闭终端里恢复、tty 被撤销）：安静退出，不报错、不提示 /bug
     let mut terminal = match setup_terminal() {
         Ok(t) => t,
@@ -225,6 +230,13 @@ pub async fn run_interactive(
         verbose,
     );
 
+    {
+        let mut st = shared.borrow_mut();
+        st.program_status = ProgramStatusReporter::new(program_status_supported);
+        st.program_status
+            .set_session_name(agent.session.as_ref().and_then(|s| s.name.clone()));
+    }
+
     // agent actor：worker 独占 agent，UI 经命令通道发送指令、经闭包队列收状态更新
     let (worker_cmd_tx, worker_cmd_rx) = agent_actor::channels();
     let worker = WorkerHandle::new(worker_cmd_tx);
@@ -240,6 +252,7 @@ pub async fn run_interactive(
 
     loop {
         update_terminal_title(&shared);
+        report_program_status(&shared);
 
         // 终端消失时安静退出（渲染写不进去），而非把 EIO 当崩溃报给用户
         match render_tick(&shared, &mut terminal) {
@@ -347,8 +360,38 @@ pub async fn run_interactive(
     worker.send(agent_actor::AgentCommand::Shutdown);
     _ = tokio::time::timeout(Duration::from_secs(3), worker_task).await;
 
+    // 退出前撤销 OSC 7501 状态（仅上报过的终端才写）
+    if let Some(sequence) = shared.borrow().program_status.exit_sequence() {
+        _ = io::stdout().write_all(sequence.as_bytes());
+        _ = io::stdout().flush();
+    }
+
     teardown_terminal(&mut terminal);
     Ok(())
+}
+
+/// OSC 7501：按当前 App 状态（当前面板 + 会话名 + 回合状态）重算程序状态，
+/// 并写出发生变化的那一条。
+///
+/// 每轮循环调用一次；与上次相同的状态被去重，因此不会重复写终端。
+/// 直接写 stdout 而非进 ratatui 缓冲：OSC 7501 不搬光标、不画单元格，
+/// 在两帧之间写出不会破坏已绘制的画面。
+fn report_program_status(shared: &Rc<RefCell<App>>) {
+    let sequence = {
+        let mut st = shared.borrow_mut();
+        let blocked = st.program_status_blocked();
+        st.program_status.set_blocked(blocked);
+        st.program_status.report();
+        st.program_status.take_pending()
+    };
+
+    let Some(sequence) = sequence else {
+        return;
+    };
+
+    let mut stdout = io::stdout();
+    _ = stdout.write_all(sequence.as_bytes());
+    _ = stdout.flush();
 }
 
 /// 处理单个键盘事件对应的动作；返回 true 表示退出

@@ -125,6 +125,25 @@ prux 以全屏终端界面（TUI）运行，用于读写会话、执行斜杠命
 - **临时提示**：`ctrl+x` 复制、OAuth 等一次性反馈以 muted 单行显示，2 秒后消失。
 - **信任确认**：项目未信任时以 warning 色逐行显示确认。
 
+## 程序状态（OSC 7501）
+
+prux 用 [Program Status Protocol（OSC 7501）](https://www.superlogical.com/rex/docs/build/program-status) 向终端上报自己的状态，让终端或 agent 面板显示它是在工作、在等你、已完成还是失败了：
+
+| 状态 | 何时 |
+|---|---|
+| `working` | agent 回合或上下文压缩进行中；说明文字是会话名 |
+| `blocked` | 扩展对话框或登录在等你；说明文字是对话框标题 |
+| `done` | 一个回合结束；说明文字是会话名 |
+| `error` | 回合以不再重试的错误结束；说明文字是错误首行 |
+| `idle` | 刚启动，或你取消了回合 |
+
+上报内容只有会话名、对话框标题与错误首行，**绝不包含 prompt 或模型输出**。prux 只在终端应答过协议的支持查询后才上报；tmux / screen 不转发该序列（同 OSC 8 / 内联图片的限制）。退出时发一条 `clear` 撤销状态。
+
+- `PRUX_PROGRAM_STATUS=1`：不查询，直接上报。
+- `PRUX_PROGRAM_STATUS=0`：完全关闭上报。
+
+支持查询与终端配色、内联图片的探测一起发生在启动阶段（TUI 接管输入之前），详见[环境变量](environment-variables.md)。
+
 ## 停靠面板（dock）
 
 状态栏上方的可滚动面板，用于常显扩展状态（如 plan-mode 的 todo 进度）。`/dock` 切换显隐；面板打开时若没有任何扩展提供内容则提示。

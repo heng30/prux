@@ -42,7 +42,7 @@
 4. **codemode 输出与图片**（2.4–2.8）：四条互相独立的小改动。
 5. **`agent_settled.aborted` + 工具 `durationMs`**（1.5 / 2.10 / 2.12）：事件载荷补齐，UI 侧顺带修 `Took`。
 6. **MCP OAuth 可取消 + 15s 超时**（1.7 / 2.14）：改动最大，需要动登录状态机。
-7. **OSC 7501 程序状态**（2.13）：纯新增，可最后做。
+7. **OSC 7501 程序状态**（2.13）：纯新增，可最后做。**已完成**（第五轮）。
 
 ---
 
@@ -713,7 +713,11 @@ prux 基于 ratatui，没有 pi 的 `Terminal` trait，所以 pi 的
 `agent_start` / `message_end` / `compaction_*` / `agent_settled`（2.12）与扩展对话框开合。
 先做 `working` / `done` / `error` / `idle`，`blocked` 依赖对话框接线可后置。
 
-> **状态：未做**
+> **状态：已实现**。新增 `src/modes/interactive/program_status.rs`：状态枚举 + OSC 7501 编码
+> （base64 `msg`、控制字符替换、`app` 形状校验、2048 字节截断）+ 支持探测 + `ProgramStatusReporter`；
+> `PRUX_PROGRAM_STATUS=1|0` 覆盖；上报点接在 `App::apply_sink_event` 与会话切换、
+> 阻塞状态从当前面板每帧派生，退出时发 `clear`。断言见 `program_status::tests::*` 与
+> `program_status_blocked_only_covers_extension_and_login_dialogs`。
 
 ---
 
@@ -746,8 +750,10 @@ Bedrock 上走 adaptive thinking + native `xhigh` + prompt caching。
 
 **建议**：重跑同步；然后核对 anthropic 的 adaptive thinking 与 mid-conversation 系统消息路径。
 
-> **状态：数据面已同步**。`claude-haiku-5-5` 已进目录（含 `tiers` 定价档，见 1.24）。
-> 「对话中途系统消息 / 工具变更」仍待核对（`anthropic.rs` 是否按 pi-ai 1.1.0 的形状发送）。
+> **状态：部分实现**。数据面（`claude-haiku-5-5` + 定价档）已在第二轮同步；本轮实现「对话中途系统消息」
+> （原生 + 回灌两条路径，见第十一节）。**未做**：`compat.supportsMidConvoEffort` 那一整簇
+> （强制 adaptive thinking + `block_binding`、逐消息 `output_config.effort` 回放、两个新 beta 头）
+> 与「对话中途工具变更」（`supportsMidConvoToolChanges`），原因与范围见第十一节。
 
 ---
 
@@ -930,7 +936,10 @@ prux 现有 bash 临时文件（`tools/bash.rs`）与 MCP 资源落盘需要一�
 - [x] `Home`/`End` 与 `Ctrl+Home`/`Ctrl+End` 键位对齐（3.3）
 - [x] Anthropic 登录端口占用行为核对（1.2）
 - [x] 终端消失错误识别（1.17）
-- [x] （可选）`openai-decisions`（2.17）——**第四轮已做**；OSC 7501 程序状态（2.13）仍未做
+- [x] （可选）`openai-decisions`（2.17）——**第四轮已做**
+- [x] OSC 7501 程序状态（2.13）——**第五轮已做**
+- [~] Anthropic 对话中途系统消息（2.16）——**第五轮已做系统消息面**；
+      `supportsMidConvoEffort` 簇与 `supportsMidConvoToolChanges` 有意未做（见第十一节）
 - [x] `outputPad` 设置项（2.11）——**有意跳过**，理由见第九节；prux 的 transcript 缩进硬编码 1 列、不可配置
 
 ---
@@ -1050,3 +1059,67 @@ changelog 正文不再沿用上一版的「产品介绍」格式，而是按本�
 **验证**：`cargo test` 全绿（lib 3271 项 + 19 个集成测试目标，含 `tests/`）；
 `cargo fmt --check` 通过；`cargo clippy --lib --tests` 只剩改动前就存在的 3 条 warning
 （`settings_manager` 1、`tasks/widget` 2）。
+
+---
+
+## 十一、第五轮实施记录（OSC 7501 + Anthropic 对话中途系统消息）
+
+本轮落地 2.13 与 2.16 的系统消息面。2.16 在核对 pi-ai 1.1.0 源码后被发现比迁移指南原先的判断更大，
+未做的部分与理由见本节末尾。
+
+| # | 项 | 改动位置 | 关键测试 |
+|---|---|---|---|
+| 2.13 | OSC 7501 程序状态 | 新增 `modes/interactive/program_status.rs`（`ProgramState` / `BlockedKind` / `ProgramStatus` / `format_program_status` / `detect_program_status_support` / `ProgramStatusReporter`）；`utils/terminal_colors.rs` 抽出可复用的 `query_terminal_replies`；`modes/interactive.rs`（启动探测、每轮循环 `report_program_status`、退出 `clear`）；`app.rs`（`program_status` 字段 + `program_status_blocked`）；`handlers/events.rs`（`apply_sink_event` 喂事件、切会话 `set_session_name` + `reset`）；`assets/docs/{tui,environment-variables}.md` | `program_status::tests::*`（12 条）、`program_status_blocked_only_covers_extension_and_login_dialogs` |
+| 2.16 | Anthropic 对话中途系统消息 | `core/provider/anthropic.rs`：`compat_supports_mid_convo_system_messages`、`convert_anthropic_messages` 的 `system` 分支（原生缓发）、`flush_pending_system_messages`、`convert_anthropic_system_message`、`collapse_mid_convo_system_messages`（不支持时并入首部提示词）、`apply_anthropic_cache_control` 接受 `system` 角色、`stream_anthropic` 用合并后的提示词 | `native_mid_convo_system_messages_are_held_until_the_next_assistant`、`system_before_a_missing_tool_result_lands_after_the_synthetic_result`、`inline_system_messages_are_dropped_without_the_compat_flag`、`collapse_joins_inline_system_messages_into_the_prompt`、`trailing_system_message_gets_cache_control` |
+
+**2.13 实现要点与 pi 的差异**：
+
+- 支持探测与终端配色、内联图片一起发生在 `setup_terminal` 之前（要读写 stdin），
+  查询串是 `OSC 7501;?` + DA1 哨兵；`PRUX_PROGRAM_STATUS=1|0` 跳过查询。
+  为此把 `terminal_colors` 的「写查询 + 读到 DA1」抽成 `pub(crate) query_terminal_replies`，两处共用。
+- **与 pi 的差异**：pi 的 `Terminal.start()` 把 kitty 键盘查询、OSC 7501 查询、DA 查询一次写出，
+  并用 DA 计数判定「最后一次 DA 之前没收到 7501 应答 = 不支持」。prux 没有自建终端层
+  （键盘协议分别交给 crossterm 与 tmux 序列），因此单独发一次 `7501;?` + DA1 探测。
+  pi 的 `setProgramStatus` 由 `Terminal` 实现承载，prux 直接写 stdout——OSC 7501 不搬光标、不画单元格，
+  在两帧之间写出不会破坏 ratatui 已绘制的画面。
+- **与 pi 的差异（阻塞状态）**：pi 用「按来源键控的 Map + 取最后插入的一条」，prux 的 TUI 一次只有一个模态，
+  因此改为每轮循环从当前栈顶面板派生（`App::program_status_blocked`），不必在各面板开关处成对维护。
+  覆盖面与 pi 对齐：只有扩展选择面板（`PanelKind::Custom`）、扩展设置面板与登录面板算 `blocked`，
+  `/model` `/theme` `/session` 等内置面板不上报。
+- `working` / `done` 的说明文字取会话名（`SessionSwitched.name` 或 `session_info_changed`），
+  未命名时省略 `msg` 字段。
+
+**2.16 实现要点与 pi 的差异**：
+
+- 原生路径**缓发**系统消息到下一条 assistant 之前（或序列末尾）：anthropic 要求 `tool_result` 紧跟
+  `tool_use`，夹在中间的系统消息会被拒。pi 在 `transformMessages` 的第二遍里做这件事，
+  prux 在 `convert_anthropic_messages` 里做，并把 flush 放在 `insert_synthetic_tool_results` **之后**
+  （顺序 = `[synthetic tool_result, system, assistant]`，与 pi 的 `closePendingToolCalls()` 先于
+  `heldSystemMessages` 一致）。
+- 不支持原生中途系统消息的模型：文本按出现顺序以空行分隔并入首部系统提示词
+  （对齐 pi 的 `collapseSystemMessages`）。注意 pi 会把**全部** system 消息回灌成一条首部消息，
+  prux 的首部提示词单独传递，所以只追加中途的那些。
+- 缓存断点从「最后一条 user」扩到「最后一条 user 或 system」，对齐 pi 的 `convertMessages` 收尾。
+- **对话中途工具变更（`supportsMidConvoToolChanges`）未做，且判定为当前不适用**：
+  pi 的 transcript 在每个 system 消息上带 `toolsAdded` / `toolsRemoved`，用
+  `tool_addition` / `tool_removal` 块 + `inline-tools-2026-09-15` beta 表达中途的工具变更；
+  prux 的 `AgentMessage` 没有逐消息工具增量（工具是会话级、每次请求整体声明），
+  要落地得先扩 transcript 模型。将来若接入，同时需要 `DEFERRED_TOOL_PLACEHOLDER` 占位工具
+  与 `nativeToolChanges` 的三重条件（`supportsMidConvoSystemMessages && supportsMidConvoToolChanges && 首部有工具`）。
+- **`compat.supportsMidConvoEffort` 簇未做**（本轮新识别出的残留，不在迁移指南原先的判断里）。
+  pi 对这批模型（anthropic 的 opus-5 / opus-5-5 / sonnet-5-5 / haiku-5-5 / fable-5-1）有整套额外行为：
+  ① `thinking` 被**强制**为 adaptive 并带 `block_binding.prefix_mismatch_behavior = "drop_block"`；
+  ② `output_config.effort` 默认 `"high"`；
+  ③ 每条历史 assistant 消息前插一条 `{role:"system", content:[], output_config:{effort}}`，
+  末尾补一条当前 effort 的同类消息（`insertThinkingLevelMessages`）；
+  ④ 请求带 `mid-conversation-output-config-2026-07-01` 与 `thinking-binding-controls-2026-08-01` 两个 beta。
+  prux 目前发的是请求级 `output_config.effort`（当前回合的 effort 是对的），缺的是**历史 effort 回放**。
+  未做的理由：②③ 需要 prux 记录「该条 assistant 消息当时用的 provider effort」，而 prux 存的是内部级别
+  （`thinking_level`），映射回去在 `off`/`minimal` 这类边界上语义不等价；①会改变请求形状
+  （用户选 off 时也强制 adaptive），属于产品行为决定而非纯对齐。要做得先确认口径，不按猜测实现。
+- **其它协议仍丢中途系统消息**：`openai-completions` / `openai-responses` 的转换仍是 `_ => {}`，
+  而目录里 `supportsMidConvoSystemMessages` 在 openai / moonshotai / kimi 系模型上也是 true。
+  本轮的收录范围按迁移指南 2.16 只覆盖 anthropic；两条 openai 路径留作后续。
+
+**验证**：`cargo test` 全绿（lib 3289 项 + 全部集成测试目标）；`cargo fmt --check` 通过；
+`cargo clippy --lib --tests` 只剩改动前就存在的 3 条 warning（`settings_manager` 1、`tasks/widget` 2）。
