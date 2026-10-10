@@ -50,7 +50,7 @@ core::extensions::register_banner_extension(extensions::banner::Banner::new());
 | `downloader` | 扩展 | 外部工具（`fd` / `rg`）的安装与状态展示：`/download fd\|rg` 缺失时直接下载、已存在时弹选择面板（重装 / 取消）、下载中只提示、未知工具与多余参数报错；裸 `/download` 切换本扩展的 dock 段显隐（对齐 plan-mode `/todos`、proxy `/proxy`，不控制整个面板），段内每行是「状态点 + 工具名 + 版本 + 位置」（仅 PATH 命中的系统副本会标 `(system)`）。**默认启用**（工具可用性属于开箱能力）；禁用只影响该命令与 dock 段，启动时的缺失检测与提示（不自动下载）不受影响 |
 | `update-check` | 扩展 | 启动时异步检查 GitHub 最新 release（`heng30/prux`），有新版本就在**输入框下方**弹出选择面板（`Open download page` / `Ignore` / `Don't ask again`；↑↓ 选择、Enter 确认、Esc/Ctrl+C 关闭）。`Ignore` 只关掉本次提示，`Don't ask again` 把版本写进 `settings.json` 的 `skipUpdateVersion`（只抑制该版本，之后更新的版本仍会提示）。`--offline`/`PRUX_OFFLINE` 跳过检查，网络失败静默。**默认启用**。另提供 `/update check`（异步检查并在聊天区输出当前/新版本与下载地址）与 `/update open`（直接打开最新 release 下载页，不比较版本） |
 | `cache-usage` | 扩展 | 历史会话的 prompt cache 命中率：`/cache-usage [all] [<provider>]`。数据源就是会话文件里的 `Usage`（assistant 消息 + compaction / branch_summary 条目），命中率口径 `cacheRead / (input + cacheRead + cacheWrite)`——与底栏同式。空参只统计**当前会话**，`all` 统计全部已存会话（`agent_dir()/sessions` 下各工程合并，按修改时间取最新 200 份），`<provider>` 只统计该 provider 的样本（provider 是跨会话概念，因此同样读全部已存会话）。覆盖面板画总量条形图（24 格）+ 24 档趋势 sparkline + 各 provider / 各会话分列；fork 出来的重复条目按「条目 id + 时间戳 + provider + 用量」去重。只读会话文件，不发网络请求。**默认不启用**（`Dev` / `Creator` 模式） |
-| `doctor` | 扩展 | provider 网络可达性诊断：`/doctor [summary]` 对目录里每个 provider 的第一个 chat 模型发一个**不带凭据**的 `HEAD`（并发上限 16、单请求 10s），判定链路是否通——**有 HTTP 响应就算网络可达**（探的是 base URL，`404` / `405` 这类「路径没处理器」的响应同样证明连接与 TLS 都通：`2xx` / `401` / `403` / `405` 是预期结果，其它状态码标 `status not OK`），只有请求本身失败才记 `timeout` / `dns error` / `connect error`；`/doctor summary` 只给可达/失败计数与失败清单。面板末尾的 environment 段给出版本、`agent_dir()`、探测目标数与 `HTTP_PROXY` / `HTTPS_PROXY` / `http_proxy` 的 set/unset（**不回显值**）。`--offline` / `PRUX_OFFLINE` 不发请求，只显示 environment 段。**默认不启用**（`Dev` / `Creator` 模式） |
+| `doctor` | 扩展 | provider 网络可达性诊断：`/doctor [summary]` 对目录里每个 provider 的第一个 chat 模型发一个**不带凭据**的 `HEAD`（并发上限 16、单请求 10s），判定链路是否通——**有 HTTP 响应就算网络可达**（探的是 base URL，`404` / `405` 这类「路径没处理器」的响应同样证明连接与 TLS 都通：`2xx` / `401` / `403` / `405` 是预期结果，其它状态码标 `status not OK`），只有请求本身失败才记 `timeout` / `dns error` / `connect error`；`/doctor summary` 只给可达/失败计数与失败清单。面板末尾的 environment 段给出版本、`agent_dir()`、探测目标数与 `http_proxy` / `https_proxy` / `all_proxy` / `no_proxy` 的 set/unset（大小写不敏感，**不回显值**）。`--offline` / `PRUX_OFFLINE` 不发请求，只显示 environment 段。**默认不启用**（`Dev` / `Creator` 模式） |
 | `btw` | 扩展 | 只读旁问：`/btw <问题>` 把答案渲染在输入区上方的 `BTW` 面板里（Esc / Enter 关闭），**不进会话、不改上下文**——送给模型的只有最近 4 条 / 4000 字以内的摘录加一段只读系统提示（一次性请求，不带工具、不写会话；答案晚到时若面板已关就丢弃）。**默认不启用**（`Dev` / `Creator` 模式） |
 | `recap` | 扩展 | 一行会话小结：`/recap [now|on|off]` 在停靠面板里显示 `※ recap: …`（≤120 字，去前缀/引号后硬截断），默认开启自动小结、空闲 5 分钟重刷一次（30 秒一拍的后台任务判断），开关存在 `agent_dir()/extensions/recap.json` 的 `autoRecap`（也可在扩展设置面板改）。**默认不启用**（`Dev` / `Creator` 模式）：开启后空闲即会发起模型请求 |
 | `doc-helper` | 扩展 | 精简系统提示词：启用后从默认系统提示词移除整段 prux 文档描述（README/docs/examples 指针 + 主题映射），改用 `/help <question>` 按需提问——把**同一段**文档描述当作一条普通 user 消息投出（不动系统提示词，保护缓存命中率）；无参 `/help` 只列出文档主题。**默认不启用**，需在 `/extension` 面板开启 |
@@ -93,9 +93,11 @@ core::extensions::register_banner_extension(extensions::banner::Banner::new());
   （网络通了但服务端答案不对，是另一类问题）；
 - 只有请求本身失败才算不可达：超时 → `timeout`；DNS 失败 → `dns error`；连接失败 → `connect error`；
 - 并发 16、单请求 10s 超时、不发 prompt；
+- 面板首行是顶栏（面板样式不渲染 `title` 字段）：`Doctor · <N> providers`，`/doctor summary` 档为
+  `Doctor · summary · <N> providers`，与 cache-usage 面板同款；探测期间顶栏不变、下行显示 `probing…`；
 - `--offline` / `PRUX_OFFLINE`：不发任何请求，只显示 environment 段并提示 `offline mode: network probes skipped`。
 
-environment 段包含程序名与版本、`agent_dir()`、探测目标数、三个代理变量是 set 还是 unset（**只报有无，不回显值**——值里可能带凭据）。
+环境段包含程序名与版本、`agent_dir()`、探测目标数、代理变量（`http_proxy` / `https_proxy` / `all_proxy` / `no_proxy`）是 set 还是 unset（按请求实际读取的变量与大小写规则判有无；**只报有无，不回显值**——值里可能带凭据）。
 
 ### btw
 

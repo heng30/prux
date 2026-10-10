@@ -1,5 +1,10 @@
 //! HTTP 代理 / NO_PROXY 解析。
 
+/// 本模块参与代理决策的环境变量名（小写形式，[`env_var_ci`] 读取时大写名兜底）。
+///
+/// `http_proxy` / `https_proxy` / `all_proxy` 给代理地址与兜底，`no_proxy` 给直连排除表。
+pub const ENV_VARS: [&str; 4] = ["http_proxy", "https_proxy", "all_proxy", "no_proxy"];
+
 /// 解析后的 NO_PROXY 条目。
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct NoProxyEntry {
@@ -141,6 +146,16 @@ fn parse_port(s: &str) -> Option<u16> {
     s.parse::<u16>().ok().filter(|&p| p != 0)
 }
 
+/// 逐个报告 [`ENV_VARS`] 是否已配置（走 [`env_var_ci`]，大小写不敏感，空值视为未配置）。
+///
+/// 只取有无、**不回显值**——值里可能带凭据；供诊断面板展示代理配置用。
+pub fn env_flags() -> Vec<(&'static str, bool)> {
+    ENV_VARS
+        .iter()
+        .map(|name| (*name, env_var_ci(name).is_some()))
+        .collect()
+}
+
 /// 读取环境变量：小写名优先、大写名兜底，trim 后非空才返回。
 /// 对应 pi `getProxyEnv` 无 provider 作用域时的读取次序。
 pub fn env_var_ci(key: &str) -> Option<String> {
@@ -274,5 +289,15 @@ mod tests {
         assert!(!NoProxyList::default().hits("x.com", 443));
         // 空格分隔
         assert!(NoProxyList::parse("a.com b.com").hits("b.com", 443));
+    }
+
+    /// 诊断面板拿到的名单必须就是本模块真正读的那些变量（含 all_proxy / no_proxy），
+    /// 少一个就会把「配了却没用上」和「没配」混为一谈。
+    #[test]
+    fn env_flags_cover_every_decision_var() {
+        let flags = env_flags();
+        assert_eq!(flags.len(), ENV_VARS.len());
+        let names: Vec<&str> = flags.iter().map(|(name, _)| *name).collect();
+        assert_eq!(names, ENV_VARS.to_vec());
     }
 }

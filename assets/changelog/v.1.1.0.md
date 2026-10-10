@@ -58,8 +58,10 @@ This release aligns prux with upstream pi 1.1.0.
   (16 at a time, 10s each). Any HTTP response means the network path is fine — `2xx`, `401`, `403`
   and `405` are the expected answers, anything else is flagged `status not OK` — and only a failing
   request is listed as unreachable (`timeout` / `dns error` / `connect error`). `/doctor summary`
-  prints the counts and the failures, the panel ends with an environment block (version, agent
-  directory, proxy variables as set/unset only), and `--offline` skips the probes entirely.
+  prints the counts and the failures, the panel's first line is the title bar (`Doctor · <N> providers`,
+  plus a `summary` segment in the summary view), and it ends with an environment block (version, agent
+  directory, `http_proxy` / `https_proxy` / `all_proxy` / `no_proxy` as set/unset only — read the
+  same way the probes read them, case-insensitively); `--offline` skips the probes entirely.
 - **`/btw` asks a read-only side question and `/recap` shows a one-line session summary.** `/btw`
   answers in a panel from a short excerpt through one independent request — nothing is added to the
   conversation — while `/recap [now|on|off]` puts a one-line summary in the dock and refreshes it
@@ -157,7 +159,10 @@ This release aligns prux with upstream pi 1.1.0.
   （并发 16、单请求 10s）：**有 HTTP 响应就算网通**（`2xx` / `401` / `403` / `405` 是预期结果，
   其它状态码标 `status not OK`），只有请求本身失败才列入不可达（`timeout` / `dns error` /
   `connect error`）。`/doctor summary` 只给计数与失败清单，面板末尾的 environment 段列出程序
-  版本、`agent_dir()`、探测目标数与代理变量的 set/unset（不回显值）；`--offline` 不发请求。
+  版本、`agent_dir()`、探测目标数与代理变量（`http_proxy` / `https_proxy` / `all_proxy` /
+  `no_proxy`，按请求实际读取的大小写规则判有无）的 set/unset（不回显值）。面板首行是顶栏
+  `Doctor · <N> providers`（`summary` 档多一段 `summary`），探测期间下行显示 `probing…`；
+  `--offline` 不发请求。
 - **新增 `/btw` 与 `/recap`**：`/btw <问题>` 是只读旁问——答案渲染在输入区上方的面板里，
   上下文只有一小段摘录、走独立的一次性请求，**不进会话、不改上下文**；
   `/recap [now|on|off]` 在停靠面板里显示一行会话小结（≤120 字），空闲 5 分钟后自动重刷。
