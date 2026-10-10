@@ -1199,6 +1199,17 @@ pub(crate) fn viewer_target_id() -> Option<String> {
     lock().viewer_target.clone()
 }
 
+/// 丢掉缓存的物化上下文与运行时句柄（测试接缝）。
+///
+/// [`reset`] 故意保留 `last_ctx`/`last_rt`（会话切换后核心会重新 `on_exec_ctx`），
+/// 所以要测"还没有执行上下文"只能显式清。
+#[cfg(test)]
+pub(super) fn forget_ctx_for_test() {
+    let mut st = lock();
+    st.last_ctx = None;
+    st.last_rt = None;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

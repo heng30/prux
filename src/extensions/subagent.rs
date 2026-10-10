@@ -30,6 +30,7 @@ mod widget;
 mod wizard;
 mod worktree;
 
+pub(crate) mod autoresearch;
 pub(crate) mod workflow;
 
 use super::util::{choice_key, notify, notify_text, opt_str, req_str, type_arg_label};
@@ -469,62 +470,75 @@ impl Extension for Subagent {
 
     /// 声明 `/agents` 斜杠命令及其子命令（types/result/stop/workflows/schedules/settings/eject/…）。
     fn commands(&self) -> Vec<ExtensionCommand> {
-        vec![ExtensionCommand {
-            name: "agents".to_string(),
-            description: "List sub-agents of this session (types, running, recent results)"
-                .to_string(),
-            busy_safe: true, // handler 只读扩展自身状态，不锁 agent
-            subcommands: vec![
-                extensions::SubcommandDef {
-                    name: "types",
-                    description: "List available agent types (read-only)",
-                },
-                extensions::SubcommandDef {
-                    name: "result",
-                    description: "Show one agent's status and result: /agents result <id> (`@` picks the id)",
-                },
-                extensions::SubcommandDef {
+        vec![
+            ExtensionCommand {
+                name: "agents".to_string(),
+                description: "List sub-agents of this session (types, running, recent results)"
+                    .to_string(),
+                busy_safe: true, // handler 只读扩展自身状态，不锁 agent
+                subcommands: vec![
+                    extensions::SubcommandDef {
+                        name: "types",
+                        description: "List available agent types (read-only)",
+                    },
+                    extensions::SubcommandDef {
+                        name: "result",
+                        description: "Show one agent's status and result: /agents result <id> (`@` picks the id)",
+                    },
+                    extensions::SubcommandDef {
+                        name: "stop",
+                        description: "Stop a running or queued agent, or a workflow run: /agents stop <id> (`@` picks the id)",
+                    },
+                    extensions::SubcommandDef {
+                        name: "workflows",
+                        description: "Open the workflow runs list (live progress)",
+                    },
+                    extensions::SubcommandDef {
+                        name: "schedules",
+                        description: "List scheduled sub-agent jobs (cancel with d)",
+                    },
+                    extensions::SubcommandDef {
+                        name: "settings",
+                        description: "Open the subagent settings panel",
+                    },
+                    extensions::SubcommandDef {
+                        name: "eject",
+                        description: "Write an agent type out as a .md file: /agents eject <type> [project] (`@` picks the type)",
+                    },
+                    extensions::SubcommandDef {
+                        name: "enable",
+                        description: "Re-enable a disabled agent .md: /agents enable <type> (`@` picks the type)",
+                    },
+                    extensions::SubcommandDef {
+                        name: "disable",
+                        description: "Disable an agent .md (line-wise edit): /agents disable <type> (`@` picks the type)",
+                    },
+                    extensions::SubcommandDef {
+                        name: "delete",
+                        description: "Delete a custom agent's .md file: /agents delete <type> (`@` picks the type)",
+                    },
+                    extensions::SubcommandDef {
+                        name: "reset",
+                        description: "Delete a built-in default's override .md, restoring the default: /agents reset <type> (`@` picks the type)",
+                    },
+                    extensions::SubcommandDef {
+                        name: "edit",
+                        description: "Edit an agent type's .md in a multi-line editor: /agents edit <type> (`@` picks the type)",
+                    },
+                ],
+            },
+            ExtensionCommand {
+                name: "autoresearch".to_string(),
+                description: "Iterate one sub-agent on a goal until it reports [goal-complete]: \
+                              /autoresearch <goal> [--iterations N] starts a job, bare /autoresearch lists jobs"
+                    .to_string(),
+                busy_safe: true, // handler 只动本扩展的作业表与子代理注册表，不锁 agent
+                subcommands: vec![extensions::SubcommandDef {
                     name: "stop",
-                    description: "Stop a running or queued agent, or a workflow run: /agents stop <id> (`@` picks the id)",
-                },
-                extensions::SubcommandDef {
-                    name: "workflows",
-                    description: "Open the workflow runs list (live progress)",
-                },
-                extensions::SubcommandDef {
-                    name: "schedules",
-                    description: "List scheduled sub-agent jobs (cancel with d)",
-                },
-                extensions::SubcommandDef {
-                    name: "settings",
-                    description: "Open the subagent settings panel",
-                },
-                extensions::SubcommandDef {
-                    name: "eject",
-                    description: "Write an agent type out as a .md file: /agents eject <type> [project] (`@` picks the type)",
-                },
-                extensions::SubcommandDef {
-                    name: "enable",
-                    description: "Re-enable a disabled agent .md: /agents enable <type> (`@` picks the type)",
-                },
-                extensions::SubcommandDef {
-                    name: "disable",
-                    description: "Disable an agent .md (line-wise edit): /agents disable <type> (`@` picks the type)",
-                },
-                extensions::SubcommandDef {
-                    name: "delete",
-                    description: "Delete a custom agent's .md file: /agents delete <type> (`@` picks the type)",
-                },
-                extensions::SubcommandDef {
-                    name: "reset",
-                    description: "Delete a built-in default's override .md, restoring the default: /agents reset <type> (`@` picks the type)",
-                },
-                extensions::SubcommandDef {
-                    name: "edit",
-                    description: "Edit an agent type's .md in a multi-line editor: /agents edit <type> (`@` picks the type)",
-                },
-            ],
-        }]
+                    description: "Stop a running job: /autoresearch stop <id> (`#3` / `autoresearch-3` also work)",
+                }],
+            },
+        ]
     }
 
     /// 声明本扩展关心的钩子（Dock/Overlay/UserPrompt/AgentEvent/ExtensionEvent/AfterToolCall/Suggestions）。
@@ -552,18 +566,20 @@ impl Extension for Subagent {
         }
     }
 
-    /// 停靠面板内容：合并子代理注册表与工作流的行（两段各有 header，互不影响）。
+    /// 停靠面板内容：合并子代理注册表、工作流与 autoresearch 作业的行
+    /// （三段各有 header，互不影响）。
     fn dock_lines(&self) -> Vec<extensions::DockLine> {
-        // 两个注册表在此组合（各有一段 header、互不影响）。
+        // 三个注册表在此组合（各有一段 header、互不影响）。
         let mut lines = manager::widget_lines();
         lines.extend(workflow::task::dock_lines());
+        lines.extend(autoresearch::dock_lines());
         lines
     }
 
     /// 有后台活儿在跑时请求持续重绘：dock 里的 spinner 与计数才会动
     /// （覆盖层打开时 TUI 本来就每帧重绘，不依赖这里）。
     fn wants_redraw(&self) -> bool {
-        manager::background_live() > 0 || workflow::task::has_live()
+        manager::background_live() > 0 || workflow::task::has_live() || autoresearch::has_live()
     }
 
     /// 会话执行上下文：核心在会话建立 / turn 开始 / 会话切换后交给扩展，
@@ -697,6 +713,7 @@ impl Extension for Subagent {
 
     /// 会话切换（/new /resume /import /fork）：旧会话的子代理一并中止并清空。
     fn on_session_switched(&self, session_path: Option<&str>, _messages: &[AgentMessage]) {
+        autoresearch::cancel_all(); // 作业挂在旧会话的上下文上：先停，再清注册表
         manager::reset_all();
         workflow::task::reset_all();
         fleet::reset();
@@ -725,6 +742,7 @@ impl Extension for Subagent {
             config::ensure_config_file();
             manager::reload_config();
         } else {
+            autoresearch::cancel_all();
             manager::reset_all();
             workflow::task::reset_all();
             fleet::reset();
@@ -743,6 +761,7 @@ impl Extension for Subagent {
     /// 注册时接线 `/agents` 命令 handler，失效让位缓存，并在扩展此刻生效时播报启动提示。
     fn on_registered(&self) {
         register_slash_command(EXT, "agents", command_agents);
+        register_slash_command(EXT, "autoresearch", autoresearch::command);
         session::invalidate(); // 注册顺序在首个回合之前定下来，正是判让位的时候
 
         // 启动提示只在扩展此刻生效（启用且当前模式可用）时发：Minimal 模式下
@@ -2334,6 +2353,15 @@ pub(crate) fn record_for_test(id: &str) -> Option<(String, Option<String>)> {
     manager::record(id).map(|r| (r.agent_type.clone(), r.result.clone()))
 }
 
+/// 测试接缝：agent 记录的子会话路径。
+///
+/// `agent_session.rs` 的 autoresearch 端到端用例用它断言"resume 续的是同一个文件"
+/// （子会话落在哪个目录取决于子任务所在线程的 agent_dir，测试线程看不见它）。
+#[cfg(test)]
+pub(crate) fn agent_session_path(id: &str) -> Option<String> {
+    manager::record(id).and_then(|rec| rec.session_path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3789,7 +3817,7 @@ mod tests {
     #[test]
     fn commands_declare_subcommands() {
         let cmds = Subagent.commands();
-        assert_eq!(cmds.len(), 1);
+        assert_eq!(cmds.len(), 2);
         assert_eq!(cmds[0].name, "agents");
         assert!(cmds[0].busy_safe);
         let subs: Vec<&str> = cmds[0].subcommands.iter().map(|s| s.name).collect();
@@ -3810,6 +3838,12 @@ mod tests {
                 "edit"
             ]
         );
+
+        // `/autoresearch`：候选表只声明 `stop`，无参是启动（参数是目标本身）
+        assert_eq!(cmds[1].name, "autoresearch");
+        assert!(cmds[1].busy_safe);
+        let subs: Vec<&str> = cmds[1].subcommands.iter().map(|s| s.name).collect();
+        assert_eq!(subs, vec!["stop"]);
     }
 
     /// 面板项与配置键一一对应，且值可往返。

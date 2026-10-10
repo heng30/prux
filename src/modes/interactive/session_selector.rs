@@ -1477,6 +1477,74 @@ mod tests {
     }
 
     #[test]
+    fn cycle_sort_rotates_through_three_modes() {
+        let mut s = SessionSelector::new();
+        assert_eq!(s.sort_mode, SortMode::Threaded, "默认 threaded");
+        s.cycle_sort();
+        assert_eq!(s.sort_mode, SortMode::Recent);
+        s.cycle_sort();
+        assert_eq!(s.sort_mode, SortMode::Relevance);
+        s.cycle_sort();
+        assert_eq!(s.sort_mode, SortMode::Threaded, "三轮后回到 threaded");
+    }
+
+    #[test]
+    fn sort_modes_order_rows_by_their_characteristic() {
+        let base = SystemTime::UNIX_EPOCH;
+        let row = |id: &str, text: &str, search: &str, secs: u64| {
+            let mut r = test_row(text);
+            r.id = id.to_string();
+            r.search_text = search.to_string();
+            r.modified = base + Duration::from_secs(secs);
+            r
+        };
+        let ids = |s: &SessionSelector| -> Vec<String> {
+            s.display.iter().map(|n| s.rows[n.idx].id.clone()).collect()
+        };
+
+        // 「连续匹配」的 old 比「跳字匹配」的 new 得分高（更小分更优），但 mtime 更旧。
+        let old = row("old", "ab", "ab", 100);
+        let new = row("new", "axb", "axb", 300);
+
+        let mut s = SessionSelector::new();
+        s.active = true;
+        s.filter.set_value("ab");
+        // 加载层已按 mtime 新→旧排好：new(300) 在前、old(100) 在后。
+        s.current = vec![new.clone(), old.clone()];
+
+        // Recent：只过滤，保持加载序（mtime 倒序） → new 在前。
+        s.sort_mode = SortMode::Recent;
+        s.recompute();
+        assert_eq!(ids(&s), ["new", "old"], "Recent 保持 mtime 倒序");
+
+        // Relevance：按匹配度（连续更优）→ old 在前；mtime 仅作平局兜底。
+        s.sort_mode = SortMode::Relevance;
+        s.recompute();
+        assert_eq!(ids(&s), ["old", "new"], "Relevance 按匹配度评分排序");
+
+        // Threaded + 查询：与 Relevance 同路（评分排序），不建树。
+        s.sort_mode = SortMode::Threaded;
+        s.recompute();
+        assert_eq!(ids(&s), ["old", "new"], "Threaded 带查询时按评分排序");
+
+        // Threaded 空查询：建树，fork 子会话紧邻父会话。
+        let mut parent = row("p", "parent", "parent", 100);
+        parent.parent_session_id = None;
+        let mut child = row("c", "child", "child", 500);
+        child.parent_session_id = Some("p".to_string());
+        let other = row("z", "other", "other", 300);
+        s.filter.clear();
+        s.current = vec![parent, child, other];
+        s.sort_mode = SortMode::Threaded;
+        s.recompute();
+        assert_eq!(
+            ids(&s),
+            ["p", "c", "z"],
+            "Threaded 空查询：子会话紧随父会话"
+        );
+    }
+
+    #[test]
     fn move_selection_wraps_at_both_ends() {
         let mut s = SessionSelector::new();
         s.active = true;

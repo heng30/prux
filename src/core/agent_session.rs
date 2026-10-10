@@ -8485,6 +8485,85 @@ mod tests {
         quoted[1..quoted.len() - 1].to_string()
     }
 
+    /// 端到端：autoresearch 作业在**真子会话**上迭代到完成标记。
+    ///
+    /// 假 provider 演两轮子代理：第 1 轮回 `[continue]`，第 2 轮（走 resume 的同一子会话）
+    /// 回 `[goal-complete]`。断言的是「派发 → 读记录 → 判定 → 收敛」整条链路：
+    /// 第二轮能跑起来本身就要求 resume 在真会话文件上成立（假 runner 那条用例覆盖不了它）。
+    #[test]
+    fn autoresearch_job_loops_until_the_completion_marker() {
+        let _lock = subagent_test_lock();
+        let _agent_dir = crate::test_support::AgentDirGuard::temp();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            crate::core::extensions::register_extension(crate::extensions::subagent::Subagent);
+            crate::core::extensions::set_extension_enabled("subagent", true);
+            let cwd = std::env::temp_dir().to_string_lossy().to_string();
+
+            // 连接1：第 1 轮子代理；连接2：resume 同一子会话后的第 2 轮
+            // （正文里不能带真换行：帧是拼进 JSON 字符串的）
+            let f1 = text_frame("first change [continue]", "cmpl_1");
+            let f2 = text_frame("verified [goal-complete]", "cmpl_2");
+            let (base, handle) = mock_server_multi(vec![f1, f2]).await;
+
+            let agent = test_agent(&base, &cwd);
+            let id = crate::extensions::subagent::autoresearch::start_with(
+                agent.exec_ctx(),
+                tokio::runtime::Handle::current(),
+                "make the renderer faster",
+                None,
+            );
+            let snapshot = await_autoresearch_terminal(id).await;
+            handle.await.unwrap();
+
+            assert_eq!(
+                snapshot.status,
+                crate::extensions::subagent::autoresearch::JobStatus::Completed,
+                "{snapshot:?}"
+            );
+            assert_eq!(snapshot.iteration, 2, "{snapshot:?}");
+            assert!(
+                snapshot
+                    .latest_result
+                    .as_deref()
+                    .is_some_and(|r| r.contains("[goal-complete]")),
+                "{snapshot:?}"
+            );
+
+            // 两轮落在**同一个**子会话文件里：resume 续的是它，而不是每轮新建一个。
+            let agent_id = snapshot.agent_id.clone().expect("作业应留下子代理记录 id");
+            let path = crate::extensions::subagent::agent_session_path(&agent_id)
+                .expect("子代理记录应带子会话路径（persist_session=true）");
+            let text = std::fs::read_to_string(&path).expect("子会话文件应落盘");
+            assert!(
+                text.contains("first change") && text.contains("verified"),
+                "同一个子会话里应同时有两轮的回答（{path}）: {text}"
+            );
+
+            crate::core::extensions::set_extension_enabled("subagent", false);
+            _ = crate::core::extensions::unregister_extension("subagent");
+        });
+    }
+
+    /// 等一个 autoresearch 作业到终态（假 provider 是同步的，所以只等状态）。
+    async fn await_autoresearch_terminal(
+        id: crate::extensions::subagent::autoresearch::JobId,
+    ) -> crate::extensions::subagent::autoresearch::JobSnapshot {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let snapshot = crate::extensions::subagent::autoresearch::snapshot(id)
+                .expect("job should be registered");
+            if snapshot.status.is_finished() {
+                return snapshot;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "autoresearch job {id} did not settle in time: {snapshot:?}"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
+
     /// 端到端：`agent({schema})` 把 `StructuredOutput` 注入给子代理，子代理真调它，
     /// 脚本拿到**对象**。这是唯一能证明「注入接缝真的通了」的证据——
     /// 假 provider 演子代理的工具调用，走完 注入 → 工具表 → 派发 → 捕获 → 回传 全程。

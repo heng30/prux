@@ -11,7 +11,7 @@
   开启方式：`/extension` 面板，或 `settings.json` 的 `"enabledExtensions": ["subagent"]`。
 
 开启后模型可见的工具：`Agent`、`get_subagent_result`、`steer_subagent`，以及（条件性）
-`SubagentWorkflow`。用户侧入口是 `/agents` 命令。
+`SubagentWorkflow`。用户侧入口是 `/agents` 与 `/autoresearch` 两个命令。
 
 > 只想要"某个任务交给一个子代理跑"时，用 `Agent` 就够；要**根据运行时发现**决定派几个、
 > 或需要可复现的多阶段流程时，才用 `SubagentWorkflow`（见 [工作流](#工作流subagentworkflow)）。
@@ -27,6 +27,7 @@
 - [功能键之间的关系](#功能键之间的关系)
 - [界面：dock、FleetView、检查器、向导](#界面dockfleetview检查器向导)
 - [定时任务](#定时任务)
+- [autoresearch 作业](#autoresearch-作业)
 - [事件与 RPC](#事件与-rpc)
 - [与其他模块的关系](#与其他模块的关系)
 
@@ -445,6 +446,31 @@ You are a code reviewer. Read the diff, then report findings with file:line.
 存储：`<agent_dir>/extensions/schedules/<session>.json`（按会话键，原子写）。到点走的是**同一条**
 `manager::dispatch`，但带 `bypass_queue`：不占后台额度也不排队（配额是给人的突发行为用的）。
 过期的一次性任务会被标记错误并停用，同时告警（不静默丢）。
+
+---
+
+## autoresearch 作业
+
+`/autoresearch <目标> [--iterations N]` 把同一个目标交给**同一个子代理**反复迭代，
+直到它自己说达标或到轮次上限（移植 kiss 的 `JobKind::Autoresearch`）：
+
+- 每一轮都是同一条前台 `manager::dispatch`，提示词只有轮次不同；
+- **首轮 `inherit_context = true`**（从当前对话分叉），之后每轮 `resume` 同一个子代理记录——
+  "同一个子会话接着聊"走的是既有 resume 机制，所以子会话文件里能看到每一轮；
+- 回答里出现 `[goal-complete]`（大小写不敏感）即收工；否则看 `--iterations`：到上限落 `completed`，
+  子代理出错落 `failed`，被停落 `stopped`；
+- **不随主回合的 `Esc` 一起停**：作业在扩展自己的任务里跑，每轮还换掉 `parent_abort`。
+  要停就 `/autoresearch stop <id>`（`#3` / `autoresearch-3` 也认）。
+
+`/autoresearch` 无参列出全部作业（状态 / 轮次 / token / 耗时 / 最近一轮摘要）；
+未终结的作业同时出现在 dock 的 `Autoresearch` 段里。子代理本身照旧在 `/agents`（FleetView）里，
+可以用 `/agents result <id>` 看它的完整结果。
+
+上限与 kiss 同值：**同时 4 个活跃作业**（第 5 个排队等额度）、保留 20 条、`--iterations` clamp 到 100。
+作业表是内存态（重启即丢），但子会话本身落盘，历史不丢。
+
+参数只认**结尾**的 `--iterations N`（`N` 必须是单个正整数）：`-n` / `--iterations=N` 会被当成目标的一部分，
+与 kiss 一致（同一串输入在两边语义相同）。目标为空、`N` 非正整数或 `N` 后面还有别的词都会直接报错。
 
 ---
 

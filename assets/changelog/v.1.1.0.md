@@ -41,6 +41,12 @@ This release aligns prux with upstream pi 1.1.0.
   extension dialog or login is waiting), `done`, `error`, or `idle`. Reports hold only the session
   name, dialog titles, and the first line of errors — never prompts or model output.
   `PRUX_PROGRAM_STATUS=1` reports without asking, `=0` turns it off.
+- **The `subagent` extension can run autoresearch jobs** with
+  `/autoresearch <goal> [--iterations N]`. Every iteration runs the same prompt in the same forked
+  sub-agent session — the first turn forks the current conversation, later turns resume it — and the
+  job stops when the answer ends with `[goal-complete]` or the iteration limit is reached. Four jobs
+  run at a time, `/autoresearch` lists them, `/autoresearch stop <id>` stops one, and a job keeps
+  running when you press `Esc` (stop it explicitly).
 
 ### Changed
 
@@ -108,6 +114,10 @@ This release aligns prux with upstream pi 1.1.0.
   能看到 `working`、`blocked`（扩展对话框或登录在等用户）、`done`、`error`、`idle`。
   上报只含会话名、对话框标题与错误首行，**绝不包含 prompt 或模型输出**。
   `PRUX_PROGRAM_STATUS=1` 不查询直接上报，`=0` 完全关闭。
+- **`subagent` 扩展新增 autoresearch 作业**（`/autoresearch <目标> [--iterations N]`）：
+  每轮都在同一个分叉出的子会话里跑同一条提示词（首轮 fork 当前对话，之后 resume 续跑），
+  回答以 `[goal-complete]` 收尾或到达轮次上限即收工。同时最多 4 个作业，`/autoresearch` 列作业，
+  `/autoresearch stop <id>` 停一个；作业不随 `Esc` 一起停（要停得显式停）。
 
 ### 变更
 

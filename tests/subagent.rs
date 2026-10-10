@@ -63,7 +63,7 @@ fn identity_tool_surface_and_commands() {
     );
 
     let cmds = ext.commands();
-    assert_eq!(cmds.len(), 1);
+    assert_eq!(cmds.len(), 2);
     assert_eq!(cmds[0].name, "agents");
     assert!(cmds[0].busy_safe, "/agents handler 不锁 agent");
     let subs: Vec<&str> = cmds[0].subcommands.iter().map(|s| s.name).collect();
@@ -84,6 +84,15 @@ fn identity_tool_surface_and_commands() {
             "edit"
         ]
     );
+
+    // `/autoresearch`：启动要写参数（目标本身），所以候选表只声明 `stop`
+    assert_eq!(cmds[1].name, "autoresearch");
+    assert!(
+        cmds[1].busy_safe,
+        "/autoresearch handler 只动作业表与注册表"
+    );
+    let subs: Vec<&str> = cmds[1].subcommands.iter().map(|s| s.name).collect();
+    assert_eq!(subs, vec!["stop"]);
 
     // dock / wants_redraw 读的是**进程级**注册表，而这个二进制里的用例并行跑、
     // 有的会派发后台 agent → 在这里断言它们必然是竞态。它们由 `extensions::subagent`
