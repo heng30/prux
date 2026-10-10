@@ -15,34 +15,27 @@
 > **不逐条列出**，只在第五节汇总说明。
 
 **状态标记**：🔧 应修/应移植　⚠️ 需对照 pi 源码逐项核对（行为可能已有偏差）　✅ 已满足/无此问题（附理由）
-❌ 结构性不适用（仅备注）　🆕 本区间新增、prux 缺失的候选移植项
+❌ 结构性不适用（prux 无对应实现，无可改）　🆕 本区间新增/变更的候选移植项（实现状态见条目下方的「状态」行）
+🚫 **决定不实现**（已评估并终局定案，不再作为待办；逐条理由见第十三节）
 
 ---
 
-## 零、总体判断（先看这张表）
+## 零、总体判断（终局状态）
 
 | 分类 | 条目 | 数量 |
 |---|---|---|
-| 🔧 必修 bug 修复 | 1.1、1.3、1.7、1.9、1.10、1.24 **已修复** | 6 |
-| ⚠️ 需核对（行为已有偏差） | 1.2、1.5、1.6、1.17、1.18 **已修复**；1.29 待定（靠 rmcp 默认值） | 6 |
-| ✅ 已满足 / 无此问题 | 1.11、1.12、1.13、1.14、1.16、1.19 | 6 |
-| 🆕 本区间新增、prux 缺失 | 2.1–2.8、2.10–2.14、2.16–2.18、2.22 | 17 |
-| ✅ 已满足（无需再动） | 2.9 | 1 |
-| ❌ 结构性不适用 | 1.4（并入 2.12）、1.8、1.15、1.20–1.23、1.26–1.28、2.15、2.19、2.20 | — |
+| ✅ 已落地 | 1.1、1.2、1.3、1.5–1.7、1.9、1.10、1.17、1.18、1.24、1.29；2.1–2.8、2.10、2.12–2.14、2.16（系统消息面）、2.17、2.18、2.22；3.3 | 29 |
+| ✅ 已满足 / 无此问题 | 1.11–1.14、1.16、1.19、2.9 | 7 |
+| 🚫 决定不实现 | 2.11（`outputPad`）、2.15（`mcp login --timeout`）、2.16 残留（`supportsMidConvoEffort` 簇 / `supportsMidConvoToolChanges`） | 3 |
+| ❌ 结构性不适用 | 1.4（并入 2.12）、1.8、1.15、1.20–1.23、1.25–1.28、1.30、2.19、2.20，以及第五节整段 | — |
 
-**最短落地路径（按性价比排序）**：
+> 上表是**终局状态**：本区间的可落地项已在第二～六轮全部完成（第七～十二节），
+> 没有遗留待办；不实现的三项已定案，理由见第十三节。
 
-1. **重跑模型目录同步**（1.24 + 2.16 + 2.17 的数据面）——**已完成**（见第八节）：
-   把 `SUPPORTED_PROVIDERS` 补上 `azure`，
-   再 `make sync-models`，一次性拿到 Claude Haiku 5.5、GPT-6 Luna、azure 的 Foundry 条目，
-   以及 OpenCode / OpenRouter / Vercel / Google / MiniMax 的 prompt-length 定价档。
-2. **可重试错误表补两条**（1.1）：`server_busy`、`servers are currently busy`，一行级改动。
-3. **`--tools` 三件套**（2.1 通配 / 2.2 MCP 保留 + `--no-mcp` / 2.3 `+name`-`name`）：
-   改动集中在 `args.rs` + `ToolSelection`，但影响面广，建议一起做。
-4. **codemode 输出与图片**（2.4–2.8）：四条互相独立的小改动。
-5. **`agent_settled.aborted` + 工具 `durationMs`**（1.5 / 2.10 / 2.12）：事件载荷补齐，UI 侧顺带修 `Took`。
-6. **MCP OAuth 可取消 + 15s 超时**（1.7 / 2.14）：改动最大，需要动登录状态机。
-7. **OSC 7501 程序状态**（2.13）：纯新增，可最后做。**已完成**（第五轮）。
+**落地路径（已全部收口）**：数据面在第二轮同步（1.24 + 2.16 + 2.17 的目录数据、azure 条目）；
+bug 修复分两轮（第七、八节）；新增项分四轮（第九～十二节）。
+按性价比排序的原始顺序（模型目录同步 → 可重试表 → `--tools` 三件套 → codemode →
+事件载荷 → MCP OAuth → OSC 7501）已逐条执行完毕，仅上述三项经评估后放弃。
 
 ---
 
@@ -85,8 +78,8 @@ UI 在 Esc / Ctrl+C、会话关闭与退出时统一取消，不必知道是哪�
 > `extensions::subagent::tests::cli_flag_workflow_file_launches_a_run` 等碰全局状态的用例
 > 会偶发失败（单独跑必过），与 `migration-v1.0.2.md` 第八/十六节记录的同源。
 
-**未做（属新增功能，不在本轮 bug 修复范围）**：2.10 的
-`tool_execution_end.durationMs`、2.22（codemode 内联 guidelines）。
+**本轮未做、后续已补**：2.10 的 `tool_execution_end.durationMs` 与 2.22（codemode 内联 guidelines）
+超出本轮 bug 修复范围，已在第三轮完成（见第九节）。
 （1.24 模型目录同步已在第二轮完成，见第八节。）
 
 ---
@@ -206,7 +199,7 @@ relaod 会话后 `Took` 不再消失，实时值也不再包含 `after_tool_call
 
 > **状态：已修复（技能提示部分）**。新增 `SystemPromptOptions::hidden_tools` 与
 > `SkillFileReader`（read → bash → 不点名），`compose_tools` 不再预过滤 `selected_tools`。
-> codemode 内联 guidelines 见 2.22（未做）。断言见 `skills_hint_*` 四条。
+> codemode 内联 guidelines 见 2.22（已在第三轮实现，见第九节）。断言见 `skills_hint_*` 四条。
 
 ---
 
@@ -655,7 +648,7 @@ prux 的 `src/extensions/codemode/description.rs:70`（`INTRO` 常量）**已经
 
 ---
 
-### 2.11 🆕 `outputPad` 扩展到 `!` 命令输出 / 工具输出 / summary 块
+### 2.11 🚫 `outputPad` 扩展到 `!` 命令输出 / 工具输出 / summary 块
 
 **pi 1.1.0 新增/Changed**：`ToolRenderContext` 新增 `outputPad`
 （`renderShell: "self"` 的渲染器自行应用）；`outputPad` 语义从「chat message output」
@@ -673,7 +666,7 @@ prux 的 `src/extensions/codemode/description.rs:70`（`INTRO` 常量）**已经
 再把 `render/messages.rs` 里硬编码的 1 换成该值，并加进 `ToolRenderCtx`。
 若暂不移植，需在文档里注明 prux 的缩进不可配置，避免与 pi 面板项对不齐。
 
-> **状态：未做（有意跳过）**。prux 无 TUI 组件层，落地要给出参数量已超长、多处 `too_many_arguments` 的消息渲染函数链各加一个参数；按本条「若暂不移植需注明」的要求，第九节记录结论：**prux 的 transcript 缩进硬编码为 1 列、不可配置**。
+> **状态：🚫 决定不实现**。prux 无 TUI 组件层，落地要给出参数量已超长、多处 `too_many_arguments` 的消息渲染函数链各加一个参数，收益与回归风险不成比例。按本条「若不移植需注明」的要求，结论已落进文档：**prux 的 transcript 缩进硬编码为 1 列、不可配置**，`/settings` 不提供该项。见第九节与第十三节。
 
 ---
 
@@ -731,16 +724,19 @@ prux 基于 ratatui，没有 pi 的 `Terminal` trait，所以 pi 的
 
 ---
 
-### 2.15 ❌ `pi mcp login --timeout` 限制整段登录
+### 2.15 🚫 `pi mcp login --timeout` 限制整段登录
 
 pi 1.1.0 改的是**已有**的 `--timeout` 语义（此前只限制等浏览器）。prux 的
 `mcp login` 用法是 `prux mcp login <name> [--no-browser]`（`src/cli/mcp_command.rs:54`），
 **没有** `--timeout`；`--timeout-ms` 是 `mcp add` 的单次 RPC 超时，两回事。
-若要移植 2.14，可顺带加 `--timeout`（默认值对齐 pi）。**当前不适用**。
+
+> **状态：🚫 决定不实现**。prux 的登录已由 1.7 / 2.14 补上 Esc 取消与每请求 15s 超时，
+> 缺的只是「整段登录总时限」这一个旋钮；再引入一个与 `--timeout-ms` 名字相近的参数反而增加歧义，
+> 真要中断直接按 Esc。见第十三节。
 
 ---
 
-### 2.16 🆕 Claude Haiku 5.5
+### 2.16 ✅ Claude Haiku 5.5（含两项已定案不实现的残留）
 
 **pi 1.1.0 新增**：`anthropic/claude-haiku-5-5`，带 prompt-length 定价档、
 adaptive thinking 支持到 `xhigh` / `max`、逐消息 effort、对话中途的系统消息与工具变更；
@@ -759,6 +755,10 @@ Bedrock 上走 adaptive thinking + native `xhigh` + prompt caching。
 > `core/provider/convert.rs`（`compat_flag` / `supports_mid_convo_system_messages` /
 > `collapse_mid_convo_system_messages` / `flush_pending_system_messages` / `instruction_role` /
 > `convert_system_message`），anthropic 改为委托。断言见第十二节。
+>
+> **同条目的两项残留已定案为不实现**：`compat.supportsMidConvoEffort` 簇（历史 effort 标记 +
+> `drop_block` + 两个 beta）与 `supportsMidConvoToolChanges`（对话中途工具变更）。
+> 评估结论与理由见第十一节与第十三节。
 
 ---
 
@@ -943,11 +943,13 @@ prux 现有 bash 临时文件（`tools/bash.rs`）与 MCP 资源落盘需要一�
 - [x] 终端消失错误识别（1.17）
 - [x] （可选）`openai-decisions`（2.17）——**第四轮已做**
 - [x] OSC 7501 程序状态（2.13）——**第五轮已做**
-- [~] Anthropic 对话中途系统消息（2.16）——**第五轮已做系统消息面**；
-      `supportsMidConvoEffort` 簇与 `supportsMidConvoToolChanges` 有意未做（见第十一节）
+- [x] Anthropic 对话中途系统消息（2.16）——**第五轮已做系统消息面**
 - [x] openai-completions / openai-responses 对话中途系统消息（2.16 收尾）——**第六轮已做**
 - [x] MCP `oauth.applicationType`（1.29）——**第六轮已做**
-- [x] `outputPad` 设置项（2.11）——**有意跳过**，理由见第九节；prux 的 transcript 缩进硬编码 1 列、不可配置
+- [x] `outputPad` 设置项（2.11）——**🚫 决定不实现**，理由见第九节；prux 的 transcript 缩进硬编码 1 列、不可配置
+- [x] `mcp login --timeout`（2.15）——**🚫 决定不实现**（见第十三节）
+- [x] `supportsMidConvoEffort` 簇与 `supportsMidConvoToolChanges`（2.16 残留）——**🚫 决定不实现**（见第十一节与第十三节）
+- [x] 不实现项已集中成册：新增第十三节「决定不实现清单」作为终局决策记录，零节表格同步为终局状态
 
 ---
 
@@ -991,7 +993,8 @@ changelog 正文不再沿用上一版的「产品介绍」格式，而是按本�
 
 ## 九、第三轮实施记录（新增功能，A 档完成）
 
-本轮落地第二节里「有明确建议、可自主实现」的全部新增项，只留下 2.11 一项有意跳过。
+本轮落地第二节里「有明确建议、可自主实现」的全部新增项；2.11 当时暂缓，与 2.15、2.16 的两项残留
+一起在收尾时定案为**不实现**（见第十三节）。
 
 | # | 项 | 改动位置 | 关键测试 |
 |---|---|---|---|
@@ -1015,14 +1018,15 @@ changelog 正文不再沿用上一版的「产品介绍」格式，而是按本�
   `--no-tools`（空 allowlist）与名字里出现 `mcp__` 前缀条目仍会挡掉 MCP（对齐 pi 的 `_allowlistFiltersMcp`）。
 - **2.4**：pi 把图片路径提示插在各自图片**前面**；prux 的 `ToolResult` 只有「一段文本 + 附件数组」两个槽，
   提示因此统一追加在正文之后、附件之前。
-- **2.6**：只移植了 `lockdown()`；宿主侧对畸形 payload 的**显式** `Result` 校验未做——prux 用进程内 rquickjs，
+- **2.6**：本轮只移植了 `lockdown()`；宿主侧对畸形 payload 的**显式** `Result` 校验当时未做——prux 用进程内 rquickjs，
   畸形 payload 不会崩宿主（`finish()` 降级、`__settle` 失败走 `ErrorKind::Sandbox`），语义等价但错误文案不如 pi 明确。
+  （已在第六轮补齐，见第十二节。）
 - **2.7**：`==> text N/M <==` 的编号只算 `text()` 与顶层 `return` 项，`console.*` 归并进末尾一个 `<console_output>` 块。
   描述里只写一句概括，细则写进了 codemode 文档（`assets/docs/extensions/codemode.md`），
   否则 INTRO 的固定开销会顶破 `fixed_overhead_stays_small` 的预算（上限已按本轮新增量从 470 调到 530）。
 - **2.10**：`AssistantMessage.durationMs` 不在各 provider 里填，而是由 `stream_chat` 统一盖
   （对齐 pi 把计时放在 `AssistantMessageEventStream` 的位置）；`timestamp` 早于本次流开始的消息不盖。
-- **2.11（outputPad）**：**未做**。`outputPad` 在 pi 是 TUI 组件 API（`Box/Text.setPaddingX`）的产物，
+- **2.11（outputPad）**：**🚫 决定不实现**。`outputPad` 在 pi 是 TUI 组件 API（`Box/Text.setPaddingX`）的产物，
   prux 没有组件层；落地要给出参数量已超长、多处 `#[allow(clippy::too_many_arguments)]` 的
   消息渲染函数链（`render_message` → `render_message_blocks` → `render_user` / `render_assistant` /
   `render_tool_block_inner` / `render_summary` …）各加一个参数，收益（缩进可配）与回归风险不成比例。
@@ -1072,7 +1076,7 @@ changelog 正文不再沿用上一版的「产品介绍」格式，而是按本�
 ## 十一、第五轮实施记录（OSC 7501 + Anthropic 对话中途系统消息）
 
 本轮落地 2.13 与 2.16 的系统消息面。2.16 在核对 pi-ai 1.1.0 源码后被发现比迁移指南原先的判断更大，
-未做的部分与理由见本节末尾。
+两项未能落地的残留已于收尾时定案为**不实现**，理由见本节末尾与第十三节。
 
 | # | 项 | 改动位置 | 关键测试 |
 |---|---|---|---|
@@ -1107,13 +1111,13 @@ changelog 正文不再沿用上一版的「产品介绍」格式，而是按本�
   （对齐 pi 的 `collapseSystemMessages`）。注意 pi 会把**全部** system 消息回灌成一条首部消息，
   prux 的首部提示词单独传递，所以只追加中途的那些。
 - 缓存断点从「最后一条 user」扩到「最后一条 user 或 system」，对齐 pi 的 `convertMessages` 收尾。
-- **对话中途工具变更（`supportsMidConvoToolChanges`）未做，且判定为当前不适用**：
+- **对话中途工具变更（`supportsMidConvoToolChanges`）：🚫 决定不实现**。
   pi 的 transcript 在每个 system 消息上带 `toolsAdded` / `toolsRemoved`，用
   `tool_addition` / `tool_removal` 块 + `inline-tools-2026-09-15` beta 表达中途的工具变更；
   prux 的 `AgentMessage` 没有逐消息工具增量（工具是会话级、每次请求整体声明），
   要落地得先扩 transcript 模型。将来若接入，同时需要 `DEFERRED_TOOL_PLACEHOLDER` 占位工具
   与 `nativeToolChanges` 的三重条件（`supportsMidConvoSystemMessages && supportsMidConvoToolChanges && 首部有工具`）。
-- **`compat.supportsMidConvoEffort` 簇未做**（本轮新识别出的残留，不在迁移指南原先的判断里）。
+- **`compat.supportsMidConvoEffort` 簇：🚫 决定不实现**（本轮新识别出的残留，不在迁移指南原先的判断里）。
   pi 对这批模型（anthropic 的 opus-5 / opus-5-5 / sonnet-5-5 / haiku-5-5 / fable-5-1）有整套额外行为：
   ① `thinking` 被**强制**为 adaptive 并带 `block_binding.prefix_mismatch_behavior = "drop_block"`；
   ② `output_config.effort` 默认 `"high"`；
@@ -1121,12 +1125,15 @@ changelog 正文不再沿用上一版的「产品介绍」格式，而是按本�
   末尾补一条当前 effort 的同类消息（`insertThinkingLevelMessages`）；
   ④ 请求带 `mid-conversation-output-config-2026-07-01` 与 `thinking-binding-controls-2026-08-01` 两个 beta。
   prux 目前发的是请求级 `output_config.effort`（当前回合的 effort 是对的），缺的是**历史 effort 回放**。
-  未做的理由：②③ 需要 prux 记录「该条 assistant 消息当时用的 provider effort」，而 prux 存的是内部级别
-  （`thinking_level`），映射回去在 `off`/`minimal` 这类边界上语义不等价；①会改变请求形状
-  （用户选 off 时也强制 adaptive），属于产品行为决定而非纯对齐。要做得先确认口径，不按猜测实现。
-- **其它协议仍丢中途系统消息**：`openai-completions` / `openai-responses` 的转换仍是 `_ => {}`，
-  而目录里 `supportsMidConvoSystemMessages` 在 openai / moonshotai / kimi 系模型上也是 true。
-  本轮的收录范围按迁移指南 2.16 只覆盖 anthropic；两条 openai 路径留作后续。
+  决策理由见第十三节。
+  **附记（更正此处原先写的「未做理由」）**：「prux 存的是内部级别、映射回去语义不等价」并不成立——
+  pi 也不反向映射，它在 stream 时就把**下发到 provider 的 effort 字符串**记进 `providerThinkingLevel`；
+  prux 的 `map_thinking_level_to_effort` 结果同理可直接落盘。这批模型目录里 `off: null`，
+  prux 的 `supported_thinking_levels()` 已排除 `off`，Shift+Tab 也切不到 `off`。
+  所以真实成本只有「给 assistant 消息加一个持久化字段 + 改请求形状」；放弃的核心原因是后者落在
+  旗舰模型主路径上、风险高却缺本机可验证的复现（见第十三节）。
+- **其它协议的中途系统消息**：本轮只覆盖 anthropic；`openai-completions` / `openai-responses`
+  已于第六轮补齐（见第十二节），三协议口径统一。
 
 **验证**：`cargo test` 全绿（lib 3289 项 + 全部集成测试目标）；`cargo fmt --check` 通过；
 `cargo clippy --lib --tests` 只剩改动前就存在的 3 条 warning（`settings_manager` 1、`tasks/widget` 2）。
@@ -1170,3 +1177,33 @@ detail 取 pi 的原文（`return value is not valid JSON` / `store writes conta
 
 **验证**：`cargo test --lib` 全绿（3303 项，1 ignored）；`cargo fmt --check` 通过；
 `cargo clippy --lib --tests` 只剩改动前就存在的 3 条 warning（`settings_manager` 1、`tasks/widget` 2）。
+
+---
+
+## 十三、决定不实现清单（终局决策）
+
+本区间**没有任何遗留待办**：可落地项已全部实现，剩下的三类是经评估后明确放弃的。
+本节是终局记录——列出的条目**不再作为待办**；将来若要翻案，必须满足各自「翻案条件」，
+不接受「顺手做一下」。
+
+与第五节的 ❌ 区别：❌ 是「prux 根本没有对应实现，无可改」；🚫 是「有对应实现/可做，但决定不做」。
+
+| # | 条目 | 不实现的核心理由 | 翻案条件 |
+|---|---|---|---|
+| 2.11 | `outputPad`（transcript 缩进可配） | prux 无 TUI 组件层，落地要改一条自身已带 `too_many_arguments` 的消息渲染函数链（`render_message` → `render_message_blocks` → `render_user` / `render_assistant` / `render_tool_block_inner` / `render_summary` …）各加一个参数，收益（缩进 0/1 可配）与回归风险不成比例 | 出现真实用户诉求，或渲染层重构顺带消掉参数问题 |
+| 2.15 | `pi mcp login --timeout`（整段登录总时限） | 1.7 / 2.14 已给登录补上 Esc 取消 + 每请求 15s 超时；再加一个与 `--timeout-ms`（`mcp add` 的单次 RPC 超时）名字相近的参数会引入歧义 | 有「无人值守登录必须自动失败」的具体场景 |
+| 2.16 残留 A | `compat.supportsMidConvoEffort` 簇：历史 effort 标记 + `block_binding.prefix_mismatch_behavior = "drop_block"` + 两个 beta | 请求形状改动落在旗舰 Claude 主路径（目录里 9 条：`anthropic/{fable-5-1,haiku-5-5,opus-5,opus-5-5,sonnet-5-5}` + OpenRouter 4 条镜像），收益只是「避免潜在持久 400 + 前缀缓存稳定」，且**本机无法验证**（需要真实 key 复现） | 在真实 key 上复现「中途改 thinking 级别 / `/rewind` / 压缩后持续 400」 |
+| 2.16 残留 B | `supportsMidConvoToolChanges`（对话中途工具变更） | prux 的 `AgentMessage` 没有逐消息工具增量（工具是会话级、每次请求整体声明），要落地得先扩 transcript 模型，还要 `DEFERRED_TOOL_PLACEHOLDER` + `inline-tools-2026-09-15` beta；换来的只是工具列表变化时的前缀缓存 | 接入逐消息工具增量（例如为别的需求先扩了 transcript 模型） |
+
+**2.16 残留 A 的复现实验（翻案的前置步骤，5 分钟）**：
+
+1. 用 `anthropic/claude-opus-5` 开新会话，发一轮需要思考的请求，让模型答完；
+2. Shift+Tab 改一档 thinking 级别，继续对话 → 观察是否出现持续 400；
+3. 另开新会话，`/rewind` 回到某一轮后继续 → 同样观察。
+
+复现了才有实现价值；不复现则它只是「前缀缓存稳定性」的小优化，仍维持不实现。
+
+**附记**：第十一节原先给 2.16 残留 A 写的理由是「prux 存的是内部级别，映射回去在 `off`/`minimal`
+边界语义不等价」——该理由**不成立**（pi 同样不反向映射，它直接存下发到 provider 的 effort 字符串），
+真正的放弃理由以上表为准。同时 2.16 的定位需要更正：该机制是 **pi-ai 0.85.0** 引入的，
+早于 prux 基线 1.0.2，不是 1.0.2→1.1.0 区间的新增项，按本指南的收录规则本不该收录。
