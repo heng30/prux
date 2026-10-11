@@ -62,6 +62,8 @@ pub enum AgentCommand {
     Tree,
     /// 运行状态信息
     DebugInfo,
+    /// 当前系统提示词原文（`/debug system-prompt`；回执走 command_notice）
+    SystemPrompt,
     /// 分享会话（theme 为当前 TUI 主题名，None 时回退 dark）
     Share { theme: Option<String> },
     /// 导出会话（theme 为当前 TUI 主题名，None 时回退 dark）

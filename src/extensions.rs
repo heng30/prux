@@ -13,7 +13,7 @@ pub mod banner;
 pub mod browser;
 pub mod cache_usage;
 pub mod codemode;
-pub mod debug_provider;
+pub mod debug;
 pub mod doc_helper;
 pub mod doctor;
 pub mod downloader;
@@ -87,8 +87,8 @@ pub const PRIORITY_DOWNLOADER: u32 = 60;
 pub const PRIORITY_UPDATE_CHECK: u32 = 55;
 /// doc-helper 按需文档查询扩展的注册优先级。
 pub const PRIORITY_DOC_HELPER: u32 = 50;
-/// debug-provider 供应商原始流事件查看扩展的注册优先级。
-pub const PRIORITY_DEBUG_PROVIDER: u32 = 45;
+/// debug 调试工具集扩展注册优先级。
+pub const PRIORITY_DEBUG: u32 = 45;
 /// tool_search 延迟工具检索扩展的注册优先级。
 pub const PRIORITY_TOOL_SEARCH: u32 = 40;
 /// codemode 工具编排扩展的注册优先级。

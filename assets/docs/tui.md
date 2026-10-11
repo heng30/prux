@@ -88,7 +88,7 @@ prux 以全屏终端界面（TUI）运行，用于读写会话、执行斜杠命
 | `extension` | 启用 / 禁用扩展（面板） |
 | `trust` | 信任当前项目 |
 | `bug [description]` | 报告 bug：收集脱敏环境/模型/扩展/设置与会话诊断，可选附带 transcript 或模型摘要，导出 zip 到当前目录 |
-| `debug` | 显示运行状态汇总（不在 `/` 候选列表中，需手输） |
+| `debug <info\|provider\|system-prompt>` | 调试工具集：`info` 打印 agent 运行状态汇总（provider/model/api、自动压缩/重试开关、steer/follow-up 模式、会话 id 与活动分支叶子）；`provider [on\|off\|dump]` 捕获供应商原始流事件（归一化之前的载荷），每轮 assistant 消息结束时渲染一张卡片并把整份载荷落成会话条目；`system-prompt` 打印当前系统提示词原文。由 `debug` 扩展提供（默认不启用） |
 | `dock` | 切换停靠面板（状态栏上方显示扩展内容，如 `/todos`） |
 | `download [fd\|rg]` | 下载/安装外部工具（`fd` / `rg`）；无参数切换 downloader 的 dock 段显隐（面板未开时一并打开面板）。启动只检测并提示缺失，不自动下载。由 `downloader` 扩展提供 |
 | `update check` / `update open` | `check` 异步检查 GitHub 最新 release，有新版本时在聊天区输出当前版本、新版本与下载地址（便于复制）；`open` 直接用浏览器打开最新 release 下载页（不比较版本）。由 `update-check` 扩展提供 |

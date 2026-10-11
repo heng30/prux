@@ -122,6 +122,12 @@ This release aligns prux with upstream pi 1.1.0.
   job no longer ends silently when its dock row disappears. The notice is user-facing only: the
   job still does not inject anything into the conversation, so read a round with
   `/agents result <id>`. Stopping a job by hand stays silent (the command already answers).
+- **The built-in `/debug` became the `debug` extension's `info` subcommand.** The `debug-provider`
+  extension was renamed to `debug` and split by debug target: `/debug info` prints the agent runtime
+  summary, `/debug provider [on|off|dump]` keeps the raw provider stream viewer, and the new
+  `/debug system-prompt` prints the current system prompt verbatim. `/debug` therefore needs the
+  extension enabled (off by default, `Dev` mode and above), and its subcommands now appear in the
+  `/` candidate list.
 
 ### Fixed
 
@@ -235,6 +241,10 @@ This release aligns prux with upstream pi 1.1.0.
 - **autoresearch 作业终结时会回报**：完成或失败都投一条通知（轮次、token、耗时、目标，
   失败还带原因），作业不再在 dock 行消失时无声收场。通知只给人看，仍**不**往主会话注入消息，
   看某一轮的结果走 `/agents result <id>`；用户自己停的作业不发（命令已经回过话）。
+- **内置 `/debug` 收进 `debug` 扩展的 `info` 子命令**：原 `debug-provider` 扩展更名为 `debug`，
+  并按调试对象拆分子命令——`/debug info` 打印 agent 运行状态汇总，`/debug provider [on|off|dump]`
+  仍是供应商原始流事件查看器，新增 `/debug system-prompt` 打印当前系统提示词原文。
+  `/debug` 因此需要先启用该扩展（默认关闭，`Dev` 及以上模式可用），子命令会出现在 `/` 候选列表里。
 
 ### 修复
 

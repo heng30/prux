@@ -148,7 +148,6 @@ impl App {
             "thinking" => self.cmd_thinking(&cmd),
             "scoped-models" => self.cmd_scoped_models(),
             "hotkeys" => self.cmd_hotkeys(),
-            "debug" => self.cmd_debug(),
             "dock" => self.cmd_dock(),
             "bug" => self.cmd_bug(raw),
             "fork" => self.cmd_fork(),
@@ -804,11 +803,6 @@ impl App {
             ],
             MsgLevel::Info,
         );
-    }
-
-    /// /debug：运行状态由 worker 汇总（回执 command_notice）
-    fn cmd_debug(&mut self) {
-        self.worker.send(AgentCommand::DebugInfo);
     }
 
     /// /dock：切换停靠面板显示。打开时若没有任何扩展提供内容则提示；

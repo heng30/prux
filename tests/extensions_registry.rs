@@ -52,7 +52,7 @@ fn register_all_collects_and_sorts_slices() {
         "extra-themes",
         "downloader",
         "doc-helper",
-        "debug-provider",
+        "debug",
         "tool-search",
         "codemode",
         "jet",
@@ -162,7 +162,7 @@ fn register_all_collects_and_sorts_slices() {
     prux::core::extensions::set_extension_enabled("doc-helper", true);
     prux::core::extensions::set_extension_enabled("downloader", true);
     prux::core::extensions::set_extension_enabled("update-check", true);
-    prux::core::extensions::set_extension_enabled("debug-provider", true);
+    prux::core::extensions::set_extension_enabled("debug", true);
     prux::core::extensions::set_extension_enabled("tool-search", true);
     prux::core::extensions::set_extension_enabled("jet", true);
 
@@ -171,7 +171,7 @@ fn register_all_collects_and_sorts_slices() {
     // browser:68 同样默认关闭，也不在其中）
     // （extra-themes:100 → goal:90 → plan-mode:85 → tasks:80 → subagent:78 → loop-detect:75
     //   → notify:74 → hang-detect:73 → proxy:72 → rewind:71 → web-access:70 → mcp:69
-    //   → skills:65 → downloader:60 → update-check:55 → doc-helper:50 → debug-provider:45
+    //   → skills:65 → downloader:60 → update-check:55 → doc-helper:50 → debug:45
     //   → tool-search:40 → jet:38）
     let names: Vec<String> = registered().iter().map(|e| e.name().to_string()).collect();
     assert_eq!(
@@ -193,7 +193,7 @@ fn register_all_collects_and_sorts_slices() {
             "downloader".to_string(),
             "update-check".to_string(),
             "doc-helper".to_string(),
-            "debug-provider".to_string(),
+            "debug".to_string(),
             "tool-search".to_string(),
             "jet".to_string()
         ],

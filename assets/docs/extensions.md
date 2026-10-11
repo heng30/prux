@@ -69,7 +69,7 @@ core::extensions::register_banner_extension(extensions::banner::Banner::new());
 | `jet` | 扩展 | 虚拟模型路由器：注册虚拟模型 `jet/auto`，**用强模型规划、用便宜模型实现**——本轮第一次成功的 `edit`/`write` 之后同轮切到实现模型并留在那里，因此每个会话最多切换一次模型、最多吃一次 prompt-cache miss。配置在 `agent_dir()/extensions/jet.json`（**没有默认值**：路由目标不完整或解析不到就不注册进 `/model`），`/jet set` 配分类器、`/jet router` 增量配路由目标（三档可各用不同 provider）、`/jet reset` 清空。**默认不启用**（`Dev`/`Creator` 模式可用）。详见下文与 [virtual-models.md](virtual-models.md) |
 | `tasks` | 扩展 | 任务跟踪与协调：7 个模型可见工具（`TaskCreate` / `TaskList` / `TaskGet` / `TaskUpdate` / `TaskOutput` / `TaskStop` / `TaskExecute`）、常驻任务 widget、`/tasks` 命令与系统提醒注入，`TaskExecute` 经 RPC 联动 `subagent` 扩展。**默认不启用**（`Dev`/`Creator` 模式可用） |
 | `tool-search` | 扩展 | 延迟工具检索：扩展可把工具声明为 `ToolExposure::Deferred`（仍可执行但不进模型可见列表），本扩展提供 `tool_search` 工具按 BM25 检索延迟工具元数据，命中项在**下一次模型调用**变为可见。**默认启用**（`Dev`/`Creator` 模式可用；无延迟工具时它只会占一个工具位） |
-| `debug-provider` | 扩展 | `/debug-provider`：供应商原始流事件查看器，订阅 `ProviderStreamEvent`，每轮 assistant 消息结束时渲染一张卡片（provider/model/api + 捕获条数 + 事件摘要）并把整份载荷落成会话条目。**默认不启用**（仅 `Dev` 模式可用） |
+| `debug` | 扩展 | 调试工具集：`/debug info` 打印 agent 运行状态汇总（provider/model/api、自动压缩/重试开关、steer/follow-up 模式、会话 id 与活动分支叶子）；`/debug provider [on\|off\|dump]` 是供应商原始流事件查看器（订阅 `ProviderStreamEvent`，每轮 assistant 消息结束时渲染一张卡片（provider/model/api + 捕获条数 + 事件摘要）并把整份载荷落成会话条目）；`/debug system-prompt` 打印当前系统提示词原文。**默认不启用**（仅 `Dev` 模式可用） |
 
 > `subagent` 是功能最多的内置扩展，单独一篇文档：[extensions/subagent.md](extensions/subagent.md)——心智模型（三条派发路径）、运行环境与隔离、agent 类型与 frontmatter 键、工作流、设置键及其相互关系、界面、定时任务、事件与 RPC。
 
@@ -704,12 +704,12 @@ banner 扩展**互斥**：注册/面板切换时启用一个会自动禁用其�
 - **Tab**：切换扩展模式（`all` → `dev` → `creator` → `minimal` → `all`），写盘持久化
 - **Esc**：关闭面板并应用变更（`RebuildTools`）
 
-极简模式下非本模式扩展不显示。默认可选（`default_enabled() == false`）的扩展共 16 个：`plan-mode`、`goal`、`web-access`、`proxy`、`doc-helper`、`subagent`、`loop-detect`、`hang-detect`、`notify`、`rewind`、`codemode`、`mcp`、`browser`、`jet`、`tasks`、`debug-provider`；它们默认未勾选（关闭），空格开启后立即生效并写入 `enabledExtensions`。
+极简模式下非本模式扩展不显示。默认可选（`default_enabled() == false`）的扩展共 16 个：`plan-mode`、`goal`、`web-access`、`proxy`、`doc-helper`、`subagent`、`loop-detect`、`hang-detect`、`notify`、`rewind`、`codemode`、`mcp`、`browser`、`jet`、`tasks`、`debug`；它们默认未勾选（关闭），空格开启后立即生效并写入 `enabledExtensions`。
 
 ## settings 与启用状态
 
 - **`disabledExtensions`**：settings.json 中禁用的扩展名数组。注册时据此恢复初始状态（对默认启用的扩展 = 关闭）；/extension 面板切换后写回**全局**。项目 `.prux/settings.json` 里的同名字段与全局取并集（只在本项目禁用某内置扩展；未受信任的项目不生效）。
-- **`enabledExtensions`**：settings.json 中显式启用的扩展名数组，仅对声明 [`default_enabled() == false`] 的默认可选扩展（`plan-mode`、`goal`、`web-access`、`proxy`、`doc-helper`、`subagent`、`loop-detect`、`hang-detect`、`notify`、`rewind`、`codemode`、`mcp`、`browser`、`jet`、`tasks`、`debug-provider`、`cache-usage`、`doctor`、`btw`、`recap`）有意义。这些扩展注册后默认禁用，必须在此列出（或经 `/extension` 面板开启）才参与钩子/工具/命令分发；关闭时从列表移除（回到默认态）。项目层同样与全局取并集（项目可自行开启默认关闭的扩展）；两层冲突时禁用优先（与 `disabledExtensions` 的并集语义一致）。
+- **`enabledExtensions`**：settings.json 中显式启用的扩展名数组，仅对声明 [`default_enabled() == false`] 的默认可选扩展（`plan-mode`、`goal`、`web-access`、`proxy`、`doc-helper`、`subagent`、`loop-detect`、`hang-detect`、`notify`、`rewind`、`codemode`、`mcp`、`browser`、`jet`、`tasks`、`debug`、`cache-usage`、`doctor`、`btw`、`recap`）有意义。这些扩展注册后默认禁用，必须在此列出（或经 `/extension` 面板开启）才参与钩子/工具/命令分发；关闭时从列表移除（回到默认态）。项目层同样与全局取并集（项目可自行开启默认关闭的扩展）；两层冲突时禁用优先（与 `disabledExtensions` 的并集语义一致）。
 - **`extensionMode`**：`"minimal"`、`"dev"`、`"creator"`、`"all"`（默认，兜底全集）。`All` 是兜底模式，所有扩展隐式属于它；扩展声明的模式（如 `Minimal`）表示“该级别及以上可用”，列出多个（如 `[Dev, Creator]`）则覆盖两个并排模式。是运行时过滤层，不触碰各扩展 enabled 状态；切回全部模式即恢复原状。
 
 settings 相关键见 [settings.md](settings.md)。修改 settings 后重启生效；`/reload` 会重新接线扩展并重建工具列表与系统提示，但无法加载新编译的扩展代码。

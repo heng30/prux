@@ -206,6 +206,7 @@ async fn dispatch(
         AgentCommand::SetSessionName { name } => dispatch_set_session_name(agent, name).await,
         AgentCommand::Tree => dispatch_tree(agent).await,
         AgentCommand::DebugInfo => dispatch_debug_info(agent).await,
+        AgentCommand::SystemPrompt => dispatch_system_prompt(agent).await,
         AgentCommand::Share { theme } => dispatch_share(agent, theme).await,
         AgentCommand::BugReport {
             hint,
@@ -501,6 +502,20 @@ async fn dispatch_debug_info(agent: &Arc<Mutex<Agent>>) -> Option<RoundFuture> {
         lines.push(format!("leaf: {:?}", s.get_leaf_id()));
     }
     let msg = lines.join("\n");
+    _ = run_in_event_loop(move |ui| ui.on_command_notice(true, msg));
+    None
+}
+
+/// 处理 AgentCommand::SystemPrompt：把当前系统提示词原文回执到聊天区
+/// （空白提示词给一行提示语，避免看起来像命令失败）。
+async fn dispatch_system_prompt(agent: &Arc<Mutex<Agent>>) -> Option<RoundFuture> {
+    let a = agent.lock().await;
+    let prompt = a.system_prompt.trim();
+    let msg = if prompt.is_empty() {
+        "system prompt is empty".to_string()
+    } else {
+        prompt.to_string()
+    };
     _ = run_in_event_loop(move |ui| ui.on_command_notice(true, msg));
     None
 }
@@ -1744,6 +1759,32 @@ mod tests {
         })
         .await
         .expect("Export 无会话应回 notice 失败");
+        shutdown(worker, cmd_tx, handle).await;
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn system_prompt_replies_with_the_prompt_text() {
+        let _g = crate::test_support::AUTH_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let agent = test_agent_arc();
+        agent.lock().await.system_prompt = "SENTINEL SYSTEM PROMPT".to_string();
+
+        let (cmd_tx, cmd_rx) = channels();
+        let worker = WorkerHandle::new(cmd_tx.clone());
+        let (handle, mut ui_rx) = start_worker_with_agent(agent, cmd_rx);
+        let mut app = App::new();
+
+        worker.send(AgentCommand::SystemPrompt);
+        apply_until(&mut ui_rx, &mut app, |a| {
+            a.system_messages
+                .iter()
+                .any(|(_, m)| sys_msg_text(m).contains("SENTINEL SYSTEM PROMPT"))
+        })
+        .await
+        .expect("SystemPrompt 应回 notice 含系统提示词原文");
+
         shutdown(worker, cmd_tx, handle).await;
     }
 
