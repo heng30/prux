@@ -229,7 +229,10 @@ fn compose_tools(
     let mut snippets = HashMap::new();
     let mut prompt_guidelines: Vec<String> = Vec::new();
     for t in &tools_defs {
-        snippets.insert(t.name.to_string(), t.snippet.clone());
+        // 无 snippet 的工具不进 Available tools 段（snippet 为空 = 不想被清单列出）。
+        if !t.snippet.trim().is_empty() {
+            snippets.insert(t.name.to_string(), t.snippet.clone());
+        }
         prompt_guidelines.extend(t.prompt_guidelines.clone());
     }
 
@@ -245,7 +248,15 @@ fn compose_tools(
             if !selection.declares_to_model(&t.name, t.exposure) {
                 continue;
             }
-            snippets.insert(t.name.clone(), t.snippet.clone());
+            // 扩展工具同样并入 `selected`：Available tools 段是按 `selected_tools` 查 snippet 渲染的，
+            // 不并入就只有 tools 数组里有它、提示清单里看不到（与内置工具待遇不一致）。
+            if !selected.contains(&t.name) {
+                selected.push(t.name.clone());
+            }
+            // 同内置：无 snippet 不进 Available tools 段，guidelines 照收。
+            if !t.snippet.trim().is_empty() {
+                snippets.insert(t.name.clone(), t.snippet.clone());
+            }
             prompt_guidelines.extend(t.prompt_guidelines.clone());
         }
     }
@@ -5563,6 +5574,70 @@ mod tests {
             "清空激活集合后重新隐藏"
         );
         assert!(unregister_extension("deferred-demo"));
+    }
+
+    /// 扩展工具与内置工具在系统提示里待遇一致：被声明的扩展工具进 Available tools 段，
+    /// 无 snippet 的只进工具表与 Guidelines、不进清单。
+    #[test]
+    fn extension_tools_join_available_tools_section() {
+        use crate::core::extensions::{
+            Extension, ExtensionTool, register_extension, unregister_extension,
+        };
+
+        let _g = crate::test_support::AUTH_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _ad = crate::test_support::AgentDirGuard::temp();
+        crate::core::settings_manager::write_disabled_extensions(&[]).ok();
+
+        struct SnippetProbe;
+        impl Extension for SnippetProbe {
+            fn name(&self) -> &str {
+                "snippet-probe"
+            }
+            fn tools(&self) -> Vec<ExtensionTool> {
+                let mut listed = ExtensionTool::simple(
+                    "probe_listed",
+                    "A tool with a snippet",
+                    serde_json::json!({ "type": "object" }),
+                    "probe one-liner",
+                );
+                listed.prompt_guidelines = vec!["probe guideline".to_string()];
+                let silent = ExtensionTool::simple(
+                    "probe_silent",
+                    "A tool without a snippet",
+                    serde_json::json!({ "type": "object" }),
+                    "",
+                );
+                vec![listed, silent]
+            }
+        }
+
+        register_extension(SnippetProbe);
+        let agent = test_agent_selection(ToolSelection::Default(vec!["read".to_string()]), vec![]);
+        let active = agent.get_active_tools();
+        assert!(active.iter().any(|n| n == "probe_listed"), "{active:?}");
+        assert!(
+            active.iter().any(|n| n == "probe_silent"),
+            "无 snippet 的工具仍要进工具表：{active:?}"
+        );
+        assert!(
+            agent
+                .system_prompt
+                .contains("- probe_listed: probe one-liner"),
+            "扩展工具的 snippet 必须进 Available tools：{}",
+            agent.system_prompt
+        );
+        assert!(
+            agent.system_prompt.contains("- probe guideline"),
+            "扩展工具的 guideline 必须进 Guidelines"
+        );
+        assert!(
+            !agent.system_prompt.contains("probe_silent"),
+            "无 snippet 的扩展工具不进 Available tools 段：{}",
+            agent.system_prompt
+        );
+        assert!(unregister_extension("snippet-probe"));
     }
 
     #[test]

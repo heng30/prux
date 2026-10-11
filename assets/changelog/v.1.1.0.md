@@ -142,6 +142,9 @@ This release aligns prux with upstream pi 1.1.0.
   stays at the top instead of jumping to the end.
 - The scrollbar of panel-style overlays is aligned with the content area (its track started one row
   too low), so the thumb reaches the first line.
+- Extension tools are listed in the system prompt's `Available tools` section (previously only
+  built-in tools were), and tools that declare no snippet are omitted from it instead of showing an
+  empty line.
 
 ## 中文
 
@@ -255,3 +258,5 @@ This release aligns prux with upstream pi 1.1.0.
 - 终端消失（`EIO` / `EPIPE` / `ENOTCONN` / `ENOTTY`）时安静退出，不再在读取输入或渲染时报错崩栈。
 - 覆盖层内容一次性换代（占位提示 → 正式内容）时停在开头，不再被“贴底跟随”拉到结尾。
 - 面板式覆盖层的滚动条与内容区对齐（此前 track 起点偏低一行），thumb 拖到顶端就是第一行。
+- 系统提示的 `Available tools` 段现在也列出扩展工具（此前只列内置工具）；未声明 snippet 的工具
+  不再占一行空描述。

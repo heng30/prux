@@ -225,6 +225,7 @@ fn build_default_system_prompt(
     // 下的直接工具）不能还挂在提示里让模型直接调。
     let tools = declared_tool_names(options);
 
+    // 只有带了 snippet 的工具才列：`tool_snippets` 缺条目 = 该工具不进清单（见 `compose_tools`）。
     let visible_tools: Vec<&String> = tools
         .iter()
         .filter(|t| options.tool_snippets.contains_key(*t))
