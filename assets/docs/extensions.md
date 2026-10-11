@@ -65,10 +65,10 @@ core::extensions::register_banner_extension(extensions::banner::Banner::new());
 | `codemode` | 扩展 | JavaScript 工具编排：模型写一段 JS，在 QuickJS 沙箱里用 `tools.<name>()` 并行/串联调其它工具（内置、扩展、MCP 都能调），只把脚本输出交回模型；嵌套调用记进 `details.nestedCalls` 并计入会话成本。`codemode.mode`（`on`/`only`）与 `codemode.inlineBudget` 控制可调工具怎么声明给模型（配置在 `agent_dir()/extensions/codemode.json`）；`/codemode` 打开扩展设置面板（Space/Enter 循环档位、立即落盘），`/codemode show` 打印当前配置。**默认不启用**（`Dev`/`Creator` 模式可用），详见 [extensions/codemode.md](extensions/codemode.md) |
 | `web-access` | 扩展 | 联网能力：`web_search`（8 个 REST provider 聚合搜索）/`fetch_content`（`readable` HTML→markdown、`raw` 原文，带 SSRF 防护）/`get_search_content`（按 `responseId` 取回内容切片、`findText` 检索）。配置在 `agent_dir()/extensions/web-search.json`。**默认不启用**，需在 `/extension` 面板开启 |
 | `mcp` | 扩展 | Model Context Protocol 客户端：用单个 `mcp` 工具代理已配置服务器的工具/资源/prompt（`status`/`list`/`search`/`describe`/`call`/`resources`/`read_resource`/`prompts`/`get_prompt`），懒连接 + 空闲断开 + 元数据缓存 + OAuth 2.1 登录；`/mcp` 做状态/诊断/OAuth，`prux mcp` 子命令做配置增删改查。**默认不启用**，需在 `/extension` 面板开启。详见 [extensions/mcp.md](extensions/mcp.md) |
-| `browser` | 扩展 | 真实浏览器自动化（CDP）：单个 `browser` 工具共 16 个动作——`status`/`list_tabs`/`new_tab`/`select_tab`/`open`/`snapshot`/`get_content`/`click`/`type`/`select`/`press`/`scroll`/`wait`/`eval`/`screenshot`/`upload`。`snapshot` 给可交互元素分配 `e1`/`e2`… 引用，其余动作优先用引用定位（比 CSS 选择器稳）。需要用户先以 `--remote-debugging-port=<port>` 启动 Chrome/Chromium/Edge/Brave，端点写在 `agent_dir()/extensions/browser.json`（默认 `127.0.0.1:9222`，**只允许回环主机**）；连上后 `/dock` 面板里多一行浏览器状态。**默认不启用**（`Dev`/`Creator` 模式）。详见下文 |
+| `browser` | 扩展 | 真实浏览器自动化（CDP）：单个 `browser` 工具共 16 个动作——`status`/`list_tabs`/`new_tab`/`select_tab`/`open`/`snapshot`/`get_content`/`click`/`type`/`select`/`press`/`scroll`/`wait`/`eval`/`screenshot`/`upload`。工具是**延迟工具**：模型先用 `tool_search` 载入才能调（见下文）。`snapshot` 给可交互元素分配 `e1`/`e2`… 引用，其余动作优先用引用定位（比 CSS 选择器稳）。需要用户先以 `--remote-debugging-port=<port>` 启动 Chrome/Chromium/Edge/Brave，端点写在 `agent_dir()/extensions/browser.json`（默认 `127.0.0.1:9222`，**只允许回环主机**）；连上后 `/dock` 面板里多一行浏览器状态。**默认不启用**（`Dev`/`Creator` 模式）。详见下文 |
 | `jet` | 扩展 | 虚拟模型路由器：注册虚拟模型 `jet/auto`，**用强模型规划、用便宜模型实现**——本轮第一次成功的 `edit`/`write` 之后同轮切到实现模型并留在那里，因此每个会话最多切换一次模型、最多吃一次 prompt-cache miss。配置在 `agent_dir()/extensions/jet.json`（**没有默认值**：路由目标不完整或解析不到就不注册进 `/model`），`/jet set` 配分类器、`/jet router` 增量配路由目标（三档可各用不同 provider）、`/jet reset` 清空。**默认不启用**（`Dev`/`Creator` 模式可用）。详见下文与 [virtual-models.md](virtual-models.md) |
 | `tasks` | 扩展 | 任务跟踪与协调：7 个模型可见工具（`TaskCreate` / `TaskList` / `TaskGet` / `TaskUpdate` / `TaskOutput` / `TaskStop` / `TaskExecute`）、常驻任务 widget、`/tasks` 命令与系统提醒注入，`TaskExecute` 经 RPC 联动 `subagent` 扩展。**默认不启用**（`Dev`/`Creator` 模式可用） |
-| `tool-search` | 扩展 | 延迟工具检索：扩展可把工具声明为 `ToolExposure::Deferred`（仍可执行但不进模型可见列表），本扩展提供 `tool_search` 工具按 BM25 检索延迟工具元数据，命中项在**下一次模型调用**变为可见。**默认不启用**（`Dev`/`Creator` 模式可用；无延迟工具时它只会占一个工具位） |
+| `tool-search` | 扩展 | 延迟工具检索：扩展可把工具声明为 `ToolExposure::Deferred`（仍可执行但不进模型可见列表），本扩展提供 `tool_search` 工具按 BM25 检索延迟工具元数据，命中项在**下一次模型调用**变为可见。**默认启用**（`Dev`/`Creator` 模式可用；无延迟工具时它只会占一个工具位） |
 | `debug-provider` | 扩展 | `/debug-provider`：供应商原始流事件查看器，订阅 `ProviderStreamEvent`，每轮 assistant 消息结束时渲染一张卡片（provider/model/api + 捕获条数 + 事件摘要）并把整份载荷落成会话条目。**默认不启用**（仅 `Dev` 模式可用） |
 
 > `subagent` 是功能最多的内置扩展，单独一篇文档：[extensions/subagent.md](extensions/subagent.md)——心智模型（三条派发路径）、运行环境与隔离、agent 类型与 frontmatter 键、工作流、设置键及其相互关系、界面、定时任务、事件与 RPC。
@@ -247,6 +247,8 @@ chrome --remote-debugging-port=9222
 ```
 
 没有可用端点时，工具会报错并提示这条启动命令，不会静默失败。
+
+**按需加载**：`browser` 是**延迟工具**——在模型用 `tool_search` 检索到它之前，它的描述、参数 schema 与提示片段都不进请求（完整声明约 3.7k 字符，长期挂在每轮请求里不划算）。因此需要 `tool-search` 扩展处于启用状态（默认启用，模式与本扩展相同）：模型先用 `tool_search` 搜到 `browser`，**下一次模型调用**即可调用它；`tool-search` 被关闭时，`browser` 不会出现在工具表里，模型也就发现不了它。会话恢复（`/resume`）时，历史里调用过 `browser` 的会话会自动重新载入它。这个前置依赖经 `prerequisite_tools()` 声明：`/extension` 详情页的 `requires:` 行会以 `tool-search (tool_search)` 的形式列出（扩展名在前，一眼能看出该开哪个扩展），并在它不可用时补 `- enable it`；保存扩展状态时也会就此告警（只提示，不拦）。
 
 **配置**：`agent_dir()/extensions/browser.json`（首次启用时写入模板，全部键可选）：
 
@@ -495,6 +497,7 @@ core::extensions::register_extension(Echo);
 |------|------|
 | `name()` / `description()` | 扩展名与描述（/extension 面板详情展示） |
 | `fork_project()` | 扩展来源（上游项目名及其版本/URL）；`/extension` 详情展示，`None` = 原创 |
+| `prerequisite_tools()` | 本扩展的工具所依赖的**前置工具**名（如延迟工具需 `tool_search`）；`/extension` 详情页以 `requires:` 行按 `扩展名 (工具名)` 展示（不可用时补 `- enable it`），保存扩展状态时对「已启用但前置不满足」的扩展逐条告警（只提示，不改变任何状态） |
 | `default_enabled()` | 是否默认启用；返回 `false` 的扩展注册后为禁用态，需 `enabledExtensions` 或 `/extension` 面板开启 |
 | `modes()` | 所属扩展模式（可多个；默认只属全部模式） |
 | `tools()` | 提供的扩展工具定义（并入模型可见工具列表） |

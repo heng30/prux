@@ -81,7 +81,16 @@ This release aligns prux with upstream pi 1.1.0.
   `agent_dir()/extensions/browser.json` (default `127.0.0.1:9222`) and must be a loopback address —
   the CDP endpoint has no authentication. The connection is lazy, shared across tabs through flat
   sessions and dropped on session switches; while it is up the dock (`/dock`) lists the browser and
-  the active tab. Disabled by default (`Dev` / `Creator` modes).
+  the active tab. The tool itself is **deferred**: it stays out of the tool list and the system
+  prompt (about 3.7k characters of description and schema) until the model loads it with
+  `tool_search`, which is enabled by default in the same modes. Disabled by default
+  (`Dev` / `Creator` modes).
+- **Extensions can declare prerequisite tools, and the `/extension` panel shows whether they are
+  met.** `Extension::prerequisite_tools()` names the tools an extension's own tools depend on (a
+  deferred tool needs `tool_search` to be discovered at all). The detail panel lists them on a
+  `requires:` line as `extension (tool-name)`, so the extension to enable is obvious, and appends
+  `- enable it` while one is unavailable; saving extension states warns — without blocking anything
+  — about each enabled extension whose prerequisites are not met.
 - **These four new extensions are disabled by default** and live in the `Dev` and `Creator`
   extension modes: `cache-usage`, `doctor`, `btw`, `recap` (turn them on in the `/extension` panel).
 
@@ -193,7 +202,13 @@ This release aligns prux with upstream pi 1.1.0.
   会明确报错（不会点到别的元素），重新 `snapshot` 即可。端点写在
   `agent_dir()/extensions/browser.json`（默认 `127.0.0.1:9222`），**只接受回环地址**——
   CDP 端点没有鉴权。连接是惰性的、按 flat session 复用给多标签页、会话切换时丢弃；
-  连上后停靠面板（`/dock`）里多一行浏览器标识与活动标签页。**默认不启用**（`Dev` / `Creator` 模式）。
+  连上后停靠面板（`/dock`）里多一行浏览器标识与活动标签页。工具本身是**延迟工具**：在模型用
+  `tool_search` 载入之前，它的描述与 schema（约 3.7k 字符）都不进工具表与系统提示；
+  `tool-search` 默认启用、模式相同。**默认不启用**（`Dev` / `Creator` 模式）。
+- **扩展可声明前置工具，`/extension` 面板会显示是否满足**。`Extension::prerequisite_tools()`
+  列出本扩展工具所依赖的工具（延迟工具需要 `tool_search` 才能被模型发现），二级详情页以
+  `requires:` 行按 `扩展名 (工具名)` 展示（不可用时补 `- enable it`）；保存扩展状态时，对
+  「已启用但前置不满足」的扩展逐条告警（只提示，不拦任何流程）。
 - **这四个新扩展都默认不启用**，且只在 `Dev` / `Creator` 扩展模式下可用：
   `cache-usage`、`doctor`、`btw`、`recap`（在 `/extension` 面板里开启）。
 

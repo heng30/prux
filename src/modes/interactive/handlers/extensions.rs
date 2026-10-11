@@ -200,10 +200,17 @@ impl App {
         }
 
         match extensions::persist_extension_states() {
-            Ok(()) => self.push_msg(
-                "extension states saved to settings".to_string(),
-                MsgLevel::Success,
-            ),
+            Ok(()) => {
+                self.push_msg(
+                    "extension states saved to settings".to_string(),
+                    MsgLevel::Success,
+                );
+
+                // 前置工具没满足的已启用扩展：只提示，不改任何状态
+                for warning in extensions::unsatisfied_prerequisites() {
+                    self.push_msg(warning, MsgLevel::Warning);
+                }
+            }
             Err(e) => self.push_msg(
                 format!("failed to save extension state: {}", e),
                 MsgLevel::Error,
@@ -275,7 +282,7 @@ mod tests {
     use super::super::commands::slash_commands;
     use super::*;
     use crate::modes::interactive::agent_actor::WorkerHandle;
-    use crate::modes::interactive::app::App;
+    use crate::modes::interactive::app::{App, sys_spans_text};
     use crate::modes::interactive::handlers::KeyAction;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     fn lock_auth() -> std::sync::MutexGuard<'static, ()> {
@@ -343,6 +350,32 @@ mod tests {
         REG.call_once(|| {
             crate::core::extensions::register_extension(PanelOtherExt);
         });
+    }
+
+    /// 声明一个没人提供的前置工具的扩展（保存时应当被警告）。
+    fn register_panel_prereq_ext() {
+        use std::sync::Once;
+        static REG: Once = Once::new();
+        REG.call_once(|| {
+            crate::core::extensions::register_extension(PanelPrereqExt);
+        });
+    }
+
+    struct PanelPrereqExt;
+    impl crate::core::extensions::Extension for PanelPrereqExt {
+        fn name(&self) -> &str {
+            "panel-prereq-ext"
+        }
+        /// 默认关闭（同 `browser` 这类按需开启的扩展）。
+        fn default_enabled(&self) -> bool {
+            false
+        }
+        fn prerequisite_tools(&self) -> Vec<String> {
+            vec!["prereq-missing-tool".to_string()]
+        }
+        fn tools(&self) -> Vec<crate::core::extensions::ExtensionTool> {
+            Vec::new()
+        }
     }
 
     struct PanelOtherExt;
@@ -501,6 +534,44 @@ mod tests {
         // 还原全局状态，避免影响其他测试
         crate::core::extensions::set_extension_enabled("panel-test-ext", true);
         crate::core::settings_manager::write_disabled_extensions(&[]).ok();
+    }
+
+    /// 保存扩展状态时，已启用扩展的前置工具不满足 → 只推一条 Warning 提示，不改任何状态。
+    #[test]
+    fn saving_warns_about_unsatisfied_prerequisite_tools() {
+        let _g = lock_auth();
+        register_panel_prereq_ext();
+        crate::core::extensions::set_extension_mode(crate::core::extensions::ExtensionMode::All);
+        crate::core::extensions::set_extension_enabled("panel-prereq-ext", false);
+        crate::core::settings_manager::write_extension_states(&[], &[]).ok();
+
+        let mut st = App::new();
+        st.open_extension_panel();
+        select(&mut st, "panel-prereq-ext");
+        // 勾上（草稿）后保存
+        press(&mut st, KeyCode::Char(' '));
+        ctrl(&mut st, 's');
+
+        // 保存照常生效（只是提示，不拦）
+        assert!(crate::core::extensions::is_extension_enabled(
+            "panel-prereq-ext"
+        ));
+        let warnings: Vec<String> = st
+            .system_messages
+            .iter()
+            .filter(|(_, m)| m.level == MsgLevel::Warning)
+            .map(|(_, m)| sys_spans_text(&m.spans))
+            .collect();
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("panel-prereq-ext") && w.contains("prereq-missing-tool")),
+            "应有一条前置工具告警: {warnings:?}"
+        );
+
+        // 还原全局状态，避免影响其他测试
+        crate::core::extensions::set_extension_enabled("panel-prereq-ext", false);
+        crate::core::settings_manager::write_extension_states(&[], &[]).ok();
     }
 
     #[test]

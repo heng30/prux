@@ -900,6 +900,97 @@ pub fn persist_extension_states() -> Result<()> {
     settings_manager::write_extension_states(&disabled, &enabled)
 }
 
+/// 前置工具（[`Extension::prerequisite_tools`]）的解析结果：谁提供、当前是否可用。
+enum Prerequisite {
+    /// 已启用（且当前模式可用）的扩展提供该工具。
+    Ready {
+        /// 提供该工具的扩展名。
+        owner: String,
+    },
+    /// 有扩展声明了该工具，但它当前不可用（被禁用，或声明的 `modes()` 不含当前模式）。
+    Unavailable {
+        /// 声明该工具的扩展名（已注册，只是当前不可用）。
+        owner: String,
+    },
+    /// 注册表里没有任何扩展声明这个工具。
+    Unknown,
+}
+
+/// 解析某个前置工具由哪个扩展提供、当前是否可用。
+///
+/// 先在锁内快照（`enabled` + `Arc`），**释放注册表锁后**再调 `tools()`：
+/// 扩展回调可能重入注册表（`tool-search` 的 `tools()` 会调 [`registered`]），
+/// 而 `registry()` 是不可重入的 `Mutex`，持锁回调会直接死锁。
+fn resolve_prerequisite(tool: &str) -> Prerequisite {
+    let entries: Vec<(bool, Arc<dyn Extension>)> = registry()
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|e| (e.enabled, e.ext.clone()))
+        .collect();
+    let mode = current_extension_mode();
+
+    let mut owner: Option<String> = None;
+    for (enabled, ext) in &entries {
+        if !ext.tools().iter().any(|t| t.name == tool) {
+            continue;
+        }
+        if *enabled && usable_in_mode(&ext.modes(), mode) {
+            return Prerequisite::Ready {
+                owner: ext.name().to_string(),
+            };
+        }
+        owner = Some(ext.name().to_string());
+    }
+
+    match owner {
+        Some(owner) => Prerequisite::Unavailable { owner },
+        None => Prerequisite::Unknown,
+    }
+}
+
+/// 前置工具在 `/extension` 详情页的展示形态：`<扩展名> (<工具名>)`。
+///
+/// 先给扩展名：工具名很难反推是哪个扩展（`tool_search` → `tool-search`），而用户要做的是
+/// 「去开哪个扩展」。当前不可用时补 `- enable it`，无人提供时只能列工具名。
+fn prerequisite_label(tool: &str) -> String {
+    match resolve_prerequisite(tool) {
+        Prerequisite::Ready { owner } => format!("{owner} ({tool})"),
+        Prerequisite::Unavailable { owner } => format!("{owner} ({tool}) - enable it"),
+        Prerequisite::Unknown => format!("{tool} (no extension provides it)"),
+    }
+}
+
+/// 已启用扩展中前置工具不满足的那些，每个扩展一条可直接展示的告警。
+///
+/// 供 `/extension` 面板保存时提示（[`Extension::prerequisite_tools`]）：
+/// **只提示，不改变任何状态**——前置工具缺失的扩展照常启用，只是它的工具模型看不到。
+/// 只看当前已启用且模式可用的扩展；全部满足时返回空。
+pub fn unsatisfied_prerequisites() -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for ext in registered() {
+        let missing: Vec<String> = ext
+            .prerequisite_tools()
+            .iter()
+            .filter_map(|tool| match resolve_prerequisite(tool) {
+                Prerequisite::Ready { .. } => None,
+                Prerequisite::Unavailable { owner } => {
+                    Some(format!("{owner} ({tool}), which is not enabled"))
+                }
+                Prerequisite::Unknown => Some(format!("{tool} (no extension provides it)")),
+            })
+            .collect();
+        if !missing.is_empty() {
+            out.push(format!(
+                "extension `{}` requires {}",
+                ext.name(),
+                missing.join(", ")
+            ));
+        }
+    }
+    out
+}
+
 /// 扩展详情行（/extension 二级菜单展示）：描述 + 空行 + fork 来源 + 工具/hooks 摘要 + 类别。
 /// 描述后固定跟一行空行，与其余信息分隔。
 /// 找不到返回空（面板不会展示空详情）。
@@ -930,6 +1021,13 @@ pub fn extension_detail_lines(name: &str) -> Vec<String> {
         } else {
             format!("  mode: {}", modes.join(", "))
         });
+
+        // 前置工具：缺失时当场标出要开哪个扩展，用户不必自己推「为什么这个工具不出现」
+        let required = ext.prerequisite_tools();
+        if !required.is_empty() {
+            let listed: Vec<String> = required.iter().map(|t| prerequisite_label(t)).collect();
+            lines.push(format!("  requires: {}", listed.join(", ")));
+        }
 
         // 工具名带上 namespace，并标注非 direct 的暴露方式与已声明的注解
         let tools: Vec<String> = ext

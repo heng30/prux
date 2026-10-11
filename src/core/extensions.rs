@@ -70,6 +70,7 @@ pub use registry::{
     register_extension_arc, register_footer_extension, register_footer_extension_arc,
     registered_commands, registration_issues, reload_from_settings, set_all_extensions_disabled,
     set_extension_enabled, set_extension_mode, settings_for, unregister_extension,
+    unsatisfied_prerequisites,
 };
 pub use registry::{registered, registered_banners, registered_footers};
 pub use renderers::{
@@ -367,6 +368,19 @@ pub trait Extension: Send + Sync {
     /// 扩展描述（/extension 面板详情展示）
     fn description(&self) -> &str {
         ""
+    }
+
+    /// 本扩展的工具所依赖的**前置工具**名，默认空。
+    ///
+    /// 声明「模型要能发现/调用本扩展的工具，工具表里得先有这些工具」：典型是声明了
+    /// 延迟工具（`ToolExposure::Deferred`）的扩展——它的工具需经 `tool_search` 检索才能
+    /// 被模型看到，所以前置工具是 `tool_search`。
+    ///
+    /// 只用于 `/extension` 二级详情面板提示（会同时标注前置工具当前是否可用），
+    /// **不参与可用性判定**：前置工具缺失时扩展照常注册，只是它的工具模型看不到。
+    /// 返回的是**工具名**（如 `tool_search`），不是扩展名。
+    fn prerequisite_tools(&self) -> Vec<String> {
+        Vec::new()
     }
 
     /// 该扩展声明的扩展模式列表（每个声明即一个“级别”），默认空。
@@ -1919,6 +1933,99 @@ mod tests {
             "空 url 不应渲染 fork url 行: {lines:?}"
         );
         assert!(unregister_extension("fork-detail-ext"));
+    }
+
+    #[test]
+    fn extension_detail_lines_report_prerequisite_tools() {
+        // 与其它注册表测试共用全局注册表：持锁串行
+        let _g = crate::test_support::AUTH_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+
+        /// 提供前置工具的扩展（声明 `[Minimal]` 以免依赖当前扩展模式）。
+        struct Provider;
+        impl Extension for Provider {
+            fn name(&self) -> &str {
+                "prereq-provider"
+            }
+            fn modes(&self) -> Vec<ExtensionMode> {
+                vec![ExtensionMode::Minimal]
+            }
+            fn tools(&self) -> Vec<ExtensionTool> {
+                vec![ExtensionTool::simple(
+                    "prereq_tool",
+                    "d",
+                    serde_json::json!({}),
+                    "s",
+                )]
+            }
+        }
+
+        /// 依赖两个前置工具：一个有人提供、一个无人提供。
+        struct Consumer;
+        impl Extension for Consumer {
+            fn name(&self) -> &str {
+                "prereq-consumer"
+            }
+            fn prerequisite_tools(&self) -> Vec<String> {
+                vec!["prereq_tool".to_string(), "missing_tool".to_string()]
+            }
+            fn tools(&self) -> Vec<ExtensionTool> {
+                Vec::new()
+            }
+        }
+
+        register_extension(Consumer);
+        // 提供者未注册：两个前置都标为无人提供
+        let lines = extension_detail_lines("prereq-consumer");
+        assert!(
+            lines.iter().any(|l| l
+                == "  requires: prereq_tool (no extension provides it), missing_tool (no extension provides it)"),
+            "detail lines: {lines:?}"
+        );
+
+        // 注册提供者：已声明的前置按「扩展名 (工具名)」展示，未声明的仍标注
+        register_extension(Provider);
+        let lines = extension_detail_lines("prereq-consumer");
+        assert!(
+            lines.iter().any(|l| l
+                == "  requires: prereq-provider (prereq_tool), missing_tool (no extension provides it)"),
+            "detail lines: {lines:?}"
+        );
+
+        // 提供者被禁用：同一行补一句提示
+        assert!(set_extension_enabled("prereq-provider", false));
+        let lines = extension_detail_lines("prereq-consumer");
+        assert!(
+            lines.iter().any(|l| l
+                == "  requires: prereq-provider (prereq_tool) - enable it, missing_tool (no extension provides it)"),
+            "detail lines: {lines:?}"
+        );
+
+        // 未声明前置的扩展不出这一行
+        assert!(
+            extension_detail_lines("prereq-provider")
+                .iter()
+                .all(|l| !l.starts_with("  requires:")),
+            "无前置工具时不应渲染 requires 行"
+        );
+
+        // 保存时的告警源：已启用但前置不满足的扩展逐条列出，并点名要开哪个扩展
+        let warnings = unsatisfied_prerequisites();
+        assert!(
+            warnings.iter().any(|w| w.contains("`prereq-consumer`")
+                && w.contains("prereq-provider (prereq_tool), which is not enabled")),
+            "warnings: {warnings:?}"
+        );
+        assert!(
+            warnings
+                .iter()
+                .all(|w| !w.starts_with("extension `prereq-provider`")),
+            "warnings: {warnings:?}"
+        );
+
+        assert!(unregister_extension("prereq-consumer"));
+        assert!(unregister_extension("prereq-provider"));
     }
 
     #[test]

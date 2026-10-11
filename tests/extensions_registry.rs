@@ -2,8 +2,8 @@
 //! `register_all` 按 priority 降序注册、footer 互斥的默认启用者。
 
 use prux::core::extensions::{
-    extension_count, footer_extension_count, footer_names, is_extension_enabled, panel_entries,
-    registered, registered_footers, unregister_extension,
+    extension_count, extension_detail_lines, footer_extension_count, footer_names,
+    is_extension_enabled, panel_entries, registered, registered_footers, unregister_extension,
 };
 use prux::core::settings_manager;
 use prux::test_support::AgentDirGuard;
@@ -236,6 +236,15 @@ fn register_all_collects_and_sorts_slices() {
     let entries: Vec<String> = panel_entries().iter().map(|(n, _, _)| n.clone()).collect();
     assert!(entries.contains(&"plan-mode".to_string()));
     assert!(entries.contains(&"footer(rich)".to_string()));
+
+    // 前置工具按「扩展名 (工具名)」解析：`browser` 的 `tool_search` 由已启用的 `tool-search` 提供
+    let browser_lines = extension_detail_lines("browser");
+    assert!(
+        browser_lines
+            .iter()
+            .any(|l| l == "  requires: tool-search (tool_search)"),
+        "browser 详情的 requires 行应点名扩展: {browser_lines:?}"
+    );
 }
 
 /// `--no-extensions`：立即禁用**已注册**的扩展（含刚才默认启用的内置扩展），
