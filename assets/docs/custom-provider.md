@@ -13,8 +13,7 @@ prux 的「供应商（provider）」是「协议端点 + 一组模型条目」�
 
 prux 的模型条目按 provider 合并自三层（低 → 高）：
 
-1. **静态基线**：随程序内嵌的模型目录（`assets/models/models.all.json`，由
-   `scripts/sync-models.py` 按 pi 的发布布局同步），始终可用
+1. **静态基线**：随程序内嵌的模型目录，始终可用
 2. **动态缓存 `models-store.json`**：远程模型目录的只读缓存（请求 `/api/models/providers/<id>`），
    按 `(type, id)` 覆盖/追加基线模型
 3. **用户配置 `models.json`**：自定义供应商与覆盖的唯一入口，每次读取实时生效
@@ -160,7 +159,7 @@ provider/baseUrl 自动探测：`deepseek`→`deepseek`、`zai`→`zai`、`toget
 | `chat-template` | 不注入思考字段（由模板/网关自行处理） |
 | `openai`（或空/其它） | `reasoning_effort`（仅当 `supportsReasoningEffort`）：启用取映射值，关闭仅当 `off` 为字符串才发 |
 
-会话亲和（prompt cache / 路由）请求头的规则（对齐 pi 1.0.2）。会话 id 是当前会话的持久 id，
+会话亲和（prompt cache / 路由）请求头的规则。会话 id 是当前会话的持久 id，
 随请求下发；`openrouter` 格式只发 `x-session-id`，`anthropic-messages` 发 `x-session-affinity`，
 `openai` 格式发 `session_id` + `x-client-request-id`（completions 额外补 `x-session-affinity`），
 `openai-nosession` 格式去掉 `session_id`（opencode 目录即此档）：

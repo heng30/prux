@@ -84,6 +84,25 @@ git 历史以「同步 pi-vX.Y.Z」为节奏推进，与上游保持行为/文�
 - **符号链接只读**：`pi/` 指向仓外目录，不在版本控制内。读没问题，写=改别人的仓。
 
 
+## 文档：`assets/docs/` 是给 AI 读的，不写移植叙事与仓外引用
+
+`assets/docs/**` 经 `doc_sync` 同步到 `agent_dir()/docs`，读者是**在用户机器上运行的 AI**：
+它只能看到 prux 二进制、`agent_dir()` 与用户自己的项目，**看不到 prux 仓库**。按这个读者写：
+
+- **不写移植源项目的内容与差别比较**：不出现“移植自 pi / kiss / …”“某插件的版本”“与 pi 的差异”
+  “对齐 pi”“（与 pi 一致）”“尚未移植 / 有意收窄”这类叙事。只描述 prux 自己的功能与边界：
+  不支持的能力直接写“不支持 X，传入会报错”，不写成“相对上游少了什么”。
+- **不引用 `assets/docs/` 之外的仓库文件**：`src/`、`tests/`、`examples/`、`migrations/`、`scripts/`、
+  `assets/models|themes|skills|banner`、`Cargo.toml`、`Makefile` 等 AI 一律读不到，写进去就是死链。
+  连带不要写“代码位置：`src/...`”，也不要写依赖 `examples/` / `tests/` 的开发验证步骤。
+- **保留**：`agent_dir()` / `~/.prux` / `.prux` 等运行期路径、用户项目文件（`settings.json`、
+  `models.json`、`SKILL.md`、`MEMORY.md` …）、`assets/docs/` 内部互链——这些 AI 能正常访问。
+- `fork_project()` 声明的来源值（如 `pi-goal` v0.1.7）是 `/extension` 面板要展示的功能数据，照写；
+  但正文不展开“从哪移植来”的来龙去脉。
+
+仓库自身的 pi 对齐（`sync.md` / `migrations/`、按 pi 版本推进）不受影响——那是开发流程，
+与用户文档的写法是两回事。
+
 ## 代码要求
 
 - 如果 `enum` 类型需要和字符串相互转换，需要使用`strum`库实现这个功能，不要手动实现转换函数。

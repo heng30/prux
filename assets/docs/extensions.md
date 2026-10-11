@@ -12,7 +12,7 @@ prux 的扩展模型只有一套：Rust trait + 全局静态注册表 + 启用/�
 
 - **`Extension`（工具/钩子扩展）**：提供模型可见的工具、事件钩子、斜杠命令、快捷键、CLI flag。如 `plan-mode`、`extra-themes`、`subagent`。
 - **`FooterExtension`（底栏扩展）**：接管 TUI 底栏渲染，并接收 agent 内核事件。如 `footer(normal)` / `footer(minimal)` / `footer(rich)`。**互斥**：同一时刻至多一个 footer 生效。
-- **`BannerExtension`（横幅扩展）**：干净启动时在 TUI 窗口顶部渲染一次性的 ASCII 横幅（`assets/banner/normal.txt`）。如 `banner`。**互斥**：同一时刻至多一个 banner 生效。
+- **`BannerExtension`（横幅扩展）**：干净启动时在 TUI 窗口顶部渲染一次性的 ASCII 横幅。如 `banner`。**互斥**：同一时刻至多一个 banner 生效。
 
 三类扩展共用同一套启用状态与扩展模式，都出现在 `/extension` 面板中。
 
@@ -44,9 +44,9 @@ core::extensions::register_banner_extension(extensions::banner::Banner::new());
 | `footer(normal)` | footer | 默认底栏：行 1 工作目录（含 git 分支），行 2 token/缓存/费用/上下文统计 + 模型名 |
 | `footer(minimal)` | footer | 只显示模型行（normal 的第二行） |
 | `footer(rich)` | footer | 富底栏：分支/模型/上下文 + token 速率/费用/目标标记 🎯/计划模式标记 📋/交互数/耗时/工具调用计数/LLM 调用计数 📨 |
-| `banner` | banner | 启动横幅：干净启动时窗口顶部左侧显示 `assets/banner/normal.txt` 的 ASCII art（`accent`），宽度足够时 art 右侧 4 列间隔处画竖线 + 6 行信息区（版本加粗显示、描述、常用工具、`/extension` 提示、快捷键提示）；顶部/底部各 2 行、左侧 4 列 padding；声明 `Minimal`（即所有扩展模式都可用）；首次提交输入后隐藏 |
+| `banner` | banner | 启动横幅：干净启动时窗口顶部左侧显示内嵌的 ASCII art（`accent`），宽度足够时 art 右侧 4 列间隔处画竖线 + 6 行信息区（版本加粗显示、描述、常用工具、`/extension` 提示、快捷键提示）；顶部/底部各 2 行、左侧 4 列 padding；声明 `Minimal`（即所有扩展模式都可用）；首次提交输入后隐藏 |
 | `extra-themes` | 扩展 | 把编译期嵌入的额外主题同步进 `agent_dir()/themes`（见 [themes.md](themes.md)）；启用写入、禁用删除，内容幂等、不覆盖外部定制 |
-| `skills` | 扩展 | 统一的技能管理面板（`/skills`）：列出全部技能（含尚未落盘的扩展技能），空格切草稿、`Ctrl+S` 写 `settings.json` 的 `skills` 过滤数组并重建 skill 工具、回车看详情（SKILL.md 头信息 + 来源 + 路径）。随二进制分发的**扩展技能**（`assets/skills/**`，编译期内嵌）默认不落盘，开启时「检查并创建」到 `agent_dir()/skills/<name>/**`（已存在不覆盖）。**默认启用**。详见 [skills.md](skills.md) |
+| `skills` | 扩展 | 统一的技能管理面板（`/skills`）：列出全部技能（含尚未落盘的扩展技能），空格切草稿、`Ctrl+S` 写 `settings.json` 的 `skills` 过滤数组并重建 skill 工具、回车看详情（SKILL.md 头信息 + 来源 + 路径）。随二进制分发的**扩展技能**（编译期内嵌）默认不落盘，开启时「检查并创建」到 `agent_dir()/skills/<name>/**`（已存在不覆盖）。**默认启用**。详见 [skills.md](skills.md) |
 | `downloader` | 扩展 | 外部工具（`fd` / `rg`）的安装与状态展示：`/download fd\|rg` 缺失时直接下载、已存在时弹选择面板（重装 / 取消）、下载中只提示、未知工具与多余参数报错；裸 `/download` 切换本扩展的 dock 段显隐（对齐 plan-mode `/todos`、proxy `/proxy`，不控制整个面板），段内每行是「状态点 + 工具名 + 版本 + 位置」（仅 PATH 命中的系统副本会标 `(system)`）。**默认启用**（工具可用性属于开箱能力）；禁用只影响该命令与 dock 段，启动时的缺失检测与提示（不自动下载）不受影响 |
 | `update-check` | 扩展 | 启动时异步检查 GitHub 最新 release（`heng30/prux`），有新版本就在**输入框下方**弹出选择面板（`Open download page` / `Ignore` / `Don't ask again`；↑↓ 选择、Enter 确认、Esc/Ctrl+C 关闭）。`Ignore` 只关掉本次提示，`Don't ask again` 把版本写进 `settings.json` 的 `skipUpdateVersion`（只抑制该版本，之后更新的版本仍会提示）。`--offline`/`PRUX_OFFLINE` 跳过检查，网络失败静默。**默认启用**。另提供 `/update check`（异步检查并在聊天区输出当前/新版本与下载地址）与 `/update open`（直接打开最新 release 下载页，不比较版本） |
 | `cache-usage` | 扩展 | 历史会话的 prompt cache 命中率：`/cache-usage [all] [<provider>]`。数据源就是会话文件里的 `Usage`（assistant 消息 + compaction / branch_summary 条目），命中率口径 `cacheRead / (input + cacheRead + cacheWrite)`——与底栏同式。空参只统计**当前会话**，`all` 统计全部已存会话（`agent_dir()/sessions` 下各工程合并，按修改时间取最新 200 份），`<provider>` 只统计该 provider 的样本（provider 是跨会话概念，因此同样读全部已存会话）。覆盖面板画总量条形图（24 格）+ 24 档趋势 sparkline + 各 provider / 各会话分列；fork 出来的重复条目按「条目 id + 时间戳 + provider + 用量」去重。只读会话文件，不发网络请求。**默认不启用**（`Dev` / `Creator` 模式） |
@@ -55,7 +55,7 @@ core::extensions::register_banner_extension(extensions::banner::Banner::new());
 | `recap` | 扩展 | 一行会话小结：`/recap` 把最近 12 条 / 12000 字摘录交给一次独立的一次性请求，结果规整到 ≤120 字（去前缀/引号后硬截断）作为**系统消息**推到聊天区。**不进会话、不改上下文**；没有后台任务/开关/落盘，只在显式执行时花一次模型请求。**默认不启用**（`Dev` / `Creator` 模式） |
 | `doc-helper` | 扩展 | 精简系统提示词：启用后从默认系统提示词移除整段 prux 文档描述（README/docs/examples 指针 + 主题映射），改用 `/help <question>` 按需提问——把**同一段**文档描述当作一条普通 user 消息投出（不动系统提示词，保护缓存命中率）；无参 `/help` 只列出文档主题。**默认不启用**，需在 `/extension` 面板开启 |
 | `plan-mode` | 扩展 | 只读探索模式：禁用 `edit`/`write`、`bash` 白名单、`Plan:` 编号步骤 + `[DONE:n]` 进度跟踪（`/plan [text]`、`/todos`、`Alt+P`、`--plan`）。**默认不启用**，需在 `/extension` 面板开启 |
-| `goal` | 扩展 | 持久化自主目标（移植自 pi-goal v0.1.7）：`/goal [--tokens 50k] <objective>` 设置长期目标，agent 持续工作直到完成/暂停/清除/预算耗尽。裸 `/goal` 开关停靠面板，`/goal pause\|resume\|clear` 换挡；提供 `create_goal`/`get_goal`/`update_goal` 工具。**默认不启用**，需在 `/extension` 面板开启 |
+| `goal` | 扩展 | 持久化自主目标：`/goal [--tokens 50k] <objective>` 设置长期目标，agent 持续工作直到完成/暂停/清除/预算耗尽。裸 `/goal` 开关停靠面板，`/goal pause\|resume\|clear` 换挡；提供 `create_goal`/`get_goal`/`update_goal` 工具。**默认不启用**，需在 `/extension` 面板开启 |
 | `subagent` | 扩展 | 子代理：`Agent` / `get_subagent_result` / `steer_subagent` 工具，外加确定性编排器 `SubagentWorkflow` 与 `/agents` 命令。**默认不启用**，需在 `/extension` 面板开启。详见 [extensions/subagent.md](extensions/subagent.md) |
 | `loop-detect` | 扩展 | 纯检测：实时检测模型自身的循环行为（流式 thinking/output 字符级与语义循环、跨轮推理停滞、工具调用序列循环），命中即 `AbortRun` 终止整个 run，并在聊天区发一条系统消息说明终止理由。不向会话写入模型可见内容、不改写/检索历史。配置在 `agent_dir()/extensions/loop-detect.json`，`/loop-detect` 打开扩展设置面板（无参数；预设档位、Space/Enter 循环切换、立即落盘）、`/loop-detect reset` 清状态。**默认不启用**，需在 `/extension` 面板开启 |
 | `hang-detect` | 扩展 | 假死看门狗：run 进行中超过 `timeoutSecs`（等待模型）或 `toolTimeoutSecs`（工具执行中）没有任何 agent 事件，即认定假死，经 `RestartRun` 中止当前回合并**立即重开一轮**——新一轮的 user 批次 = 恢复引导消息 + 运行中 steer 注入箱（follow-up 保持「settle 后才发送」的语义，留在队列里不动）；连续恢复超过 `maxRecoveries` 次仍假死时退化为只 `AbortRun`（不重启）。计时心跳由独立后台线程驱动（注册时启动一次）。配置在 `agent_dir()/extensions/hang-detect.json`，`/hang-detect` 打开扩展设置面板，`/hang-detect status`、`/hang-detect timeout\|tool-timeout\|recoveries <n>`、`/hang-detect reset`。**默认不启用**（`Dev`/`Creator` 模式可用） |
@@ -63,10 +63,10 @@ core::extensions::register_banner_extension(extensions::banner::Banner::new());
 | `proxy` | 扩展 | **入站** OpenAI 兼容网关：`/proxy listen <host:port>` 设定监听、`/proxy provider <provider>` 设定目标 provider、`/proxy api-key <sk-xx>` 设定入站 token（裸命令清空），请求体 `model` 字段逐请求选模型，流式转发到该 provider（走 prux 的鉴权/OAuth/四协议适配）；裸 `/proxy` 开关 dock 面板（地址/连接数/请求数/速率/最近请求/api-key 遮蔽值）。配置在 `agent_dir()/extensions/proxy.json`。**默认不启用**，需在 `/extension` 面板开启。注意与**出站** HTTP 代理（[http-proxy.md](http-proxy.md)）方向相反 |
 | `rewind` | 扩展 | 回退最后一次用户输入：把活动分支叶子移到最后一条 user 消息之前，该消息与由它产生的全部后续输出一起离开模型上下文（只动分支指针，历史仍保留在会话树，`/tree` 可找回）。`/rewind` 每次都弹确认面板（Rewind & edit / Rewind & discard / Cancel），忙碌时拒绝执行。**默认不启用**（`Dev`/`Creator` 模式可用） |
 | `codemode` | 扩展 | JavaScript 工具编排：模型写一段 JS，在 QuickJS 沙箱里用 `tools.<name>()` 并行/串联调其它工具（内置、扩展、MCP 都能调），只把脚本输出交回模型；嵌套调用记进 `details.nestedCalls` 并计入会话成本。`codemode.mode`（`on`/`only`）与 `codemode.inlineBudget` 控制可调工具怎么声明给模型（配置在 `agent_dir()/extensions/codemode.json`）；`/codemode` 打开扩展设置面板（Space/Enter 循环档位、立即落盘），`/codemode show` 打印当前配置。**默认不启用**（`Dev`/`Creator` 模式可用），详见 [extensions/codemode.md](extensions/codemode.md) |
-| `web-access` | 扩展 | 联网能力（移植自 pi-web-access v0.29.0，Phase 1）：`web_search`（8 个 REST provider 聚合搜索）/`fetch_content`（`readable` HTML→markdown、`raw` 原文，带 SSRF 防护）/`get_search_content`（按 `responseId` 取回内容切片、`findText` 检索）。配置在 `agent_dir()/extensions/web-search.json`（键名与上游一致）。**默认不启用**，需在 `/extension` 面板开启 |
-| `mcp` | 扩展 | Model Context Protocol 客户端（移植自 kiss `kiss-mcp`）：用单个 `mcp` 工具代理已配置服务器的工具/资源/prompt（`status`/`list`/`search`/`describe`/`call`/`resources`/`read_resource`/`prompts`/`get_prompt`），懒连接 + 空闲断开 + 元数据缓存 + OAuth 2.1 登录；`/mcp` 做状态/诊断/OAuth，`prux mcp` 子命令做配置增删改查。**默认不启用**，需在 `/extension` 面板开启。详见 [extensions/mcp.md](extensions/mcp.md) |
-| `jet` | 扩展 | 虚拟模型路由器（移植自 pi `examples/extensions/jev-router.ts`）：注册虚拟模型 `jet/auto`，**用强模型规划、用便宜模型实现**——本轮第一次成功的 `edit`/`write` 之后同轮切到实现模型并留在那里，因此每个会话最多切换一次模型、最多吃一次 prompt-cache miss。配置在 `agent_dir()/extensions/jet.json`（**没有默认值**：路由目标不完整或解析不到就不注册进 `/model`），`/jet set` 配分类器、`/jet router` 增量配路由目标（三档可各用不同 provider）、`/jet reset` 清空。**默认不启用**（`Dev`/`Creator` 模式可用）。详见下文与 [virtual-models.md](virtual-models.md) |
-| `tasks` | 扩展 | 任务跟踪与协调（移植自 `@tintinweb/pi-tasks` v0.9.0）：7 个模型可见工具（`TaskCreate` / `TaskList` / `TaskGet` / `TaskUpdate` / `TaskOutput` / `TaskStop` / `TaskExecute`）、常驻任务 widget、`/tasks` 命令与系统提醒注入，`TaskExecute` 经 RPC 联动 `subagent` 扩展。**默认不启用**（`Dev`/`Creator` 模式可用） |
+| `web-access` | 扩展 | 联网能力：`web_search`（8 个 REST provider 聚合搜索）/`fetch_content`（`readable` HTML→markdown、`raw` 原文，带 SSRF 防护）/`get_search_content`（按 `responseId` 取回内容切片、`findText` 检索）。配置在 `agent_dir()/extensions/web-search.json`。**默认不启用**，需在 `/extension` 面板开启 |
+| `mcp` | 扩展 | Model Context Protocol 客户端：用单个 `mcp` 工具代理已配置服务器的工具/资源/prompt（`status`/`list`/`search`/`describe`/`call`/`resources`/`read_resource`/`prompts`/`get_prompt`），懒连接 + 空闲断开 + 元数据缓存 + OAuth 2.1 登录；`/mcp` 做状态/诊断/OAuth，`prux mcp` 子命令做配置增删改查。**默认不启用**，需在 `/extension` 面板开启。详见 [extensions/mcp.md](extensions/mcp.md) |
+| `jet` | 扩展 | 虚拟模型路由器：注册虚拟模型 `jet/auto`，**用强模型规划、用便宜模型实现**——本轮第一次成功的 `edit`/`write` 之后同轮切到实现模型并留在那里，因此每个会话最多切换一次模型、最多吃一次 prompt-cache miss。配置在 `agent_dir()/extensions/jet.json`（**没有默认值**：路由目标不完整或解析不到就不注册进 `/model`），`/jet set` 配分类器、`/jet router` 增量配路由目标（三档可各用不同 provider）、`/jet reset` 清空。**默认不启用**（`Dev`/`Creator` 模式可用）。详见下文与 [virtual-models.md](virtual-models.md) |
+| `tasks` | 扩展 | 任务跟踪与协调：7 个模型可见工具（`TaskCreate` / `TaskList` / `TaskGet` / `TaskUpdate` / `TaskOutput` / `TaskStop` / `TaskExecute`）、常驻任务 widget、`/tasks` 命令与系统提醒注入，`TaskExecute` 经 RPC 联动 `subagent` 扩展。**默认不启用**（`Dev`/`Creator` 模式可用） |
 | `tool-search` | 扩展 | 延迟工具检索：扩展可把工具声明为 `ToolExposure::Deferred`（仍可执行但不进模型可见列表），本扩展提供 `tool_search` 工具按 BM25 检索延迟工具元数据，命中项在**下一次模型调用**变为可见。**默认不启用**（`Dev`/`Creator` 模式可用；无延迟工具时它只会占一个工具位） |
 | `debug-provider` | 扩展 | `/debug-provider`：供应商原始流事件查看器，订阅 `ProviderStreamEvent`，每轮 assistant 消息结束时渲染一张卡片（provider/model/api + 捕获条数 + 事件摘要）并把整份载荷落成会话条目。**默认不启用**（仅 `Dev` 模式可用） |
 
@@ -82,7 +82,7 @@ core::extensions::register_banner_extension(extensions::banner::Banner::new());
 
 扫描范围三选一：空参 = **当前会话**；`all` = **全部已存会话**（所有 provider）；`<provider>` = **该 provider**（provider 是跨会话概念，只在当前会话里找它基本等于无参统计，因此也读全部已存会话）。后两者读 `agent_dir()/sessions` 下 **最新 200 份**会话文件（各工程目录合并后按修改时间排序）。扫描在 `spawn_blocking` 里做，面板先显示 `scanning sessions…`；面板打开期间 ↑↓ / PageUp / PageDown / Home / End 滚动。会话文件解析失败（不可修复或需要修复）就跳过，不会因为一份坏文件整份失败。
 
-命中率只统计**带用量**的条目；fork / clone 出来的会话文件会重复包含父会话的条目，因此同一份样本按「条目 id + 时间戳 + provider + 用量」去重（与 kiss `crates/kiss/src/cache.rs` 同口径）。
+命中率只统计**带用量**的条目；fork / clone 出来的会话文件会重复包含父会话的条目，因此同一份样本按「条目 id + 时间戳 + provider + 用量」去重。
 
 ### doctor
 
@@ -116,8 +116,7 @@ core::extensions::register_banner_extension(extensions::banner::Banner::new());
 没有后台任务、没有开关、没有落盘：只在显式执行时花一次模型请求。
 
 小结与旁问都用**主模型**（当前会话的 provider/model），不引入虚拟模型。两者是独立扩展：
-旁问要一个可连续追问的面板，小结只推一条系统消息。摘录、折行与一次性请求由两者共用的
-`recap_btw/shared.rs` 提供；其中一次性请求在**关不掉思考**的模型（目录里 `thinkingLevelMap.off = null`，
+旁问要一个可连续追问的面板，小结只推一条系统消息。摘录、折行与一次性请求由两者共用的实现提供；其中一次性请求在**关不掉思考**的模型（目录里 `thinkingLevelMap.off = null`，
 如 deepseek 系）上会把输出上限抬到 4096，否则思考 token 会吃光额度、正文被截断
 （`stop_reason = "length"` 直接报错）。
 
@@ -195,7 +194,7 @@ core::extensions::register_banner_extension(extensions::banner::Banner::new());
 
 ### mcp
 
-`mcp` 把 kiss 的 Model Context Protocol 客户端（`kiss-mcp`）移植为 prux 内置扩展（`Dev`/`Creator` 模式可用），**默认不启用**（需 `enabledExtensions` 或 `/extension` 面板开启）；fork 来源经 `fork_project()` 声明为 `kiss-mcp`（`/extension` 二级详情展示）。它不是 WebMCP（浏览器 CDP 集成），而是标准 MCP 客户端。**完整说明与各种 mcp.json 配置例子见 [extensions/mcp.md](extensions/mcp.md)。**
+`mcp` 是 prux 内置的 Model Context Protocol 客户端扩展（`Dev`/`Creator` 模式可用），**默认不启用**（需 `enabledExtensions` 或 `/extension` 面板开启）；fork 来源经 `fork_project()` 声明为 `kiss-mcp`（`/extension` 二级详情展示）。它不是 WebMCP（浏览器 CDP 集成；prux 不做 WebMCP），而是标准 MCP 客户端。**完整说明与各种 mcp.json 配置例子见 [extensions/mcp.md](extensions/mcp.md)。**
 
 **配置发现**（6 个位置，全局优先、深度合并、后覆盖前；`//` 与 `/* */` 注释允许）：
 
@@ -220,7 +219,7 @@ core::extensions::register_banner_extension(extensions::banner::Banner::new());
 
 ### web-access
 
-`web-access` 把 pi-web-access 的联网能力移植为 prux 内置扩展（`Dev`/`Creator` 模式可用），**默认不启用**（需 `enabledExtensions` 或 `/extension` 面板开启）；fork 来源经 `fork_project()` 声明为 `pi-web-access` v0.29.0（`/extension` 二级详情展示）。
+`web-access` 是 prux 内置的联网扩展（`Dev`/`Creator` 模式可用），**默认不启用**（需 `enabledExtensions` 或 `/extension` 面板开启）；fork 来源经 `fork_project()` 声明为 `pi-web-access` v0.29.0（`/extension` 二级详情展示）。
 
 **工具**
 
@@ -230,11 +229,11 @@ core::extensions::register_banner_extension(extensions::banner::Banner::new());
 
 **Provider 与配置**
 
-本阶段实现 8 个纯 REST provider：`tavily` `brave` `exa` `jina` `searxng` `duckduckgo`（免密钥）`serper` `perplexity`。密钥可写在 `agent_dir()/extensions/web-search.json`（如 `tavilyApiKey` / `braveApiKey` / `exaApiKey` / `jinaApiKey` / `serperApiKey` / `perplexityApiKey`，支持 `$ENV_VAR` 间接引用），也可用同名环境变量（`TAVILY_API_KEY` 等）；SearXNG 配 `searxngBaseUrl`（可选 `searxngHeaders`）。`provider` 设默认 provider，`searchRouting.providers` 设路由顺序，`tools.{webSearch,fetchContent,getSearchContent}.enabled: false` 可按工具关闭，`maxInlineContentChars`（默认 30000）控制内联切片上限，`proxy`/`userAgent`/`fetch.timeout` 控制出口；`allowPrivateHosts` + `ssrfAllowRanges` 可放行内网地址（默认拒绝回环/私有/链路本地，逐跳校验重定向）。
+提供 8 个纯 REST provider：`tavily` `brave` `exa` `jina` `searxng` `duckduckgo`（免密钥）`serper` `perplexity`。密钥可写在 `agent_dir()/extensions/web-search.json`（如 `tavilyApiKey` / `braveApiKey` / `exaApiKey` / `jinaApiKey` / `serperApiKey` / `perplexityApiKey`，支持 `$ENV_VAR` 间接引用），也可用同名环境变量（`TAVILY_API_KEY` 等）；SearXNG 配 `searxngBaseUrl`（可选 `searxngHeaders`）。`provider` 设默认 provider，`searchRouting.providers` 设路由顺序，`tools.{webSearch,fetchContent,getSearchContent}.enabled: false` 可按工具关闭，`maxInlineContentChars`（默认 30000）控制内联切片上限，`proxy`/`userAgent`/`fetch.timeout` 控制出口；`allowPrivateHosts` + `ssrfAllowRanges` 可放行内网地址（默认拒绝回环/私有/链路本地，逐跳校验重定向）。
 
-**与上游的差异（Phase 1 有意收窄）**
+**功能边界**
 
-尚未移植：浏览器 curator、Auto-Summary、`source_check`、GitHub/YouTube/PDF/本地视频/图片、`answer` 模式、浏览器 cookie 认证抓取、OpenAI/Parallel/TinyFish/Firecrawl 等 provider 与 `/websearch` 命令。对应参数传入时显式报错（不做静默降级）；`web_search` 无 curator，一律按 `workflow: "none"`；`includeContent` 改为同步抓取（上限 10 个 URL）。搜索/抓取数据存于进程内 LRU/TTL（128 条 / 1 小时），不写入会话 JSONL，跨进程重启不恢复。
+不支持浏览器 curator、Auto-Summary、`source_check`、GitHub/YouTube/PDF/本地视频/图片、`answer` 模式、浏览器 cookie 认证抓取、OpenAI/Parallel/TinyFish/Firecrawl 等 provider 与 `/websearch` 命令；对应参数传入时显式报错（不做静默降级）。`web_search` 无 curator，一律按 `workflow: "none"`；`includeContent` 走同步抓取（上限 10 个 URL）。搜索/抓取数据存于进程内 LRU/TTL（128 条 / 1 小时），不写入会话 JSONL，跨进程重启不恢复。
 
 ### proxy
 
@@ -262,8 +261,6 @@ core::extensions::register_banner_extension(extensions::banner::Banner::new());
 | `GET` | `/health` | 免鉴权探活 |
 
 其余路径 `404`、已知路径方法不对 `405`，一律 OpenAI 错误体 `{"error":{message,type,param,code}}`。
-
-**手工验证**：`examples/bot` 就是一个 OpenAI 兼容示例客户端（依赖走根包 dev-dependencies，随根包构建）：`RUST_LOG=debug cargo run --example bot` 会走 `/v1/chat/completions` 流式请求并把增量与完整回答打到日志上；网关地址 / 模型 / key 取 `BOT_DEMO_BASE_URL`（默认 `http://127.0.0.1:8765/v1`）/ `BOT_DEMO_MODEL` / `BOT_DEMO_API_KEY`。
 
 **转发语义（协议翻译，不是字节透传）**
 
@@ -317,15 +314,15 @@ OpenAI 请求 → 内部 `AgentMessage` → `provider::stream_chat()`（自动�
 
 `listen` 接受 `127.0.0.1:8765` / `0.0.0.0:8765` / `localhost:8765` / `[::1]:8765`；不接受裸端口与端口 0。`apiKey` 留空即不鉴权（`PRUX_PROXY_TOKEN` 仍会覆盖它）。键名 camelCase。dock 面板第 1 行会显示**生效中**的 token（首尾各 4 个字符、中间 5 个 `*`；带 `(env)` 表示来自 `PRUX_PROXY_TOKEN`，未配置则显示 `(none)`）；短于 12 个字符的 token 整体打码为 `*****`（否则露出的比遮住的还多），裸 `/proxy` 的状态提示只说有没有鉴权、不显示值。
 
-**有意收窄（本阶段不做）**
+**功能边界**
 
-`/v1/completions`（legacy）、`/v1/responses`、embeddings、**CORS**（不给跨站头 = 不把额度开放给任意网页；浏览器端客户端需自行代理）、远程图片抓取、并发排队、扩展设置面板、CLI flag、`stop`/`n>1`/`logprobs`/`response_format`/`seed`/惩罚项。
+不支持 `/v1/completions`（legacy）、`/v1/responses`、embeddings、**CORS**（不给跨站头 = 不把额度开放给任意网页；浏览器端客户端需自行代理）、远程图片抓取、并发排队、扩展设置面板、CLI flag、`stop`/`n>1`/`logprobs`/`response_format`/`seed`/惩罚项。
 
 ### jet
 
-`jet` 是编译期内置的**虚拟模型路由器**（移植自 pi 的示例插件 `examples/extensions/jev-router.ts`；`Dev`/`Creator` 模式可用）。它注册虚拟模型 `jet/auto`，让规划阶段跑在强模型上、实现阶段跑在便宜模型上。**默认不启用**，需在 `/extension` 面板开启。
+`jet` 是编译期内置的**虚拟模型路由器**（`Dev`/`Creator` 模式可用）。它注册虚拟模型 `jet/auto`，让规划阶段跑在强模型上、实现阶段跑在便宜模型上。**默认不启用**，需在 `/extension` 面板开启。
 
-- **路由语义**（对齐 pi 的示例插件）：
+- **路由语义**：
   - 规划阶段用 `planning` 档；配了 `planningComplex` 档且分类器把题面判为复杂（`complex` 概率 ≥ 0.5）时改用后者。
   - 本轮出现第一次**成功**的 `edit`/`write` 工具结果后，同一轮的下一个请求起切到 `implementation` 档，此后整个会话留在那里。
   - `reason == direct`（压缩摘要、扩展直调）直接给 `implementation` 档。
@@ -367,7 +364,7 @@ OpenAI 请求 → 内部 `AgentMessage` → `provider::stream_chat()`（自动�
 /jet set openrouter ~typesafe/jev-latest
 ```
 
-- **成本口径**：底栏与 `/session` 显示的是路由后**物理模型**的开销，footer 也带 `→ <物理模型>` 后缀；分类器调用的 token 用量**不计入**会话成本（与 pi 一致）。
+- **成本口径**：底栏与 `/session` 显示的是路由后**物理模型**的开销，footer 也带 `→ <物理模型>` 后缀；分类器调用的 token 用量**不计入**会话成本。
 - **依赖**：各档目标 provider 的凭据、分类器模型的凭据。
 
 ## 编写一个扩展
@@ -438,7 +435,7 @@ core::extensions::register_extension(Echo);
 | 方法 | 说明 |
 |------|------|
 | `name()` / `description()` | 扩展名与描述（/extension 面板详情展示） |
-| `fork_project()` | 扩展来源（移植自哪个插件及其版本/URL）；`/extension` 详情展示，`None` = 原创 |
+| `fork_project()` | 扩展来源（上游项目名及其版本/URL）；`/extension` 详情展示，`None` = 原创 |
 | `default_enabled()` | 是否默认启用；返回 `false` 的扩展注册后为禁用态，需 `enabledExtensions` 或 `/extension` 面板开启 |
 | `modes()` | 所属扩展模式（可多个；默认只属全部模式） |
 | `tools()` | 提供的扩展工具定义（并入模型可见工具列表） |
@@ -511,8 +508,7 @@ core::extensions::register_extension(Echo);
 ## 协议实现（图片与分类器）
 
 内置的图片生成 / 分类器协议只有 `openrouter-images` 与 `typesafe-system-one`；
-扩展可以注册自己的 `api` 名（对齐 pi 的 `registerProvider({ models, images, classifiers })`：
-条目与实现一起给出，`api` 名只写一遍）：
+扩展可以注册自己的 `api` 名（条目与实现一起给出，`api` 名只写一遍）：
 
 ```rust
 use prux::core::{
@@ -555,7 +551,7 @@ impl Extension for MyExtension {
 - 分发顺序：**扩展注册的实现优先，其次内置实现**（同名 `api` 由扩展覆盖内置）；
   都没有时返回「协议未实现」错误（`generate_images` / `classify` 的“不抛错”契约不变）。
 - 实现随扩展启停过滤：扩展被 `/extension` 面板禁用（或 `--no-extensions`）后立即不再参与分发。
-- 非 chat 条目请显式写 `api`：image / classifier 型不从 provider 级 `api` 继承（与 pi 一致）。
+- 非 chat 条目请显式写 `api`：image / classifier 型不从 provider 级 `api` 继承。
 
 ## 工具渲染器（`tool_renderers()`）
 

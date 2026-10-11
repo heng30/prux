@@ -4,8 +4,7 @@
 命令与 `prux mcp` CLI，用来管配置、诊断连接、走 OAuth 登录。
 
 - 扩展名：`mcp`（settings 的 `enabledExtensions` / `/extension` 面板切换）
-- 代码位置：`src/extensions/mcp/`（`config` / `manager` / `oauth` / `error`）
-- 来源：移植 kiss 的 `kiss-mcp` v0.0.18（`/extension` 二级详情里的 fork 来源）
+- 来源：`kiss-mcp` v0.0.18（`/extension` 二级详情里的 fork 来源）
 - **默认关闭**：`default_enabled() == false`，只在 `Dev` / `Creator` 扩展模式注册。
   开启方式：`/extension` 面板，或 `settings.json` 的 `"enabledExtensions": ["mcp"]`。
 
@@ -510,22 +509,6 @@ prux mcp login linear
 - server 名严格白名单校验，避免路径注入。
 - stdio 服务器是**任意代码执行**：配置里写什么命令，prux 就会启动什么进程。别往不信任的
   项目配置里放你没看过的命令。
-
-## 测试服务端
-
-`examples/mcp_test_server/` 是一个真实的 HTTP MCP 服务端（rmcp server 侧 + hyper），用来做端到端验证：
-
-```bash
-# 起一个要求 bearer 的服务端
-cargo run --example mcp_test_server -- --token sk-test
-# 授权服务器 metadata 发现端点：missing（默认 404）| broken（缺 token_endpoint）| valid（完整文档）
-cargo run --example mcp_test_server -- --discovery valid
-```
-
-它同时充当最小 OAuth 授权服务器（`/authorize`、`/register`、`/token`、`/.well-known/*`），
-`tests/mcp_oauth_e2e.rs` 复用同一份实现，覆盖 `auth: {"provider": ...}`、`oauth.clientRegistration: "cimd"`
-与 `oauth.authServerMetadataUrl` 的运行时路径。服务端实现放 `examples/` 而不是 `src/`：rmcp 的 server 侧
-feature 与 `tower` 只在 dev-dependencies 里，不该进 lib 的依赖图。
 
 ## 与其他模块的关系
 

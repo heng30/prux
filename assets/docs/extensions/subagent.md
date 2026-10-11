@@ -5,8 +5,7 @@
 编排器（`SubagentWorkflow`）。
 
 - 扩展名：`subagent`（settings 的 `enabledExtensions` / `/extension` 面板切换）
-- 代码位置：`src/extensions/subagent/`
-- 来源：移植 `@tintinweb/pi-subagents` v0.19.0（偏离清单见仓库根 `migration-subagents.md`）
+- 来源：`@tintinweb/pi-subagents` v0.19.0
 - **默认关闭**：`default_enabled() == false`，只在 `Dev` / `Creator` 扩展模式下注册。
   开启方式：`/extension` 面板，或 `settings.json` 的 `"enabledExtensions": ["subagent"]`。
 
@@ -44,7 +43,7 @@ SubagentWorkflow 脚本      ┘
 定时任务（schedule）        ┘
 ```
 
-`src/core/extensions/tools.rs` 划定了边界：核心只提供**机制**（按 `SubAgentSpec` 物化一个
+核心只提供**机制**（按 `SubAgentSpec` 物化一个
 状态隔离的 child，并交回 `SubAgentRunner` + `SubAgentControls`），spawn 策略、并发、排队、
 结果存储、通知全在扩展里。
 
@@ -452,7 +451,7 @@ You are a code reviewer. Read the diff, then report findings with file:line.
 ## autoresearch 作业
 
 `/autoresearch <目标> [--iterations N]` 把同一个目标交给**同一个子代理**反复迭代，
-直到它自己说达标或到轮次上限（移植 kiss 的 `JobKind::Autoresearch`）：
+直到它自己说达标或到轮次上限：
 
 - 每一轮都是同一条前台 `manager::dispatch`，提示词只有轮次不同；
 - **首轮 `inherit_context = true`**（从当前对话分叉），之后每轮 `resume` 同一个子代理记录——
@@ -470,11 +469,11 @@ You are a code reviewer. Read the diff, then report findings with file:line.
 就等于无声收场。这条通知**只给人看**，不往主会话注入消息（上百轮的作业若每轮都注入
 `<subagent_result>` 会把主对话灌满）；用户自己 `/autoresearch stop` 停掉的不发。
 
-上限与 kiss 同值：**同时 4 个活跃作业**（第 5 个排队等额度）、保留 20 条、`--iterations` clamp 到 100。
+上限：**同时 4 个活跃作业**（第 5 个排队等额度）、保留 20 条、`--iterations` clamp 到 100。
 作业表是内存态（重启即丢），但子会话本身落盘，历史不丢。
 
 参数只认**结尾**的 `--iterations N`（`N` 必须是单个正整数）：`-n` / `--iterations=N` 会被当成目标的一部分，
-与 kiss 一致（同一串输入在两边语义相同）。目标为空、`N` 非正整数或 `N` 后面还有别的词都会直接报错。
+目标为空、`N` 非正整数或 `N` 后面还有别的词都会直接报错。
 
 ---
 

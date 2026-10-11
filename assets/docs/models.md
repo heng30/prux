@@ -155,8 +155,8 @@ OpenRouter / TypeSafe / Vercel AI Gateway / OpenCode Zen 共用，只是 `baseUr
 
 键是 **prux 的思考级别**（不是 `thinkingLevelMap` 里的 provider 值）。取值时先把当前级别按模型能力钳制
 （`low` 被声明为不支持时落到最近的可用级别），再按「模型 `samplingParams` → 该级别的覆盖项」合并，
-后写胜；级别未列出的键继承模型默认值。**级别覆盖项的键会覆盖请求体里的同名显式字段**（包括 `temperature`），
-与 pi 一致；`settings.json` 的 `temperature` 是用户级覆盖，优先级最高，不被级别覆盖项改写。
+后写胜；级别未列出的键继承模型默认值。**级别覆盖项的键会覆盖请求体里的同名显式字段**（包括 `temperature`）；
+`settings.json` 的 `temperature` 是用户级覆盖，优先级最高，不被级别覆盖项改写。
 `modelOverrides` 里的同名字段按级别、按键合并。
 
 ### thinkingLevelMap 与 off 的语义
@@ -250,7 +250,7 @@ OpenRouter / TypeSafe / Vercel AI Gateway / OpenCode Zen 共用，只是 `baseUr
   对应 provider 同样视为已配置并出现在 `/model`（`environment` 认证来源）；仅在 `models.json`
   未给该 provider 声明 `apiKey` 时生效。
 - **本地免鉴权端点也要写占位 `apiKey`**（如 `"ollama"`）：未解析到任何凭据的请求会被拒为
-  `Provider is not configured: <provider>`（对齐 pi），不会发出一个空 key 的请求。
+  `Provider is not configured: <provider>`，不会发出一个空 key 的请求。
 - `/login` API key 列表的认证来源三态：`✓ stored`（auth.json 已存）、`✓ env (VAR)`（仅环境变量）、
   `✓ stored · env (VAR)`（两者并存）、`• not configured`（未配置）。
 - 未配置任何凭据（`auth.json`、`models.json`、环境变量均无）时，启动提示运行 `/login`。

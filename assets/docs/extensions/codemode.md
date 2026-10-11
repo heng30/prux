@@ -146,7 +146,7 @@ declare const models: {
 （`toolCallId` / `toolName` / `args` / `isError` / `text` / `durationMs` / `usage`），
 用量并入调用方，因此**会话成本里能看到脚本花的钱**。嵌套结果本身不进对话，只有脚本输出进。
 
-可调集合（与 pi 一致）：已激活的 `direct` 工具 + 全部 `codemode` exposure 工具 +
+可调集合：已激活的 `direct` 工具 + 全部 `codemode` exposure 工具 +
 已激活的 `deferred` 工具。`model-only`（含 `codemode` 自己）与 `hidden` 不进脚本工具表。
 
 ## 呈现方式与预算
@@ -159,11 +159,11 @@ declare const models: {
 当前值与配置文件路径；也可直接手写 `codemode.json`（`inlineBudget` 填表外任意非负整数亦可）。
 **本扩展默认不启用**，先经 `/extension` 面板开启，`/codemode` 才可用。
 
-## 与 pi 的差异
+## 使用约束
 
-- `store()` 快照按**当前分支**的 `codemode-store` 条目重建（与 pi 一致），每轮脚本执行前整体替换；
+- `store()` 快照按**当前分支**的 `codemode-store` 条目重建，每轮脚本执行前整体替换；
   落盘走 TUI 的持久化请求——无 TUI（headless/SDK）时写入只留在进程内。
 - `models.*` 全局齐备（目录查询 / `classify` / `generateImages`），但只有 `models` namespace，
-  pi 的模型注册表扩展接口（`ctx.modelRegistry`）没有对应物。
+  没有模型注册表扩展接口。
 - 无实时嵌套调用进度（结束后统一出现在 `details.nestedCalls`），TUI 也没有专门的 codemode 卡片。
 - `bash` 等声明了 `outputSchema` 的工具在脚本里返回**结构化结果**（`output` 最大 1 MiB，另有 `exit_code`、`wall_time_seconds` 等字段）；面向模型的文本截断预算（50 KiB / 2000 行）不适用于这条路径。

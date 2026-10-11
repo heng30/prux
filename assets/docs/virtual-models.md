@@ -174,7 +174,7 @@ ModelRoute { provider: "anthropic".into(), model_id: model_id.into(),
 ## 开箱用例：`jet` 扩展
 
 `jet` 是内置扩展（**默认不启用**）里唯一的虚拟模型消费者：一个"强模型规划、便宜模型
-实现"的路由器，移植自 pi 的示例插件 `examples/extensions/jev-router.ts`。它把上面几节
+实现"的路由器。它把上面几节
 的能力凑成一个可直接用的形态：
 
 - 注册 `jet/auto`（provider `jet`），按**会话相位**路由：规划档用 `planning`
@@ -189,23 +189,17 @@ ModelRoute { provider: "anthropic".into(), model_id: model_id.into(),
   `--implementation-provider`）→ `/jet set <classifier-provider> <classifier-model-id>`
   → 在 `/model` 面板选中 `jet/auto`。
 - 路由目标不完整或解析不到时**不注册**：`jet/auto` 不会出现在 `/model` 里。
-- 分类器调用的用量不计入会话成本（与 pi 一致）。
+- 分类器调用的用量不计入会话成本。
 
 完整语义、配置 schema 与命令清单见 [extensions.md](extensions.md) 的 `jet` 一节。
 
-## 与 pi 的差异（已知且刻意）
+## 使用约束
 
-- **示例插件变成了内置扩展**：pi 的 `examples/extensions/jev-router.ts` 在 prux 里是内置
-  扩展 `jet`（默认不启用，见上节）；路由逻辑写在 `Extension::virtual_models()` 里
-  （本页示例即完整形态）。
-- **`unregisterVirtualModel(provider, id)` 不单独暴露**：虚拟模型随扩展整体注册/注销
+- `unregisterVirtualModel(provider, id)` 不单独暴露：虚拟模型随扩展整体注册/注销
   （`virtual_models::unregister` / `unregister_owner` 供 SDK 与测试用）。
-- **SDK 直接注册的「仅有虚拟模型」provider 不进已配置列表**：扩展注册的虚拟模型会让
-  一个全新 provider 自动可用；不经扩展注册时，请先把该 provider 写进 `models.json`
-  （带 `apiKey`），否则 `/model` 不会列出它。
-- **`/proxy` 不路由虚拟模型**：网关按请求模型直接 `stream_chat`，虚拟条目会报
+- 只有经扩展注册的虚拟模型能让一个全新 provider 自动可用；SDK 直接注册时，请先把该
+  provider 写进 `models.json`（带 `apiKey`），否则 `/model` 不会列出它。
+- `/proxy` 不路由虚拟模型：网关按请求模型直接 `stream_chat`，虚拟条目会报
   `unsupported api type: prux-virtual`。虚拟模型只服务 agent 循环与扩展直调。
-- **`/resume` 不恢复模型选择**：这是 prux 既有行为（不按 `model_change` 恢复），虚拟
-  选择同样只随显式 `/model` 切换。
-- 没有 `signal`（用 `abort`）、没有 `onPayload` / `onResponse` / `maxRetries` 选项，
-  与 provider 层其它入口一致。
+- `/resume` 不恢复模型选择（不按 `model_change` 恢复），虚拟选择只随显式 `/model` 切换。
+- 没有 `signal`（用 `abort`）、没有 `onPayload` / `onResponse` / `maxRetries` 选项。

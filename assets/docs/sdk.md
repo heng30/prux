@@ -163,7 +163,7 @@ let images = list_models_of_type("openrouter", ModelType::Image);
 let every = list_all_models();
 let classifiers = list_all_models_of_type(ModelType::Classifier);
 
-// 只含已配置凭据的 provider（等价于 pi 的 Models.getAllAvailable()）
+// 只含已配置凭据的 provider
 let usable = list_all_available_models_of_type(ModelType::Chat);
 ```
 
