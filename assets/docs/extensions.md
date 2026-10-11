@@ -51,8 +51,8 @@ core::extensions::register_banner_extension(extensions::banner::Banner::new());
 | `update-check` | 扩展 | 启动时异步检查 GitHub 最新 release（`heng30/prux`），有新版本就在**输入框下方**弹出选择面板（`Open download page` / `Ignore` / `Don't ask again`；↑↓ 选择、Enter 确认、Esc/Ctrl+C 关闭）。`Ignore` 只关掉本次提示，`Don't ask again` 把版本写进 `settings.json` 的 `skipUpdateVersion`（只抑制该版本，之后更新的版本仍会提示）。`--offline`/`PRUX_OFFLINE` 跳过检查，网络失败静默。**默认启用**。另提供 `/update check`（异步检查并在聊天区输出当前/新版本与下载地址）与 `/update open`（直接打开最新 release 下载页，不比较版本） |
 | `cache-usage` | 扩展 | 历史会话的 prompt cache 命中率：`/cache-usage [all] [<provider>]`。数据源就是会话文件里的 `Usage`（assistant 消息 + compaction / branch_summary 条目），命中率口径 `cacheRead / (input + cacheRead + cacheWrite)`——与底栏同式。空参只统计**当前会话**，`all` 统计全部已存会话（`agent_dir()/sessions` 下各工程合并，按修改时间取最新 200 份），`<provider>` 只统计该 provider 的样本（provider 是跨会话概念，因此同样读全部已存会话）。覆盖面板画总量条形图（24 格）+ 24 档趋势 sparkline + 各 provider / 各会话分列；fork 出来的重复条目按「条目 id + 时间戳 + provider + 用量」去重。只读会话文件，不发网络请求。**默认不启用**（`Dev` / `Creator` 模式） |
 | `doctor` | 扩展 | provider 网络可达性诊断：`/doctor [summary]` 对目录里每个 provider 的第一个 chat 模型发一个**不带凭据**的 `HEAD`（并发上限 16、单请求 10s），判定链路是否通——**有 HTTP 响应就算网络可达**（探的是 base URL，`404` / `405` 这类「路径没处理器」的响应同样证明连接与 TLS 都通：`2xx` / `401` / `403` / `405` 是预期结果，其它状态码标 `status not OK`），只有请求本身失败才记 `timeout` / `dns error` / `connect error`；`/doctor summary` 只给可达/失败计数与失败清单。面板末尾的 environment 段给出版本、`agent_dir()`、探测目标数与 `http_proxy` / `https_proxy` / `all_proxy` / `no_proxy` 的 set/unset（大小写不敏感，**不回显值**）。`--offline` / `PRUX_OFFLINE` 不发请求，只显示 environment 段。**默认不启用**（`Dev` / `Creator` 模式） |
-| `btw` | 扩展 | 只读旁问：`/btw <问题>` 把答案渲染在输入区上方的 `BTW` 面板里（Esc / Enter 关闭），**不进会话、不改上下文**——送给模型的只有最近 4 条 / 4000 字以内的摘录加一段只读系统提示（一次性请求，不带工具、不写会话；答案晚到时若面板已关就丢弃）。**默认不启用**（`Dev` / `Creator` 模式） |
-| `recap` | 扩展 | 一行会话小结：`/recap [now|on|off]` 在停靠面板里显示 `※ recap: …`（≤120 字，去前缀/引号后硬截断），默认开启自动小结、空闲 5 分钟重刷一次（30 秒一拍的后台任务判断），开关存在 `agent_dir()/extensions/recap.json` 的 `autoRecap`（也可在扩展设置面板改）。**默认不启用**（`Dev` / `Creator` 模式）：开启后空闲即会发起模型请求 |
+| `btw` | 扩展 | 只读旁问：`/btw <问题>` 打开 `BTW` 面板（占据输入区、主页输入框隐藏），面板自带一行 `btw>` 输入框、打开即聚焦，可直接回车连续追问（Esc / 空回车关闭），**不进会话、不改上下文**——送给模型的只有最近 4 条 / 4000 字以内的摘录、此前的旁问轮次加一段只读系统提示（一次性请求，不带工具、不写会话；答案晚到时若面板已关或换了问题就丢弃）。**默认不启用**（`Dev` / `Creator` 模式） |
+| `recap` | 扩展 | 一行会话小结：`/recap [now|on|off]` 在停靠面板里显示 `※ recap: …`（≤120 字，去前缀/引号后硬截断），默认开启自动小结、空闲 5 分钟重刷一次（30 秒一拍的后台任务判断），有小结时会像 plan-mode 一样主动打开停靠面板；开关存在 `agent_dir()/extensions/recap.json` 的 `autoRecap`（也可在扩展设置面板改）。**默认不启用**（`Dev` / `Creator` 模式）：开启后空闲即会发起模型请求 |
 | `doc-helper` | 扩展 | 精简系统提示词：启用后从默认系统提示词移除整段 prux 文档描述（README/docs/examples 指针 + 主题映射），改用 `/help <question>` 按需提问——把**同一段**文档描述当作一条普通 user 消息投出（不动系统提示词，保护缓存命中率）；无参 `/help` 只列出文档主题。**默认不启用**，需在 `/extension` 面板开启 |
 | `plan-mode` | 扩展 | 只读探索模式：禁用 `edit`/`write`、`bash` 白名单、`Plan:` 编号步骤 + `[DONE:n]` 进度跟踪（`/plan [text]`、`/todos`、`Alt+P`、`--plan`）。**默认不启用**，需在 `/extension` 面板开启 |
 | `goal` | 扩展 | 持久化自主目标（移植自 pi-goal v0.1.7）：`/goal [--tokens 50k] <objective>` 设置长期目标，agent 持续工作直到完成/暂停/清除/预算耗尽。裸 `/goal` 开关停靠面板，`/goal pause\|resume\|clear` 换挡；提供 `create_goal`/`get_goal`/`update_goal` 工具。**默认不启用**，需在 `/extension` 面板开启 |
@@ -102,20 +102,26 @@ core::extensions::register_banner_extension(extensions::banner::Banner::new());
 ### btw
 
 **`/btw <问题>`**：只读旁问。答案是**独立的一次性请求**（`provider::simple_completion`），
-上下文只有最近 4 条消息、4000 字以内的摘录，以及一段"只读、只依据摘录、别装作用工具"的系统提示；
-结果渲染在输入区上方的 `BTW` 面板里（生成中显示 spinner，失败显示 `✗ 原因`，Esc / Enter 关闭）。
-它**不写会话文件、不进 transcript**，因此不会改变主模型接下来看到的历史。
+上下文只有最近 4 条消息、4000 字以内的摘录、此前的旁问轮次，以及一段"只读、只依据摘录、
+别装作用工具"的系统提示；结果渲染在 `BTW` 面板里（生成中显示 spinner，失败显示 `✗ 原因`）。
+面板占据输入区（主页输入框隐藏，避免"看得见却打不了字"），自带一行 `btw>` 输入框且打开即聚焦：
+直接输入并回车即可连续追问，空回车或 Esc 关闭。它**不写会话文件、不进 transcript**，
+因此不会改变主模型接下来看到的历史。
 
 ### recap
 
 **`/recap [now|on|off]`**：停靠面板里的一行会话小结（`※ recap: …`，≤120 字，模型偶尔回的前缀/引号会被清洗掉）。
+停靠面板默认隐藏，所以有小结要展示时（`/recap now` 开始生成、自动小结开始、结果落地）
+会像 plan-mode 那样主动请求打开（`request_show_dock`），不需要先 `/dock`。
 默认开启自动小结：空闲 5 分钟（30 秒一拍的后台任务，`subagent::schedule` 同款"代际"退出）后自动重刷一次，
 `now` 立即刷、`off` 关掉并取消进行中的生成。开关存在 `agent_dir()/extensions/recap.json` 的 `autoRecap`，
 也可以在 `/extension` 面板的扩展设置里改。
 
 小结与旁问都用**主模型**（当前会话的 provider/model；摘录里最后一条带 `provider`/`model` 的 assistant
 消息作兜底），不引入虚拟模型。两者是独立扩展、独立开关：旁问只在用户显式发起时才有动作，
-而小结会在后台自动花 token。摘录、折行与一次性请求由两者共用的 `recap_btw/shared.rs` 提供。
+而小结会在后台自动花 token。摘录、折行与一次性请求由两者共用的 `recap_btw/shared.rs` 提供；
+其中一次性请求在**关不掉思考**的模型（目录里 `thinkingLevelMap.off = null`，如 deepseek 系）上
+会把输出上限抬到 4096，否则思考 token 会吃光额度、正文被截断（`stop_reason = "length"` 直接报错）。
 
 ### loop-detect
 

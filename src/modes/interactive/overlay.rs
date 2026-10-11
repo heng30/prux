@@ -366,10 +366,12 @@ fn inline_content_rows(
 
 /// 内联输入提交（把当前文本回传扩展；是否清空由扩展决定，下一帧 sync 同步）。
 ///
-/// 提交后**立即清空并退出输入态**：扩展通常只把 `OverlayInput.value` 置空，
-/// 而 [`sync`] 在 `input_active` 时不会用扩展值覆盖本地编辑，所以若不复位，
-/// 用户按下 Enter 后会看到文本原样留在输入框里（像是"回车没反应"）；
-/// 失焦后下一帧 sync 也会正常拿到扩展给的新值。
+/// 提交后**立即清空**：扩展通常只把 `OverlayInput.value` 置空，而 [`sync`] 在 `input_active`
+/// 时不会用扩展值覆盖本地编辑，所以若不复位，用户按下 Enter 后会看到文本原样留在输入框里
+/// （像是“回车没反应”）；失焦后下一帧 sync 也会正常拿到扩展给的新值。
+///
+/// 提交后是否**保持聚焦**看扩展声明的 `input_focus`：为真表示“这个输入框应一直聚焦”
+/// （如 `/btw` 面板连续追问），提交后仍可接着打字；为假则退回未聚焦（旧行为）。
 pub fn submit_input(st: &mut App) {
     let Some(state) = st.overlay.as_mut() else {
         return;
@@ -378,7 +380,7 @@ pub fn submit_input(st: &mut App) {
     let text = state.input.value.clone();
     let id = state.id;
     state.input.clear();
-    state.input_active = false;
+    state.input_active = state.view.input_focus;
     extensions::overlay_event(id, OverlayEvent::Submit { text });
     st.dirty = true;
 }
@@ -1034,6 +1036,28 @@ mod tests {
         );
 
         unregister_extension("overlay-focus-test-ext");
+    }
+
+    /// `input_focus: true` 的输入框提交后仍保持聚焦（`/btw` 面板连续追问）。
+    #[test]
+    fn submit_keeps_focus_when_the_view_declares_input_focus() {
+        let mut v = view(3, None);
+        v.input = Some(OverlayInput {
+            label: "btw>".to_string(),
+            value: String::new(),
+            placeholder: String::new(),
+        });
+        v.input_focus = true;
+        let mut st = with_overlay(43, v);
+        st.overlay.as_mut().unwrap().input.insert_text("hi");
+        st.overlay.as_mut().unwrap().input_active = true;
+
+        submit_input(&mut st);
+        assert_eq!(st.overlay.as_ref().unwrap().input.value, "", "提交后清空");
+        assert!(
+            st.overlay.as_ref().unwrap().input_active,
+            "声明的聚焦态要在提交后保持（否则下一问要再按 i）"
+        );
     }
 
     /// 滚动条拖动映射：覆盖层是顶部偏移语义（track 顶 = 内容开头）。

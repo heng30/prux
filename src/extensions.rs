@@ -46,6 +46,8 @@ use std::sync::Arc;
 /// 当前注册序 rich → minimal → normal，默认 `footer(normal)`。
 /// 若想改默认底栏，把目标 footer 的 priority 调成三者最小即可。
 pub const PRIORITY_EXTRA_THEMES: u32 = 100;
+/// recap 一行会话小结扩展的注册优先级。
+pub const PRIORITY_RECAP: u32 = 95;
 /// goal 持久化自主目标扩展的注册优先级。
 pub const PRIORITY_GOAL: u32 = 90;
 /// plan-mode 只读探索模式扩展的注册优先级。
@@ -74,8 +76,6 @@ pub const PRIORITY_SKILLS: u32 = 65;
 pub const PRIORITY_CACHE_USAGE: u32 = 66;
 /// btw 只读旁问扩展的注册优先级。
 pub const PRIORITY_BTW: u32 = 63;
-/// recap 一行会话小结扩展的注册优先级。
-pub const PRIORITY_RECAP: u32 = 62;
 /// doctor provider 可达性诊断扩展的注册优先级。
 pub const PRIORITY_DOCTOR: u32 = 64;
 /// downloader 外部依赖下载扩展的注册优先级。

@@ -510,7 +510,7 @@ cargo clippy --lib --all-targets       # 无新增告警（剩下的都是本次
 |---|---|---|---|
 | `/btw` 上下文 | `transcript_excerpt(4 条, 4000 字)` + 只装 `read` 工具 | 同样 4 条 / 4000 字，**不给任何工具** | 一次性请求本来不带工具，安全面更小 |
 | `/btw` 执行 | `run_ephemeral`（空上下文新开一次） | `provider::simple_completion`（非流式一次性请求） | 都不写会话文件 |
-| `/btw` 展示 | `app.btw_panel`（输入区上方，esc / enter 关闭） | `OverlaySize::Inline` 覆盖面板（Esc / Enter 关闭） | 位置与关闭语义一致 |
+| `/btw` 展示 | `app.btw_panel`（输入区上方，esc / enter 关闭） | `OverlaySize::Panel` 覆盖面板：占据输入区（主页输入框隐藏）、自带单行 `btw>` 输入框且打开即聚焦，可连续追问（Esc / 空回车关闭） | kiss 显示在输入区上方；prux 用 Panel 档隐藏主页输入框并复用覆盖层的输入行，避免“看得见却打不了字” |
 | `/recap` 展示 | 状态区一行 `※ recap: …` | 停靠面板（dock）一行 | dock 就是"状态栏上方"，语义等价 |
 | `/recap` 生成 | 12 条 / 12000 字摘录，≤120 字，`max_tokens=160` | 同，另做前缀/引号清洗 + 硬截断（省略号不占配额） | |
 | 空闲触发 | TUI 事件循环判 5 分钟 | 30 秒 tick 后台任务（"代际"退出，同 `subagent::schedule`） | 扩展没有独立定时器接口 |

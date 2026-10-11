@@ -68,6 +68,8 @@ pub const DEF_DOT_FILLED: &str = "●";
 pub const DEF_HEADER: &str = DEF_DOT_FILLED;
 /// 信息图标（`/extension` 条目后的详情入口；终端按 1 列宽渲染）
 pub const DEF_INFO: &str = "𝒊";
+/// 会话小结停靠行的行首标记
+pub const DEF_RECAP: &str = "※";
 /// 滚动条滑块
 pub const DEF_SCROLLBAR_THUMB: &str = "█";
 /// 密集 braille spinner（8 帧）

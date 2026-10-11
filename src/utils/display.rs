@@ -145,6 +145,20 @@ pub fn wrap_words(text: &str, width: usize) -> Vec<String> {
     out
 }
 
+/// 按显示宽度折行，且把显式换行 `\n` 当硬换行：每段各自按词折行，段与段之间不合并。
+///
+/// 与 [`wrap_words`] 的区别只在换行语义——`wrap_words` 视 `\n` 为普通空白，
+/// 多行文本会被压成一段；面板类场景（问题 + 答案、说明 + 路径）需要保留分段。
+/// `width` 为 0 时按 1 列处理，返回结果至少一行。
+pub fn wrap_text(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut out: Vec<String> = Vec::new();
+    for logical in text.split('\n') {
+        out.extend(wrap_words(logical, width));
+    }
+    out
+}
+
 /// 截取前 n 个显示宽度（用于折叠摘要）
 pub fn truncate_display(s: &str, max_width: usize) -> (String, bool) {
     let mut out = String::new();
@@ -393,6 +407,15 @@ mod tests {
         for l in &lines {
             assert!(display_width(l) <= 12, "不超宽度: {l:?}");
         }
+    }
+
+    #[test]
+    fn wrap_text_keeps_explicit_newlines() {
+        assert_eq!(wrap_text("one two three", 7), vec!["one two", "three"]);
+        assert_eq!(wrap_text("a\nb", 10), vec!["a", "b"], "显式换行是硬换行");
+        assert_eq!(wrap_text("a\n\nb", 10), vec!["a", "", "b"]);
+        assert_eq!(wrap_text("", 10), vec![""]);
+        assert_eq!(wrap_text("中文换行测试", 4), vec!["中文", "换行", "测试"]);
     }
 
     #[test]

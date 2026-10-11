@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <a href="README.md">English</a> | <a href="README.zh-CN.md">简体中文</a>
+  <a href="README.md">English</a> | <a href="README.zh-CN.md">简体中文</a> | <a href="https://www.youtube.com/watch?v=i_yn1ZDgH94">Explainer Video</a>
 </p>
 
 > ⚠️NOTE: So far only `opencode-go` and `deepseek` have been tested.

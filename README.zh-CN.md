@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <a href="README.md">English</a> | <a href="README.zh-CN.md">简体中文</a>
+  <a href="README.md">English</a> | <a href="README.zh-CN.md">简体中文</a> | <a href="https://www.bilibili.com/video/BV1usp46nECj">介绍视频</a>
 </p>
 
 > ⚠️注意：目前仅测试了`opencode-go`和`deepseek`。
