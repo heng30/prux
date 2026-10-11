@@ -13,6 +13,13 @@ use crate::{
 };
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
+/// 关不掉思考的模型上，一次性请求的输出上限下限。
+///
+/// 这类模型（目录里 `thinkingLevelMap.off = null`）即使不发 `reasoning_effort`，服务端也默认
+/// 开着思考，而思考 token 计入输出上限：`recap` 的 160 / `btw` 的 500 会被思考吃光，正文为空，
+/// `stop_reason = "length"` 让 [`provider::simple_completion`] 直接报错（“hit the token cap”）。
+const REASONING_OUTPUT_FLOOR: u32 = 4096;
+
 /// 取会话 id 槽（进程级单例）。
 fn session_slot() -> &'static Mutex<Option<String>> {
     /// 当前会话 id 的进程级单例。
@@ -141,13 +148,6 @@ async fn one_shot(
         .map_err(|e| format!("{e}"))?;
     Ok(text)
 }
-
-/// 关不掉思考的模型上，一次性请求的输出上限下限。
-///
-/// 这类模型（目录里 `thinkingLevelMap.off = null`）即使不发 `reasoning_effort`，服务端也默认
-/// 开着思考，而思考 token 计入输出上限：`recap` 的 160 / `btw` 的 500 会被思考吃光，正文为空，
-/// `stop_reason = "length"` 让 [`provider::simple_completion`] 直接报错（“hit the token cap”）。
-const REASONING_OUTPUT_FLOOR: u32 = 4096;
 
 /// 一次性请求的实际输出上限：关不掉思考的模型抬到 [`REASONING_OUTPUT_FLOOR`]（仍受模型自身
 /// `max_tokens` 约束），其它模型沿用调用方给的上限。

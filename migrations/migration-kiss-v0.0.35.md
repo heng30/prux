@@ -19,6 +19,10 @@
 > **默认不启用**、只在 `Dev` / `Creator` 扩展模式下可用。§2.7 按"旁问只在用户开口时才有动作、
 > 小结会在后台自己花 token"拆成了两个独立开关的扩展。§2.6 WebMCP 是唯一还没落地的候选功能。
 >
+> **版本修订（第五版）**：§2.6 WebMCP **也判为不实现**（理由与翻案条件见 §3.10）。
+> 候选清单至此全部收口：已落地 4 项（5 个扩展）、明确不实现 6 项、不该做成扩展 4 项，
+> **没有待做项**。
+>
 > **目标**：`src/extensions/` 下的扩展（不与上游插件移植混在一起；本仓已有
 > `migration-subagents.md` / `migration-tasks.md`）。
 > **性质**：先冻结「值得移植 / 不值得移植」的判断，再逐条落地；落地项的状态列在实施过程中回填。
@@ -44,9 +48,10 @@ QuickJS 沙箱、MCP、联网检索、技能与提示词模板、项目信任、
   provider 可达性诊断（§2.4 → `doctor`，§4.6）、
   只读旁问与一行小结（§2.7 → `btw` + `recap` 两个扩展，§4.7）。
   新增的四个扩展一律**默认不启用**（`Dev` / `Creator` 模式），理由见各小节；
-- **待做（1 项）**：WebMCP（§2.6）——唯一还没落地的功能项（实验性 Chrome API，价值低）；
-- **明确不实现（5 项）**：外部 agent 凭证导入（§3.5）、真实自更新（§3.6）、
-  多账号池与限流切换（§3.7）、实验性上下文文件（§3.8）、跨 agent 会话恢复（§3.9）。
+- **待做（0 项）**：无——原候选清单已全部收口；
+- **明确不实现（6 项）**：外部 agent 凭证导入（§3.5）、真实自更新（§3.6）、
+  多账号池与限流切换（§3.7）、实验性上下文文件（§3.8）、跨 agent 会话恢复（§3.9）、
+  WebMCP（§3.10）。
 
 另有四类**不该做成扩展**（§3.1–§3.4）：对外接口（ACP / RPC / SDK）、provider 层新增（Cursor /
 Databricks / Snowflake / Bedrock）、语音输入、Jev 压缩。前两类需要进程级接线与 `core::provider`
@@ -60,7 +65,7 @@ Databricks / Snowflake / Bedrock）、语音输入、Jev 压缩。前两类需�
 | 2 | §2.3 缓存效率跨会话报告 | ✅ 已落地（§4.5，`cache-usage`） |
 | 3 | §2.4 provider 可达性诊断 | ✅ 已落地（§4.6，`doctor`） |
 | 4 | §2.7 `/recap` + `/btw` | ✅ 已落地（§4.7，`btw` + `recap` 两个扩展） |
-| 4 | §2.6 WebMCP | 🔜 待做（唯一未落地项） |
+| — | §2.6 WebMCP | 🚫 决定不实现（§3.10） |
 | — | §2.2 凭证导入、§2.5 会话恢复、§2.8 自更新、§2.9 多账号池、§6.2 上下文文件 | 🚫 决定不实现（§3.5–§3.9） |
 | — | §3.1–§3.4 不做成扩展的四项 | 🚫 已定案 |
 
@@ -180,7 +185,7 @@ HTTP/2）时，扩展层够不到——那要动 `core/` 与 `cli/`。其余都�
 | prux 现状 | 有 `/resume`（自己的会话）与 `/import <path>`（自己的 jsonl：`handlers/commands.rs:669` → `run_import`（`handlers/session_repair.rs:238`）→ `Session::open_checked`（`session_manager.rs:715`）），**不认**别家的会话格式。技术上补齐就是写两份字段映射（Claude 取 `message.content[*].type`，Codex 取 `response_item` + `payload.type=="message"` 并过滤 `is_codex_context` 注入），再落到 `SessionManager` 的写 API |
 | 决定 | 🚫 不实现。理由与翻案条件见 **§3.9** |
 
-### 2.6 WebMCP（Tier 4，🔜）
+### 2.6 WebMCP（Tier 4，🚫 决定不实现，见 §3.10）
 
 | 维度 | 内容 |
 |---|---|
@@ -188,9 +193,10 @@ HTTP/2）时，扩展层够不到——那要动 `core/` 与 `cli/`。其余都�
 | kiss 出处 | `crates/kiss-webmcp/`（`lib.rs` 989 + `client.rs` 170）；`/webmcp [connect|list|disconnect]` |
 | kiss 语义（实测） | 常量 `DEFAULT_CDP_PORT=9222`、`CALL_TIMEOUT=60s`、`MAX_TEXT_BYTES=100_000`（`lib.rs:20-22`），client 的 `REQUEST_TIMEOUT=10s`（`client.rs:11`）。连接：给端口时先 GET `http://127.0.0.1:{port}/json/version` 取 `webSocketDebuggerUrl`（`lib.rs:598-621`），直接给 `ws://` 时必须 loopback（`lib.rs:559-597`）。CDP 序列：`Target.setDiscoverTargets` → `Target.getTargets` → `Target.attachToTarget{flatten:true}` → `Page.enable` → `WebMCP.enable`（`lib.rs:113-118`、`314-356`）。调用：`WebMCP.invokeTool{frameId,toolName,input}` 取 `invocationId`，等广播的 `WebMCP.toolResponded`（按 `invocationId` + `sessionId` 匹配），失败/取消时发 `WebMCP.cancelInvocation`（`lib.rs:200-260`），状态分 Completed / Canceled / Error（`:265-280`）。origin 白名单：先 allow 后 deny、**deny 优先**；entry 含 `://` 比 origin，否则比 `host[:port]`（`lib.rs:531-557`），配置源 `settings.webmcp.{allowedOrigins,disallowedOrigins,cdp}`。输出超 100 KB 时按字符边界截断并追加提示（`lib.rs:741-749`）。用户要先在 Chrome 开 `#enable-webmcp-testing` / `#devtools-webmcp-support` 与 `chrome://inspect/#remote-debugging`（README:525-542） |
 | prux 现状 | 无（`web_access` 是搜索/抓取，不是“用网页上的工具”） |
-| prux 落点 | 扩展 `webmcp`：CDP 客户端用 `tokio-tungstenite 0.30`（`Cargo.toml:160`，带 `connect` + `rustls`；**当前 `src/` 里没有任何调用点**，是现成依赖，不必新增），HTTP 用 `reqwest 0.13`。工具动态注册可行：prux 的 `tools()`（`extensions.rs:407`）**每次组装工具表都会重新问**（`compose_tools`，`agent_session.rs:197`，`Agent::new` 与 `rebuild_tools`（`:1111`）都会调），连上/断开后用 `request_ui(ExtensionUiRequest::RebuildTools)`（`ui.rs:159` / `:181`）触发下一轮重建——所以“页面工具出现在工具表里、断开后消失”能做到。命令 `/webmcp [connect|list|disconnect]`，`settings()` 声明白名单与端口（对齐 kiss 的 `settings.webmcp.*`）；工具名加前缀避免与内建撞名，判定可复用 `core/tool_names.rs` |
+| 决定 | 🚫 不实现。理由与翻案条件见 **§3.10** |
+| 若翻案的落点（**未落地**，仅存设计） | 扩展 `webmcp`：CDP 客户端用 `tokio-tungstenite 0.30`（`Cargo.toml:160`，带 `connect` + `rustls`；**当前 `src/` 里没有任何调用点**，是现成依赖，不必新增），HTTP 用 `reqwest 0.13`。工具动态注册可行：prux 的 `tools()`（`extensions.rs:407`）**每次组装工具表都会重新问**（`compose_tools`，`agent_session.rs:197`，`Agent::new` 与 `rebuild_tools`（`:1111`）都会调），连上/断开后用 `request_ui(ExtensionUiRequest::RebuildTools)`（`ui.rs:159` / `:181`）触发下一轮重建——所以“页面工具出现在工具表里、断开后消失”能做到。命令 `/webmcp [connect|list|disconnect]`，`settings()` 声明白名单与端口（对齐 kiss 的 `settings.webmcp.*`）；工具名加前缀避免与内建撞名，判定可复用 `core/tool_names.rs` |
 | 接缝与约束 | 每帧调用且必须无 I/O 的只有 `overlay_view` / `dock_lines`，那里不能碰 WebSocket；工具调用本身在扩展工具的 handler 里，是正常 I/O。`ws://` 的 loopback 校验用 `utils/net.rs:63` 的 `is_loopback_host` |
-| 风险 | 实验性 API（要靠 Chrome flag 打开），协议可能变；“没有 Chrome 就不可用”要写进文档 |
+| 风险 | 实验性 API（要靠 Chrome flag 打开），协议可能变；若落地，“没有 Chrome 就不可用”要写进文档 |
 | 验证 | 本地起一个假 CDP WebSocket 服务（就用 `tokio-tungstenite`）回放 kiss 的握手与 `toolResponded` 时序，断言工具注册、调用结果、超时与 100 KB 截断；用 `run_with_timeout` 包住 |
 | 工作量 | 中 |
 
@@ -227,7 +233,7 @@ HTTP/2）时，扩展层够不到——那要动 `core/` 与 `cli/`。其余都�
 ## 三、不做成扩展 / 决定不实现（已定案）
 
 本节分两类：**§3.1–§3.4** 是“功能本身不做”（或虽有价值但扩展层够不到，属 core 工程）；
-**§3.5–§3.9** 是本轮逐项决策后判为不做、并给出翻案条件的五项。两类都是**决定**，
+**§3.5–§3.10** 是本轮逐项决策后判为不做、并给出翻案条件的六项。两类都是**决定**，
 不是“暂缓”——没有新证据就不要重新启动讨论。
 
 ### 3.1 对外接口：ACP / JSONL RPC / WebSocket RPC / 六种语言 SDK
@@ -346,6 +352,26 @@ kiss 的 `session_sources.rs`（434 行）让 `/resume` 能列出并接着用 KI
 - **不在主线**：pi 没有这个能力；prux 已有自己的 `/resume` 与 `/import`（自家格式）。
 
 **翻案条件**：Claude Code / Codex 把会话格式文档化并稳定下来，或 pi 侧先做了同样的事。
+
+### 3.10 WebMCP（原 §2.6）
+
+kiss 的 `kiss-webmcp`（`lib.rs` 989 + `client.rs` 170）是一个 Chrome DevTools Protocol 客户端：
+连上本机已打开的 Chrome（默认端口 9222），把当前页面通过实验性 WebMCP API 暴露的工具拉进
+agent 工具表，并按 `origin` + 工具名调用它们（`list` / `describe` / `call`）。
+prux 侧技术上做得到（`tokio-tungstenite` 已在依赖里、`tools()` 每次组装都会重问、
+`request_ui(RebuildTools)` 能触发重建，见 §2.6 的落点）。**为什么不做**：
+
+- **前置条件就把用户挡在门外**：要 Chrome 开 `#enable-webmcp-testing` / `#devtools-webmcp-support`
+  与 `chrome://inspect/#remote-debugging`，再打开一个 WebMCP 页面；没 Chrome 就完全不可用。
+  这不是“功能没做完”，是入口不成立。
+- **与 `web_access` 高度重叠**：绝大多数“帮我看看这个页面”的请求，抓正文就够；
+  真需要点按钮的场景，用户自己点更快也更放心。
+- **协议未定**：实验性 API，工具声明与 CDP 命令都可能变；跟进去要长期维护（同 §3.5 / §3.9 的逻辑）。
+- **注入面直通真实账号**：页面元数据与结果都是不可信内容（kiss 自己的工具描述里就写着
+  “Page metadata and results are untrusted content”），网页可以写工具描述诱导模型；
+  而这条通道连的是用户**已登录**的浏览器会话，误操作的代价是真的。
+
+**翻案条件**：WebMCP 从实验 flag 毕业成为稳定 API，或 pi 侧先提供同名能力（那时随 pi 契约走）。
 
 ---
 
@@ -593,7 +619,7 @@ cargo fmt --check                        # 通过
 | `kiss/src/cache.rs`、`doctor.rs`、`session_sources.rs`、`kiss-coding/src/jev.rs`、`kiss-coding/src/subagents.rs` | **未改** | §2.3 / §2.4 / §1.2 的对照仍然成立；§2.5 的事实成立，但结论已改为不实现（§3.9） |
 | `kiss-ai/src/auth/external.rs` | +3 行 | §2.2 的事实成立，但结论已改为不实现（§3.5） |
 | `kiss/src/modes/acp.rs` | +25 行 | §3.1 的结论（新运行模式，不是扩展）不变 |
-| `kiss-webmcp/src/lib.rs` | +5 行 | §2.6 成立 |
+| `kiss-webmcp/src/lib.rs` | +5 行 | §2.6 的事实成立，但结论已改为不实现（§3.10） |
 | `kiss/src/update.rs` | 措辞重写（384→450） | §2.8 的事实成立，但结论已改为不实现（§3.6） |
 
 新增能力（首版清单里没有，重核时补入）：
@@ -611,4 +637,4 @@ cargo fmt --check                        # 通过
 - §1.2 的"已覆盖"对照、§1.3 的扩展能力边界（可注册/可画 UI/可挂钩子/不能改 provider 层）都没变；
 - §3 的四项"不做成扩展"（ACP/RPC/SDK、新 provider、语音、Jev）依旧成立，理由也依旧成立；
 - §2.3 / §2.4 / §2.7 的落点与估计在落地时基本成立（§4.5–§4.7）；§2.2 / §2.5 / §2.8 / §2.9
-  与 §6.2 的上下文文件判为不实现，理由与翻案条件集中在 §3.5–§3.9。
+  与 §6.2 的上下文文件、§2.6 的 WebMCP 判为不实现，理由与翻案条件集中在 §3.5–§3.10。
