@@ -130,7 +130,7 @@ fn register_all_collects_and_sorts_slices() {
     );
     assert!(
         !is_extension_enabled("recap"),
-        "recap 应默认不启用（空闲会自动发起小结请求）"
+        "recap 应默认不启用（每次执行会花一次模型请求）"
     );
     // update-check 默认启用（版本提示属于开箱能力）
     assert!(

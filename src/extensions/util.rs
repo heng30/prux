@@ -14,7 +14,7 @@ use crate::{
 };
 use serde_json::Value;
 use std::{
-    path::{PathBuf, absolute},
+    path::{Path, PathBuf, absolute},
     sync::atomic::{AtomicU64, Ordering},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -47,6 +47,19 @@ pub fn project_key(cwd: &str) -> String {
         })
         .collect();
     format!("--{encoded}--")
+}
+
+/// 会话文件路径 → 会话键（文件名去扩展名）。
+///
+/// 会话文件名形如 `<ISO 时间戳>_<uuidv7>.jsonl`，取 stem 得到一个稳定且唯一的键；
+/// 它被当作 `session_id` 传给 provider 层做会话亲和与提示缓存路由（不必等于会话头里的
+/// `sessionId`）。路径为 `None`（新建会话尚未落盘）或 stem 为空时返回 `None`——空串当会话 id
+/// 比没有更糟（opencode 系 provider 会拿它当合法头发出去）。
+pub fn session_id_of(session_path: Option<&str>) -> Option<String> {
+    session_path
+        .and_then(|p| Path::new(p).file_stem())
+        .map(|s| s.to_string_lossy().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 /// 通用一次性 id：`{毫秒时间戳}-{十六进制尾巴}`。
@@ -439,6 +452,17 @@ mod tests {
         assert_eq!(numeric_id("1.5"), 1.5);
         assert!(numeric_id("abc").is_nan());
         assert!(numeric_id("").is_nan());
+    }
+
+    #[test]
+    fn session_id_of_reads_the_file_stem_and_rejects_blanks() {
+        assert_eq!(
+            session_id_of(Some("/tmp/sessions/2026-01-01T00-00-00_abc.jsonl")),
+            Some("2026-01-01T00-00-00_abc".to_string())
+        );
+        // 未落盘 / 空路径：交回 None，别把空串当会话 id 发出去
+        assert_eq!(session_id_of(None), None);
+        assert_eq!(session_id_of(Some("")), None);
     }
 
     #[test]

@@ -28,7 +28,7 @@ use crate::{
     },
     extensions::{
         ACCENT, ERROR, EXTENSION_FACTORIES, ExtensionFactory, MUTED, PRIORITY_BTW, command_arg,
-        util::spinner_frame,
+        util::{session_id_of, spinner_frame},
     },
     modes::interactive::{
         app::{App, MsgLevel},
@@ -36,10 +36,7 @@ use crate::{
     },
     utils::{display::wrap_text, glyphs::DEF_FAILED},
 };
-use std::{
-    path::Path,
-    sync::{Arc, Mutex, MutexGuard, OnceLock},
-};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 /// 扩展名。
 const EXT: &str = "btw";
@@ -365,13 +362,6 @@ fn push_question(lines: &mut Vec<Vec<DockSpan>>, question: &str, width: usize) {
     }
 }
 
-/// 会话文件路径 → 会话 id（文件名去扩展名）。
-fn session_id_of(session_path: Option<&str>) -> Option<String> {
-    session_path
-        .and_then(|p| Path::new(p).file_stem())
-        .map(|s| s.to_string_lossy().to_string())
-}
-
 /// `/btw` handler：打开面板并问第一个问题。
 fn command_btw(st: &mut App, raw: &str) -> bool {
     let question = command_arg(raw).trim().to_string();
@@ -384,8 +374,7 @@ fn command_btw(st: &mut App, raw: &str) -> bool {
         return false;
     }
 
-    let snapshot = None;
-    let Some((provider, model_id)) = shared::current_model(st, snapshot) else {
+    let Some((provider, model_id)) = shared::current_model(st) else {
         st.push_msg(
             "No model is selected yet. Pick one with /model, then ask again.".to_string(),
             MsgLevel::Warning,

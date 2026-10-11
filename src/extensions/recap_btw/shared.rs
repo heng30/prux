@@ -8,13 +8,10 @@ use crate::{
         auth, model_resolver,
         provider::{self, AgentMessage, ModelConfig},
     },
-    extensions::util::truncate_chars,
+    extensions::util::{session_id_of, truncate_chars},
     modes::interactive::app::App,
 };
-use std::{
-    path::Path,
-    sync::{Mutex, MutexGuard, OnceLock},
-};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 /// 取会话 id 槽（进程级单例）。
 fn session_slot() -> &'static Mutex<Option<String>> {
@@ -42,27 +39,17 @@ pub(super) fn remember_session(session_id: Option<String>) {
 /// 缺 `x-opencode-session` 直接回 400。命令执行时会话文件路径一定就绪，补写一次即可。
 /// 新建会话尚未落盘（路径为 `None`）时不动槽，避免把好 id 抹掉。
 pub(super) fn refresh_session_from_app(st: &App) {
-    let Some(id) = st
-        .current_session_path
-        .as_deref()
-        .and_then(|p| Path::new(p).file_stem())
-        .map(|s| s.to_string_lossy().to_string())
-        .filter(|s| !s.is_empty())
-    else {
-        return;
-    };
-    remember_session(Some(id));
+    // 新建会话尚未落盘（路径为 `None`）或文件名推不出键时不动槽，避免把好 id 抹掉。
+    if let Some(id) = session_id_of(st.current_session_path.as_deref()) {
+        remember_session(Some(id));
+    }
 }
 
-/// 当前 `(provider, model)`：优先用 TUI 镜像（`/model` 切过就是最新的），
-/// 缺失时回退到调用方给的快照。
-pub(super) fn current_model(
-    st: &App,
-    snapshot: Option<(String, String)>,
-) -> Option<(String, String)> {
+/// 当前 `(provider, model)`：取 TUI 镜像（`/model` 切过就是最新的）。
+pub(super) fn current_model(st: &App) -> Option<(String, String)> {
     match (&st.current_provider, &st.current_model) {
         (Some(provider), Some(model_id)) => Some((provider.clone(), model_id.clone())),
-        _ => snapshot,
+        _ => None,
     }
 }
 
@@ -100,19 +87,6 @@ fn role_label(role: &str) -> &str {
         "system" => "system",
         _ => "user",
     }
-}
-
-/// 摘录里最新的 `(provider, model)`：取最后一条同时带两者的 assistant 消息。
-pub(super) fn newest_model(messages: &[AgentMessage]) -> Option<(String, String)> {
-    messages.iter().rev().find_map(|message| {
-        if message.role != "assistant" {
-            return None;
-        }
-        match (&message.provider, &message.model) {
-            (Some(provider), Some(model_id)) => Some((provider.clone(), model_id.clone())),
-            _ => None,
-        }
-    })
 }
 
 /// 起一次异步一次性请求，结果经 `done` 回调交回调用方。
@@ -216,14 +190,6 @@ mod tests {
         message
     }
 
-    /// 一条带 model/provider 的 assistant 消息。
-    fn assistant(text: &str, provider: &str, model_id: &str) -> AgentMessage {
-        let mut message = message("assistant", text);
-        message.provider = Some(provider.to_string());
-        message.model = Some(model_id.to_string());
-        message
-    }
-
     #[test]
     fn excerpt_keeps_recent_messages_and_caps_chars() {
         let messages = vec![
@@ -258,43 +224,22 @@ mod tests {
     }
 
     #[test]
-    fn newest_model_takes_last_assistant_with_model() {
-        let messages = vec![
-            assistant("a1", "anthropic", "claude-fable-5"),
-            message("user", "u2"),
-            assistant("a3", "openai", "gpt-4"),
-        ];
-        assert_eq!(
-            newest_model(&messages),
-            Some(("openai".to_string(), "gpt-4".to_string()))
-        );
-        assert_eq!(newest_model(&[message("user", "u")]), None);
-    }
-
-    #[test]
-    fn current_model_prefers_tui_mirror_over_snapshot() {
+    fn current_model_reads_tui_mirror() {
         let mut st = App::new();
         st.current_provider = Some("openai".to_string());
         st.current_model = Some("gpt-4".to_string());
         assert_eq!(
-            current_model(
-                &st,
-                Some(("anthropic".to_string(), "claude-fable-5".to_string()))
-            ),
+            current_model(&st),
             Some(("openai".to_string(), "gpt-4".to_string()))
         );
 
         st.current_provider = None;
         st.current_model = None;
         assert_eq!(
-            current_model(
-                &st,
-                Some(("anthropic".to_string(), "claude-fable-5".to_string()))
-            ),
-            Some(("anthropic".to_string(), "claude-fable-5".to_string())),
-            "TUI 还没定型号时回退到摘录快照"
+            current_model(&st),
+            None,
+            "TUI 还没定型号时没有可用的 provider/model"
         );
-        assert_eq!(current_model(&st, None), None);
     }
 
     #[test]

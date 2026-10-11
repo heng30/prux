@@ -62,14 +62,14 @@ This release aligns prux with upstream pi 1.1.0.
   plus a `summary` segment in the summary view), and it ends with an environment block (version, agent
   directory, `http_proxy` / `https_proxy` / `all_proxy` / `no_proxy` as set/unset only — read the
   same way the probes read them, case-insensitively); `--offline` skips the probes entirely.
-- **`/btw` asks a read-only side question and `/recap` shows a one-line session summary.** `/btw`
+- **`/btw` asks a read-only side question and `/recap` prints a one-line session summary.** `/btw`
   answers in a panel from a short excerpt through one independent request — nothing is added to the
   conversation — and the panel replaces the main input box and carries its own one-line `btw>` field,
-  so you can keep asking follow-ups (Esc or an empty Enter closes it); `/recap [now|on|off]` puts a
-  one-line summary in the dock and refreshes it after 5 minutes idle, opening the dock panel itself
-  whenever it has one. They are separate extensions on purpose: `/btw` only acts when you ask,
-  `/recap` spends tokens on its own. On models that cannot turn thinking off, the one-shot request's
-  output cap is raised so reasoning tokens cannot crowd out the answer.
+  so you can keep asking follow-ups (Esc or an empty Enter closes it); `/recap` prints a one-line
+  summary as a system message (never added to the conversation). They are separate extensions on
+  purpose: `/btw` needs a panel you can keep asking in, `/recap` only needs one line. On models that
+  cannot turn thinking off, the one-shot request's output cap is raised so reasoning tokens cannot
+  crowd out the answer.
 - **These four new extensions are disabled by default** and live in the `Dev` and `Creator`
   extension modes: `cache-usage`, `doctor`, `btw`, `recap` (turn them on in the `/extension` panel).
 
@@ -169,8 +169,8 @@ This release aligns prux with upstream pi 1.1.0.
 - **新增 `/btw` 与 `/recap`**：`/btw <问题>` 是只读旁问——答案渲染在 `BTW` 面板里，
   面板占据输入区（主页输入框隐藏）且自带一行 `btw>` 输入框、打开即聚焦，可直接回车连续追问
   （Esc / 空回车关闭）；上下文只有一小段摘录与此前的旁问轮次、走独立的一次性请求，
-  **不进会话、不改上下文**。`/recap [now|on|off]` 在停靠面板里显示一行会话小结（≤120 字），
-  空闲 5 分钟后自动重刷，有小结时自动打开停靠面板（同 plan-mode，无需先 `/dock`）。两者**刻意拆成两个扩展**：旁问只在你开口时才有动作，小结会在后台自己花 token。
+  **不进会话、不改上下文**。`/recap` 把一行会话小结（≤120 字）作为**系统消息**推到聊天区，
+  同样不进会话。两者**刻意拆成两个扩展**：旁问要一个可连续追问的面板，小结只要一行。
   在关不掉思考的模型上，一次性请求的输出上限会抬高，避免思考 token 吃光额度、正文被截断。
 - **这四个新扩展都默认不启用**，且只在 `Dev` / `Creator` 扩展模式下可用：
   `cache-usage`、`doctor`、`btw`、`recap`（在 `/extension` 面板里开启）。
