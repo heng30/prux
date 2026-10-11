@@ -50,6 +50,7 @@ core::extensions::register_banner_extension(extensions::banner::Banner::new());
 | `downloader` | 扩展 | 外部工具（`fd` / `rg`）的安装与状态展示：`/download fd\|rg` 缺失时直接下载、已存在时弹选择面板（重装 / 取消）、下载中只提示、未知工具与多余参数报错；裸 `/download` 切换本扩展的 dock 段显隐（对齐 plan-mode `/todos`、proxy `/proxy`，不控制整个面板），段内每行是「状态点 + 工具名 + 版本 + 位置」（仅 PATH 命中的系统副本会标 `(system)`）。**默认启用**（工具可用性属于开箱能力）；禁用只影响该命令与 dock 段，启动时的缺失检测与提示（不自动下载）不受影响 |
 | `update-check` | 扩展 | 启动时异步检查 GitHub 最新 release（`heng30/prux`），有新版本就在**输入框下方**弹出选择面板（`Open download page` / `Ignore` / `Don't ask again`；↑↓ 选择、Enter 确认、Esc/Ctrl+C 关闭）。`Ignore` 只关掉本次提示，`Don't ask again` 把版本写进 `settings.json` 的 `skipUpdateVersion`（只抑制该版本，之后更新的版本仍会提示）。`--offline`/`PRUX_OFFLINE` 跳过检查，网络失败静默。**默认启用**。另提供 `/update check`（异步检查并在聊天区输出当前/新版本与下载地址）与 `/update open`（直接打开最新 release 下载页，不比较版本） |
 | `cache-usage` | 扩展 | 历史会话的 prompt cache 命中率：`/cache-usage [all] [<provider>]`。数据源就是会话文件里的 `Usage`（assistant 消息 + compaction / branch_summary 条目），命中率口径 `cacheRead / (input + cacheRead + cacheWrite)`——与底栏同式。空参只统计**当前会话**，`all` 统计全部已存会话（`agent_dir()/sessions` 下各工程合并，按修改时间取最新 200 份），`<provider>` 只统计该 provider 的样本（provider 是跨会话概念，因此同样读全部已存会话）。覆盖面板画总量条形图（24 格）+ 24 档趋势 sparkline + 各 provider / 各会话分列；fork 出来的重复条目按「条目 id + 时间戳 + provider + 用量」去重。只读会话文件，不发网络请求。**默认不启用**（`Dev` / `Creator` 模式） |
+| `cache-watch` | 扩展 | 提示 prompt cache 的两种异常：**缓存已冷**（提交新一轮输入时，距上次写入缓存的请求已超过目录 TTL）与**意外未命中**（本次没有命中任何缓存却重新写入，且上次写入仍在 TTL 内），经聊天区系统消息提示（不落库、不进模型上下文）。TTL 与保温判据同源（目录 `promptCache.{short,long}`，按 `PRUX_CACHE_RETENTION` 选档）；开启保温时缓存通常不会冷，因此冷警告主要出现在保温关闭或空闲超过 TTL 之后。同一份缓存只提示一次。**默认不启用**（`Dev` / `Creator` 模式） |
 | `doctor` | 扩展 | provider 网络可达性诊断：`/doctor [summary]` 对目录里每个 provider 的第一个 chat 模型发一个**不带凭据**的 `HEAD`（并发上限 16、单请求 10s），判定链路是否通——**有 HTTP 响应就算网络可达**（探的是 base URL，`404` / `405` 这类「路径没处理器」的响应同样证明连接与 TLS 都通：`2xx` / `401` / `403` / `405` 是预期结果，其它状态码标 `status not OK`），只有请求本身失败才记 `timeout` / `dns error` / `connect error`；`/doctor summary` 只给可达/失败计数与失败清单。面板末尾的 environment 段给出版本、`agent_dir()`、探测目标数与 `http_proxy` / `https_proxy` / `all_proxy` / `no_proxy` 的 set/unset（大小写不敏感，**不回显值**）。`--offline` / `PRUX_OFFLINE` 不发请求，只显示 environment 段。**默认不启用**（`Dev` / `Creator` 模式） |
 | `btw` | 扩展 | 只读旁问：`/btw <问题>` 打开 `BTW` 面板（占据输入区、主页输入框隐藏），面板自带一行 `btw>` 输入框、打开即聚焦，可直接回车连续追问（Esc / 空回车关闭），**不进会话、不改上下文**——送给模型的只有最近 4 条 / 4000 字以内的摘录、此前的旁问轮次加一段只读系统提示（一次性请求，不带工具、不写会话；答案晚到时若面板已关或换了问题就丢弃）。**默认不启用**（`Dev` / `Creator` 模式） |
 | `recap` | 扩展 | 一行会话小结：`/recap` 把最近 12 条 / 12000 字摘录交给一次独立的一次性请求，结果规整到 ≤120 字（去前缀/引号后硬截断）作为**系统消息**推到聊天区。**不进会话、不改上下文**；没有后台任务/开关/落盘，只在显式执行时花一次模型请求。**默认不启用**（`Dev` / `Creator` 模式） |
@@ -66,12 +67,31 @@ core::extensions::register_banner_extension(extensions::banner::Banner::new());
 | `web-access` | 扩展 | 联网能力：`web_search`（8 个 REST provider 聚合搜索）/`fetch_content`（`readable` HTML→markdown、`raw` 原文，带 SSRF 防护）/`get_search_content`（按 `responseId` 取回内容切片、`findText` 检索）。配置在 `agent_dir()/extensions/web-search.json`。**默认不启用**，需在 `/extension` 面板开启 |
 | `mcp` | 扩展 | Model Context Protocol 客户端：用单个 `mcp` 工具代理已配置服务器的工具/资源/prompt（`status`/`list`/`search`/`describe`/`call`/`resources`/`read_resource`/`prompts`/`get_prompt`），懒连接 + 空闲断开 + 元数据缓存 + OAuth 2.1 登录；`/mcp` 做状态/诊断/OAuth，`prux mcp` 子命令做配置增删改查。**默认不启用**，需在 `/extension` 面板开启。详见 [extensions/mcp.md](extensions/mcp.md) |
 | `browser` | 扩展 | 真实浏览器自动化（CDP）：单个 `browser` 工具共 16 个动作——`status`/`list_tabs`/`new_tab`/`select_tab`/`open`/`snapshot`/`get_content`/`click`/`type`/`select`/`press`/`scroll`/`wait`/`eval`/`screenshot`/`upload`。工具是**延迟工具**：模型先用 `tool_search` 载入才能调（见下文）。`snapshot` 给可交互元素分配 `e1`/`e2`… 引用，其余动作优先用引用定位（比 CSS 选择器稳）。需要用户先以 `--remote-debugging-port=<port>` 启动 Chrome/Chromium/Edge/Brave，端点写在 `agent_dir()/extensions/browser.json`（默认 `127.0.0.1:9222`，**只允许回环主机**）；连上后 `/dock` 面板里多一行浏览器状态。**默认不启用**（`Dev`/`Creator` 模式）。详见下文 |
+| `open` | 扩展 | 用系统默认程序打开文件或 URL：`open` 工具（参数 `path`）。`http`/`https`/`file` URL 原样透传，本地路径按工作目录展开且必须存在；只把用户引到内容面前，**不把内容读回上下文**。**默认不启用**（`Dev` / `Creator` 模式） |
+| `pdf` | 扩展 | 抽取 PDF 的**文本层**：`read_pdf` 工具（参数 `path`）。超过 32 MiB 的文件在解析前拒绝，抽出的文本按 `read` 的口径截断（2000 行 / 50KB）；扫描件（图片型 PDF）没有文本层时明确提示，解析失败报错而不是崩。**默认不启用**（`Dev` / `Creator` 模式） |
 | `jet` | 扩展 | 虚拟模型路由器：注册虚拟模型 `jet/auto`，**用强模型规划、用便宜模型实现**——本轮第一次成功的 `edit`/`write` 之后同轮切到实现模型并留在那里，因此每个会话最多切换一次模型、最多吃一次 prompt-cache miss。配置在 `agent_dir()/extensions/jet.json`（**没有默认值**：路由目标不完整或解析不到就不注册进 `/model`），`/jet set` 配分类器、`/jet router` 增量配路由目标（三档可各用不同 provider）、`/jet reset` 清空。**默认不启用**（`Dev`/`Creator` 模式可用）。详见下文与 [virtual-models.md](virtual-models.md) |
 | `tasks` | 扩展 | 任务跟踪与协调：7 个模型可见工具（`TaskCreate` / `TaskList` / `TaskGet` / `TaskUpdate` / `TaskOutput` / `TaskStop` / `TaskExecute`）、常驻任务 widget、`/tasks` 命令与系统提醒注入，`TaskExecute` 经 RPC 联动 `subagent` 扩展。**默认不启用**（`Dev`/`Creator` 模式可用） |
 | `tool-search` | 扩展 | 延迟工具检索：扩展可把工具声明为 `ToolExposure::Deferred`（仍可执行但不进模型可见列表），本扩展提供 `tool_search` 工具按 BM25 检索延迟工具元数据，命中项在**下一次模型调用**变为可见。**默认启用**（`Dev`/`Creator` 模式可用；无延迟工具时它只会占一个工具位） |
 | `debug` | 扩展 | 调试工具集：`/debug info` 打印 agent 运行状态汇总（provider/model/api、自动压缩/重试开关、steer/follow-up 模式、会话 id 与活动分支叶子）；`/debug provider [on\|off\|dump]` 是供应商原始流事件查看器（订阅 `ProviderStreamEvent`，每轮 assistant 消息结束时渲染一张卡片（provider/model/api + 捕获条数 + 事件摘要）并把整份载荷落成会话条目）；`/debug system-prompt` 打印当前系统提示词原文。**默认不启用**（仅 `Dev` 模式可用） |
 
 > `subagent` 是功能最多的内置扩展，单独一篇文档：[extensions/subagent.md](extensions/subagent.md)——心智模型（三条派发路径）、运行环境与隔离、agent 类型与 frontmatter 键、工作流、设置键及其相互关系、界面、定时任务、事件与 RPC。
+
+### cache-watch
+
+盯 prompt cache 的两种异常，命中就经聊天区系统消息提示（不落库、不进模型上下文）：
+
+- **缓存已冷**：用户提交新一轮输入时，距上次写入缓存的请求已超过目录 TTL；
+- **意外未命中**：每次 LLM 响应结束时，本次没有命中任何缓存却重新写入，且上次写入仍在 TTL 内。
+
+TTL 取目录 `promptCache.{short,long}`（按 `PRUX_CACHE_RETENTION` 选档），与保温判据同源；开启保温时缓存通常不会冷，因此冷警告主要出现在保温关闭或空闲超过 TTL 之后。**意外未命中是近似判定**：扩展只能看到用量、看不到前缀到底哪里变了，因此用「本轮重新写入 + 上轮 TTL 内写过」这个保守信号，仍可能误报（压缩上下文、改工具集等）。同一份缓存只提示一次；新写入会重置告警记录。
+
+### open
+
+给模型一个 `open` 工具：把文件或 URL 交给系统默认程序（Linux `xdg-open` / macOS `open` / Windows `cmd /C start`）在**用户看得见**的窗口里打开。参数只有 `path`：`http` / `https` / `file` URL 原样透传，其它按工作目录展开成绝对路径并要求文件存在（不存在直接报错）。工具只负责把用户引到内容面前，**不把内容读回上下文**——要内容请用 `read` / `fetch_content`。
+
+### pdf
+
+`read_pdf` 工具抽取 PDF 的**文本层**（不渲染版面、不识别图片）。超过 32 MiB 的文件在解析前拒绝；抽出的文本按 `read` 的口径截断（2000 行 / 50KB）。扫描件（图片型 PDF）没有文本层，此时返回明确的提示而不是空内容；解析失败返回错误而不是崩——解析器对畸形文件可能 panic，扩展用 `catch_unwind` 兜住，注意 release 构建是 `panic = "abort"`，该兜底只在 debug / 测试构建下生效。
 
 ### cache-usage
 
@@ -709,7 +729,7 @@ banner 扩展**互斥**：注册/面板切换时启用一个会自动禁用其�
 ## settings 与启用状态
 
 - **`disabledExtensions`**：settings.json 中禁用的扩展名数组。注册时据此恢复初始状态（对默认启用的扩展 = 关闭）；/extension 面板切换后写回**全局**。项目 `.prux/settings.json` 里的同名字段与全局取并集（只在本项目禁用某内置扩展；未受信任的项目不生效）。
-- **`enabledExtensions`**：settings.json 中显式启用的扩展名数组，仅对声明 [`default_enabled() == false`] 的默认可选扩展（`plan-mode`、`goal`、`web-access`、`proxy`、`doc-helper`、`subagent`、`loop-detect`、`hang-detect`、`notify`、`rewind`、`codemode`、`mcp`、`browser`、`jet`、`tasks`、`debug`、`cache-usage`、`doctor`、`btw`、`recap`）有意义。这些扩展注册后默认禁用，必须在此列出（或经 `/extension` 面板开启）才参与钩子/工具/命令分发；关闭时从列表移除（回到默认态）。项目层同样与全局取并集（项目可自行开启默认关闭的扩展）；两层冲突时禁用优先（与 `disabledExtensions` 的并集语义一致）。
+- **`enabledExtensions`**：settings.json 中显式启用的扩展名数组，仅对声明 [`default_enabled() == false`] 的默认可选扩展（`plan-mode`、`goal`、`web-access`、`proxy`、`doc-helper`、`subagent`、`loop-detect`、`hang-detect`、`notify`、`rewind`、`codemode`、`mcp`、`browser`、`jet`、`tasks`、`debug`、`cache-usage`、`doctor`、`btw`、`recap`、`open`、`pdf`、`cache-watch`）有意义。这些扩展注册后默认禁用，必须在此列出（或经 `/extension` 面板开启）才参与钩子/工具/命令分发；关闭时从列表移除（回到默认态）。项目层同样与全局取并集（项目可自行开启默认关闭的扩展）；两层冲突时禁用优先（与 `disabledExtensions` 的并集语义一致）。
 - **`extensionMode`**：`"minimal"`、`"dev"`、`"creator"`、`"all"`（默认，兜底全集）。`All` 是兜底模式，所有扩展隐式属于它；扩展声明的模式（如 `Minimal`）表示“该级别及以上可用”，列出多个（如 `[Dev, Creator]`）则覆盖两个并排模式。是运行时过滤层，不触碰各扩展 enabled 状态；切回全部模式即恢复原状。
 
 settings 相关键见 [settings.md](settings.md)。修改 settings 后重启生效；`/reload` 会重新接线扩展并重建工具列表与系统提示，但无法加载新编译的扩展代码。

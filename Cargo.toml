@@ -53,6 +53,7 @@ html2text = { version = "0.17", default-features = false }
 serde_json = { version = "1.0", default-features = false }
 async-trait = { version = "0.1", default-features = false }
 jsonschema = { version = "0.58", default-features = false }
+pdf-extract = { version = "0.12", default-features = false }
 tiktoken-rs = { version = "0.12", default-features = false }
 futures-util = { version = "0.3", default-features = false }
 strum_macros = { version = "0.28", default-features = false }

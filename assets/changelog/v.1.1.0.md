@@ -85,14 +85,32 @@ This release aligns prux with upstream pi 1.1.0.
   prompt (about 3.7k characters of description and schema) until the model loads it with
   `tool_search`, which is enabled by default in the same modes. Disabled by default
   (`Dev` / `Creator` modes).
+- **An `open` extension hands files and URLs to the desktop.** The `open` tool takes one `path` and
+  launches the system opener (`xdg-open` / `open` / `cmd /C start`), so the user sees the file or page
+  in a real window. `http` / `https` / `file` URLs are passed through; anything else is resolved
+  against the working directory and must exist. It never reads the content back — use `read` or
+  `fetch_content` for that. Disabled by default (`Dev` / `Creator` modes).
+- **A `pdf` extension extracts the text layer of PDFs.** The `read_pdf` tool takes one `path`,
+  refuses files above 32 MiB before parsing, and truncates the result the way `read` does (2000 lines
+  / 50KB). Scanned (image-only) PDFs have no text layer and say so instead of returning nothing, and
+  a file the parser chokes on returns an error rather than taking the process down. Disabled by
+  default (`Dev` / `Creator` modes).
+- **A `cache-watch` extension warns about prompt cache trouble.** It reports a cold cache when a new
+  turn is submitted after the catalog TTL has passed since the last cache write, and an unexpected
+  miss when a request rewrites the cache without reading any of it back while the previous write was
+  still within the TTL. Both arrive as chat system messages (nothing is written to the conversation).
+  The TTL comes from the same catalog entries the cache warmer uses. The miss check is an
+  approximation — the extension sees usage only, not what changed in the prefix — so it can
+  over-report after a compaction or a tool-set change. Disabled by default (`Dev` / `Creator` modes).
 - **Extensions can declare prerequisite tools, and the `/extension` panel shows whether they are
   met.** `Extension::prerequisite_tools()` names the tools an extension's own tools depend on (a
   deferred tool needs `tool_search` to be discovered at all). The detail panel lists them on a
   `requires:` line as `extension (tool-name)`, so the extension to enable is obvious, and appends
   `- enable it` while one is unavailable; saving extension states warns — without blocking anything
   — about each enabled extension whose prerequisites are not met.
-- **These four new extensions are disabled by default** and live in the `Dev` and `Creator`
-  extension modes: `cache-usage`, `doctor`, `btw`, `recap` (turn them on in the `/extension` panel).
+- **These new extensions are disabled by default** and live in the `Dev` and `Creator`
+  extension modes: `cache-usage`, `doctor`, `btw`, `recap`, `open`, `pdf`, `cache-watch`
+  (turn them on in the `/extension` panel).
 
 ### Changed
 
@@ -214,12 +232,25 @@ This release aligns prux with upstream pi 1.1.0.
   连上后停靠面板（`/dock`）里多一行浏览器标识与活动标签页。工具本身是**延迟工具**：在模型用
   `tool_search` 载入之前，它的描述与 schema（约 3.7k 字符）都不进工具表与系统提示；
   `tool-search` 默认启用、模式相同。**默认不启用**（`Dev` / `Creator` 模式）。
+- **新增 `open` 扩展：把文件或 URL 交给桌面程序**。`open` 工具只吃一个 `path`，拉起系统
+  opener（`xdg-open` / `open` / `cmd /C start`），让用户在真实窗口里看到文件或网页。
+  `http` / `https` / `file` URL 原样透传，其余按工作目录展开且必须存在。它**不把内容读回上下文**——
+  要内容用 `read` / `fetch_content`。**默认不启用**（`Dev` / `Creator` 模式）。
+- **新增 `pdf` 扩展：抽取 PDF 的文本层**。`read_pdf` 工具只吃一个 `path`，超过 32 MiB 的文件在
+  解析前拒绝，结果按 `read` 的口径截断（2000 行 / 50KB）。扫描件（图片型 PDF）没有文本层，
+  会明确说明而不是返回空；解析器啃不动的文件返回错误，不会把进程带崩。
+  **默认不启用**（`Dev` / `Creator` 模式）。
+- **新增 `cache-watch` 扩展：提示 prompt cache 的两种异常**。提交新一轮输入时距上次写入缓存
+  已超过目录 TTL 就报「缓存已冷」；某次请求没读回任何缓存却重新写入、而上一次写入仍在 TTL 内
+  就报「意外未命中」。两者都作为聊天区系统消息出现（不写进会话）。TTL 取自保温用的同一份目录条目。
+  未命中判定是近似值——扩展只看得到用量、看不到前缀里到底变了什么——因此压缩上下文或改工具集
+  之后可能多报。**默认不启用**（`Dev` / `Creator` 模式）。
 - **扩展可声明前置工具，`/extension` 面板会显示是否满足**。`Extension::prerequisite_tools()`
   列出本扩展工具所依赖的工具（延迟工具需要 `tool_search` 才能被模型发现），二级详情页以
   `requires:` 行按 `扩展名 (工具名)` 展示（不可用时补 `- enable it`）；保存扩展状态时，对
   「已启用但前置不满足」的扩展逐条告警（只提示，不拦任何流程）。
-- **这四个新扩展都默认不启用**，且只在 `Dev` / `Creator` 扩展模式下可用：
-  `cache-usage`、`doctor`、`btw`、`recap`（在 `/extension` 面板里开启）。
+- **这些新扩展都默认不启用**，且只在 `Dev` / `Creator` 扩展模式下可用：
+  `cache-usage`、`doctor`、`btw`、`recap`、`open`、`pdf`、`cache-watch`（在 `/extension` 面板里开启）。
 
 ### 变更
 
@@ -248,6 +279,8 @@ This release aligns prux with upstream pi 1.1.0.
   并按调试对象拆分子命令——`/debug info` 打印 agent 运行状态汇总，`/debug provider [on|off|dump]`
   仍是供应商原始流事件查看器，新增 `/debug system-prompt` 打印当前系统提示词原文。
   `/debug` 因此需要先启用该扩展（默认关闭，`Dev` 及以上模式可用），子命令会出现在 `/` 候选列表里。
+- **cache-watch 的时长文案改用通用档位**：`0s` / `5m` 这种自造写法换成
+  `0ms` / `1m0s`（与保温评估的状态行同一口径），不再各写一套。
 
 ### 修复
 
@@ -260,3 +293,5 @@ This release aligns prux with upstream pi 1.1.0.
 - 面板式覆盖层的滚动条与内容区对齐（此前 track 起点偏低一行），thumb 拖到顶端就是第一行。
 - 系统提示的 `Available tools` 段现在也列出扩展工具（此前只列内置工具）；未声明 snippet 的工具
   不再占一行空描述。
+- `open` 工具会把系统 opener 的标准错误一并回给模型（标准输出丢弃）；非零退出码、10 秒未退出
+  都算失败，不再一律回「已打开」。

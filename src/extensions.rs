@@ -12,6 +12,7 @@ pub(crate) mod util;
 pub mod banner;
 pub mod browser;
 pub mod cache_usage;
+pub mod cache_watch;
 pub mod codemode;
 pub mod debug;
 pub mod doc_helper;
@@ -25,6 +26,8 @@ pub mod jet;
 pub mod loop_detect;
 pub mod mcp;
 pub mod notify;
+pub mod open;
+pub mod pdf;
 pub mod plan_mode;
 pub mod proxy;
 pub mod recap_btw;
@@ -81,6 +84,12 @@ pub const PRIORITY_DOCTOR: u32 = 64;
 pub const PRIORITY_BTW: u32 = 63;
 /// recap 一行会话小结扩展的注册优先级。
 pub const PRIORITY_RECAP: u32 = 62;
+/// open 外部程序打开扩展的注册优先级。
+pub const PRIORITY_OPEN: u32 = 61;
+/// pdf PDF 文本层读取扩展的注册优先级。
+pub const PRIORITY_PDF: u32 = 59;
+/// cache-watch prompt cache 冷/未命中提示扩展的注册优先级。
+pub const PRIORITY_CACHE_WATCH: u32 = 58;
 /// downloader 外部依赖下载扩展的注册优先级。
 pub const PRIORITY_DOWNLOADER: u32 = 60;
 /// update-check 启动时版本检查扩展的注册优先级。
