@@ -18,7 +18,7 @@ use crate::{
         },
         tools::{ToolError, ToolResult},
     },
-    extensions::{EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_PDF},
+    extensions::{EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_PDF, tool_search},
     utils::{
         paths::resolve_path,
         truncate::{format_size, truncate_head},
@@ -26,11 +26,7 @@ use crate::{
 };
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
-use std::{
-    panic::AssertUnwindSafe,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::{panic::AssertUnwindSafe, path::Path, sync::Arc};
 
 /// 扩展名（也是 `/extension` 面板中的标识）。
 const EXT: &str = "pdf";
@@ -69,6 +65,11 @@ impl Extension for Pdf {
             plugin_version: "0.94.0".to_string(),
             url: "https://github.com/1jehuang/jcode".to_string(),
         })
+    }
+
+    /// 前置工具：`read_pdf` 是延迟工具，模型得先用 `tool_search` 才能发现它（`/extension` 详情页展示）。
+    fn prerequisite_tools(&self) -> Vec<String> {
+        vec![tool_search::TOOL_NAME.to_string()]
     }
 
     /// 默认关闭：PDF 解析依赖较重，由用户在 `/extension` 面板开启。
@@ -233,7 +234,7 @@ mod tests {
     }
 
     /// 建一个临时目录（用例内自清理）。
-    fn temp_dir(tag: &str) -> PathBuf {
+    fn temp_dir(tag: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("prux-pdf-{tag}-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
