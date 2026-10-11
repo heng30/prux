@@ -10,6 +10,7 @@
 pub(crate) mod util;
 
 pub mod banner;
+pub mod browser;
 pub mod cache_usage;
 pub mod codemode;
 pub mod debug_provider;
@@ -68,6 +69,8 @@ pub const PRIORITY_REWIND: u32 = 71;
 pub const PRIORITY_WEB_ACCESS: u32 = 70;
 /// mcp MCP 客户端扩展的注册优先级。
 pub const PRIORITY_MCP: u32 = 69;
+/// browser 真实浏览器自动化（CDP）扩展的注册优先级。
+pub const PRIORITY_BROWSER: u32 = 68;
 /// cache-usage prompt cache 命中率统计扩展的注册优先级。
 pub const PRIORITY_CACHE_USAGE: u32 = 66;
 /// skills 扩展技能管理（`/skills` 面板）扩展的注册优先级。

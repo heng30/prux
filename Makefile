@@ -16,6 +16,7 @@ debug:
 	$(build-env) $(run-env) cargo run --bin ${app-name}
 
 install-linux: release
+	cp -f  ~/.local/bin/${app-name} ~/.local/bin/${app-name}.bak
 	cp -f ./target/release/${app-name} ~/.local/bin/
 
 check:

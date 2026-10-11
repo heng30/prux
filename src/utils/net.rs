@@ -59,14 +59,63 @@ pub fn base_url(listen: &str) -> String {
     format!("http://{host}:{port}/v1")
 }
 
-/// loopback 主机判定：`localhost` / `127.0.0.1` / `[::1]` / `::1`。
+/// loopback 主机判定：`localhost` / `127.0.0.1` / `::1`，大小写不敏感。
+///
+/// 兼容 URL 主机的写法：去掉 IPv6 的方括号（`Url::host_str` 带方括号）、
+/// 接受未压缩的 `0:0:0:0:0:0:0:1`。
 pub fn is_loopback_host(host: &str) -> bool {
-    matches!(host, "localhost" | "127.0.0.1" | "[::1]" | "::1")
+    let trimmed = host
+        .trim()
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_ascii_lowercase();
+    matches!(
+        trimmed.as_str(),
+        "localhost" | "127.0.0.1" | "::1" | "0:0:0:0:0:0:0:1"
+    )
+}
+
+/// URL 是否指向回环主机（用于无鉴权的本机端点，绝不允许连到别的机器）。
+///
+/// 解析失败、没有主机名的 URL 都返回 `false`。
+pub fn url_is_loopback(url: &str) -> bool {
+    url::Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_string))
+        .is_some_and(|host| is_loopback_host(&host))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 回环判定：接受三种写法与方括号 / 未压缩 IPv6，大小写不敏感，拒绝其它主机。
+    #[test]
+    fn loopback_host_detection() {
+        for host in [
+            "localhost",
+            "LOCALHOST",
+            "127.0.0.1",
+            "::1",
+            "[::1]",
+            "0:0:0:0:0:0:0:1",
+        ] {
+            assert!(is_loopback_host(host), "{host} 应判为回环");
+        }
+        for host in ["", "example.com", "10.0.0.1", "0.0.0.0", "127.0.0.2"] {
+            assert!(!is_loopback_host(host), "{host} 不应判为回环");
+        }
+    }
+
+    /// 只有回环的 URL 才被接受，无法解析的字符串一律拒绝。
+    #[test]
+    fn url_loopback_detection() {
+        assert!(url_is_loopback("ws://127.0.0.1:9222/devtools/browser/x"));
+        assert!(url_is_loopback("ws://[::1]:9222/devtools/browser/x"));
+        assert!(!url_is_loopback("ws://example.com:9222/devtools/browser/x"));
+        assert!(!url_is_loopback("ws://10.0.0.5:9222/x"));
+        assert!(!url_is_loopback("not a url"));
+    }
 
     #[test]
     fn normalize_listen_accepts_host_port_forms() {

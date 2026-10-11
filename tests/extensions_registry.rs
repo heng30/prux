@@ -56,6 +56,7 @@ fn register_all_collects_and_sorts_slices() {
         "tool-search",
         "codemode",
         "jet",
+        "browser",
         "update-check",
         "footer(normal)",
         "footer(minimal)",
@@ -66,8 +67,8 @@ fn register_all_collects_and_sorts_slices() {
 
     prux::extensions::register_all();
 
-    // 分布式切片确实汇聚：24 个工具扩展 + 3 个底栏扩展
-    assert_eq!(extension_count(), 24, "普通扩展应全被切片收集");
+    // 分布式切片确实汇聚：25 个工具扩展 + 3 个底栏扩展
+    assert_eq!(extension_count(), 25, "普通扩展应全被切片收集");
     assert_eq!(footer_extension_count(), 3, "footer 扩展应全被切片收集");
 
     // plan-mode / goal / subagent / tasks / web-access / proxy / doc-helper / notify 是声明 default_enabled() == false 的默认可选扩展：
@@ -107,6 +108,10 @@ fn register_all_collects_and_sorts_slices() {
     assert!(
         !is_extension_enabled("jet"),
         "jet 应默认不启用（需要用户先配路由目标与分类器）"
+    );
+    assert!(
+        !is_extension_enabled("browser"),
+        "browser 应默认不启用（需要用户先起带调试端口的浏览器）"
     );
     // downloader 默认启用（工具可用性属于开箱能力）：`/download` 无需先开扩展即可用；
     // 其 dock 段默认隐藏，靠 `/download` 显示
@@ -162,7 +167,8 @@ fn register_all_collects_and_sorts_slices() {
     prux::core::extensions::set_extension_enabled("jet", true);
 
     // 普通扩展全部注册且按 priority 降序（默认关闭的 cache-usage:66 / doctor:64 /
-    // btw:63 / recap:62 / codemode:39 与 skills:65 不在其中：本用例没启用它们）
+    // btw:63 / recap:62 / codemode:39 与 skills:65 不在其中：本用例没启用它们；
+    // browser:68 同样默认关闭，也不在其中）
     // （extra-themes:100 → goal:90 → plan-mode:85 → tasks:80 → subagent:78 → loop-detect:75
     //   → notify:74 → hang-detect:73 → proxy:72 → rewind:71 → web-access:70 → mcp:69
     //   → skills:65 → downloader:60 → update-check:55 → doc-helper:50 → debug-provider:45

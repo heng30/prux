@@ -70,6 +70,18 @@ This release aligns prux with upstream pi 1.1.0.
   purpose: `/btw` needs a panel you can keep asking in, `/recap` only needs one line. On models that
   cannot turn thinking off, the one-shot request's output cap is raised so reasoning tokens cannot
   crowd out the answer.
+- **A `browser` extension drives a real browser over CDP.** One `browser` tool with 16 actions
+  (`status`, `list_tabs`, `new_tab`, `select_tab`, `open`, `snapshot`, `get_content`, `click`,
+  `type`, `select`, `press`, `scroll`, `wait`, `eval`, `screenshot`, `upload`) talks to a browser you
+  start yourself with `--remote-debugging-port` (Chrome / Chromium / Edge / Brave), so the model can
+  navigate, read a page's structure, click and fill, press keys, scroll, take screenshots, run
+  JavaScript and upload files. `snapshot` hands out `e1`, `e2`, … references for the interactable
+  elements, and the other actions prefer those over CSS selectors; a reference goes stale after a
+  navigation and says so instead of clicking the wrong element. The endpoint is configured in
+  `agent_dir()/extensions/browser.json` (default `127.0.0.1:9222`) and must be a loopback address —
+  the CDP endpoint has no authentication. The connection is lazy, shared across tabs through flat
+  sessions and dropped on session switches; while it is up the dock (`/dock`) lists the browser and
+  the active tab. Disabled by default (`Dev` / `Creator` modes).
 - **These four new extensions are disabled by default** and live in the `Dev` and `Creator`
   extension modes: `cache-usage`, `doctor`, `btw`, `recap` (turn them on in the `/extension` panel).
 
@@ -172,6 +184,16 @@ This release aligns prux with upstream pi 1.1.0.
   **不进会话、不改上下文**。`/recap` 把一行会话小结（≤120 字）作为**系统消息**推到聊天区，
   同样不进会话。两者**刻意拆成两个扩展**：旁问要一个可连续追问的面板，小结只要一行。
   在关不掉思考的模型上，一次性请求的输出上限会抬高，避免思考 token 吃光额度、正文被截断。
+- **新增 `browser` 扩展：用 CDP 驱动真实浏览器**。单个 `browser` 工具共 16 个动作
+  （`status`/`list_tabs`/`new_tab`/`select_tab`/`open`/`snapshot`/`get_content`/`click`/`type`/
+  `select`/`press`/`scroll`/`wait`/`eval`/`screenshot`/`upload`），对接用户自己用
+  `--remote-debugging-port` 起的浏览器（Chrome / Chromium / Edge / Brave）：模型可以导航、
+  读页面结构、点击与填写、按键、滚动、截图、执行 JavaScript、上传文件。`snapshot` 给可见的
+  可交互元素分配 `e1`/`e2`… 引用，其余动作优先用引用定位而不是 CSS 选择器；导航后引用失效时
+  会明确报错（不会点到别的元素），重新 `snapshot` 即可。端点写在
+  `agent_dir()/extensions/browser.json`（默认 `127.0.0.1:9222`），**只接受回环地址**——
+  CDP 端点没有鉴权。连接是惰性的、按 flat session 复用给多标签页、会话切换时丢弃；
+  连上后停靠面板（`/dock`）里多一行浏览器标识与活动标签页。**默认不启用**（`Dev` / `Creator` 模式）。
 - **这四个新扩展都默认不启用**，且只在 `Dev` / `Creator` 扩展模式下可用：
   `cache-usage`、`doctor`、`btw`、`recap`（在 `/extension` 面板里开启）。
 
