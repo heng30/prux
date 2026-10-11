@@ -452,13 +452,13 @@ fn shell_output_schema() -> Value {
     })
 }
 
-/// 内置 `bash` 工具定义：参数 command/timeout，附带 PI_* 环境变量的 prompt guideline。
+/// 内置 `bash` 工具定义：参数 command/timeout，附带 PRUX_* 环境变量的 prompt guideline。
 fn bash_def() -> ToolDef {
     ToolDef {
         name: "bash",
         label: None,
         prompt_guidelines: vec![
-            "You can inspect PI_* environment variables for current model and session details."
+            "You can inspect PRUX_* environment variables for current model and session details."
                 .to_string(),
         ],
         constrained_sampling: BUILTIN_CONSTRAINED_SAMPLING,
