@@ -188,6 +188,8 @@ This release aligns prux with upstream pi 1.1.0.
   empty line.
 - Provider error messages longer than 1000 bytes no longer risk a panic when a multi-byte
   character straddles the cut-off point.
+- A large paste sent while the agent is busy (Enter queues a steering message) is expanded to its
+  full text before queueing, so the model no longer receives the literal `[paste #N ...]` marker.
 
 ## 中文
 
@@ -336,3 +338,5 @@ This release aligns prux with upstream pi 1.1.0.
 - `open` 工具会把系统 opener 的标准错误一并回给模型（标准输出丢弃）；非零退出码、10 秒未退出
   都算失败，不再一律回「已打开」。
 - 超过 1000 字节的 provider 错误信息不再因多字节字符跨在截断点上而 panic（截断回退到字符边界）。
+- 忙碌时回车排队的 steering 消息中的大粘贴会先展开为完整文本再入队，模型不再收到
+  `[paste #N ...]` 这类 marker 原文。

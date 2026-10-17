@@ -350,7 +350,10 @@ fn handle_busy_key(st: &mut App, key: &KeyEvent) -> Option<KeyAction> {
             }
         }
 
-        let raw = st.editor.text();
+        // 先展开 paste marker 再判定/排队：大粘贴在编辑器里只存 `[paste #N ...]`，
+        // 展开后 submit_and_record 会清空编辑器（含粘贴存储），marker 至此无法再展开——
+        // 用 raw 排队等于把 marker 原文发给模型（与空闲提交、Alt+Enter follow-up 链不一致）。
+        let raw = st.editor.expanded_text();
         if let Some(cmd) = raw
             .strip_prefix('/')
             .map(str::trim)
@@ -2519,6 +2522,32 @@ mod tests {
             assert!(text.contains("<skill name=\"demo\""), "got: {text}");
             assert!(text.contains("# Body"), "got: {text}");
             assert!(text.ends_with("do it"), "got: {text}");
+        }
+        shared.borrow_mut().busy = false;
+    }
+
+    #[test]
+    fn busy_submit_expands_paste_marker() {
+        // 回归：忙碌时 Enter 的大粘贴必须展开成完整文本再进 steer 队列
+        // （编辑器只存 `[paste #N ...]`，清空后无源可展，marker 原文发给模型就瞎了）。
+        let _g = test_agent_dir();
+        let shared = Rc::new(RefCell::new(App::new()));
+        let big: String = (0..20)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        {
+            let mut st = shared.borrow_mut();
+            st.busy = true;
+            st.editor.paste_text(&big);
+            assert_eq!(st.editor.text(), "[paste #1 +20 lines]");
+        }
+        press(&shared, KeyCode::Enter, KeyModifiers::NONE);
+        {
+            let st = shared.borrow();
+            let inbox = st.runtime_steer_inbox.lock().unwrap();
+            assert_eq!(inbox.len(), 1);
+            assert_eq!(inbox[0].text(), big, "steer 应是展开后的全文");
         }
         shared.borrow_mut().busy = false;
     }
