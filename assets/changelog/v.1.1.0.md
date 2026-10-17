@@ -72,8 +72,8 @@ This release aligns prux with upstream pi 1.1.0.
   crowd out the answer.
 - **A `browser` extension drives a real browser over CDP.** One `browser` tool with 16 actions
   (`status`, `list_tabs`, `new_tab`, `select_tab`, `open`, `snapshot`, `get_content`, `click`,
-  `type`, `select`, `press`, `scroll`, `wait`, `eval`, `screenshot`, `upload`) talks to a browser you
-  start yourself with `--remote-debugging-port` (Chrome / Chromium / Edge / Brave), so the model can
+  `type`, `select`, `press`, `scroll`, `wait`, `eval`, `screenshot`, `upload`) talks to Chrome /
+  Chromium / Edge / Brave over `--remote-debugging-port`, so the model can
   navigate, read a page's structure, click and fill, press keys, scroll, take screenshots, run
   JavaScript and upload files. `snapshot` hands out `e1`, `e2`, … references for the interactable
   elements, and the other actions prefer those over CSS selectors; a reference goes stale after a
@@ -116,6 +116,21 @@ This release aligns prux with upstream pi 1.1.0.
   otherwise. Matching is keyword based (no vector search); a query made only of stop words is
   rejected. It reads only this machine's saved prux sessions, never other tools' history. The tool is
   deferred, so it is loaded through `tool_search`. Disabled by default (`Dev` / `Creator` modes).
+- **The `browser` extension starts a browser for you.** It first tries the configured CDP endpoint
+  (`127.0.0.1:9222` by default) and, when that port is silent *or* answers as something other than a
+  CDP endpoint, it walks the new `browsers` list in
+  `agent_dir()/extensions/browser.json`. Candidates that are already running with a debug port are
+  used first, in order, so a reachable endpoint always wins over starting a new browser; candidates
+  that are already running without `--remote-debugging-port` are skipped (a second launch would only
+  hand the command line to the running instance); only then does it start the first candidate that is
+  not running, on a free port of its own — detached from prux, so the
+  browser outlives the agent and is left on your desktop. A candidate that is already running with a
+  debug port on some other port is used as it is. When no candidate works, the error names what
+  failed for each one and keeps the manual `--remote-debugging-port` hint. The candidates are
+  Chromium-based browsers only: Firefox is left out on purpose (Firefox 141 removed CDP, and even
+  the 140 ESR only answers once `remote.active-protocols` is enabled in its profile), but adding it
+  to `browsers` by hand works — it gets its own flags (`--no-remote --new-instance`) and its failure
+  message says the remote agent serves WebDriver BiDi instead.
 - **These new extensions are disabled by default** and live in the `Dev` and `Creator`
   extension modes: `cache-usage`, `doctor`, `btw`, `recap`, `open`, `pdf`, `cache-watch`,
   `session-search` (turn them on in the `/extension` panel).
@@ -232,8 +247,8 @@ This release aligns prux with upstream pi 1.1.0.
   在关不掉思考的模型上，一次性请求的输出上限会抬高，避免思考 token 吃光额度、正文被截断。
 - **新增 `browser` 扩展：用 CDP 驱动真实浏览器**。单个 `browser` 工具共 16 个动作
   （`status`/`list_tabs`/`new_tab`/`select_tab`/`open`/`snapshot`/`get_content`/`click`/`type`/
-  `select`/`press`/`scroll`/`wait`/`eval`/`screenshot`/`upload`），对接用户自己用
-  `--remote-debugging-port` 起的浏览器（Chrome / Chromium / Edge / Brave）：模型可以导航、
+  `select`/`press`/`scroll`/`wait`/`eval`/`screenshot`/`upload`），通过 `--remote-debugging-port`
+  对接 Chrome / Chromium / Edge / Brave：模型可以导航、
   读页面结构、点击与填写、按键、滚动、截图、执行 JavaScript、上传文件。`snapshot` 给可见的
   可交互元素分配 `e1`/`e2`… 引用，其余动作优先用引用定位而不是 CSS 选择器；导航后引用失效时
   会明确报错（不会点到别的元素），重新 `snapshot` 即可。端点写在
@@ -265,6 +280,15 @@ This release aligns prux with upstream pi 1.1.0.
   消息默认都隐藏，每个会话默认只出 1 条（`max_per_session` 可调）。检索是**词法**的（没有向量检索），
   只有停用词构成的查询会被拒绝。它只读本机已存的 prux 会话，不读别的工具的会话文件。工具是**延迟工具**，
   经 `tool_search` 载入。**默认不启用**（`Dev` / `Creator` 模式）。
+- **`browser` 扩展会自己把浏览器拉起来**：先试配置的 CDP 端点（默认 `127.0.0.1:9222`），没人监听、
+  或者听得见却不是 CDP 端点（端口被别的服务占了）时，
+  按 `agent_dir()/extensions/browser.json` 新增的 `browsers` 列表逐个检查候选——**已经在跑且开着调试端口
+  的优先**（按顺序连第一个连得上的，现成端点不会被「启动新实例」盖掉），已经在跑但没带
+  `--remote-debugging-port` 的跳过（再启动一次只会把命令行转交给已有实例），都没有才用一个自己挑的
+  空闲端口启动第一个没在跑的候选（分离子进程，prux 退出不影响它，浏览器留在桌面上给你用）。一个都不成时报错会逐个列明原因，并保留手动启动的命令提示。候选只列 Chromium 系：
+  Firefox 有意不列（141 起移除了 CDP，140 ESR 也要 profile 里开了 `remote.active-protocols` 才应答），
+  但手工写进 `browsers` 仍可用——它拿到的是自己的开关（`--no-remote --new-instance`），失败时报错会
+  点明远程端口只剩 WebDriver BiDi。
 - **这些新扩展都默认不启用**，且只在 `Dev` / `Creator` 扩展模式下可用：
   `cache-usage`、`doctor`、`btw`、`recap`、`open`、`pdf`、`cache-watch`、`session-search`（在 `/extension` 面板里开启）。
 

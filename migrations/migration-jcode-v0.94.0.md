@@ -388,6 +388,32 @@ self-dev、浏览器 bridge 的常驻进程）扩展层够不到；其余都能�
 > 导航→快照→点 `ref`（页面 JS 真的跑了，标题被改）→输入→下拉→按键→滚动→等待→整页截图→
 > 读正文/HTML→新标签页与切换，全部通过（临时测试已删，不进仓）。
 > 默认不启用、`modes() == [Dev, Creator]`；配置在 `agent_dir()/extensions/browser.json`。
+>
+> **落地记录（2026-10-17，自动启动）**：新增 `src/extensions/browser/launch.rs`
+> （端口探活 / 空闲端口 / 进程扫描 / 分离启动 / 等端点就绪），配置新增 `browsers` 候选列表。
+> `ensure_connection` 改为：配置端口已在监听 → 试着连；连不上（被别的服务占着 / 不是 CDP 端点）也
+> 不当作致命错误，照样往下走候选。候选分**两轮**处理：第一轮按 `browsers` 顺序连「已在跑且开着调试
+> 端口」的第一个（可能是配置之外的端口），第二轮才挑第一个「没在跑」的候选用空闲端口启动并等端点
+> 就绪（`timeout` 兼作预算）；「已在跑但没带 `--remote-debugging-port`」的候选一直跳过（再启动只会
+> 转交给已有实例）。两轮必须分开：一轮循环会把「第一个候选没在跑」直接变成启动，把后面那个现成
+> 端点盖掉（回归用例 `a_running_candidate_with_a_debug_port_wins_over_starting_one` 盯住这点）。
+> 进程扫描用 `sysinfo`（`default-features = false, features = ["system"]`，不拉磁盘 / 网络 / CPU 采集），
+> 一次拿到每个进程的可执行文件路径与命令行 argv，不再自己写 `/proc` / `ps` / PowerShell 三套分支。
+> 命中判定看进程的 exe 与 argv0 两个文件名**任一**是否等于候选别名：只看 exe 会在 NixOS 那种
+> coreutils 多合一二进制上失手（`sleep` 的 exe 是 `coreutils`），只看 argv0 会在没 `exec` 的 shell
+> 包装脚本上失手；而按「任一参数」匹配会把 `grep browser` 误判成浏览器在跑。
+> **默认候选不含 Firefox**（明确决策）：实测本机 Firefox 155 的 `--remote-debugging-port` 端点没有
+> `/json/version`、`/json/list`（只剩 WebDriver BiDi 的 `/session`），显式写 `remote.active-protocols = 1`
+> 也一样——该 pref 已随 CDP 后端在 141 一起删除；Firefox 140 ESR 默认同样 404，profile 里写
+> `user_pref("remote.active-protocols", 3)` 后 `/json/version` 才回来（实测返回 `webSocketDebuggerUrl`）。
+> 所以它不进默认列表，但保留两条可用性：写进 `browsers` 会按家族拿到自己的开关
+> （`--no-remote --new-instance`），等不到端点时 `cdp_hint()` 把原因写进报错。
+> 另外实测 Firefox 不会因 Chromium 的那两个开关（`--no-first-run` / `--no-default-browser-check`）起不来，
+> 自定义项判错家族也不会崩。
+> 验证：`cargo test --lib extensions::browser`（73 个用例）+ 本机 Brave 152 真实端到端一次
+> （临时 wrapper 脚本加 `--headless=new` 与临时 `--user-data-dir` 走 `browsers` 配置，
+> 启动 → 发现端口 → `open file://…` → `snapshot` 全部通过；另单跑一次真进程扫描，
+> `running_state("brave")` 正确报出 `DebugPorts([19995])`；临时测试已删，不进仓）。
 
 ---
 

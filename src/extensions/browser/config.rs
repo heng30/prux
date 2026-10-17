@@ -1,8 +1,9 @@
-//! `browser.json` 配置：CDP 端点与输出上限（`agent_dir()/extensions/browser.json`）。
+//! `browser.json` 配置：CDP 端点、候选浏览器与输出上限（`agent_dir()/extensions/browser.json`）。
 //!
 //! 全部键可选、未知键忽略；文件不存在时用 [`Config::default`]。
 //! 只有**回环**主机能通过校验：CDP 调试端点没有鉴权，连到别的机器等于把浏览器交出去。
 
+use super::launch;
 use crate::core::{config_cache::ConfigCache, settings_manager::agent_dir};
 use crate::utils::net;
 use serde::{Deserialize, Serialize};
@@ -56,16 +57,31 @@ pub fn config_path() -> PathBuf {
 }
 
 /// 默认配置模板（首次启用时落盘，便于用户对照增删）。
-const DEFAULT_CONFIG_TEMPLATE: &str = r#"{
+///
+/// `browsers` 按当前平台的内置候选列表展开（JSON 字符串由 Rust 的 `Debug` 转义，
+/// 恰好与 JSON 的转义规则一致）。
+fn default_template() -> String {
+    let browsers = launch::default_browsers()
+        .iter()
+        .map(|program| format!("    {program:?}"))
+        .collect::<Vec<_>>()
+        .join(",\n");
+    format!(
+        r#"{{
   "_comment": "browser extension config (all keys optional). The CDP endpoint has no authentication, so host must be a loopback address.",
   "host": "127.0.0.1",
   "port": 9222,
   "timeout": 30,
+  "browsers": [
+{browsers}
+  ],
   "maxSnapshotChars": 20000,
   "maxContentChars": 50000,
   "maxElements": 200
+}}
+"#
+    )
 }
-"#;
 
 /// 首次启用时落盘默认配置模板：文件缺失才写入（建目录），已存在则绝不覆盖。
 pub fn ensure_config_file() {
@@ -79,7 +95,7 @@ pub fn ensure_config_file() {
     {
         return;
     }
-    _ = std::fs::write(&path, DEFAULT_CONFIG_TEMPLATE);
+    _ = std::fs::write(&path, default_template());
 }
 
 /// 生效配置（已带默认值与区间钳制）。
@@ -89,8 +105,10 @@ pub struct Config {
     pub host: String,
     /// CDP 调试端口（浏览器启动时 `--remote-debugging-port=<port>`）。
     pub port: u16,
-    /// 单条 CDP 命令（含 WebSocket 握手与 HTTP 发现）的超时。
+    /// 单条 CDP 命令（含 WebSocket 握手与 HTTP 发现）的超时，也是等自动启动的浏览器就绪的上限。
     pub timeout: Duration,
+    /// 自动启动的候选浏览器启动命令，按顺序尝试；空数组 = 只连已有端口，不启动任何浏览器。
+    pub browsers: Vec<String>,
     /// `snapshot` 返回文本的字符上限。
     pub max_snapshot_chars: usize,
     /// `get_content` 返回文本的字符上限。
@@ -100,12 +118,13 @@ pub struct Config {
 }
 
 impl Default for Config {
-    /// 全部取默认值（127.0.0.1:9222、30s、2 万字符快照、5 万字符正文、200 个元素）。
+    /// 全部取默认值（127.0.0.1:9222、30s、2 万字符快照、5 万字符正文、200 个元素、平台默认候选浏览器）。
     fn default() -> Self {
         Self {
             host: DEFAULT_HOST.to_string(),
             port: DEFAULT_PORT,
             timeout: Duration::from_secs(DEFAULT_TIMEOUT_SECS),
+            browsers: launch::default_browsers(),
             max_snapshot_chars: DEFAULT_MAX_SNAPSHOT_CHARS,
             max_content_chars: DEFAULT_MAX_CONTENT_CHARS,
             max_elements: DEFAULT_MAX_ELEMENTS,
@@ -132,6 +151,12 @@ impl Config {
             return Err(format!(
                 "browser: config `timeout` must be {}..={} seconds, got {secs}",
                 TIMEOUT_RANGE.0, TIMEOUT_RANGE.1
+            ));
+        }
+
+        if let Some(index) = self.browsers.iter().position(|p| p.trim().is_empty()) {
+            return Err(format!(
+                "browser: config `browsers[{index}]` is empty; remove the entry to stop auto-starting that candidate"
             ));
         }
 
@@ -169,6 +194,8 @@ struct FileConfig {
     port: Option<u16>,
     /// 单条 CDP 命令超时秒数
     timeout: Option<u64>,
+    /// 自动启动的候选浏览器启动命令（按顺序尝试）
+    browsers: Option<Vec<String>>,
     /// `snapshot` 返回文本的字符上限
     max_snapshot_chars: Option<usize>,
     /// `get_content` 返回文本的字符上限
@@ -248,6 +275,13 @@ fn loaded_config(value: &Value) -> Loaded {
             .unwrap_or(defaults.host),
         port: file.port.unwrap_or(defaults.port),
         timeout: Duration::from_secs(file.timeout.unwrap_or(DEFAULT_TIMEOUT_SECS)),
+        browsers: match file.browsers {
+            Some(browsers) => browsers
+                .into_iter()
+                .map(|program| program.trim().to_string())
+                .collect(),
+            None => defaults.browsers,
+        },
         max_snapshot_chars: file
             .max_snapshot_chars
             .unwrap_or(defaults.max_snapshot_chars),
@@ -281,7 +315,7 @@ mod tests {
         assert_eq!(loaded.config, Config::default());
     }
 
-    /// 部分键覆盖其余键保持默认。
+    /// 部分键覆盖其余键保持默认（含 `browsers`：没写就用内置候选列表）。
     #[test]
     fn partial_file_overrides_only_given_keys() {
         let _dir = AgentDirGuard::temp();
@@ -295,19 +329,54 @@ mod tests {
         assert_eq!(loaded.config.max_elements, 7);
         assert_eq!(loaded.config.host, DEFAULT_HOST);
         assert_eq!(loaded.config.timeout, Duration::from_secs(30));
+        assert_eq!(loaded.config.browsers, launch::default_browsers());
     }
 
-    /// 模板文件本身必须是合法配置（否则首次启用就把用户带沟里）。
+    /// `browsers` 给了就以配置为准（空数组 = 不自动启动），表项前后空白被去掉。
+    #[test]
+    fn browsers_key_replaces_the_builtin_list() {
+        let _dir = AgentDirGuard::temp();
+        ensure_config_file();
+        std::fs::write(
+            config_path(),
+            r#"{ "browsers": [" my-chrome ", "/opt/brave/brave"] }"#,
+        )
+        .unwrap();
+        invalidate();
+        assert_eq!(
+            load().config.browsers,
+            vec!["my-chrome".to_string(), "/opt/brave/brave".to_string()]
+        );
+
+        std::fs::write(config_path(), r#"{ "browsers": [] }"#).unwrap();
+        invalidate();
+        assert!(load().config.browsers.is_empty());
+    }
+
+    /// 空的 `browsers` 条目直接报错（静默忽略会让用户以为它生效了）。
+    #[test]
+    fn empty_browser_entries_are_rejected() {
+        let config = Config {
+            browsers: vec!["   ".to_string()],
+            ..Config::default()
+        };
+        assert!(config.validate().unwrap_err().contains("browsers[0]"));
+    }
+
+    /// 模板文件本身必须是合法配置（否则首次启用就把用户带沟里），且列出平台的默认候选浏览器。
     #[test]
     fn default_template_is_valid() {
         let _dir = AgentDirGuard::temp();
         ensure_config_file();
         let text = std::fs::read_to_string(config_path()).unwrap();
         let file: FileConfig = serde_json::from_str(&text).unwrap();
+        let browsers = file.browsers.clone().expect("模板应列出默认候选浏览器");
+        assert_eq!(browsers, launch::default_browsers());
         let config = Config {
             host: file.host.unwrap(),
             port: file.port.unwrap(),
             timeout: Duration::from_secs(file.timeout.unwrap()),
+            browsers,
             max_snapshot_chars: file.max_snapshot_chars.unwrap(),
             max_content_chars: file.max_content_chars.unwrap(),
             max_elements: file.max_elements.unwrap(),

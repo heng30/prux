@@ -69,6 +69,11 @@ impl FakeBrowser {
         }
     }
 
+    /// `/json/version` 的 HTTP 端口（测试里当「已在监听的配置端口」用）。
+    pub(crate) fn http_port(&self) -> u16 {
+        self.http_port
+    }
+
     /// 走一遍发现 + 握手，返回连上假浏览器的 [`Cdp`]（等价于扩展的 `ensure_connection`）。
     pub(crate) async fn connect(&self) -> Cdp {
         let endpoint = discover("127.0.0.1", self.http_port, Duration::from_secs(5))

@@ -66,7 +66,7 @@ core::extensions::register_banner_extension(extensions::banner::Banner::new());
 | `codemode` | 扩展 | JavaScript 工具编排：模型写一段 JS，在 QuickJS 沙箱里用 `tools.<name>()` 并行/串联调其它工具（内置、扩展、MCP 都能调），只把脚本输出交回模型；嵌套调用记进 `details.nestedCalls` 并计入会话成本。`codemode.mode`（`on`/`only`）与 `codemode.inlineBudget` 控制可调工具怎么声明给模型（配置在 `agent_dir()/extensions/codemode.json`）；`/codemode` 打开扩展设置面板（Space/Enter 循环档位、立即落盘），`/codemode show` 打印当前配置。**默认不启用**（`Dev`/`Creator` 模式可用），详见 [extensions/codemode.md](extensions/codemode.md) |
 | `web-access` | 扩展 | 联网能力：`web_search`（8 个 REST provider 聚合搜索）/`fetch_content`（`readable` HTML→markdown、`raw` 原文，带 SSRF 防护）/`get_search_content`（按 `responseId` 取回内容切片、`findText` 检索）。配置在 `agent_dir()/extensions/web-search.json`。**默认不启用**，需在 `/extension` 面板开启 |
 | `mcp` | 扩展 | Model Context Protocol 客户端：用单个 `mcp` 工具代理已配置服务器的工具/资源/prompt（`status`/`list`/`search`/`describe`/`call`/`resources`/`read_resource`/`prompts`/`get_prompt`），懒连接 + 空闲断开 + 元数据缓存 + OAuth 2.1 登录；`/mcp` 做状态/诊断/OAuth，`prux mcp` 子命令做配置增删改查。**默认不启用**，需在 `/extension` 面板开启。详见 [extensions/mcp.md](extensions/mcp.md) |
-| `browser` | 扩展 | 真实浏览器自动化（CDP）：单个 `browser` 工具共 16 个动作——`status`/`list_tabs`/`new_tab`/`select_tab`/`open`/`snapshot`/`get_content`/`click`/`type`/`select`/`press`/`scroll`/`wait`/`eval`/`screenshot`/`upload`。工具是**延迟工具**：模型先用 `tool_search` 载入才能调（见下文）。`snapshot` 给可交互元素分配 `e1`/`e2`… 引用，其余动作优先用引用定位（比 CSS 选择器稳）。需要用户先以 `--remote-debugging-port=<port>` 启动 Chrome/Chromium/Edge/Brave，端点写在 `agent_dir()/extensions/browser.json`（默认 `127.0.0.1:9222`，**只允许回环主机**）；连上后 `/dock` 面板里多一行浏览器状态。**默认不启用**（`Dev`/`Creator` 模式）。详见下文 |
+| `browser` | 扩展 | 真实浏览器自动化（CDP）：单个 `browser` 工具共 16 个动作——`status`/`list_tabs`/`new_tab`/`select_tab`/`open`/`snapshot`/`get_content`/`click`/`type`/`select`/`press`/`scroll`/`wait`/`eval`/`screenshot`/`upload`。工具是**延迟工具**：模型先用 `tool_search` 载入才能调（见下文）。`snapshot` 给可交互元素分配 `e1`/`e2`… 引用，其余动作优先用引用定位（比 CSS 选择器稳）。CDP 端点写在 `agent_dir()/extensions/browser.json`（默认 `127.0.0.1:9222`，**只允许回环主机**）；那个端口上没人监听时，会按 `browsers` 列表的顺序自动启动一个浏览器（已经在跑的候选会被跳过）。连上后 `/dock` 面板里多一行浏览器状态。**默认不启用**（`Dev`/`Creator` 模式）。详见下文 |
 | `open` | 扩展 | 用系统默认程序打开文件或 URL：`open` 工具（参数 `path`）。`http`/`https`/`file` URL 原样透传，本地路径按工作目录展开且必须存在；只把用户引到内容面前，**不把内容读回上下文**。**默认不启用**（`Dev` / `Creator` 模式） |
 | `pdf` | 扩展 | 抽取 PDF 的**文本层**：`read_pdf` 工具（参数 `path`）。超过 32 MiB 的文件在解析前拒绝，抽出的文本按 `read` 的口径截断（2000 行 / 50KB）；扫描件（图片型 PDF）没有文本层时明确提示，解析失败报错而不是崩。**默认不启用**（`Dev` / `Creator` 模式） |
 | `session-search` | 扩展 | 跨会话检索：`session_search` 工具（**延迟工具**，模型先用 `tool_search` 载入）。扫描 `agent_dir()/sessions` 下最新的 200 份会话文件，按关键词返回**按会话分组**的片段；默认隐藏当前会话、工具调用与结果、以及 `<system-reminder>` 注入消息，每个会话默认只出 1 条。**默认不启用**（`Dev` / `Creator` 模式） |
@@ -287,13 +287,18 @@ TTL 取目录 `promptCache.{short,long}`（按 `PRUX_CACHE_RETENTION` 选档）�
 
 `browser` 是 prux 内置的真实浏览器自动化扩展（`Dev`/`Creator` 模式可用），**默认不启用**（需 `enabledExtensions` 或 `/extension` 面板开启）。它通过 CDP（Chrome DevTools Protocol）操作一个**用户自己的**浏览器：导航、读页面结构、点/填/选、按键、滚动、截图、执行 JS、上传文件。
 
-**前置条件**：先启动一个带调试端口的浏览器（Chrome / Chromium / Edge / Brave 都支持），例如：
+**前置条件**：不需要你手动去起浏览器。第一次调用工具时按这个顺序找一个可用的 CDP 端点：
+
+1. 配置的 `host:port`（默认 `127.0.0.1:9222`）上已经有人在监听 → 试着连它（你自己启动的浏览器走这条）；**听得见但不是 CDP 端点**（比如这个端口被别的服务占了）就跳过它、继续下面的候选；
+2. 再按 `browsers` 的顺序看**已经在跑**的候选：**开着调试端口**的那些按顺序连第一个连得上的（可能是配置之外的端口），**没带调试端口**的跳过（浏览器会把自己当成第二个实例，把命令行转交给已有实例后退出，拿不到调试端口）；
+3. 一个现成端点都没有，才启动：按顺序挑第一个**没在跑**的候选，用一个空闲端口把它带 `--remote-debugging-port` 启动起来（端口由 prux 挑，不动你配置的那个）。
+4. 一个候选都不成时，工具会报错、逐个列出每个候选失败的原因，并给出手动启动的命令（若把 Firefox 写进 `browsers`，它的失败原因里会额外说明：远程端口只有 WebDriver BiDi、没有 CDP）：
 
 ```bash
-chrome --remote-debugging-port=9222
+google-chrome --remote-debugging-port=9222
 ```
 
-没有可用端点时，工具会报错并提示这条启动命令，不会静默失败。
+自动启动的浏览器**独立于 prux**：prux 退出、`Ctrl+C` 都不会关掉它，它留在桌面上给你继续用；等它的调试端点就绪的上限就是配置里的 `timeout`。
 
 **按需加载**：`browser` 是**延迟工具**——在模型用 `tool_search` 检索到它之前，它的描述、参数 schema 与提示片段都不进请求（完整声明约 3.7k 字符，长期挂在每轮请求里不划算）。因此需要 `tool-search` 扩展处于启用状态（默认启用，模式与本扩展相同）：模型先用 `tool_search` 搜到 `browser`，**下一次模型调用**即可调用它；`tool-search` 被关闭时，`browser` 不会出现在工具表里，模型也就发现不了它。会话恢复（`/resume`）时，历史里调用过 `browser` 的会话会自动重新载入它。这个前置依赖经 `prerequisite_tools()` 声明：`/extension` 详情页的 `requires:` 行会以 `tool-search (tool_search)` 的形式列出（扩展名在前，一眼能看出该开哪个扩展），并在它不可用时补 `- enable it`；保存扩展状态时也会就此告警（只提示，不拦）。
 
@@ -303,12 +308,13 @@ chrome --remote-debugging-port=9222
 |----|--------|------|
 | `host` | `127.0.0.1` | 调试主机；**只接受回环地址**（`localhost` / `127.0.0.1` / `::1`），其它取值直接报错 |
 | `port` | `9222` | 调试端口，与浏览器启动时的 `--remote-debugging-port` 一致 |
-| `timeout` | `30` | 单条 CDP 命令与端点发现的超时秒数（1–600） |
+| `timeout` | `30` | 单条 CDP 命令与端点发现的超时秒数（1–600），也是等自动启动的浏览器就绪的上限 |
+| `browsers` | 当前平台的常见浏览器 | 自动启动的候选浏览器启动命令（PATH 里的命令名或可执行文件路径，**不带参数**），按顺序尝试。Linux 默认 `google-chrome`、`google-chrome-stable`、`chromium`、`chromium-browser`、`microsoft-edge`、`brave-browser`、`brave`；macOS / Windows 默认取各自的常规安装路径。空数组 = 只连已有端口、不自动启动；自定义项按命令名（去目录、去 `.exe`、忽略大小写）判断「是否已经在跑」。**默认不含 Firefox**：Firefox 141 起移除了 CDP，远程端口只剩 WebDriver BiDi（`/json/version` 返回 404）；140 ESR 还有 CDP，但要在 profile 里把 `remote.active-protocols` 开到含 CDP 才会应答。要用手工写进 `browsers` 即可，启动时会得到它自己的开关（`--no-remote --new-instance`），连不上时的报错也会说明原因 |
 | `maxSnapshotChars` | `20000` | `snapshot` 返回文本的字符上限 |
 | `maxContentChars` | `50000` | `get_content` 返回文本的字符上限 |
 | `maxElements` | `200` | `snapshot` 收集的可交互元素条数上限 |
 
-**连接与生命周期**：连接是惰性的（第一次用工具时发现端点并连上浏览器级 WebSocket），之后一直复用；同一条连接按 flat session 模式管多标签页。连接会在扩展被禁用、或会话切换（`/new` `/resume` `/import` `/fork` `/clone`）时丢弃，下次用工具时重新发现。连上后停靠面板（`/dock`）里多一行 `browser · <浏览器标识> · <活动标签页>`（不会自动弹开面板）。
+**连接与生命周期**：连接是惰性的（第一次用工具时发现端点并连上，必要时先启动一个浏览器），之后一直复用；同一条连接按 flat session 模式管多标签页。连接会在扩展被禁用、或会话切换（`/new` `/resume` `/import` `/fork` `/clone`）时丢弃，下次用工具时重新发现。连上后停靠面板（`/dock`）里多一行 `browser · <浏览器标识> · <活动标签页>`（不会自动弹开面板）。
 
 **动作**（单个 `browser` 工具的 `action` 参数）：
 

@@ -13,7 +13,7 @@ use crate::{
         error::{Context as _, McpError, Result, bail},
         oauth,
     },
-    utils::{http as http_util, paths::expand_home},
+    utils::{env, http as http_util, paths::expand_home},
 };
 use futures_util::stream::BoxStream;
 use http::{HeaderName, HeaderValue};
@@ -866,17 +866,17 @@ async fn connect(
     log_dir: &Path,
 ) -> Result<Client> {
     if let Some(command) = &server.command {
-        let mut process = Command::new(expand_env(command));
-        process.args(server.args.iter().map(|value| expand_env(value)));
+        let mut process = Command::new(env::expand(command));
+        process.args(server.args.iter().map(|value| env::expand(value)));
         process.envs(
             server
                 .env
                 .iter()
-                .map(|(key, value)| (key, expand_env(value))),
+                .map(|(key, value)| (key, env::expand(value))),
         );
 
         if let Some(cwd) = &server.cwd {
-            process.current_dir(expand_home(&expand_env(cwd)));
+            process.current_dir(expand_home(&env::expand(cwd)));
         }
 
         // 子进程 stderr 必须脱离 prux 的终端：继承会让服务器日志直接写进 inline TUI 的滚动区，撕碎正在渲染的界面。
@@ -895,7 +895,7 @@ async fn connect(
 
     ensure_tls_crypto_provider();
 
-    let url = expand_env(server.url.as_deref().context("MCP URL is missing")?);
+    let url = env::expand(server.url.as_deref().context("MCP URL is missing")?);
 
     // `auth: {"provider": ...}` 的 token 交给 `LiveTokenClient` 每次请求现取，静态配置里不填；
     // bearerToken / bearerTokenEnv 仍是建连时读一次的静态值。
@@ -943,7 +943,7 @@ async fn connect(
 pub async fn probe_oauth_challenge(server: &ServerEntry) -> Result<Option<String>> {
     ensure_tls_crypto_provider();
 
-    let url = expand_env(server.url.as_deref().context("MCP URL is missing")?);
+    let url = env::expand(server.url.as_deref().context("MCP URL is missing")?);
     let transport = StreamableHttpClientTransport::with_client(
         http_util::client_builder(None)
             .build()
@@ -990,7 +990,7 @@ async fn bearer_token(server: &ServerEntry) -> Result<Option<String>> {
     let token = server
         .bearer_token
         .as_ref()
-        .map(|value| expand_env(value))
+        .map(|value| env::expand(value))
         .or_else(|| {
             server
                 .bearer_token_env
@@ -1169,7 +1169,7 @@ fn http_transport_config(
     for (name, value) in &server.headers {
         headers.insert(
             HeaderName::try_from(name)?,
-            HeaderValue::try_from(expand_env(value))?,
+            HeaderValue::try_from(env::expand(value))?,
         );
     }
 
@@ -1224,29 +1224,6 @@ fn tool_is_enabled(server: &ServerEntry, name: &str) -> bool {
 /// 唯一计算点：`idle_timeout` 未做范围校验，用饱和乘法避免超大配置在 debug 构建下溢出 panic。
 fn idle_disconnect_after(server: &ServerEntry) -> Duration {
     Duration::from_secs(server.idle_timeout.unwrap_or(10).saturating_mul(60))
-}
-
-/// 展开字符串里的 `${VAR}` 为环境变量值（未定义则替换为空串，未闭合的 `${` 原样保留）。
-fn expand_env(value: &str) -> String {
-    let mut output = String::with_capacity(value.len());
-    let mut rest = value;
-
-    while let Some(start) = rest.find("${") {
-        output.push_str(&rest[..start]);
-        let tail = &rest[start + 2..];
-
-        let Some(end) = tail.find('}') else {
-            output.push_str(&rest[start..]);
-            return output;
-        };
-
-        let name = &tail[..end];
-        output.push_str(&std::env::var(name).unwrap_or_default());
-        rest = &tail[end + 1..];
-    }
-
-    output.push_str(rest);
-    output
 }
 
 /// 服务器配置序列化后的 SHA-256 十六进制指纹，用于判断缓存是否失效。
@@ -1638,7 +1615,7 @@ done
     #[test]
     fn environment_and_home_expansion_are_explicit() {
         unsafe { std::env::set_var("PRUX_MCP_TEST_VALUE", "value") };
-        assert_eq!(expand_env("a-${PRUX_MCP_TEST_VALUE}-b"), "a-value-b");
+        assert_eq!(env::expand("a-${PRUX_MCP_TEST_VALUE}-b"), "a-value-b");
         assert!(expand_home("~/work").ends_with("work"));
     }
 

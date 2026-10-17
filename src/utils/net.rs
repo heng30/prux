@@ -1,4 +1,10 @@
-//! 网络地址工具：监听地址的校验与规范化、OpenAI 兼容 base_url 推导。
+//! 网络地址与端口工具：监听地址的校验与规范化、OpenAI 兼容 base_url 推导、
+//! 回环端口的挑选与探活。
+
+use std::time::Duration;
+
+/// 探活时连一下回环地址的超时（端口没人监听会立刻被拒，这个上限只是防某些防火墙丢包）。
+const PROBE_TIMEOUT: Duration = Duration::from_millis(300);
 
 /// 校验并规范化监听地址 `host:port`。
 ///
@@ -85,9 +91,31 @@ pub fn url_is_loopback(url: &str) -> bool {
         .is_some_and(|host| is_loopback_host(&host))
 }
 
+/// 挑一个当前空闲的回环端口（绑定 `127.0.0.1:0` 读出内核分配的端口后立刻释放）。
+///
+/// 释放到真正有人绑上之间有竞态窗口；被抢走时表现为连不上，而不是连到别的服务上。
+/// 挑不出端口（回环不可用、fd 耗尽等）时返回 `Err`，文案供调用方加自己的域前缀。
+pub fn pick_free_port() -> Result<u16, String> {
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0))
+        .map_err(|e| format!("cannot find a free loopback port: {e}"))?;
+    listener
+        .local_addr()
+        .map(|addr| addr.port())
+        .map_err(|e| format!("cannot read the port the kernel assigned: {e}"))
+}
+
+/// 探一下 `host:port` 上有没有人在监听（只做一次 TCP 连接，[`PROBE_TIMEOUT`] 内没连上就算没有）。
+pub async fn is_port_listening(host: &str, port: u16) -> bool {
+    matches!(
+        tokio::time::timeout(PROBE_TIMEOUT, tokio::net::TcpStream::connect((host, port))).await,
+        Ok(Ok(_))
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Instant;
 
     /// 回环判定：接受三种写法与方括号 / 未压缩 IPv6，大小写不敏感，拒绝其它主机。
     #[test]
@@ -153,6 +181,34 @@ mod tests {
             "127.0.0.1:99999",
         ] {
             assert!(normalize_listen(bad).is_err(), "{bad} 应被拒绝");
+        }
+    }
+
+    /// 空闲端口真的空着（挑出来之后能立刻绑上）。
+    #[test]
+    fn pick_free_port_returns_a_bindable_port() {
+        let port = pick_free_port().unwrap();
+        assert!(port > 0);
+        std::net::TcpListener::bind(("127.0.0.1", port)).unwrap();
+    }
+
+    /// 监听探测：绑着的端口为真，松开后为假。
+    #[tokio::test]
+    async fn is_port_listening_follows_the_socket() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        assert!(is_port_listening("127.0.0.1", port).await);
+
+        drop(listener);
+        // 同时跑的用例可能正好又绑上刚释放的这个端口（`bind(:0)` 会复用），
+        // 所以给一段时间等它空出来，而不是绑完立刻断言
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while is_port_listening("127.0.0.1", port).await {
+            assert!(
+                Instant::now() < deadline,
+                "端口 {port} 已松开却仍显示在监听"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
         }
     }
 }

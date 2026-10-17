@@ -7,6 +7,7 @@ pub mod color;
 pub mod cron;
 pub mod display;
 pub mod edit_diff;
+pub mod env;
 pub mod file_lock;
 pub mod find;
 pub mod fuzzy;
