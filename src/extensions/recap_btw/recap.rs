@@ -18,13 +18,13 @@ use crate::{
     },
     extensions::{
         EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_RECAP,
-        util::{notify_text, session_id_of, truncate},
+        util::{notify_text, session_id_of},
     },
     modes::interactive::{
         app::{App, MsgLevel},
         handlers::register_slash_command,
     },
-    utils::glyphs::DEF_RECAP,
+    utils::{glyphs::DEF_RECAP, truncate::truncate_chars},
 };
 use std::sync::Arc;
 
@@ -166,7 +166,7 @@ fn normalize_recap(text: &str) -> String {
         .trim()
         .to_string();
     cleaned = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
-    truncate(&cleaned, MAX_CHARS)
+    truncate_chars(&cleaned, MAX_CHARS, None, false)
 }
 
 #[cfg(test)]

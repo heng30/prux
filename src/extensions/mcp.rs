@@ -39,7 +39,7 @@ use crate::{
         app::{App, MsgLevel},
         handlers::register_slash_command,
     },
-    utils::{glyphs::DEF_ELLIPSIS, paths::cwd},
+    utils::{glyphs::DEF_ELLIPSIS, paths::cwd, truncate::truncate_chars_within},
 };
 use config::{AuthMode, LoadedConfig, McpExposure, OAuthGrantType, ServerEntry};
 use error::McpError;
@@ -521,7 +521,7 @@ fn render_servers_section(servers: &[(String, ServerEntry)]) -> Option<String> {
             .as_deref()
             .map(first_line)
             .filter(|s| !s.is_empty() && per_server > 0)
-            .map(|s| truncate_chars(&s, per_server))
+            .map(|s| truncate_chars_within(&s, per_server, DEF_ELLIPSIS))
             .unwrap_or_default();
         lines.push(if summary.is_empty() {
             head
@@ -565,19 +565,6 @@ fn omitted_line(omitted: usize) -> Option<String> {
 /// 只取第一行并去空白：服务器说明可能带多行，段落里只放一句。
 fn first_line(text: &str) -> String {
     text.lines().next().unwrap_or_default().trim().to_string()
-}
-
-/// 截断到 `max_chars` 个字符（不是字节），超出时以 `…` 结尾。
-fn truncate_chars(text: &str, max_chars: usize) -> String {
-    if max_chars == 0 {
-        return String::new();
-    }
-    if text.chars().count() <= max_chars {
-        return text.to_string();
-    }
-
-    let head: String = text.chars().take(max_chars.saturating_sub(1)).collect();
-    format!("{head}{DEF_ELLIPSIS}")
 }
 
 /// 服务器说明摘要（`name — description`），只列写了 `description` 的服务器。

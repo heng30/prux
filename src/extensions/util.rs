@@ -8,8 +8,9 @@ use crate::{
     },
     modes::interactive::app::MsgLevel,
     utils::{
-        glyphs::{DEF_SPINNER, DEF_SPINNER_BRAILLE},
+        glyphs::{DEF_ELLIPSIS, DEF_SPINNER, DEF_SPINNER_BRAILLE},
         time::now_ms,
+        truncate::{self, truncate_chars_within},
     },
 };
 use serde_json::Value;
@@ -139,12 +140,7 @@ pub fn numeric_id(id: &str) -> f64 {
 /// 目标文本压成单行（空白折叠为一个空格）并按字符数截断，超出时以 `…` 收尾。
 pub fn truncate_objective(objective: &str, max: usize) -> String {
     let single = objective.split_whitespace().collect::<Vec<_>>().join(" ");
-    if single.chars().count() > max {
-        let truncated: String = single.chars().take(max.saturating_sub(1)).collect();
-        format!("{}…", truncated)
-    } else {
-        single
-    }
+    truncate_chars_within(&single, max, DEF_ELLIPSIS)
 }
 
 /// 构造一个「循环选择」型扩展设置项：面板里按 Space/Enter 在 `choices` 间循环。
@@ -311,28 +307,18 @@ pub fn opt_string_array(args: &Value, key: &str) -> Option<Vec<String>> {
     )
 }
 
-/// 按字符数截断（不切坏 UTF-8），超出时追加省略号。
+/// 按字符数截断并在超限时追加省略号；实现见 [`crate::utils::truncate::truncate_chars`]。
+///
+/// 先 `trim()` 再计数，所以**不要**用在需要保留缩进的行上。
 pub fn truncate_chars(s: &str, max: usize) -> String {
-    truncate_chars_with_postfix(s, max, "…")
+    truncate_chars_with_postfix(s, max, DEF_ELLIPSIS)
 }
 
-/// 按字符截断（不切坏 UTF-8），超出时在尾部标注。
+/// 按字符截断（不切坏 UTF-8），超出时在尾部标注 `postfix`（后缀不计入 `max` 配额）。
+///
+/// 先 `trim()` 再计数，所以**不要**用在需要保留缩进的行上。
 pub fn truncate_chars_with_postfix(text: &str, max: usize, postfix: &str) -> String {
-    let text = text.trim();
-    if text.chars().count() <= max {
-        return text.to_string();
-    }
-    let kept: String = text.chars().take(max).collect();
-    format!("{kept}{postfix}")
-}
-
-/// 按字符数硬截断（不切坏 UTF-8），超出部分直接丢弃、不追加省略号。
-pub fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        return s.to_string();
-    }
-
-    s.chars().take(max).collect()
+    truncate::truncate_chars(text, max, Some(postfix), true)
 }
 
 /// 当前 spinner 帧号（墙钟驱动）：`now_ms / tick_ms` 对 `glyph_count` 取模。

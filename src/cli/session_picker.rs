@@ -1,6 +1,9 @@
 //! 会话选择：--session/--fork/--session-id/--resume 的参数解析与 TUI 选择器
 
-use crate::core::session_manager::{self, SessionMeta, list_sessions};
+use crate::{
+    core::session_manager::{self, SessionMeta, list_sessions},
+    utils::{display::truncate_display, glyphs::DEF_ELLIPSIS, truncate::truncate_chars_within},
+};
 use crossterm::{
     cursor::{Hide, Show},
     event::{self, Event, KeyCode, KeyEventKind},
@@ -16,6 +19,9 @@ use std::{
     },
     time::Duration,
 };
+
+/// 选择器固定框架占用的行数：标题、标题后空行、列表后空行、状态行。
+const FRAME_LINES: usize = 4;
 
 /// 把 --session/--fork 参数解析为会话文件路径：
 /// 直接是文件 → 使用；否则在 extra_dir / default_dir 中按部分 UUID 查找。
@@ -173,7 +179,7 @@ fn row_label(meta: &SessionMeta) -> String {
         _ => "(no messages)".to_string(),
     };
 
-    let title = truncate_chars(&title, 72);
+    let title = truncate_chars_within(&title, 72, DEF_ELLIPSIS);
     let mut out = title;
 
     if meta.message_count > 0 {
@@ -185,19 +191,6 @@ fn row_label(meta: &SessionMeta) -> String {
     }
     out
 }
-
-/// 按字符（非字节）数截断到 `max`，超出时以 `…` 收尾（保证总长恰为 `max`）
-fn truncate_chars(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        return s.to_string();
-    }
-    let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
-    out.push('…');
-    out
-}
-
-/// 选择器固定框架占用的行数：标题、标题后空行、列表后空行、状态行。
-const FRAME_LINES: usize = 4;
 
 /// 每页行数：由终端高度扣除固定框架得到。
 ///
@@ -217,7 +210,7 @@ fn clip_line(s: &str, cols: usize) -> String {
         .chars()
         .map(|c| if c.is_control() { ' ' } else { c })
         .collect();
-    crate::utils::display::truncate_display(&sanitized, cols.max(1)).0
+    truncate_display(&sanitized, cols.max(1)).0
 }
 
 /// 页对齐窗口 `[start, end)`：`selected` 落在哪一页就整页显示。

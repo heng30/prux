@@ -280,3 +280,75 @@ pub fn tail_bytes(s: &str, max_bytes: usize) -> &str {
     }
     &s[start..]
 }
+
+/// 按**字符**数截断到至多 `max_chars` 个字符（不按显示宽度，也不标 "[truncated]"）。
+///
+/// `postfix` 为 `Some(p)` 时，只有真正发生截断才在结果尾部追加 `p`；`p` **不占用**
+/// `max_chars` 的配额，因此结果长度可能超过 `max_chars`。需要总长恰为 `max_chars` 的调用方
+/// 自己从 `max_chars` 里扣掉后缀长度。`None` 表示不追加后缀。
+/// `is_trim` 为 `true` 时先对输入做 `trim()` 再计数，返回的也是 trim 后的文本。
+///
+/// 未超限时原样返回（`is_trim` 为 `true` 时返回 trim 后的文本），不追加 `postfix`。
+/// 按字符切分，UTF-8 边界天然安全。
+pub fn truncate_chars(s: &str, max_chars: usize, postfix: Option<&str>, is_trim: bool) -> String {
+    let text = if is_trim { s.trim() } else { s };
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    let mut out: String = text.chars().take(max_chars).collect();
+    if let Some(postfix) = postfix {
+        out.push_str(postfix);
+    }
+    out
+}
+
+/// 按**字符**数截断，并保证**结果总长不超过 `max_chars`**：`postfix` 占用配额，
+/// 因此截断时只保留 `max_chars - postfix 字符数` 个字符，再接上 `postfix`。
+///
+/// 与 [`truncate_chars`] 的区别：那里后缀不计入配额，结果可能比 `max_chars` 长。
+/// 未超限时原样返回，同样不追加 `postfix`。
+pub fn truncate_chars_within(s: &str, max_chars: usize, postfix: &str) -> String {
+    if s.chars().count() <= max_chars {
+        return s.to_string();
+    }
+    let quota = max_chars.saturating_sub(postfix.chars().count());
+    let mut out: String = s.chars().take(quota).collect();
+    out.push_str(postfix);
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncate_chars_respects_utf8_boundaries() {
+        assert_eq!(truncate_chars("abcdef", 3, None, false), "abc");
+        assert_eq!(truncate_chars("中文内容", 2, None, false), "中文");
+        assert_eq!(truncate_chars("short", 99, None, false), "short");
+        assert_eq!(truncate_chars("", 3, None, false), "");
+    }
+
+    #[test]
+    fn truncate_chars_appends_postfix_only_when_truncated() {
+        assert_eq!(truncate_chars("abcdef", 3, Some("…"), false), "abc…");
+        assert_eq!(truncate_chars("abc", 3, Some("…"), false), "abc");
+        assert_eq!(truncate_chars("中文内容", 2, Some("..."), false), "中文...");
+    }
+
+    #[test]
+    fn truncate_chars_trims_only_when_asked() {
+        assert_eq!(truncate_chars("  abc  ", 99, None, true), "abc");
+        assert_eq!(truncate_chars("  abcdef  ", 3, Some("…"), true), "abc…");
+        assert_eq!(truncate_chars("  abc  ", 99, None, false), "  abc  ");
+    }
+
+    #[test]
+    fn truncate_chars_within_keeps_total_length() {
+        assert_eq!(truncate_chars_within("abcdefghij", 5, "…"), "abcd…");
+        assert_eq!(truncate_chars_within("abcde", 5, "…"), "abcde");
+        assert_eq!(truncate_chars_within("abcdefghij", 5, "..."), "ab...");
+        assert_eq!(truncate_chars_within("中文内容", 2, "…"), "中…");
+        assert_eq!(truncate_chars_within("", 0, "…"), "");
+    }
+}

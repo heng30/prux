@@ -563,7 +563,11 @@ impl Host {
             if let Some(message) = error_message {
                 record.insert(
                     "error".to_string(),
-                    json!(truncate_chars(message, MODEL_CALL_ERROR_PREVIEW_CHARS)),
+                    json!(truncate::truncate_chars_within(
+                        message,
+                        MODEL_CALL_ERROR_PREVIEW_CHARS,
+                        "..."
+                    )),
                 );
             }
 
@@ -615,7 +619,9 @@ fn model_ref(model: &ModelConfig) -> String {
 fn describe_script_value(value: Option<&Value>) -> String {
     match value {
         None => "undefined".to_string(),
-        Some(value) => truncate_chars(&value.to_string(), MODEL_CALL_ARG_PREVIEW_CHARS),
+        Some(value) => {
+            truncate::truncate_chars_within(&value.to_string(), MODEL_CALL_ARG_PREVIEW_CHARS, "...")
+        }
     }
 }
 
@@ -866,16 +872,6 @@ fn catalog_model(kind: ModelType, provider: &str, id: &str) -> Value {
         Ok(entry) => model_info(&entry),
         Err(_) => Value::Null,
     }
-}
-
-/// 截断到 `max_chars` 个字符，超出时以 `...` 结尾（记录里的预览文本用）。
-fn truncate_chars(text: &str, max_chars: usize) -> String {
-    if text.chars().count() <= max_chars {
-        return text.to_string();
-    }
-
-    let head: String = text.chars().take(max_chars.saturating_sub(3)).collect();
-    format!("{head}...")
 }
 
 impl ScriptHost for Host {

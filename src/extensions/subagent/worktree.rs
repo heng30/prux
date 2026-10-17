@@ -15,8 +15,11 @@
 //! 所有 git 调用都走 `tokio::process`（一次副本可能要几秒，同步调用会把 UI 线程一起堵住），
 //! 并且都带超时——`git worktree add` 卡住时不能把整个回合拖死。
 
-use super::super::util::{git, truncate};
-use crate::{APP_NAME, utils::time::now_ms};
+use super::super::util::git;
+use crate::{
+    APP_NAME,
+    utils::{time::now_ms, truncate::truncate_chars},
+};
 use std::{
     path::{Path, PathBuf},
     time::Duration,
@@ -131,7 +134,10 @@ pub(crate) async fn cleanup(
     let _keep = match status {
         Ok(text) if !text.trim().is_empty() => {
             // 有改动：全部暂存并提交（`--no-verify`：用户的钩子不该在这个临时副本里跑）
-            let message = format!("{APP_NAME}-agent: {}", truncate(description, 200));
+            let message = format!(
+                "{APP_NAME}-agent: {}",
+                truncate_chars(description, 200, None, false)
+            );
             let staged = git(&path, &["add", "-A"], Duration::from_secs(10))
                 .await
                 .is_ok();
