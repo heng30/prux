@@ -1,7 +1,9 @@
 //! 文本查找与片段定位。
 //!
 //! 在给定文本中按 [`FindMode`] 查找一个或多个查询串，输出带上下文的可读片段与命中统计。
+//! 不区分大小写模式下的偏移换算走 [`case_insensitive_matches`]。
 
+use super::text::case_insensitive_matches;
 use strum_macros::{EnumString, IntoStaticStr};
 use unicode_normalization::UnicodeNormalization;
 
@@ -182,33 +184,37 @@ fn unique_queries(matches: &[Match]) -> Vec<String> {
     out
 }
 
-/// 字面匹配：返回 `query` 在 `text` 中的全部出现位置。
-/// `case_insensitive` 为真时先对两侧做小写折叠（偏移按折叠后字节长度计）。
+/// 字面匹配：返回 `query` 在 `text` 中的全部出现位置（字节区间，位于**原文**上）。
+///
+/// `case_insensitive` 为真时交给 [`case_insensitive_matches`]——小写化会改变字节数
+/// （`İ` → `i̇`），偏移必须由那里的换算表映射回原文，不能拿小写串上的偏移去切原文。
 fn literal_matches(text: &str, query: &str, case_insensitive: bool) -> Vec<Match> {
-    let haystack = if case_insensitive {
-        text.to_lowercase()
-    } else {
-        text.to_string()
-    };
-    let needle = if case_insensitive {
-        query.to_lowercase()
-    } else {
-        query.to_string()
-    };
-    let mut matches = Vec::new();
-    if needle.is_empty() {
-        return matches;
+    if query.is_empty() {
+        return Vec::new();
     }
+
+    if case_insensitive {
+        return case_insensitive_matches(text, &query.to_lowercase())
+            .into_iter()
+            .map(|(start, end)| Match {
+                query: query.to_string(),
+                start,
+                end,
+            })
+            .collect();
+    }
+
+    let mut matches = Vec::new();
     let mut search_from = 0usize;
-    while let Some(found) = haystack[search_from..].find(&needle) {
+    while let Some(found) = text[search_from..].find(query) {
         let start = search_from + found;
         matches.push(Match {
             query: query.to_string(),
             start,
-            end: start + needle.len(),
+            end: start + query.len(),
         });
-        search_from = start + needle.len().max(1);
-        if search_from > haystack.len() {
+        search_from = start + query.len().max(1);
+        if search_from > text.len() {
             break;
         }
     }
@@ -471,5 +477,14 @@ mod tests {
         assert_eq!(result.match_count, 2);
         // 不应 panic
         assert!(result.text.contains("搜索"));
+    }
+
+    #[test]
+    fn find_case_insensitive_keeps_offsets_when_lowercasing_changes_length() {
+        // İ 小写化成两个字符：命中偏移必须换算回原文，否则片段会错位甚至被截成一个字符
+        let text = format!("{}NEEDLE tail", "İ".repeat(20));
+        let result = find(&text, &["needle"], FindMode::CaseInsensitive);
+        assert_eq!(result.match_count, 1);
+        assert!(result.text.contains("NEEDLE tail"), "{}", result.text);
     }
 }

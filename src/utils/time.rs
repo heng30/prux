@@ -74,6 +74,14 @@ pub fn format_clock(at_ms: u64) -> String {
     }
 }
 
+/// 把 Unix 毫秒时间戳按 `fmt`（chrono 的 `strftime` 语法）格式化为**本地**时间。
+/// 例如 `format_local(ms, "%Y-%m-%d %H:%M")`；越界时间戳退回 `?`。
+pub fn format_local(ms: i64, fmt: &str) -> String {
+    chrono::DateTime::from_timestamp_millis(ms)
+        .map(|dt| dt.with_timezone(&Local).format(fmt).to_string())
+        .unwrap_or_else(|| "?".to_string())
+}
+
 /// 将 Unix epoch 起的天数转为 (年, 月, 日)（Howard Hinnant 民用历算法）。
 pub fn civil_from_days(z: i64) -> (u64, u64, u64) {
     let z = z + 719468;
@@ -146,6 +154,29 @@ pub fn parse_timestamp_ms(s: &str) -> Option<u64> {
     let naive = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S").ok()?;
     let dt = Local.from_local_datetime(&naive).earliest()?;
     Some(dt.timestamp_millis().max(0) as u64)
+}
+
+/// `YYYY-MM-DD`（`end_of_day` 为真时取当天 23:59:59.999）或 RFC3339 / 本地
+/// `YYYY-MM-DDTHH:MM:SS` → 自 Unix epoch 起的毫秒，以**本地时区**解释日期。
+///
+/// 两种格式都不是时返回 `None`（调用方据此报参数错误）；`YYYY-MM-DD` 日期的深夜边界用
+/// `23:59:59.999` 而不是次日零点，是为了让「`before` 只给日期」包住当天全部命中。
+pub fn parse_date_bound_ms(raw: &str, end_of_day: bool) -> Option<i64> {
+    let raw = raw.trim();
+    if let Ok(date) = chrono::NaiveDate::parse_from_str(raw, "%Y-%m-%d") {
+        let naive = if end_of_day {
+            date.and_hms_milli_opt(23, 59, 59, 999)?
+        } else {
+            date.and_hms_opt(0, 0, 0)?
+        };
+        return Some(
+            naive
+                .and_local_timezone(Local)
+                .earliest()?
+                .timestamp_millis(),
+        );
+    }
+    Some(parse_timestamp_ms(raw)? as i64)
 }
 
 /// epoch ms → RFC3339（**本地**时区，带偏移）；越界的时间戳退回纯数字毫秒串。
@@ -312,6 +343,24 @@ mod tests {
     }
 
     #[test]
+    fn format_local_honours_given_pattern() {
+        // 同一时间戳在不同 `fmt` 下的输出（同样用本地时区推算）
+        let local = chrono::DateTime::from_timestamp_millis(3_661_000)
+            .unwrap()
+            .with_timezone(&Local);
+        assert_eq!(
+            format_local(3_661_000, "%H:%M:%S"),
+            local.format("%H:%M:%S").to_string()
+        );
+        assert_eq!(
+            format_local(3_661_000, "%Y"),
+            local.format("%Y").to_string()
+        );
+        // 越界时间戳不 panic，退回 `?`
+        assert_eq!(format_local(i64::MIN, "%Y-%m-%d %H:%M"), "?");
+    }
+
+    #[test]
     fn rfc3339_days_ago_roundtrips_and_formats() {
         let start = rfc3339_days_ago(7);
         // 形如 2026-08-07T10:17:52Z（秒级、无毫秒、UTC）
@@ -384,5 +433,15 @@ mod tests {
         // epoch ms → 本地 RFC3339 → 再解回来
         let iso = epoch_ms_to_local_rfc3339(ms);
         assert_eq!(parse_timestamp_ms(&iso), Some(ms), "{iso}");
+    }
+
+    #[test]
+    fn date_bounds_take_local_midnight_or_end_of_day() {
+        let date = parse_date_bound_ms("2026-02-14", false).expect("date-only");
+        let end = parse_date_bound_ms("2026-02-14", true).expect("end of day");
+        assert_eq!(end - date, 86_399_999, "before 只给日期时取当天末尾");
+        // 带时区的完整时间戳走同一入口
+        assert!(parse_date_bound_ms("2026-02-14T09:00:00Z", false).is_some());
+        assert!(parse_date_bound_ms("not-a-time", false).is_none());
     }
 }

@@ -108,9 +108,17 @@ This release aligns prux with upstream pi 1.1.0.
   `requires:` line as `extension (tool-name)`, so the extension to enable is obvious, and appends
   `- enable it` while one is unavailable; saving extension states warns — without blocking anything
   — about each enabled extension whose prerequisites are not met.
+- **A `session-search` extension lets the model look through past sessions.** The `session_search`
+  tool scans the most recently updated session files under `agent_dir()/sessions` and returns excerpts
+  grouped by session, so the agent can recall what was decided, tried or run before the current
+  conversation. The active session, tool calls and results, and injected `<system-reminder>` messages
+  are hidden by default, and each session contributes one match unless `max_per_session` says
+  otherwise. Matching is keyword based (no vector search); a query made only of stop words is
+  rejected. It reads only this machine's saved prux sessions, never other tools' history. The tool is
+  deferred, so it is loaded through `tool_search`. Disabled by default (`Dev` / `Creator` modes).
 - **These new extensions are disabled by default** and live in the `Dev` and `Creator`
-  extension modes: `cache-usage`, `doctor`, `btw`, `recap`, `open`, `pdf`, `cache-watch`
-  (turn them on in the `/extension` panel).
+  extension modes: `cache-usage`, `doctor`, `btw`, `recap`, `open`, `pdf`, `cache-watch`,
+  `session-search` (turn them on in the `/extension` panel).
 
 ### Changed
 
@@ -163,6 +171,8 @@ This release aligns prux with upstream pi 1.1.0.
 - Extension tools are listed in the system prompt's `Available tools` section (previously only
   built-in tools were), and tools that declare no snippet are omitted from it instead of showing an
   empty line.
+- Provider error messages longer than 1000 bytes no longer risk a panic when a multi-byte
+  character straddles the cut-off point.
 
 ## 中文
 
@@ -249,8 +259,14 @@ This release aligns prux with upstream pi 1.1.0.
   列出本扩展工具所依赖的工具（延迟工具需要 `tool_search` 才能被模型发现），二级详情页以
   `requires:` 行按 `扩展名 (工具名)` 展示（不可用时补 `- enable it`）；保存扩展状态时，对
   「已启用但前置不满足」的扩展逐条告警（只提示，不拦任何流程）。
+- **新增 `session-search` 扩展：让模型自己翻历史会话**。`session_search` 工具扫描
+  `agent_dir()/sessions` 下最近更新的会话文件，返回**按会话分组**的片段，从而回忆起当前对话之前
+  定过的方案、试过的做法与跑过的命令。当前会话、工具调用与结果、以及注入的 `<system-reminder>`
+  消息默认都隐藏，每个会话默认只出 1 条（`max_per_session` 可调）。检索是**词法**的（没有向量检索），
+  只有停用词构成的查询会被拒绝。它只读本机已存的 prux 会话，不读别的工具的会话文件。工具是**延迟工具**，
+  经 `tool_search` 载入。**默认不启用**（`Dev` / `Creator` 模式）。
 - **这些新扩展都默认不启用**，且只在 `Dev` / `Creator` 扩展模式下可用：
-  `cache-usage`、`doctor`、`btw`、`recap`、`open`、`pdf`、`cache-watch`（在 `/extension` 面板里开启）。
+  `cache-usage`、`doctor`、`btw`、`recap`、`open`、`pdf`、`cache-watch`、`session-search`（在 `/extension` 面板里开启）。
 
 ### 变更
 
@@ -295,3 +311,4 @@ This release aligns prux with upstream pi 1.1.0.
   不再占一行空描述。
 - `open` 工具会把系统 opener 的标准错误一并回给模型（标准输出丢弃）；非零退出码、10 秒未退出
   都算失败，不再一律回「已打开」。
+- 超过 1000 字节的 provider 错误信息不再因多字节字符跨在截断点上而 panic（截断回退到字符边界）。

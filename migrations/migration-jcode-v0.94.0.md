@@ -37,8 +37,8 @@ jcode 与 prux 的重叠面与 kiss 类似：**自动化与 provider 那一半�
 本地 OpenAI 兼容网关、终端图形协议、mermaid 渲染），对照见 §2。
 
 按 §头部「判断口径」逐项过筛后，jcode 多出来、**且能作为独立扩展**的功能共 **10 项**（§3）：
-其中 4 项已落地（`browser`、`pdf`、`open`、`cache-watch`）、1 项（`bg`）明确不做、
-1 项（`usage`）本轮暂缓、余下 4 项待落地。
+其中 5 项已落地（`browser`、`pdf`、`open`、`cache-watch`、`session-search`）、
+2 项（`bg`、`usage`）明确不做、余下 3 项待落地。
 **其余全部明确不做**（§4）：包括 3 项被筛掉的「辅助项 / 机制」、2 项属 core 的策略与机制，
 以及 11 项扩展层够不到的能力。
 
@@ -47,9 +47,9 @@ jcode 与 prux 的重叠面与 kiss 类似：**自动化与 provider 那一半�
 | 类别 | 项 | 状态 |
 |---|---|---|
 | 可作为扩展 | §3.1 记忆系统 `memory` | 📋 待落地（词法召回，见 §4.15） |
-| 可作为扩展 | §3.2 跨会话检索 `session-search` | 📋 待落地 |
+| 可作为扩展 | §3.2 跨会话检索 `session-search` | ✅ 已落地（2026-10-11） |
 | 可作为扩展 | §3.3 结构感知检索 `agent-grep` | 📋 待落地 |
-| 暂缓 | §3.4 provider 配额用量 `usage` | ⏸️ 暂缓（2026-10-11，数据源待定） |
+| 不做 | §3.4 provider 配额用量 `usage` | 🚫 明确不做（2026-10-11） |
 | 可作为扩展 | §3.5 侧面板工具 `panel` | 📋 待落地 |
 | 可作为扩展 | §3.6 PDF 文本读取 `pdf` | ✅ 已落地（2026-10-11，`pdf-extract` 0.12） |
 | 不做 | §3.7 后台长任务 `bg` | 🚫 明确不做（2026-10-11） |
@@ -191,6 +191,27 @@ self-dev、浏览器 bridge 的常驻进程）扩展层够不到；其余都能�
 | 工作量 | 中 |
 | 默认状态 | 默认不启用（`Dev` / `Creator`） |
 
+> **落地记录（2026-10-11）**：落点 `src/extensions/session_search.rs`（`session_search` 工具，延迟工具 +
+> `prerequisite_tools()` 声明 `tool_search`）。只搜 prux 自家会话，跨 harness 检索不做（§4.10）；
+> 无 embedding，走词法打分（§4.15）。
+>
+> **与本节原计划的差异**：
+> - 原计划只提「关键词打分 + 按会话分组」，落地时补了三处 jcode 语义：**会话名作为独立结果**
+>   （得分 ×2）、**压缩/分支摘要参与检索**、**`<system-reminder>` 注入消息一律跳过**；
+> - 原计划的「复用 `cache_usage` 的会话扫描骨架」实际只复用了 `session_manager::list_sessions`
+>   与 `encode_cwd_dir` 的思路——`cache_usage` 的骨架绑着面板 UI 与 `Usage` 聚合，与「读全文打分」
+>   不是一回事，硬套反而更乱；
+> - 新增了两个原计划没有的边界：**单条消息 5 万字符 / 单份会话 400 万字符**的扫描上限，
+>   以及**扩展在会话中途被启用**时「当前会话」的退回判定（用「当前 cwd 会话目录里最新那份」近似，
+>   并在 `on_enabled_changed(true)` 时清掉可能过期的记录）。
+>
+> 验证：`cargo test --lib extensions::session_search`（36 个用例：词元切分与停用词拒绝、打分与
+>  `MAX_TERM_HITS` 封顶、摘录窗口与 UTF-8 截断、会话读写与摘要/角色归类、当前会话排除、
+> 会话名命中、目录/provider/model/时间/role/limit/`max_per_session`/`max_scan_sessions` 各过滤器、
+> 坏文件跳过、渲染与无命中文案、端到端工具调用）。
+> 声明 `fork_project()` 指向 jcode 0.94.0（来源版本取自本档），供 `/extension` 面板展示来源链接。
+> 默认不启用、`modes() == [Dev, Creator]`。
+
 ### 3.3 结构感知检索（`agent-grep`）
 
 | 维度 | 内容 |
@@ -221,13 +242,15 @@ self-dev、浏览器 bridge 的常驻进程）扩展层够不到；其余都能�
 | 工作量 | 中（本地台账小；配额端点适配是大头） |
 | 默认状态 | 默认不启用（`Dev` / `Creator`） |
 
-> **决定（2026-10-11）**：⏸️ **本轮暂缓**（不是永久不做）。两条路都不够干净：
-> ① 配额端点（Anthropic 的 `GET /api/oauth/usage`、OpenAI 的 billing）要逐 provider 适配、
-> 要读 OAuth 凭据、端点未文档化，属长期维护面；② 本地台账与 `cache-usage` 完全同源
+> **决定（2026-10-11）**：🚫 **明确不做**。两条路都不够干净：
+> ① 配额端点（Anthropic 的 `GET /api/oauth/usage`、ChatGPT 的 `backend-api/wham/usage`、
+> Copilot 的 `copilot_internal/v2/token`、Cursor 的 `GetCurrentPeriodUsage`、Antigravity 的
+> `fetchAvailableModels`、OpenRouter、Kimi、Z.ai 等）要逐 provider 适配、要读 OAuth 凭据、
+> 端点未文档化且随 provider 变动，属长期维护面；② 本地台账与 `cache-usage` 完全同源
 > （同一份会话 `Usage`），只是把视角从命中率换成花费，信息增量太小。
 > 另需注意：prux 的 provider 层目前**不捕获** `anthropic-ratelimit-*` / `x-ratelimit-*` 响应头
 > （全仓无引用），所以「从响应头读配额」这条免费且准确的路子得先改 core（provider 层透出响应头），
-> 不是纯扩展工作。将来捡起本项时先定数据源。
+> 不是纯扩展工作。**本档不再把本项列为待落地项**；若将来要捡起，先定数据源并单独立项。
 
 ### 3.5 侧面板工具（`panel`）
 
@@ -556,5 +579,4 @@ prux 的 `doctor` 扩展只做不带凭据的 `HEAD` 可达性探测。
 
 1. **§3.1 `memory` 的召回范围**：只做词法（本档建议），还是要先补 embedding API 面（§4.15 已判不做）？
 2. **§3.3 `agent-grep` 的结构提取**：轻量启发式（自研）还是引入 `agentgrep` 依赖？
-3. **§3.4 `usage` 的数据源**（**仍开放**，本轮已暂缓）：只做本地台账，还是要适配 provider 配额端点（长期维护面）？
-4. ~~**§3.6 `pdf` 的落点**~~：已定——走「新起 `read_pdf` 工具」，不动内置 `read`（见 §3.6 落地记录）。
+3. ~~**§3.6 `pdf` 的落点**~~：已定——走「新起 `read_pdf` 工具」，不动内置 `read`（见 §3.6 落地记录）。

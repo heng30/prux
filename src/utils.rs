@@ -22,6 +22,7 @@ pub mod proxy;
 pub mod terminal_caps;
 pub mod terminal_colors;
 pub mod terminal_image;
+pub mod text;
 pub mod time;
 pub mod tokens;
 pub mod truncate;

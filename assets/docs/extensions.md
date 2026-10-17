@@ -69,6 +69,7 @@ core::extensions::register_banner_extension(extensions::banner::Banner::new());
 | `browser` | 扩展 | 真实浏览器自动化（CDP）：单个 `browser` 工具共 16 个动作——`status`/`list_tabs`/`new_tab`/`select_tab`/`open`/`snapshot`/`get_content`/`click`/`type`/`select`/`press`/`scroll`/`wait`/`eval`/`screenshot`/`upload`。工具是**延迟工具**：模型先用 `tool_search` 载入才能调（见下文）。`snapshot` 给可交互元素分配 `e1`/`e2`… 引用，其余动作优先用引用定位（比 CSS 选择器稳）。需要用户先以 `--remote-debugging-port=<port>` 启动 Chrome/Chromium/Edge/Brave，端点写在 `agent_dir()/extensions/browser.json`（默认 `127.0.0.1:9222`，**只允许回环主机**）；连上后 `/dock` 面板里多一行浏览器状态。**默认不启用**（`Dev`/`Creator` 模式）。详见下文 |
 | `open` | 扩展 | 用系统默认程序打开文件或 URL：`open` 工具（参数 `path`）。`http`/`https`/`file` URL 原样透传，本地路径按工作目录展开且必须存在；只把用户引到内容面前，**不把内容读回上下文**。**默认不启用**（`Dev` / `Creator` 模式） |
 | `pdf` | 扩展 | 抽取 PDF 的**文本层**：`read_pdf` 工具（参数 `path`）。超过 32 MiB 的文件在解析前拒绝，抽出的文本按 `read` 的口径截断（2000 行 / 50KB）；扫描件（图片型 PDF）没有文本层时明确提示，解析失败报错而不是崩。**默认不启用**（`Dev` / `Creator` 模式） |
+| `session-search` | 扩展 | 跨会话检索：`session_search` 工具（**延迟工具**，模型先用 `tool_search` 载入）。扫描 `agent_dir()/sessions` 下最新的 200 份会话文件，按关键词返回**按会话分组**的片段；默认隐藏当前会话、工具调用与结果、以及 `<system-reminder>` 注入消息，每个会话默认只出 1 条。**默认不启用**（`Dev` / `Creator` 模式） |
 | `jet` | 扩展 | 虚拟模型路由器：注册虚拟模型 `jet/auto`，**用强模型规划、用便宜模型实现**——本轮第一次成功的 `edit`/`write` 之后同轮切到实现模型并留在那里，因此每个会话最多切换一次模型、最多吃一次 prompt-cache miss。配置在 `agent_dir()/extensions/jet.json`（**没有默认值**：路由目标不完整或解析不到就不注册进 `/model`），`/jet set` 配分类器、`/jet router` 增量配路由目标（三档可各用不同 provider）、`/jet reset` 清空。**默认不启用**（`Dev`/`Creator` 模式可用）。详见下文与 [virtual-models.md](virtual-models.md) |
 | `tasks` | 扩展 | 任务跟踪与协调：7 个模型可见工具（`TaskCreate` / `TaskList` / `TaskGet` / `TaskUpdate` / `TaskOutput` / `TaskStop` / `TaskExecute`）、常驻任务 widget、`/tasks` 命令与系统提醒注入，`TaskExecute` 经 RPC 联动 `subagent` 扩展。**默认不启用**（`Dev`/`Creator` 模式可用） |
 | `tool-search` | 扩展 | 延迟工具检索：扩展可把工具声明为 `ToolExposure::Deferred`（仍可执行但不进模型可见列表），本扩展提供 `tool_search` 工具按 BM25 检索延迟工具元数据，命中项在**下一次模型调用**变为可见。**默认启用**（`Dev`/`Creator` 模式可用；无延迟工具时它只会占一个工具位） |
@@ -92,6 +93,32 @@ TTL 取目录 `promptCache.{short,long}`（按 `PRUX_CACHE_RETENTION` 选档）�
 ### pdf
 
 `read_pdf` 工具抽取 PDF 的**文本层**（不渲染版面、不识别图片）。超过 32 MiB 的文件在解析前拒绝；抽出的文本按 `read` 的口径截断（2000 行 / 50KB）。扫描件（图片型 PDF）没有文本层，此时返回明确的提示而不是空内容；解析失败返回错误而不是崩——解析器对畸形文件可能 panic，扩展用 `catch_unwind` 兜住，注意 release 构建是 `panic = "abort"`，该兜底只在 debug / 测试构建下生效。
+
+### session-search
+
+`session_search` 让**模型自己**翻历史会话：模型只看得到当前上下文（外加压缩摘要），会话一关，之前定过的方案、跑过的命令、踩过的坑就都丢了。工具返回的是**按会话分组**的片段，每条只给围绕命中点的一段摘录（约 220 字符），不是整条消息。
+
+检索是**词法**的（没有向量检索）：查询按非字母数字切成词元、小写化、去停用词，再按「各词元出现次数之和 + 命中词元种类的加权」打分。只由停用词构成的查询直接报错；单个 ASCII 字符的词元（`C++` 会被切成 `c`）会被丢弃。中日韩文字不靠空格断词，连续的 CJK 片段按**相邻二字组合**（bigram）拆开，所以中文查询写成一个词或一整句都能命中——`缓存失效` 与 `如何修复缓存失效` 都能搜到含「缓存失效」的片段。
+
+可检索的内容是 **user / assistant 消息**（含 thinking 块）、**压缩摘要与分支摘要**，以及**会话名**（命中会话名时单独作为一条 `session` 结果返回，得分加权更高）。默认**不检索工具调用与工具结果**（`include_tools`），也**不检索**当前会话（`include_current`）——两者都会让结果被自己刷屏。`<system-reminder>` 开头的注入消息一律跳过。
+
+| 参数 | 默认 | 说明 |
+|------|------|------|
+| `query` | 必填 | 关键词。用有辨识度的词；只有停用词的查询会被拒绝 |
+| `working_dir` | — | 只搜工作目录以此路径开头的会话（大小写不敏感） |
+| `limit` | 10 | 返回的命中条数上限（1–50） |
+| `max_per_session` | 1 | 同一会话最多贡献几条命中（1–20），默认 1 是为了结果铺开而不是被一份会话刷屏 |
+| `include_current` | false | 是否把当前会话也纳入结果 |
+| `include_tools` | false | 是否检索工具调用与工具结果 |
+| `role` | `all` | `all` / `user` / `assistant` / `summary`（只看压缩摘要与分支摘要） |
+| `provider` / `model` | — | 按会话最后生效的 provider 名 / model id 做子串过滤（大小写不敏感） |
+| `after` / `before` | — | 命中时间范围：`YYYY-MM-DD`（本地时间；`before` 只给日期时按当天末尾算）或 RFC3339 |
+| `context` | 0 | 每条命中前后各附几条相邻消息（0–5），标 `↳` 显示 |
+| `max_scan_sessions` | 200 | 扫描最新多少份会话文件（1–2000） |
+
+**范围**：只搜 `agent_dir()/sessions` 下**本机已存的 prux 会话**，按文件修改时间取最新一批；不读别的工具的会话文件，也不联网。打不开或需要修复的会话文件直接跳过（检索不是修复工具），所以一份坏文件不会让整次检索失败。超长会话有扫描上限（单条消息 5 万字符、单份会话 400 万字符），超出部分不参与检索。
+
+**当前会话的判定**：优先用启动与会话切换时记下的会话文件路径；扩展是在会话中途被启用时没有这份记录，退回「当前工作目录的会话目录里最新那份」这一近似。
 
 ### cache-usage
 
@@ -729,7 +756,7 @@ banner 扩展**互斥**：注册/面板切换时启用一个会自动禁用其�
 ## settings 与启用状态
 
 - **`disabledExtensions`**：settings.json 中禁用的扩展名数组。注册时据此恢复初始状态（对默认启用的扩展 = 关闭）；/extension 面板切换后写回**全局**。项目 `.prux/settings.json` 里的同名字段与全局取并集（只在本项目禁用某内置扩展；未受信任的项目不生效）。
-- **`enabledExtensions`**：settings.json 中显式启用的扩展名数组，仅对声明 [`default_enabled() == false`] 的默认可选扩展（`plan-mode`、`goal`、`web-access`、`proxy`、`doc-helper`、`subagent`、`loop-detect`、`hang-detect`、`notify`、`rewind`、`codemode`、`mcp`、`browser`、`jet`、`tasks`、`debug`、`cache-usage`、`doctor`、`btw`、`recap`、`open`、`pdf`、`cache-watch`）有意义。这些扩展注册后默认禁用，必须在此列出（或经 `/extension` 面板开启）才参与钩子/工具/命令分发；关闭时从列表移除（回到默认态）。项目层同样与全局取并集（项目可自行开启默认关闭的扩展）；两层冲突时禁用优先（与 `disabledExtensions` 的并集语义一致）。
+- **`enabledExtensions`**：settings.json 中显式启用的扩展名数组，仅对声明 [`default_enabled() == false`] 的默认可选扩展（`plan-mode`、`goal`、`web-access`、`proxy`、`doc-helper`、`subagent`、`loop-detect`、`hang-detect`、`notify`、`rewind`、`codemode`、`mcp`、`browser`、`jet`、`tasks`、`debug`、`cache-usage`、`doctor`、`btw`、`recap`、`open`、`pdf`、`cache-watch`、`session-search`）有意义。这些扩展注册后默认禁用，必须在此列出（或经 `/extension` 面板开启）才参与钩子/工具/命令分发；关闭时从列表移除（回到默认态）。项目层同样与全局取并集（项目可自行开启默认关闭的扩展）；两层冲突时禁用优先（与 `disabledExtensions` 的并集语义一致）。
 - **`extensionMode`**：`"minimal"`、`"dev"`、`"creator"`、`"all"`（默认，兜底全集）。`All` 是兜底模式，所有扩展隐式属于它；扩展声明的模式（如 `Minimal`）表示“该级别及以上可用”，列出多个（如 `[Dev, Creator]`）则覆盖两个并排模式。是运行时过滤层，不触碰各扩展 enabled 状态；切回全部模式即恢复原状。
 
 settings 相关键见 [settings.md](settings.md)。修改 settings 后重启生效；`/reload` 会重新接线扩展并重建工具列表与系统提示，但无法加载新编译的扩展代码。

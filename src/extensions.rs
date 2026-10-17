@@ -32,6 +32,7 @@ pub mod plan_mode;
 pub mod proxy;
 pub mod recap_btw;
 pub mod rewind;
+pub mod session_search;
 pub mod skills;
 pub mod subagent;
 pub mod tasks;
@@ -86,12 +87,14 @@ pub const PRIORITY_BTW: u32 = 63;
 pub const PRIORITY_RECAP: u32 = 62;
 /// open 外部程序打开扩展的注册优先级。
 pub const PRIORITY_OPEN: u32 = 61;
+/// downloader 外部依赖下载扩展的注册优先级。
+pub const PRIORITY_DOWNLOADER: u32 = 60;
 /// pdf PDF 文本层读取扩展的注册优先级。
 pub const PRIORITY_PDF: u32 = 59;
 /// cache-watch prompt cache 冷/未命中提示扩展的注册优先级。
 pub const PRIORITY_CACHE_WATCH: u32 = 58;
-/// downloader 外部依赖下载扩展的注册优先级。
-pub const PRIORITY_DOWNLOADER: u32 = 60;
+/// session-search 跨会话检索扩展的注册优先级。
+pub const PRIORITY_SESSION_SEARCH: u32 = 57;
 /// update-check 启动时版本检查扩展的注册优先级。
 pub const PRIORITY_UPDATE_CHECK: u32 = 55;
 /// doc-helper 按需文档查询扩展的注册优先级。
