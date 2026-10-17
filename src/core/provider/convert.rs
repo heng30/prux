@@ -2,7 +2,7 @@
 //! 以及模型 `compat` 开关与对话中途系统消息的处理。
 
 use super::{AgentMessage, ModelConfig};
-use crate::core::model_resolver;
+use crate::{core::model_resolver, utils::truncate::head_bytes};
 use serde_json::{Value, json};
 
 /// compaction 摘要的包裹前缀，说明此前历史已被压缩为摘要。
@@ -15,10 +15,16 @@ pub const BRANCH_SUMMARY_PREFIX: &str =
 /// 分支摘要的结束标记，与分支前缀配对闭合 summary 标签。
 pub const BRANCH_SUMMARY_SUFFIX: &str = "</summary>";
 
-/// 把错误文本截到 1000 字节以内（超出时加省略号），避免错误信息撑爆上下文。
+/// 错误正文的字节上限：超出即截断，避免错误信息撑爆上下文。
+const ERROR_MAX_BYTES: usize = 1000;
+
+/// 把错误文本截到 [`ERROR_MAX_BYTES`] 字节以内（超出时回退到字符边界并追加 `...`）。
+///
+/// 按字节切片会落在多字节字符中间，所以这里退回边界再切；结果最长
+/// `ERROR_MAX_BYTES + 3` 字节（多出的 3 字节是省略号）。
 pub(crate) fn truncate_for_error(s: &str) -> String {
-    if s.len() > 1000 {
-        format!("{}...", &s[..1000])
+    if s.len() > ERROR_MAX_BYTES {
+        format!("{}...", head_bytes(s, ERROR_MAX_BYTES))
     } else {
         s.to_string()
     }
@@ -102,4 +108,29 @@ pub(crate) fn convert_system_message(msg: &AgentMessage, model: &ModelConfig) ->
     }
 
     Some(json!({ "role": instruction_role(model), "content": sanitize_surrogates(&text) }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncate_for_error_keeps_short_text_intact() {
+        assert_eq!(truncate_for_error("boom"), "boom");
+
+        let exact = "a".repeat(ERROR_MAX_BYTES);
+        assert_eq!(truncate_for_error(&exact), exact);
+    }
+
+    #[test]
+    fn truncate_for_error_does_not_split_multibyte_chars() {
+        // 每个「中」占 3 字节，上限 1000 不是 3 的倍数，旧实现的 `&s[..1000]` 会在这里 panic
+        let text = "中".repeat(ERROR_MAX_BYTES);
+        let out = truncate_for_error(&text);
+
+        assert!(out.ends_with("..."), "{out}");
+        assert!(out.chars().all(|c| c == '中' || c == '.'), "{out}");
+        assert!(out.len() <= ERROR_MAX_BYTES + 3);
+        assert!(truncate_for_error(&out).starts_with('中'));
+    }
 }
