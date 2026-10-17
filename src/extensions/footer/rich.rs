@@ -1,8 +1,8 @@
 //! `footer(rich)`：两行底栏。
 //!
 //! 行 1：git 分支（success）+ 模型（dim，reasoning 模型显示 `model:thinkingLevel`） +
-//!       上下文使用率（accent）+ 缓存命中率（muted）（左）；token 速率 + in/out + 费用 +
-//!       计划模式 + 交互数 + 耗时（右，各带主题色）。
+//!       上下文使用率（accent）+ 缓存命中率（accent，与使用率同色，仅 ` CH ` 前缀为 muted）（左）；
+//!       token 速率 + in/out + 费用 + 计划模式 + 交互数 + 耗时（右，各带主题色）。
 //! 行 2：目录 basename（左）；工具调用计数（右，插入序）+ LLM 调用计数（最右）。
 //!
 //! 状态维护对齐 footer.ts：
@@ -343,10 +343,11 @@ impl FooterExtension for RichFooter {
             ACCENT.1,
             format!("{}%", ctx.context_percent.round()),
         ));
+        left.push(FooterSpan::new(MUTED.0, MUTED.1, " CH "));
         left.push(FooterSpan::new(
-            MUTED.0,
-            MUTED.1,
-            format!(" CH {}%", cache_hit_pct.round()),
+            ACCENT.0,
+            ACCENT.1,
+            format!("{}%", cache_hit_pct.round()),
         ));
 
         // 行 1 右：t/s + in/out + 费用 + 计划模式 + 交互数 + 耗时
@@ -491,6 +492,17 @@ mod tests {
         assert!(l1.contains("42%"), "context pct(round), got: {l1}");
         // cacheRead/(cacheRead+tokIn) = 300/1300 = 23.08 → 23
         assert!(l1.contains("CH 23%"), "cache hit pct, got: {l1}");
+        // 缓存命中率与上下文使用率同色（仅 ` CH ` 前缀用 muted）
+        let hit = lines[0]
+            .iter()
+            .find(|s| s.text == "23%")
+            .expect("cache hit span");
+        assert_eq!(hit.key, ACCENT.0, "CH 百分比应与上下文使用率同色");
+        let prefix = lines[0]
+            .iter()
+            .find(|s| s.text == " CH ")
+            .expect("cache hit label span");
+        assert_eq!(prefix.key, MUTED.0, "CH 前缀保持 muted");
         // 右侧：0t/s + in/out + cost(4位)
         assert!(l1.contains("0t/s"), "tok rate, got: {l1}");
         assert!(l1.contains("1.0k in"), "tokIn fmt, got: {l1}");
