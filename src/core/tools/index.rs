@@ -18,6 +18,18 @@ pub(crate) use crate::utils::paths::relativize_path;
 /// 内置工具默认启用 constrained sampling（strict-prefer JSON-schema）。
 const BUILTIN_CONSTRAINED_SAMPLING: bool = true;
 
+/// 跨平台内置工具名（各平台均编译；`bash` 在 Windows 上也存在，只是要 settings `shellPath`
+/// 指向可用的 sh 解释器才能跑，见 `tools::bash`）。
+const BASE_TOOL_NAMES: [&str; 7] = ["read", "bash", "edit", "write", "grep", "find", "ls"];
+
+/// Windows 专有内置工具名（其它平台连实现带定义都不编译）。
+#[cfg(windows)]
+const PLATFORM_TOOL_NAMES: [&str; 1] = ["powershell"];
+
+/// 非 Windows 平台的专有内置工具名（当前为空；占位使下面的拼接写法两平台一致）。
+#[cfg(not(windows))]
+const PLATFORM_TOOL_NAMES: [&str; 0] = [];
+
 /// 工具执行模式
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolExecutionMode {
@@ -72,17 +84,22 @@ impl ToolDef {
     }
 }
 
-/// 全部内置工具名
+/// 全部内置工具名（[`BASE_TOOL_NAMES`] + 平台专有），是「内置名名单」的唯一真源。
 pub fn all_tool_names() -> Vec<String> {
-    let base = ["read", "bash", "edit", "write", "grep", "find", "ls"];
+    BASE_TOOL_NAMES
+        .iter()
+        .chain(PLATFORM_TOOL_NAMES.iter())
+        .map(|s| s.to_string())
+        .collect()
+}
 
-    #[cfg(windows)]
-    let names = base.into_iter().chain(["powershell"]);
-
-    #[cfg(not(windows))]
-    let names = base.into_iter();
-
-    names.map(|s| s.to_string()).collect()
+/// `name` 是否为内置工具名（零分配，与 [`all_tool_names`] / [`tool_defs`] 同一份名单）。
+///
+/// 执行侧靠它决定派发到内置执行分支还是扩展注册表（见 `Agent::is_builtin_tool`）：
+/// 名字进得了 [`all_tool_names`] 却在这里返回 `false`，就会「schema 声明给模型了、
+/// 真调用却回 `Tool <name> not found`」——两者必须同源。
+pub fn is_builtin_tool_name(name: &str) -> bool {
+    BASE_TOOL_NAMES.contains(&name) || PLATFORM_TOOL_NAMES.contains(&name)
 }
 
 /// 内置工具的一句话说明（子面板的描述列）；未收录的工具名返回空串。
@@ -646,6 +663,20 @@ pub(crate) fn err_code(e: &std::io::Error) -> String {
 mod tests {
     use super::*;
     use crate::core::tools::validate_tool_arguments;
+
+    #[test]
+    fn builtin_name_table_matches_registry_and_predicate() {
+        // 声明层（all_tool_names / tool_defs）与判定层（is_builtin_tool_name）必须同源。
+        // 曾出现 powershell 只进了前者：Windows 上模型看得到它的 schema，一调就 not found。
+        let names = all_tool_names();
+        for name in &names {
+            assert!(is_builtin_tool_name(name), "{name} 未被视为内置");
+            assert!(tool_def(name).is_some(), "{name} 没有工具定义");
+        }
+        assert_eq!(tool_defs(&names).len(), names.len());
+        assert!(!is_builtin_tool_name("task"));
+        assert_eq!(is_builtin_tool_name("powershell"), cfg!(windows));
+    }
 
     #[test]
     fn validate_missing_required_reports_pi_style_error() {

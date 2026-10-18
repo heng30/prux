@@ -15,14 +15,15 @@ use std::{
     path::{Path, PathBuf},
 };
 
-/// 输出文件只有属主可读（Unix 权限位；Windows 上忽略）。
+/// 输出文件只有属主可读（Unix 权限位；非 Unix 平台不设权限，故只在 Unix 编译）。
+#[cfg(unix)]
 const OUTPUT_FILE_MODE: u32 = 0o600;
 
 /// 在 OS 临时目录里新建一个独占的输出文件并返回它的句柄。
 ///
 /// 文件名形如 `<APP_NAME>-<prefix>-<随机串><extension>`；`extension` 含点（`.log`、`.png`）。
 /// 随机串与独占创建（`O_EXCL`）保证不会撞名，也不会跟随已存在的符号链接；
-/// Unix 上以 [`OUTPUT_FILE_MODE`] 创建。
+/// Unix 上创建后再把权限收紧到属主可读可写（`0o600`）。
 fn create_output_file(prefix: &str, extension: &str) -> io::Result<(File, PathBuf)> {
     let file = tempfile::Builder::new()
         .prefix(&format!("{APP_NAME}-{prefix}-"))

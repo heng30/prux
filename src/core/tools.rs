@@ -1,7 +1,7 @@
 //! 内置工具系统。 分层（工具三层设计）：
 //!
 //! - [`index`] 定义 `ToolDef`（描述层，只告诉模型工具长什么样）与注册表；
-//! - `read` / `write` / `edit` / `bash` / `grep` / `find` / `ls` 是实现层；
+//! - `read` / `write` / `edit` / `bash` / `grep` / `find` / `ls`（以及 Windows 上的 `powershell`）是实现层；
 //! - 执行统一返回 [`ToolResult`] / [`ToolError`]，错误被编码为消息，不打断 Agent 循环。
 
 mod bash;
@@ -29,8 +29,8 @@ pub use find::execute_find;
 pub use grep::execute_grep;
 pub use index::{
     ToolDef, ToolError, ToolExecutionMode, ToolResult, ToolResultAttachment, all_tool_names,
-    apply_prepare_arguments, resolve_tool_path, tool_def, tool_defs, tool_execution_mode,
-    validate_tool_arguments,
+    apply_prepare_arguments, is_builtin_tool_name, resolve_tool_path, tool_def, tool_defs,
+    tool_execution_mode, validate_tool_arguments,
 };
 pub use ls::execute_ls;
 pub use read::{ReadImageOptions, execute_read, execute_read_with_options};

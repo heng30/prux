@@ -493,7 +493,7 @@ async fn acquire_slot(cancel: &AtomicBool) -> bool {
             return false;
         }
         let acquired = ACTIVE
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
                 (n < MAX_ACTIVE).then_some(n + 1)
             })
             .is_ok();
@@ -511,7 +511,7 @@ impl Drop for SlotGuard {
     fn drop(&mut self) {
         // 饱和减：测试接缝会重置计数，重复归还不能让 `usize` 回绕成
         // `usize::MAX`（那样所有后续作业都会永远排队）
-        _ = ACTIVE.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
+        _ = ACTIVE.try_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
             Some(n.saturating_sub(1))
         });
     }

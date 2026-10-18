@@ -109,11 +109,10 @@ const SUB_CALL_PREVIEW_COUNT: usize = 8;
 const ARG_INDENT: &str = "  ";
 const ARG_CONTINUATION_INDENT: &str = "    ";
 
-/// 有自定义调用头的内置工具（`bash` 单独处理）。
+/// 有自定义调用头的内置工具（shell 类 `bash` / `powershell` 单独处理）。
 /// 其余工具（扩展工具，如 `mcp`）没有自定义调用头，按通用形式显示参数：
 /// 折叠时 `key=value` 排在同一行，展开时每个参数一行 `key: value`。
-const CUSTOM_CALL_HEADER_TOOLS: &[&str] =
-    &["read", "write", "edit", "ls", "grep", "find", "powershell"];
+const CUSTOM_CALL_HEADER_TOOLS: &[&str] = &["read", "write", "edit", "ls", "grep", "find"];
 
 /// 消息内可折叠块的类型（决定缺省展开态：thinking 跟随 `show_thinking`，其余跟随 `expand_all`）
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1647,15 +1646,15 @@ fn render_tool_output(
         if !text.is_empty() {
             lines.push(bg_line(Line::from(""), width, bg, 1));
             let out_lines: Vec<&str> = text.lines().collect();
-            let is_bash = name == "bash";
+            let is_shell = name == "bash" || name == "powershell";
             let style = if is_err && !expand_all {
                 theme.style(ERROR.0, ERROR.1)
             } else {
                 output
             };
 
-            // 折叠预览：bash 按视觉行（宽度折行后）取末尾，其他工具取开头原始行
-            // hint_before：bash 提示行在预览前；hint_after：非 bash 提示行在预览后
+            // 折叠预览：shell 类（bash / powershell）按视觉行（宽度折行后）取末尾，其他工具取开头原始行
+            // hint_before：shell 提示行在预览前；hint_after：非 shell 提示行在预览后
             let (preview, hint_before, hint_after): (Vec<String>, Option<String>, Option<String>) =
                 if expand_all {
                     (
@@ -1666,7 +1665,7 @@ fn render_tool_output(
                         None,
                         None,
                     )
-                } else if is_bash {
+                } else if is_shell {
                     let visual: Vec<String> = out_lines
                         .iter()
                         .flat_map(|l| wrap_text_lines(l, inner))
@@ -1686,7 +1685,7 @@ fn render_tool_output(
                     }
                 } else {
                     // MCP 结果折叠到 5 行，其余工具 20 行。
-                    // 与 bash 一致按**视觉行**（宽度折行后）取开头，否则一条超长逻辑行（minified JSON 等）会折出整屏。
+                    // 与 shell 类一致按**视觉行**（宽度折行后）取开头，否则一条超长逻辑行（minified JSON 等）会折出整屏。
                     let preview_lines = if name == "mcp" {
                         MCP_PREVIEW_LINES
                     } else {
@@ -1840,7 +1839,7 @@ fn render_sub_calls(
 
 /// 工具调用块头部：超宽时折行保留完整命令/路径（不截断、不溢出），返回一行或多行。
 ///
-/// - `bash`：整行 title 样式（`$ cmd (timeout Ns)`）；
+/// - shell 类（`bash` / `powershell`）：整行 title 样式（`$ cmd` / `PS> cmd`，带 timeout）；
 /// - `mcp`：`server/tool` 标题 + 参数（见 [`mcp_call_header`]）；
 /// - [`CUSTOM_CALL_HEADER_TOOLS`]：title + 路径/pattern + limit(muted)；
 /// - 其余工具：pi 的通用形式（[`generic_call_header`]）。
@@ -1852,12 +1851,13 @@ fn tool_call_header(
     inner: usize,
     expanded: bool,
 ) -> Vec<Line<'static>> {
-    if name == "bash" {
+    if name == "bash" || name == "powershell" {
         let cmd = args
             .get("command")
             .and_then(|v| v.as_str())
             .unwrap_or("...");
-        let mut text = format!("$ {}", sanitize_output(cmd).trim_end());
+        let prompt = if name == "bash" { "$" } else { "PS>" };
+        let mut text = format!("{} {}", prompt, sanitize_output(cmd).trim_end());
         if let Some(t) = args.get("timeout").and_then(|v| v.as_f64()) {
             text.push_str(&format!(" (timeout {}s)", t));
         }

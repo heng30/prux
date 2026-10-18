@@ -945,8 +945,13 @@ impl Extension for PlanMode {
         }
     }
 
-    /// plan mode 开启时拦截写操作：`edit`/`write` 直接拒绝，`bash` 仅放行命中只读白名单
-    /// 且不含破坏性模式的命令；未开启时一律放行（`Ok(None)`）。
+    /// plan mode 开启时拦截写操作：`edit`/`write` 直接拒绝，shell 类工具（`bash`/`powershell`）
+    /// 仅放行命中只读白名单（[`SAFE_PATTERNS`]）且不含破坏性模式的命令；未开启时一律放行（`Ok(None)`）。
+    ///
+    /// 白名单是 Unix 命令正则，PowerShell 的动-名词命令（`Get-ChildItem` 等）匹配不上，
+    /// 因此在 Windows 上 plan mode 会拦下绝大多数 powershell 命令——这是刻意的保守方向：
+    /// PowerShell 里 `rm`/`mv`/`cat` 等别名与 `Remove-Item`、`>` 重定向使白名单化风险太高，
+    /// 宁可多拦，由模型/用户退出 plan mode 再执行。
     fn before_tool_call(
         &self,
         name: &str,
@@ -959,14 +964,14 @@ impl Extension for PlanMode {
             "edit" | "write" => Err(ToolError(format!(
                 "Plan mode: {name} is disabled (read-only exploration). Use /plan to disable plan mode first."
             ))),
-            "bash" => {
+            "bash" | "powershell" => {
                 let command = args
                     .get("command")
                     .and_then(|v| v.as_str())
                     .unwrap_or_default();
                 if !is_safe_command(command) {
                     return Err(ToolError(format!(
-                        "Plan mode: command blocked (not allowlisted). Use /plan to disable plan mode first.\nCommand: {command}"
+                        "Plan mode: {name} command blocked (not allowlisted). Use /plan to disable plan mode first.\nCommand: {command}"
                     )));
                 }
                 Ok(None)
@@ -1625,6 +1630,14 @@ mod tests {
         assert!(bad_bash.is_err(), "destructive bash blocked");
         let ok_bash = ext.before_tool_call("bash", &serde_json::json!({"command":"ls -la"}));
         assert!(ok_bash.unwrap().is_none(), "read-only bash allowed");
+        // powershell 与 bash 同一条只读白名单（含工具名与白名单口径）
+        let ps = ext.before_tool_call(
+            "powershell",
+            &serde_json::json!({"command":"Get-ChildItem"}),
+        );
+        assert!(ps.is_err(), "powershell 也受 plan mode 约束");
+        let ps_safe = ext.before_tool_call("powershell", &serde_json::json!({"command":"ls -la"}));
+        assert!(ps_safe.unwrap().is_none(), "白名单内命令放行");
         let read = ext.before_tool_call("read", &serde_json::json!({"path":"x"}));
         assert!(read.unwrap().is_none(), "other tools allowed");
         set_enabled(false);

@@ -200,6 +200,10 @@ This release aligns prux with upstream pi 1.1.0.
 - `/giff` scrolling stays smooth on large diffs: highlighted lines are cached per file, view mode
   and theme, so scrolling no longer re-runs syntax highlighting on every key press or wheel notch,
   and holding `j`/`k` (or `↓`/`↑`) accelerates the step instead of moving one line per repeat.
+- The `powershell` tool works on Windows: it was advertised to the model but every call came back as
+  `Tool powershell not found`, because the built-in tool lookup did not list the name. It now shares
+  `bash`'s streaming output, truncation details and plan-mode read-only allowlist, and its call
+  header shows the command being run.
 
 ## 中文
 
@@ -352,3 +356,6 @@ This release aligns prux with upstream pi 1.1.0.
   `[paste #N ...]` 这类 marker 原文。
 - **`/giff` 大 diff 下滚动不再卡顿**：高亮结果按「文件 + 视图模式 + 主题」缓存，滚动与改窗口尺寸
   不再重跑语法高亮；`j`/`k`、`↓`/`↑` 按住不放时按间隔加速（孤立一次仍只走 1 行）。
+- **Windows 上 `powershell` 工具真正可用**：此前它已声明给模型，但每次调用都被回以
+  `Tool powershell not found`（内置工具判定没收录这个名字）。它现在与 `bash` 共用流式输出、截断
+  details 与 plan mode 只读白名单，调用块也会显示所执行的命令。

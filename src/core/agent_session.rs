@@ -44,6 +44,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::task::JoinHandle;
+use tools::BashOutcome;
 
 /// 分发内部JSON事件
 pub type JsonSink = Box<dyn FnMut(Value) + Send>;
@@ -3235,12 +3236,33 @@ impl Agent {
         tokio::spawn(async move { child.prompt(&user_message).await })
     }
 
-    /// 内置工具名（并行分发前过滤用）
+    /// 内置工具名（并行分发前过滤用）；名单以 [`tools::is_builtin_tool_name`] 为唯一真源，
+    /// 不要在本地另写一份 `matches!`（曾因此漏掉 Windows 的 `powershell`）。
     fn is_builtin_tool(name: &str) -> bool {
-        matches!(
-            name,
-            "read" | "write" | "edit" | "bash" | "grep" | "find" | "ls"
-        )
+        tools::is_builtin_tool_name(name)
+    }
+
+    /// 是否为 shell 类内置工具（`bash` / `powershell`）：两者的流式输出、截断 details 与
+    /// 收尾 `tool_execution_update` 走同一条路（见 [`Self::shell_output_details`]）。
+    fn is_shell_tool(name: &str) -> bool {
+        matches!(name, "bash" | "powershell")
+    }
+
+    /// shell 类工具结果的 details（供 TUI 的截断提示与展开取完整输出）：
+    /// `truncation` 为 `null` 表示未截断；`fullOutputPath` 是完整输出落盘路径，未截断时为 `None`。
+    fn shell_output_details(out: &BashOutcome) -> Value {
+        json!({
+            "truncation": if out.truncated {
+                json!({
+                    "truncated": true,
+                    "reason": "length",
+                    "fullOutputPath": out.full_output_path,
+                })
+            } else {
+                Value::Null
+            },
+            "fullOutputPath": out.full_output_path,
+        })
     }
 
     /// 内置工具执行（与 self 解耦：仅依赖 cwd）。
@@ -3314,11 +3336,13 @@ impl Agent {
                 if out.cancelled || out.timed_out {
                     Err(tools::ToolError(out.text))
                 } else {
+                    let details = Self::shell_output_details(&out);
                     let mut result = if out.exit_code.is_some_and(|c| c != 0) {
                         tools::ToolResult::error(out.text)
                     } else {
                         tools::ToolResult::text(out.text)
                     };
+                    result.details = Some(details);
                     result.structured_content = out.structured;
                     Ok(result)
                 }
@@ -3354,25 +3378,15 @@ impl Agent {
                 if out.cancelled || out.timed_out {
                     Err(tools::ToolError(out.text))
                 } else {
+                    let details = Self::shell_output_details(&out);
                     let mut result = if out.exit_code.is_some_and(|c| c != 0) {
                         tools::ToolResult::error(out.text)
                     } else {
                         tools::ToolResult::text(out.text)
                     };
 
+                    result.details = Some(details);
                     result.structured_content = out.structured;
-                    result.details = Some(json!({
-                        "truncation": if out.truncated {
-                            json!({
-                                "truncated": true,
-                                "reason": "length",
-                                "fullOutputPath": out.full_output_path,
-                            })
-                        } else {
-                            Value::Null
-                        },
-                        "fullOutputPath": out.full_output_path,
-                    }));
                     Ok(result)
                 }
             }
@@ -4322,12 +4336,12 @@ fn execute_one(
             Err(e) => FinalizedToolCall::error_result(&call, &name, &args, &e.0, false),
         };
 
-        // bash 流式更新收尾：输出被截断时补发带 details 的 tool_execution_update
+        // shell 类工具流式更新收尾：输出被截断时补发带 details 的 tool_execution_update
         let call_id = match &call {
             ContentBlock::ToolCall { id, .. } => id.clone(),
             _ => String::new(),
         };
-        if name == "bash"
+        if Agent::is_shell_tool(&name)
             && !f.is_error
             && let Some(details) = f.details.as_ref()
             && let Some(g) = &sink
@@ -5496,7 +5510,21 @@ mod tests {
         .unwrap()
     }
 
-    const BUILTIN_TOOLS: [&str; 7] = ["read", "bash", "edit", "write", "grep", "find", "ls"];
+    /// 声明层（[`tools::all_tool_names`]）与执行侧的内置判定（[`Agent::is_builtin_tool`] / [`ToolIndex`]）
+    /// 必须覆盖同一批名字。曾出现 `powershell` 只进了前者：Windows 上模型拿到它的 schema，
+    /// 真调用却只得 `Tool powershell not found`。
+    #[test]
+    fn every_declared_builtin_tool_resolves() {
+        let injected: Vec<InjectedChildTool> = Vec::new();
+        for name in tools::all_tool_names() {
+            assert!(Agent::is_builtin_tool(&name), "{name} 未被视为内置");
+            assert!(
+                ToolIndex::resolve(&injected, &name).exists(),
+                "{name} 已声明给模型却解析不到"
+            );
+        }
+        assert_eq!(Agent::is_builtin_tool("powershell"), cfg!(windows));
+    }
 
     /// 延迟工具（pi `exposure: deferred`）：未激活不进工具表/系统提示，
     /// 经 `tool_search` 激活（`activate_deferred_tools`）后下一轮可见。
@@ -5662,14 +5690,14 @@ mod tests {
         let agent = test_agent_selection(ToolSelection::NoBuiltinTools, vec![]);
         let active = agent.get_active_tools();
         assert!(
-            active.iter().all(|n| !BUILTIN_TOOLS.contains(&n.as_str())),
+            active.iter().all(|n| !tools::all_tool_names().contains(n)),
             "active 不应含内置: {:?}",
             active
         );
         // getAllTools 注册表仍含全量内置（pi：--no-builtin-tools 只影响 active 集）
         let all = agent.get_all_tools();
         assert!(
-            BUILTIN_TOOLS.iter().all(|b| all.iter().any(|n| n == b)),
+            tools::all_tool_names().iter().all(|b| all.contains(b)),
             "all: {:?}",
             all
         );

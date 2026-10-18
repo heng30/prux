@@ -8,11 +8,11 @@
 //! 结束后恢复——因此必须在 TUI 接管输入**之前**调用一次。
 
 use crate::utils::color::Rgb;
-use std::{
-    io::Write,
-    sync::OnceLock,
-    time::{Duration, Instant},
-};
+use std::{sync::OnceLock, time::Duration};
+
+/// 仅 Unix 分支会向终端写查询串并限时轮询读取回复。
+#[cfg(unix)]
+use std::{io::Write, time::Instant};
 
 /// 配色查询默认超时（毫秒）
 pub const QUERY_TIMEOUT_MS: u64 = 100;
@@ -332,7 +332,8 @@ pub(crate) fn query_terminal_replies(query: &str, timeout: Duration) -> Vec<u8> 
     }
 }
 
-/// 缓冲区里是否已经出现 DA1 回复
+/// 缓冲区里是否已经出现 DA1 回复（仅 Unix 会去读回复，故只在 Unix 编译）
+#[cfg(unix)]
 fn saw_device_attributes(mut buf: Vec<u8>) -> bool {
     while let Some(reply) = take_reply(&mut buf) {
         if reply == Reply::DeviceAttributes {
@@ -342,9 +343,11 @@ fn saw_device_attributes(mut buf: Vec<u8>) -> bool {
     false
 }
 
-/// raw 模式守卫：进入时开启，析构时关闭
+/// raw 模式守卫：进入时开启，析构时关闭（仅 Unix 会开关 raw 模式，故只在 Unix 编译）
+#[cfg(unix)]
 struct RawModeGuard;
 
+#[cfg(unix)]
 impl RawModeGuard {
     /// 开启终端 raw 模式并返回守卫；开启失败返回 `None`。
     fn acquire() -> Option<Self> {
@@ -353,6 +356,7 @@ impl RawModeGuard {
     }
 }
 
+#[cfg(unix)]
 impl Drop for RawModeGuard {
     /// 析构时关闭 raw 模式（恢复之前的终端状态）。
     fn drop(&mut self) {
@@ -378,12 +382,6 @@ fn read_available(deadline: Instant, buf: &mut [u8]) -> Option<usize> {
         Ok(0) | Err(_) => None,
         Ok(_) => nix::unistd::read(fd, buf).ok(),
     }
-}
-
-/// 非 Unix 平台没有 poll 可等，恒返回 `None`（不读取任何输入）。
-#[cfg(not(unix))]
-fn read_available(_deadline: Instant, _buf: &mut [u8]) -> Option<usize> {
-    None
 }
 
 #[cfg(test)]

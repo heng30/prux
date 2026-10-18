@@ -150,7 +150,7 @@ pub async fn execute_powershell(
     let full = collector
         .full_output
         .as_ref()
-        .map(|f| f.path().to_string_lossy().to_string());
+        .map(|(_, path)| path.to_string_lossy().to_string());
     let total_lines = collector.completed_lines + if collector.has_open_line { 1 } else { 0 };
     let truncated = total_lines > DEFAULT_MAX_LINES || collector.total_bytes > DEFAULT_MAX_BYTES;
     let mut output_text = if truncated {
