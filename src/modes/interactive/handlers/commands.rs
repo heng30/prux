@@ -19,6 +19,7 @@ use crate::{
     modes::interactive::{
         agent_actor::AgentCommand,
         app::{App, MsgLevel, SysSpan, WorkingKind},
+        giff::{self, GiffView},
         theme::{Theme, available_theme_names},
     },
     utils::{glyphs::DEF_DONE, paths::resolve_path, wheel::WheelScrollAccelerator},
@@ -90,6 +91,7 @@ const BUILTIN_COMMANDS: &[(&str, &str, &[SubcommandDef])] = &[
     ("logout", "Remove stored API key for a provider", &[]),
     ("extension", "Enable/disable extensions", &[]),
     ("dock", "Toggle the dock panel", &[]),
+    ("giff", "Review uncommitted changes", &[]),
 ];
 
 /// 扩展命令：执行入口注册表
@@ -149,6 +151,7 @@ impl App {
             "scoped-models" => self.cmd_scoped_models(),
             "hotkeys" => self.cmd_hotkeys(),
             "dock" => self.cmd_dock(),
+            "giff" => self.cmd_giff(),
             "bug" => self.cmd_bug(raw),
             "fork" => self.cmd_fork(),
             "clone" => self.cmd_clone(),
@@ -181,6 +184,30 @@ impl App {
     fn cmd_quit(&mut self) -> bool {
         self.quit_requested = true;
         true
+    }
+
+    /// 处理 `/giff`：采集工作树未提交改动并打开审阅视图。
+    ///
+    /// 无改动时只提示不打开；上次退出时留下的文件与滚动位置（`App::giff_restore`）
+    /// 在本次数据里仍存在时恢复。
+    fn cmd_giff(&mut self) {
+        match giff::collect_uncommitted() {
+            Ok((changes, _, _)) if changes.is_empty() => {
+                self.push_msg("No uncommitted changes.".to_string(), MsgLevel::Info);
+            }
+            Ok((changes, left, right)) => {
+                self.giff = Some(GiffView::new(
+                    changes,
+                    left,
+                    right,
+                    &self.theme,
+                    &self.giff_restore,
+                ));
+                self.full_redraw = true;
+                self.dirty = true;
+            }
+            Err(err) => self.push_msg(format!("/giff: {err}"), MsgLevel::Error),
+        }
     }
 
     /// 处理 `/compact [自定义摘要指令]`：置待压缩标志并记录指令（缺省则用内置摘要提示词）；

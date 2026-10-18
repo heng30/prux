@@ -77,6 +77,17 @@ pub fn session<'a>(lang: &str, theme: &'a Theme) -> Option<HighlightSession<'a>>
     })
 }
 
+/// 按文件名（扩展名 / 首行 shebang 由语法集自行判定）创建高亮会话；
+/// 识别不出语言时返回 None（调用方回退纯文本）。
+pub fn session_for_filename<'a>(path: &str, theme: &'a Theme) -> Option<HighlightSession<'a>> {
+    let hl = highlighter();
+    let syntax = hl.set.find_syntax_for_file(path).ok().flatten()?;
+    Some(HighlightSession {
+        lines: HighlightLines::new(syntax, theme),
+        set: &hl.set,
+    })
+}
+
 impl HighlightSession<'_> {
     /// 高亮一行，产出 (样式, 文本) 序列；解析失败回退 `base` 色整行。
     pub fn line(&mut self, text: &str, base: RtStyle) -> Vec<(RtStyle, String)> {

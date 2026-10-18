@@ -131,6 +131,15 @@ This release aligns prux with upstream pi 1.1.0.
   the 140 ESR only answers once `remote.active-protocols` is enabled in its profile), but adding it
   to `browsers` by hand works — it gets its own flags (`--no-remote --new-instance`) and its failure
   message says the remote agent serves WebDriver BiDi instead.
+- **`/giff` reviews uncommitted changes in a full-screen view.** It shows the working tree
+  against `HEAD` as a file list plus a diff pane, with syntax highlighting and `u` toggling between
+  side-by-side and unified layouts; `Tab` / `h` / `l` move the focus, `j`/`k`, the page keys and
+  `Home`/`End` navigate, and `?` opens a help panel. `i` brings up the main input box — the message
+  you send lands in the main transcript, which is also why `Enter` closes the view — `Esc` leaves
+  input mode without leaving the view, and `q` quits. Opening it again restores the file and scroll
+  position you left. The view is read-only: it runs `git diff` and nothing else, so no file is
+  written and nothing is rebased or committed. It renders with the current theme, hides the banner
+  and keeps the bottom bar.
 - **These new extensions are disabled by default** and live in the `Dev` and `Creator`
   extension modes: `cache-usage`, `doctor`, `btw`, `recap`, `open`, `pdf`, `cache-watch`,
   `session-search` (turn them on in the `/extension` panel).
@@ -291,6 +300,12 @@ This release aligns prux with upstream pi 1.1.0.
   Firefox 有意不列（141 起移除了 CDP，140 ESR 也要 profile 里开了 `remote.active-protocols` 才应答），
   但手工写进 `browsers` 仍可用——它拿到的是自己的开关（`--no-remote --new-instance`），失败时报错会
   点明远程端口只剩 WebDriver BiDi。
+- **新增 `/giff`：全屏审阅工作树未提交改动**。左侧是文件列表、右侧是 diff，带语法高亮，
+  `u` 在双栏与统一视图间切换；`Tab` / `h` / `l` 切焦点，`j`/`k`、翻页键与 `Home`/`End` 导航，
+  `?` 打开帮助面板。按 `i` 调出主页输入框（发出的消息落回主页消息区，这也是回车提交会退出视图的
+  原因），`Esc` 退出输入态但留在视图内，`q` 退出视图；再次 `/giff` 会恢复上次看的文件与滚动位置。
+  视图**只读**：只跑 `git diff`，不写文件、不 rebase、不提交。渲染用当前主题，隐藏顶部 banner、
+  保留底栏。
 - **这些新扩展都默认不启用**，且只在 `Dev` / `Creator` 扩展模式下可用：
   `cache-usage`、`doctor`、`btw`、`recap`、`open`、`pdf`、`cache-watch`、`session-search`（在 `/extension` 面板里开启）。
 

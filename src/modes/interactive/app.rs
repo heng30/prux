@@ -26,9 +26,15 @@ use crate::{
         settings_manager::HISTORY_MAX_ENTRIES_DEFAULT, skills::Skill,
     },
     modes::interactive::{
-        agent_actor::WorkerHandle, ext_settings::ExtSettingsPanel, oauth_flow::OAuthLogin, render,
-        render::messages::NestedCallView, session_selector::SessionSelector,
-        settings_selector::SettingsSelector, skills_panel::SkillRow,
+        agent_actor::WorkerHandle,
+        ext_settings::ExtSettingsPanel,
+        giff::{GiffRestore, GiffView},
+        oauth_flow::OAuthLogin,
+        render,
+        render::messages::NestedCallView,
+        session_selector::SessionSelector,
+        settings_selector::SettingsSelector,
+        skills_panel::SkillRow,
     },
     utils::{
         self,
@@ -602,6 +608,10 @@ pub struct App {
     pub session_selector: SessionSelector,
     /// /settings 设置选择器
     pub settings_selector: SettingsSelector,
+    /// `/giff` 审阅视图（None = 未打开）。
+    pub giff: Option<GiffView>,
+    /// `/giff` 退出后保留的位置状态，下次打开时恢复「上次的文件与滚动位置」。
+    pub giff_restore: GiffRestore,
     /// 扩展设置面板（占据输入框区域）：Space/Enter 循环切换扩展设置
     pub ext_settings: ExtSettingsPanel,
     /// /settings Autocomplete max items：候选列表最大展示行数
@@ -937,6 +947,8 @@ impl App {
             program_status: ProgramStatusReporter::new(false),
             session_selector: SessionSelector::new(),
             settings_selector: SettingsSelector::new(),
+            giff: None,
+            giff_restore: GiffRestore::default(),
             ext_settings: ExtSettingsPanel::new(),
             autocomplete_max_visible: 5,
             wheel_accel: WheelScrollAccelerator::default(),

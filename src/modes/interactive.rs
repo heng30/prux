@@ -11,6 +11,7 @@ pub mod agent_actor;
 pub mod app;
 pub mod editor;
 pub mod ext_settings;
+pub mod giff;
 pub mod handlers;
 pub mod line_input;
 pub mod oauth_flow;

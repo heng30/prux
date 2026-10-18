@@ -54,6 +54,7 @@ use self::{
 };
 use super::{
     app::{App, MsgLevel, SuggestionKind},
+    giff::{GiffView, Pane},
     line_input::printable_char,
 };
 use crate::{
@@ -212,6 +213,11 @@ pub fn handle_event(shared: &Rc<RefCell<App>>, event: Event) -> KeyAction {
         return st.handle_overlay_key(&key);
     }
 
+    // `/giff` 审阅视图：存在时接管键盘（输入态下编辑键交给主页编辑器）
+    if st.giff.is_some() {
+        return handle_giff_key(&mut st, &key);
+    }
+
     // 模态选择面板优先于忙碌态捷径：busy 时经 busy_safe 命令（如 /goal）弹出的
     // 面板也必须能被 Enter 确认、Esc/Ctrl+C 关闭，否则这些键会被 handle_busy_key 当成 steer/中断吞掉。
     if st.panel.active {
@@ -261,6 +267,176 @@ pub fn handle_event(shared: &Rc<RefCell<App>>, event: Event) -> KeyAction {
             KeyAction::Continue
         }
         EditorAction::Continue => KeyAction::Continue,
+    }
+}
+
+impl App {
+    /// 关闭 `/giff` 审阅视图，并把当前文件与滚动位置留到 [`App::giff_restore`]，
+    /// 供下次 `/giff` 恢复。
+    pub(super) fn close_giff(&mut self) {
+        if let Some(view) = self.giff.take() {
+            self.giff_restore = view.into_restore();
+        }
+        self.full_redraw = true;
+        self.dirty = true;
+    }
+}
+
+/// `/giff` 视图按键。
+///
+/// 非输入态：`q` 退出视图、`i` 进入输入态、`?` 开关帮助，其余键走视图导航；
+/// `Ctrl+C` 与 `q` 同义。输入态：`Esc` 只退出输入态（草稿保留），其余编辑键交给主页
+/// 编辑器；`Enter` 提交时先关掉视图，让消息与回复落在主页聊天区。
+fn handle_giff_key(st: &mut App, key: &KeyEvent) -> KeyAction {
+    if st.giff.as_ref().is_some_and(GiffView::is_input_active) {
+        // Esc：退出输入态，不退出视图，也不清空草稿
+        if key.code == KeyCode::Esc && key.modifiers.is_empty() {
+            if let Some(view) = st.giff.as_mut() {
+                view.set_input_active(false);
+            }
+            st.dirty = true;
+            return KeyAction::Continue;
+        }
+
+        // 外部编辑器在视图内不支持：吞掉，避免草稿被临时文件流程带走
+        if keybindings::get_global().matches(key, "app.editor.external") {
+            return KeyAction::Continue;
+        }
+
+        // Enter：有内容时提交并退出视图（回复要显示在主页聊天区）；
+        // 空回车不关视图（否则误按一下就从审阅界面掉出去）
+        if keybindings::get_global().matches(key, "tui.input.submit")
+            && !key.modifiers.contains(KeyModifiers::SHIFT)
+            && !st.editor.is_empty()
+        {
+            st.close_giff();
+        }
+
+        return match handle_editor_key(st, key) {
+            EditorAction::Quit => KeyAction::Quit,
+            EditorAction::Continue | EditorAction::OpenExternal(_) => KeyAction::Continue,
+        };
+    }
+
+    // Ctrl+C：与 q 同义退出
+    if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+        st.close_giff();
+        return KeyAction::Continue;
+    }
+
+    // 帮助模态打开时只认关闭键
+    let help_open = st.giff.as_ref().is_some_and(GiffView::is_help_open);
+    if help_open {
+        if matches!(
+            key.code,
+            KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q')
+        ) {
+            if let Some(view) = st.giff.as_mut() {
+                view.close_help();
+            }
+            st.dirty = true;
+        }
+        return KeyAction::Continue;
+    }
+
+    match key.code {
+        KeyCode::Char('q') => st.close_giff(),
+        KeyCode::Char('i') => {
+            if let Some(view) = st.giff.as_mut() {
+                view.set_input_active(true);
+            }
+            st.dirty = true;
+        }
+        KeyCode::Char('?') => {
+            if let Some(view) = st.giff.as_mut() {
+                view.toggle_help();
+            }
+            st.dirty = true;
+        }
+        _ => {
+            if let Some(view) = st.giff.as_mut()
+                && giff_navigate(view, key)
+            {
+                st.dirty = true;
+            }
+        }
+    }
+
+    KeyAction::Continue
+}
+
+/// `/giff` 非输入态的导航键：焦点在文件列表时移动选择、在内容区时滚动；
+/// 返回是否消费了该键。
+fn giff_navigate(view: &mut GiffView, key: &KeyEvent) -> bool {
+    let in_file_list = view.focused_pane() == Pane::FileList;
+    let page = view.page_rows().max(1) as isize;
+
+    match key.code {
+        KeyCode::Char('j') | KeyCode::Down => {
+            if in_file_list {
+                view.move_file(1);
+            } else {
+                view.scroll_by(1);
+            }
+            true
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            if in_file_list {
+                view.move_file(-1);
+            } else {
+                view.scroll_by(-1);
+            }
+            true
+        }
+        KeyCode::PageDown => {
+            if in_file_list {
+                view.move_file(page);
+            } else {
+                view.page(true);
+            }
+            true
+        }
+        KeyCode::PageUp => {
+            if in_file_list {
+                view.move_file(-page);
+            } else {
+                view.page(false);
+            }
+            true
+        }
+        KeyCode::Home => {
+            if in_file_list {
+                view.select_edge(false);
+            } else {
+                view.scroll_to_top();
+            }
+            true
+        }
+        KeyCode::End => {
+            if in_file_list {
+                view.select_edge(true);
+            } else {
+                view.scroll_to_bottom();
+            }
+            true
+        }
+        KeyCode::Tab => {
+            view.toggle_focus();
+            true
+        }
+        KeyCode::Char('h') | KeyCode::Left => {
+            view.focus(Pane::FileList);
+            true
+        }
+        KeyCode::Char('l') | KeyCode::Right => {
+            view.focus(Pane::DiffContent);
+            true
+        }
+        KeyCode::Char('u') => {
+            view.toggle_view();
+            true
+        }
+        _ => false,
     }
 }
 
@@ -970,6 +1146,52 @@ mod tests {
     /// 替代全局锁 + 进程级 env 劫持（并行互不干扰、无死锁）。
     fn test_agent_dir() -> crate::test_support::AgentDirGuard {
         crate::test_support::AgentDirGuard::temp()
+    }
+
+    /// `/giff` 视图：`i` 进入输入态、`Esc` 只退出输入态（视图与草稿保留）、
+    /// `q` 关闭视图并留下恢复状态；输入态下可打印字符进主页输入框。
+    #[test]
+    fn giff_view_input_and_quit_keys() {
+        use crate::modes::interactive::giff::{FileChanges, GiffRestore, GiffView};
+
+        let _dir = test_agent_dir();
+        let shared = Rc::new(RefCell::new(App::new()));
+        let view = {
+            let st = shared.borrow();
+            GiffView::new(
+                FileChanges::new(),
+                "HEAD".to_string(),
+                "Working Tree".to_string(),
+                &st.theme,
+                &GiffRestore::default(),
+            )
+        };
+        shared.borrow_mut().giff = Some(view);
+
+        let press = |shared: &Rc<RefCell<App>>, code: KeyCode| {
+            handle_event(shared, Event::Key(KeyEvent::new(code, KeyModifiers::NONE)));
+        };
+
+        // i：进入输入态，且不进字符
+        press(&shared, KeyCode::Char('i'));
+        assert!(shared.borrow().giff.as_ref().unwrap().is_input_active());
+        assert_eq!(shared.borrow().editor.text(), "");
+
+        // 输入态：字符进主页输入框
+        press(&shared, KeyCode::Char('h'));
+        press(&shared, KeyCode::Char('i'));
+        assert_eq!(shared.borrow().editor.text(), "hi");
+
+        // Esc：只退出输入态，视图还在，草稿保留
+        press(&shared, KeyCode::Esc);
+        assert!(!shared.borrow().giff.as_ref().unwrap().is_input_active());
+        assert!(shared.borrow().giff.is_some(), "Esc 不退出视图");
+        assert_eq!(shared.borrow().editor.text(), "hi");
+
+        // q：关闭视图并触发整屏重绘
+        press(&shared, KeyCode::Char('q'));
+        assert!(shared.borrow().giff.is_none());
+        assert!(shared.borrow().full_redraw);
     }
 
     /// 回归：Tab 补全（命令候选与路径补全）修改编辑器后必须置脏，否则主循环

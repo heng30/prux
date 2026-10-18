@@ -17,18 +17,19 @@ mod session_selector;
 mod settings_selector;
 mod status;
 mod suggestion;
-mod syntax_hl;
 
 pub(crate) mod image;
 pub(crate) mod messages;
 pub(crate) mod overlay;
 pub(crate) mod panel;
 pub(crate) mod startup;
+pub(crate) mod syntax_hl;
 pub(crate) mod trust;
 
 use self::history::message_lines;
 use super::{
     app::{App, ClickRow, LinkRow, MouseSel},
+    giff::{self, GiffView},
     panel::PanelKind,
     theme::{Theme, color},
 };
@@ -217,6 +218,13 @@ fn render_frame_widgets(frame: &mut Frame, app: &mut App) {
         constraints.push(Constraint::Length(footer_height));
     }
 
+    // `/giff` 审阅视图：接管整屏（不渲染 banner），底部保留 prux 底栏；
+    // 输入态时在底栏之上插入主页输入框。
+    if app.giff.is_some() {
+        render_fullscreen_giff(frame, size, app, &footer_lines);
+        return;
+    }
+
     // 全屏覆盖层：接管消息区/停靠/状态/输入（banner 与底栏保留）
     if let Some(OverlaySize::Fullscreen) = app.overlay.as_ref().map(|o| o.view.size) {
         render_fullscreen_overlay(frame, size, app, &banner_lines, &footer_lines);
@@ -308,6 +316,53 @@ fn render_fullscreen_overlay(
     }
     if footer_height > 0 {
         status::render_bottom_bar(frame, chunks[idx], app, footer_lines);
+    }
+}
+
+/// 渲染 `/giff` 审阅视图：占用整屏（**不渲染 banner**），底部保留 prux 底栏；
+/// 处于输入态时在底栏之上插入主页输入框与光标（`i` 进入、`Esc` 退出输入态）。
+fn render_fullscreen_giff(
+    frame: &mut Frame,
+    area: Rect,
+    app: &mut App,
+    footer_lines: &[FooterLine],
+) {
+    let width = area.width.max(20) as usize;
+    let input_lines = if app.giff.as_ref().is_some_and(GiffView::is_input_active) {
+        // 输入区高度按主页同一套折行计算，保证长草稿不会被压扁
+        layout_heights(app, width).2
+    } else {
+        0
+    };
+    let footer_height = footer_lines.len() as u16;
+
+    let mut constraints = vec![Constraint::Min(1), Constraint::Length(input_lines)];
+    if footer_height > 0 {
+        constraints.push(Constraint::Length(footer_height));
+    }
+    let chunks = Layout::vertical(constraints).split(area);
+
+    // 拆开字段借用：视图渲染要 `&mut`，主题要 `&`
+    let App {
+        giff: Some(view),
+        theme,
+        ..
+    } = app
+    else {
+        return;
+    };
+    giff::render::render(frame, chunks[0], view, theme);
+
+    let mut idx = 1;
+    if input_lines > 0 {
+        render_input_region(frame, chunks[idx], app);
+        idx += 1;
+    }
+    if footer_height > 0 {
+        status::render_bottom_bar(frame, chunks[idx], app, footer_lines);
+    }
+    if input_lines > 0 {
+        render_cursor(frame, chunks[1], app, width);
     }
 }
 

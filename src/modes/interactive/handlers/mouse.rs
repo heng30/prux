@@ -12,6 +12,7 @@ use crate::{
     },
 };
 use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use ratatui::layout::Rect;
 use std::{cell::RefCell, rc::Rc};
 
 /// Alt+滚轮加速倍数：按住 Alt 滚轮，每次滚动行数 ×5（消息区 3→15，停靠面板 1→5），用于快速跳过长回复。
@@ -21,13 +22,21 @@ const DRAG_EDGE_STEP: usize = 2;
 /// 指针停留在视口边缘的 tick 数（满阈值才持续滚动，避免选择边缘行时的误触）
 const EDGE_DWELL_TICKS: u8 = 3;
 
-/// 本次滚轮事件应滚动的行数：由 [`crate::utils::wheel::WheelScrollAccelerator`] 按
-/// 手势速度换算（固定值设置则恒为该值），再乘以 Alt 加速倍数。
-/// 每次滚轮事件只调用一次（加速器有跨事件状态）。
-///
 /// 处理鼠标事件：滚轮滚动消息区、左键拖选文本
 pub(super) fn handle_mouse_event(shared: &Rc<RefCell<App>>, mouse: MouseEvent) {
     let mut st = shared.borrow_mut();
+
+    // `/giff` 审阅视图：只处理滚轮（按鼠标所在窗格滚），其余鼠标行为不参与
+    if st.giff.is_some() {
+        if matches!(
+            mouse.kind,
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+        ) {
+            st.giff_wheel(&mouse);
+        }
+        return;
+    }
+
     match mouse.kind {
         MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => st.handle_mouse_wheel(&mouse),
         MouseEventKind::Down(MouseButton::Left) => st.handle_mouse_left_down(&mouse),
@@ -38,7 +47,43 @@ pub(super) fn handle_mouse_event(shared: &Rc<RefCell<App>>, mouse: MouseEvent) {
     }
 }
 
+/// 点 `(column, row)` 是否落在 `area` 内（鼠标命中判定）。
+fn rect_contains(area: Rect, column: u16, row: u16) -> bool {
+    column >= area.x
+        && column < area.x.saturating_add(area.width)
+        && row >= area.y
+        && row < area.y.saturating_add(area.height)
+}
+
 impl App {
+    /// `/giff` 视图的滚轮：鼠标落在文件列表上时移动选中文件，否则滚动当前文件的 diff。
+    fn giff_wheel(&mut self, mouse: &MouseEvent) {
+        if self.giff.as_ref().is_some_and(|view| view.is_help_open()) {
+            return;
+        }
+
+        let lines = self.wheel_lines(mouse);
+        let delta = if mouse.kind == MouseEventKind::ScrollDown {
+            lines as isize
+        } else {
+            -(lines as isize)
+        };
+
+        let Some(view) = self.giff.as_mut() else {
+            return;
+        };
+
+        if view
+            .file_list_area()
+            .is_some_and(|area| rect_contains(area, mouse.column, mouse.row))
+        {
+            view.move_file(delta);
+        } else {
+            view.scroll_by(delta);
+        }
+        self.dirty = true;
+    }
+
     /// 本次滚轮事件应滚动的行数：由 [`crate::utils::wheel::WheelScrollAccelerator`] 按
     /// 手势速度换算（固定值设置则恒为该值），再乘以 Alt 加速倍数。
     /// 每次滚轮事件只调用一次（加速器有跨事件状态）。
