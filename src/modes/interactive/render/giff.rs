@@ -6,7 +6,7 @@
 use super::syntax_hl;
 use crate::{
     modes::interactive::{
-        giff::{GiffStyle, GiffView, LineChange, Pane, ViewMode},
+        giff::{GiffContentCache, GiffStyle, GiffView, LineChange, Pane, ViewMode},
         theme::Theme,
     },
     utils::glyphs::DEF_ELLIPSIS,
@@ -30,6 +30,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 pub(super) fn render(frame: &mut Frame, area: Rect, view: &mut GiffView, theme: &Theme) {
     view.style = GiffStyle::from_theme(theme);
     ensure_syntect_theme(view, theme);
+    ensure_content_cache(view);
 
     let chunks = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(area);
 
@@ -199,12 +200,13 @@ fn render_file_list(frame: &mut Frame, view: &GiffView, area: Rect) {
 }
 
 /// 双栏模式下的一栏：标题带百分比位置，内容按 `scroll` 滚动，超出视口时右侧画滚动条。
+///
+/// `lines` 是 [`GiffContentCache`] 里已高亮的行（本函数不再触发语法高亮）。
 #[allow(clippy::too_many_arguments)]
 fn render_diff_pane(
     frame: &mut Frame,
     title: &str,
-    lines: &[LineChange],
-    filename: &str,
+    lines: &[Line<'static>],
     scroll: usize,
     is_focused: bool,
     area: Rect,
@@ -222,8 +224,7 @@ fn render_diff_pane(
         Style::default().fg(t.fg_dim)
     };
 
-    let highlighted = highlight_line_changes(lines, filename, t, view.syntect_theme.as_ref());
-    let total_lines = highlighted.len();
+    let total_lines = lines.len();
     let visible_height = area.height.saturating_sub(2) as usize;
 
     let title_text = if total_lines > visible_height {
@@ -241,9 +242,11 @@ fn render_diff_pane(
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(border_color));
 
-    let paragraph = Paragraph::new(Text::from(highlighted))
-        .block(block)
-        .scroll((scroll.min(u16::MAX as usize) as u16, 0));
+    // 只把可见窗口交给 Paragraph：否则每帧都要遍历/克隆整份 diff（大文件下就是逐帧几百毫秒）
+    let start = scroll.min(total_lines);
+    let end = start.saturating_add(visible_height).min(total_lines);
+    let window: Vec<Line<'static>> = lines[start..end].to_vec();
+    let paragraph = Paragraph::new(Text::from(window)).block(block);
     frame.render_widget(paragraph, area);
 
     if total_lines > visible_height {
@@ -270,9 +273,6 @@ fn render_side_by_side(frame: &mut Frame, view: &GiffView, base_area: Rect, head
     let Some(current_file) = view.current_file() else {
         return;
     };
-    let Some((base_lines, head_lines)) = view.file_changes.get(current_file) else {
-        return;
-    };
 
     let scroll = view
         .scroll_positions
@@ -280,13 +280,14 @@ fn render_side_by_side(frame: &mut Frame, view: &GiffView, base_area: Rect, head
         .copied()
         .unwrap_or(0);
     let is_focused = view.focused_pane == Pane::DiffContent;
+    let Some(cache) = view.content_cache.as_ref() else {
+        return;
+    };
 
-    let (aligned_base, aligned_head) = align_lines(base_lines, head_lines);
     render_diff_pane(
         frame,
         &view.left_label,
-        &aligned_base,
-        current_file,
+        &cache.left,
         scroll,
         is_focused,
         base_area,
@@ -295,8 +296,7 @@ fn render_side_by_side(frame: &mut Frame, view: &GiffView, base_area: Rect, head
     render_diff_pane(
         frame,
         &view.right_label,
-        &aligned_head,
-        current_file,
+        &cache.right,
         scroll,
         is_focused,
         head_area,
@@ -309,9 +309,6 @@ fn render_unified_diff(frame: &mut Frame, view: &GiffView, area: Rect) {
     let Some(current_file) = view.current_file() else {
         return;
     };
-    let Some((base_lines, head_lines)) = view.file_changes.get(current_file) else {
-        return;
-    };
 
     let scroll = view
         .scroll_positions
@@ -319,19 +316,12 @@ fn render_unified_diff(frame: &mut Frame, view: &GiffView, area: Rect) {
         .copied()
         .unwrap_or(0);
     let is_focused = view.focused_pane == Pane::DiffContent;
-    let unified = build_unified_lines(base_lines, head_lines);
+    let Some(cache) = view.content_cache.as_ref() else {
+        return;
+    };
     let title = format!("{} vs {}", view.left_label, view.right_label);
 
-    render_diff_pane(
-        frame,
-        &title,
-        &unified,
-        current_file,
-        scroll,
-        is_focused,
-        area,
-        view,
-    );
+    render_diff_pane(frame, &title, &cache.right, scroll, is_focused, area, view);
 }
 
 /// 生成左右对齐的行序列：改动块内逐行配对，短的一侧补 `(0, "")` 占位行。
@@ -384,75 +374,6 @@ fn align_lines(
     }
 
     (aligned_base, aligned_head)
-}
-
-/// 双栏模式下对齐后的总行数（不分配行序列，供滚动夹取使用）。
-fn aligned_line_count(base_lines: &[LineChange], head_lines: &[LineChange]) -> usize {
-    let mut count = 0;
-    let mut bi = 0;
-    let mut hi = 0;
-
-    while bi < base_lines.len() || hi < head_lines.len() {
-        let b_is_change = bi < base_lines.len() && base_lines[bi].1.starts_with('-');
-        let h_is_change = hi < head_lines.len() && head_lines[hi].1.starts_with('+');
-
-        if b_is_change || h_is_change {
-            let mut b_count = 0;
-            let mut h_count = 0;
-            while bi < base_lines.len() && base_lines[bi].1.starts_with('-') {
-                b_count += 1;
-                bi += 1;
-            }
-            while hi < head_lines.len() && head_lines[hi].1.starts_with('+') {
-                h_count += 1;
-                hi += 1;
-            }
-            count += b_count.max(h_count);
-        } else {
-            if bi < base_lines.len() {
-                bi += 1;
-            }
-            if hi < head_lines.len() {
-                hi += 1;
-            }
-            count += 1;
-        }
-    }
-
-    count
-}
-
-/// 统一视图下的总行数（不分配行序列，供滚动夹取使用）。
-fn unified_line_count(base_lines: &[LineChange], head_lines: &[LineChange]) -> usize {
-    let mut count = 0;
-    let mut bi = 0;
-    let mut hi = 0;
-
-    while bi < base_lines.len() || hi < head_lines.len() {
-        let b_is_change = bi < base_lines.len() && base_lines[bi].1.starts_with('-');
-        let h_is_change = hi < head_lines.len() && head_lines[hi].1.starts_with('+');
-
-        if b_is_change || h_is_change {
-            while bi < base_lines.len() && base_lines[bi].1.starts_with('-') {
-                count += 1;
-                bi += 1;
-            }
-            while hi < head_lines.len() && head_lines[hi].1.starts_with('+') {
-                count += 1;
-                hi += 1;
-            }
-        } else {
-            if bi < base_lines.len() {
-                bi += 1;
-            }
-            if hi < head_lines.len() {
-                hi += 1;
-            }
-            count += 1;
-        }
-    }
-
-    count
 }
 
 /// 生成统一视图的行序列：同一改动块内先列删除、再列新增，上下文行取左侧一份。
@@ -728,17 +649,71 @@ fn centered_rect(width: u16, height: u16, r: Rect) -> Rect {
     .split(popup_layout[1])[1]
 }
 
-/// 把当前文件的滚动偏移夹到合法范围（内容变短 / 窗口变高时回退）。
-fn clamp_scroll(view: &mut GiffView, visible: usize) {
+/// 按需重建当前文件的高亮缓存。
+///
+/// 命中条件 = 文件 + 视图模式 + 主题指纹；滚动位置与窗口尺寸不在键里（行内容与它们无关），
+/// 所以滚动只会走到这里又直接返回，不再重跑 syntect。
+fn ensure_content_cache(view: &mut GiffView) {
     let Some(file) = view.current_file().map(str::to_string) else {
+        view.content_cache = None;
         return;
     };
-    let content_len = match view.file_changes.get(&file) {
-        Some((base, head)) => match view.view_mode {
-            ViewMode::SideBySide => aligned_line_count(base, head),
-            ViewMode::Unified => unified_line_count(base, head),
-        },
-        None => return,
+
+    if view.content_cache.as_ref().is_some_and(|cache| {
+        cache.file == file && cache.view_mode == view.view_mode && cache.theme_fp == view.syntect_fp
+    }) {
+        return;
+    }
+
+    let Some((base_lines, head_lines)) = view.file_changes.get(&file) else {
+        view.content_cache = None;
+        return;
+    };
+
+    let (left, right) = match view.view_mode {
+        ViewMode::SideBySide => {
+            let (aligned_base, aligned_head) = align_lines(base_lines, head_lines);
+            (
+                highlight_line_changes(
+                    &aligned_base,
+                    &file,
+                    &view.style,
+                    view.syntect_theme.as_ref(),
+                ),
+                highlight_line_changes(
+                    &aligned_head,
+                    &file,
+                    &view.style,
+                    view.syntect_theme.as_ref(),
+                ),
+            )
+        }
+        ViewMode::Unified => {
+            let unified = build_unified_lines(base_lines, head_lines);
+            (
+                Vec::new(),
+                highlight_line_changes(&unified, &file, &view.style, view.syntect_theme.as_ref()),
+            )
+        }
+    };
+
+    view.content_cache = Some(GiffContentCache {
+        content_len: left.len().max(right.len()),
+        file,
+        view_mode: view.view_mode,
+        theme_fp: view.syntect_fp.clone(),
+        left,
+        right,
+    });
+}
+
+/// 把当前文件的滚动偏移夹到合法范围（内容变短 / 窗口变高时回退）。
+fn clamp_scroll(view: &mut GiffView, visible: usize) {
+    let Some(content_len) = view.content_cache.as_ref().map(|cache| cache.content_len) else {
+        return;
+    };
+    let Some(file) = view.current_file().map(str::to_string) else {
+        return;
     };
 
     if content_len <= visible {
@@ -869,14 +844,23 @@ diff --git a/b.rs b/b.rs
 
     /// 渲染一帧并返回终端，供逐行断言；布局与 TUI 侧一致：主体占满，键位行固定在最后一行。
     fn draw(view: &mut GiffView, width: u16, height: u16) -> Terminal<TestBackend> {
+        draw_with(view, &Theme::default(), width, height)
+    }
+
+    /// 用指定主题渲染一帧（主题相关的缓存失效断言用）。
+    fn draw_with(
+        view: &mut GiffView,
+        theme: &Theme,
+        width: u16,
+        height: u16,
+    ) -> Terminal<TestBackend> {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        let theme = Theme::default();
         terminal
             .draw(|frame| {
                 let area = Rect::new(0, 0, width, height);
                 let chunks =
                     Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(area);
-                render(frame, chunks[0], view, &theme);
+                render(frame, chunks[0], view, theme);
                 render_keybar(frame, view, chunks[1]);
             })
             .unwrap();
@@ -926,7 +910,6 @@ diff --git a/b.rs b/b.rs
         assert_eq!(unified.len(), 4, "上下文 1 + 删除 1 + 新增 1 + 上下文 1");
         assert_eq!(unified[1].1, "-    old();");
         assert_eq!(unified[2].1, "+    new();");
-        assert_eq!(unified_line_count(base, head), unified.len());
     }
 
     /// 路径从左侧截断，保留文件名尾部。
@@ -991,6 +974,71 @@ diff --git a/b.rs b/b.rs
             view.scroll_positions().get("a.rs"),
             Some(&0),
             "内容不足一屏时归零"
+        );
+    }
+
+    /// 滚动只换可见窗口，不重建高亮缓存（否则大文件每按一次 key 都要重跑一遍 syntect）。
+    #[test]
+    fn scrolling_reuses_highlight_cache() {
+        let mut view = view(SAMPLE);
+        let _ = draw(&mut view, 100, 20);
+        let before = view.content_cache.as_ref().unwrap().left.as_ptr();
+
+        view.scroll_by(1);
+        let _ = draw(&mut view, 100, 20);
+        let after = view.content_cache.as_ref().unwrap().left.as_ptr();
+        assert_eq!(before, after, "滚动不应重建缓存");
+
+        // 切换视图模式才失效重建，且新缓存记录新模式
+        view.toggle_view();
+        let _ = draw(&mut view, 100, 20);
+        let cache = view.content_cache.as_ref().unwrap();
+        assert_eq!(cache.view_mode, ViewMode::Unified);
+        assert!(cache.left.is_empty(), "统一模式只缓存单栏行");
+    }
+
+    /// 滚动位置是可见窗口的起点：向下 5 行后首行显示第 6 行内容。
+    #[test]
+    fn scroll_moves_visible_window() {
+        let mut diff = String::from(
+            "diff --git a/big.rs b/big.rs\n--- a/big.rs\n+++ b/big.rs\n@@ -1,40 +1,40 @@\n",
+        );
+        for i in 0..40 {
+            diff.push_str(&format!(" line {i}\n"));
+        }
+        let mut view = view(&diff);
+
+        let terminal = draw(&mut view, 100, 20);
+        assert!(
+            row(&terminal, 2, 100).contains("line 0"),
+            "首行从第 1 行开始"
+        );
+
+        view.scroll_by(5);
+        let terminal = draw(&mut view, 100, 20);
+        assert!(
+            row(&terminal, 2, 100).contains("line 5"),
+            "滚动 5 行后首行应为第 6 行: {}",
+            row(&terminal, 2, 100)
+        );
+    }
+
+    /// 主题变化使高亮缓存失效：缓存的行嵌了颜色，指纹变了必须重建。
+    #[test]
+    fn theme_change_invalidates_cache() {
+        let mut view = view(SAMPLE);
+        let mut theme = Theme::default();
+        let _ = draw_with(&mut view, &theme, 100, 20);
+        let first = view.content_cache.as_ref().unwrap().theme_fp.clone();
+
+        theme
+            .vars
+            .insert("accent".to_string(), "#ff00ff".to_string());
+        let _ = draw_with(&mut view, &theme, 100, 20);
+        assert_ne!(
+            view.content_cache.as_ref().unwrap().theme_fp,
+            first,
+            "主题变了要重建缓存"
         );
     }
 

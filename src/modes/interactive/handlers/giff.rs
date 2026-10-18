@@ -86,8 +86,9 @@ pub(super) fn handle_key(st: &mut App, key: &KeyEvent) -> KeyAction {
             st.dirty = true;
         }
         _ => {
+            let now_ms = st.accel_epoch.elapsed().as_millis() as u64;
             if let Some(view) = st.giff.as_mut()
-                && navigate(view, key)
+                && navigate(view, key, now_ms)
             {
                 st.dirty = true;
             }
@@ -99,24 +100,29 @@ pub(super) fn handle_key(st: &mut App, key: &KeyEvent) -> KeyAction {
 
 /// `/giff` 非输入态的导航键：焦点在文件列表时移动选择、在内容区时滚动；
 /// 返回是否消费了该键。
-fn navigate(view: &mut GiffView, key: &KeyEvent) -> bool {
+///
+/// `j`/`k`、`↓`/`↑` 按住不放时按间隔加速（[`GiffView::nav_step`]），孤立一次仍只走 1 行/1 项；
+/// `now_ms` 为单调时钟毫秒（连按加速的时间基准）。
+fn navigate(view: &mut GiffView, key: &KeyEvent, now_ms: u64) -> bool {
     let in_file_list = view.focused_pane() == Pane::FileList;
     let page = view.page_rows().max(1) as isize;
 
     match key.code {
         KeyCode::Char('j') | KeyCode::Down => {
+            let step = view.nav_step(1, now_ms);
             if in_file_list {
-                view.move_file(1);
+                view.move_file(step);
             } else {
-                view.scroll_by(1);
+                view.scroll_by(step);
             }
             true
         }
         KeyCode::Char('k') | KeyCode::Up => {
+            let step = view.nav_step(-1, now_ms);
             if in_file_list {
-                view.move_file(-1);
+                view.move_file(-step);
             } else {
-                view.scroll_by(-1);
+                view.scroll_by(-step);
             }
             true
         }
@@ -168,7 +174,11 @@ fn navigate(view: &mut GiffView, key: &KeyEvent) -> bool {
             view.toggle_view();
             true
         }
-        _ => false,
+        _ => {
+            // 与导航无关的键：断掉连按手势，避免下一次 j/k 被当成同一次按住
+            view.reset_nav_repeat();
+            false
+        }
     }
 }
 

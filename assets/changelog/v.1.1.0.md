@@ -46,8 +46,11 @@ This release aligns prux with upstream pi 1.1.0.
   sub-agent session — the first turn forks the current conversation, later turns resume it — and the
   job stops when the answer ends with `[goal-complete]` or the iteration limit is reached. Four jobs
   run at a time, `/autoresearch` lists them, `/autoresearch stop <id>` stops one, and a job keeps
-  running when you press `Esc` (stop it explicitly).
-
+  running when you press `Esc` (stop it explicitly). A job that finishes (or fails) posts a one-line
+  notice with the iteration count, tokens, duration, goal and — for a failure — the reason, so it no
+  longer ends silently when its dock row disappears; the notice is user-facing only (the job still
+  injects nothing into the conversation, so read a round with `/agents result <id>`), and stopping a
+  job by hand stays silent (the command already answers).
 - **`/cache-usage` reports prompt cache hit rates** from saved sessions, with three peer scopes:
   no argument reads the current session, `all` reads every saved session (all providers), and a
   provider name reports just that provider — which also reads every saved session, since a provider
@@ -59,9 +62,10 @@ This release aligns prux with upstream pi 1.1.0.
   and `405` are the expected answers, anything else is flagged `status not OK` — and only a failing
   request is listed as unreachable (`timeout` / `dns error` / `connect error`). `/doctor summary`
   prints the counts and the failures, the panel's first line is the title bar (`Doctor · <N> providers`,
-  plus a `summary` segment in the summary view), and it ends with an environment block (version, agent
-  directory, `http_proxy` / `https_proxy` / `all_proxy` / `no_proxy` as set/unset only — read the
-  same way the probes read them, case-insensitively); `--offline` skips the probes entirely.
+  plus a `summary` segment in the summary view), it shows `probing…` while the probes run, and it
+  ends with an environment block (version, agent directory, probe target count, `http_proxy` /
+  `https_proxy` / `all_proxy` / `no_proxy` as set/unset only — read the same way the probes read
+  them, case-insensitively); `--offline` skips the probes entirely.
 - **`/btw` asks a read-only side question and `/recap` prints a one-line session summary.** `/btw`
   answers in a panel from a short excerpt through one independent request — nothing is added to the
   conversation — and the panel replaces the main input box and carries its own one-line `btw>` field,
@@ -79,29 +83,43 @@ This release aligns prux with upstream pi 1.1.0.
   elements, and the other actions prefer those over CSS selectors; a reference goes stale after a
   navigation and says so instead of clicking the wrong element. The endpoint is configured in
   `agent_dir()/extensions/browser.json` (default `127.0.0.1:9222`) and must be a loopback address —
-  the CDP endpoint has no authentication. The connection is lazy, shared across tabs through flat
+  the CDP endpoint has no authentication. When that endpoint is silent *or* answers as something
+  other than CDP, the extension starts a browser for you: it walks the new `browsers` list in the
+  same file, using a candidate already running with a debug port first, in order (a reachable
+  endpoint always wins over starting a new browser), skipping one already running without
+  `--remote-debugging-port` (a second launch would only hand the command line to the running
+  instance), and only then starting the first candidate that is not running, on a free port of its
+  own — detached from prux, so the browser outlives the agent and is left on your desktop. A
+  candidate already running with a debug port on some other port is used as it is, and when no
+  candidate works the error names what failed for each one and keeps the manual
+  `--remote-debugging-port` hint. The candidates are Chromium-based browsers only: Firefox is left
+  out on purpose (Firefox 141 removed CDP, and even the 140 ESR only answers once
+  `remote.active-protocols` is enabled in its profile), but adding it to `browsers` by hand works —
+  it gets its own flags (`--no-remote --new-instance`) and its failure message says the remote agent
+  serves WebDriver BiDi instead. The connection is lazy, shared across tabs through flat
   sessions and dropped on session switches; while it is up the dock (`/dock`) lists the browser and
   the active tab. The tool itself is **deferred**: it stays out of the tool list and the system
   prompt (about 3.7k characters of description and schema) until the model loads it with
-  `tool_search`, which is enabled by default in the same modes. Disabled by default
-  (`Dev` / `Creator` modes).
+  `tool_search`, which is enabled by default in the same modes.
 - **An `open` extension hands files and URLs to the desktop.** The `open` tool takes one `path` and
   launches the system opener (`xdg-open` / `open` / `cmd /C start`), so the user sees the file or page
   in a real window. `http` / `https` / `file` URLs are passed through; anything else is resolved
-  against the working directory and must exist. It never reads the content back — use `read` or
-  `fetch_content` for that. Disabled by default (`Dev` / `Creator` modes).
+  against the working directory and must exist. It waits for the opener to exit (10 seconds at most)
+  and reports stderr back to the model with stdout dropped, so a non-zero exit code counts as a
+  failure instead of answering "opened". It never reads the content back — use `read` or
+  `fetch_content` for that.
 - **A `pdf` extension extracts the text layer of PDFs.** The `read_pdf` tool takes one `path`,
   refuses files above 32 MiB before parsing, and truncates the result the way `read` does (2000 lines
   / 50KB). Scanned (image-only) PDFs have no text layer and say so instead of returning nothing, and
-  a file the parser chokes on returns an error rather than taking the process down. Disabled by
-  default (`Dev` / `Creator` modes).
+  a file the parser chokes on returns an error rather than taking the process down.
 - **A `cache-watch` extension warns about prompt cache trouble.** It reports a cold cache when a new
   turn is submitted after the catalog TTL has passed since the last cache write, and an unexpected
   miss when a request rewrites the cache without reading any of it back while the previous write was
   still within the TTL. Both arrive as chat system messages (nothing is written to the conversation).
   The TTL comes from the same catalog entries the cache warmer uses. The miss check is an
   approximation — the extension sees usage only, not what changed in the prefix — so it can
-  over-report after a compaction or a tool-set change. Disabled by default (`Dev` / `Creator` modes).
+  over-report after a compaction or a tool-set change. Durations are formatted with the shared units
+  (`0ms` / `1m0s`), the same wording the cache-warming status line uses.
 - **Extensions can declare prerequisite tools, and the `/extension` panel shows whether they are
   met.** `Extension::prerequisite_tools()` names the tools an extension's own tools depend on (a
   deferred tool needs `tool_search` to be discovered at all). The detail panel lists them on a
@@ -115,22 +133,7 @@ This release aligns prux with upstream pi 1.1.0.
   are hidden by default, and each session contributes one match unless `max_per_session` says
   otherwise. Matching is keyword based (no vector search); a query made only of stop words is
   rejected. It reads only this machine's saved prux sessions, never other tools' history. The tool is
-  deferred, so it is loaded through `tool_search`. Disabled by default (`Dev` / `Creator` modes).
-- **The `browser` extension starts a browser for you.** It first tries the configured CDP endpoint
-  (`127.0.0.1:9222` by default) and, when that port is silent *or* answers as something other than a
-  CDP endpoint, it walks the new `browsers` list in
-  `agent_dir()/extensions/browser.json`. Candidates that are already running with a debug port are
-  used first, in order, so a reachable endpoint always wins over starting a new browser; candidates
-  that are already running without `--remote-debugging-port` are skipped (a second launch would only
-  hand the command line to the running instance); only then does it start the first candidate that is
-  not running, on a free port of its own — detached from prux, so the
-  browser outlives the agent and is left on your desktop. A candidate that is already running with a
-  debug port on some other port is used as it is. When no candidate works, the error names what
-  failed for each one and keeps the manual `--remote-debugging-port` hint. The candidates are
-  Chromium-based browsers only: Firefox is left out on purpose (Firefox 141 removed CDP, and even
-  the 140 ESR only answers once `remote.active-protocols` is enabled in its profile), but adding it
-  to `browsers` by hand works — it gets its own flags (`--no-remote --new-instance`) and its failure
-  message says the remote agent serves WebDriver BiDi instead.
+  deferred, so it is loaded through `tool_search`.
 - **`/giff` reviews uncommitted changes in a full-screen view.** It shows the working tree
   against `HEAD` as a file list plus a diff pane, with syntax highlighting and `u` toggling between
   side-by-side and unified layouts; `Tab` / `h` / `l` move the focus, `j`/`k`, the page keys and
@@ -142,7 +145,7 @@ This release aligns prux with upstream pi 1.1.0.
   banner and the bottom bar, so the key hints sit on the last screen line.
 - **These new extensions are disabled by default** and live in the `Dev` and `Creator`
   extension modes: `cache-usage`, `doctor`, `btw`, `recap`, `open`, `pdf`, `cache-watch`,
-  `session-search` (turn them on in the `/extension` panel).
+  `session-search`, `browser` (turn them on in the `/extension` panel).
 
 ### Changed
 
@@ -167,11 +170,6 @@ This release aligns prux with upstream pi 1.1.0.
   models whose catalog entry sets `compat.supportsMidConvoSystemMessages` get it natively; it is held
   back to just before the next non-tool message so a `tool_result` still follows its `tool_use`.
   For other models its text is merged into the leading system prompt instead of being dropped.
-- **An autoresearch job now reports when it settles.** Finishing (or failing) posts a one-line
-  notice with the iteration count, tokens, duration, goal and — for a failure — the reason, so a
-  job no longer ends silently when its dock row disappears. The notice is user-facing only: the
-  job still does not inject anything into the conversation, so read a round with
-  `/agents result <id>`. Stopping a job by hand stays silent (the command already answers).
 - **The built-in `/debug` became the `debug` extension's `info` subcommand.** The `debug-provider`
   extension was renamed to `debug` and split by debug target: `/debug info` prints the agent runtime
   summary, `/debug provider [on|off|dump]` keeps the raw provider stream viewer, and the new
@@ -199,6 +197,9 @@ This release aligns prux with upstream pi 1.1.0.
   character straddles the cut-off point.
 - A large paste sent while the agent is busy (Enter queues a steering message) is expanded to its
   full text before queueing, so the model no longer receives the literal `[paste #N ...]` marker.
+- `/giff` scrolling stays smooth on large diffs: highlighted lines are cached per file, view mode
+  and theme, so scrolling no longer re-runs syntax highlighting on every key press or wheel notch,
+  and holding `j`/`k` (or `↓`/`↑`) accelerates the step instead of moving one line per repeat.
 
 ## 中文
 
@@ -235,8 +236,9 @@ This release aligns prux with upstream pi 1.1.0.
 - **`subagent` 扩展新增 autoresearch 作业**（`/autoresearch <目标> [--iterations N]`）：
   每轮都在同一个分叉出的子会话里跑同一条提示词（首轮 fork 当前对话，之后 resume 续跑），
   回答以 `[goal-complete]` 收尾或到达轮次上限即收工。同时最多 4 个作业，`/autoresearch` 列作业，
-  `/autoresearch stop <id>` 停一个；作业不随 `Esc` 一起停（要停得显式停）。
-
+  `/autoresearch stop <id>` 停一个；作业不随 `Esc` 一起停（要停得显式停）。作业终结（完成或失败）会投一条
+  通知（轮次、token、耗时、目标，失败还带原因），不再在 dock 行消失时无声收场；通知只给人看，
+  仍**不**往主会话注入消息（看某一轮结果走 `/agents result <id>`），用户自己停的作业不发（命令已经回过话）。
 - **新增 `/cache-usage`**：把会话历史里的 token 用量汇总成 prompt cache 命中率报告，
   范围三选一（同级）：空参 = 当前会话，`all` = 全部已存会话（所有 provider），
   `<provider>` = 该 provider——provider 是跨会话概念，因此也读全部已存会话。
@@ -264,23 +266,31 @@ This release aligns prux with upstream pi 1.1.0.
   可交互元素分配 `e1`/`e2`… 引用，其余动作优先用引用定位而不是 CSS 选择器；导航后引用失效时
   会明确报错（不会点到别的元素），重新 `snapshot` 即可。端点写在
   `agent_dir()/extensions/browser.json`（默认 `127.0.0.1:9222`），**只接受回环地址**——
-  CDP 端点没有鉴权。连接是惰性的、按 flat session 复用给多标签页、会话切换时丢弃；
+  CDP 端点没有鉴权。端点没人监听、或者听得见却不是 CDP 端点（端口被别的服务占了）时，
+  扩展会按同一份文件里新增的 `browsers` 列表自己把浏览器拉起来：**已经在跑且开着调试端口的优先**
+  （按顺序连第一个连得上的，现成端点不会被「启动新实例」盖掉），已经在跑但没带
+  `--remote-debugging-port` 的跳过（再启动一次只会把命令行转交给已有实例），都没有才用一个自己挑的
+  空闲端口启动第一个没在跑的候选（分离子进程，prux 退出不影响它，浏览器留在桌面上给你用）。
+  一个都不成时报错会逐个列明原因，并保留手动启动的命令提示。候选只列 Chromium 系：
+  Firefox 有意不列（141 起移除了 CDP，140 ESR 也要 profile 里开了 `remote.active-protocols` 才应答），
+  但手工写进 `browsers` 仍可用——它拿到的是自己的开关（`--no-remote --new-instance`），失败时报错会
+  点明远程端口只剩 WebDriver BiDi。连接是惰性的、按 flat session 复用给多标签页、会话切换时丢弃；
   连上后停靠面板（`/dock`）里多一行浏览器标识与活动标签页。工具本身是**延迟工具**：在模型用
   `tool_search` 载入之前，它的描述与 schema（约 3.7k 字符）都不进工具表与系统提示；
-  `tool-search` 默认启用、模式相同。**默认不启用**（`Dev` / `Creator` 模式）。
+  `tool-search` 默认启用、模式相同。
 - **新增 `open` 扩展：把文件或 URL 交给桌面程序**。`open` 工具只吃一个 `path`，拉起系统
   opener（`xdg-open` / `open` / `cmd /C start`），让用户在真实窗口里看到文件或网页。
-  `http` / `https` / `file` URL 原样透传，其余按工作目录展开且必须存在。它**不把内容读回上下文**——
-  要内容用 `read` / `fetch_content`。**默认不启用**（`Dev` / `Creator` 模式）。
+  `http` / `https` / `file` URL 原样透传，其余按工作目录展开且必须存在。它等 opener 退出（最多 10 秒），
+  把标准错误回给模型、标准输出丢弃，非零退出码算失败而不是一律回「已打开」。
+  它**不把内容读回上下文**——要内容用 `read` / `fetch_content`。
 - **新增 `pdf` 扩展：抽取 PDF 的文本层**。`read_pdf` 工具只吃一个 `path`，超过 32 MiB 的文件在
   解析前拒绝，结果按 `read` 的口径截断（2000 行 / 50KB）。扫描件（图片型 PDF）没有文本层，
   会明确说明而不是返回空；解析器啃不动的文件返回错误，不会把进程带崩。
-  **默认不启用**（`Dev` / `Creator` 模式）。
 - **新增 `cache-watch` 扩展：提示 prompt cache 的两种异常**。提交新一轮输入时距上次写入缓存
   已超过目录 TTL 就报「缓存已冷」；某次请求没读回任何缓存却重新写入、而上一次写入仍在 TTL 内
   就报「意外未命中」。两者都作为聊天区系统消息出现（不写进会话）。TTL 取自保温用的同一份目录条目。
   未命中判定是近似值——扩展只看得到用量、看不到前缀里到底变了什么——因此压缩上下文或改工具集
-  之后可能多报。**默认不启用**（`Dev` / `Creator` 模式）。
+  之后可能多报。时长文案用通用档位（`0ms` / `1m0s`，与保温评估的状态行同一口径）。
 - **扩展可声明前置工具，`/extension` 面板会显示是否满足**。`Extension::prerequisite_tools()`
   列出本扩展工具所依赖的工具（延迟工具需要 `tool_search` 才能被模型发现），二级详情页以
   `requires:` 行按 `扩展名 (工具名)` 展示（不可用时补 `- enable it`）；保存扩展状态时，对
@@ -290,16 +300,7 @@ This release aligns prux with upstream pi 1.1.0.
   定过的方案、试过的做法与跑过的命令。当前会话、工具调用与结果、以及注入的 `<system-reminder>`
   消息默认都隐藏，每个会话默认只出 1 条（`max_per_session` 可调）。检索是**词法**的（没有向量检索），
   只有停用词构成的查询会被拒绝。它只读本机已存的 prux 会话，不读别的工具的会话文件。工具是**延迟工具**，
-  经 `tool_search` 载入。**默认不启用**（`Dev` / `Creator` 模式）。
-- **`browser` 扩展会自己把浏览器拉起来**：先试配置的 CDP 端点（默认 `127.0.0.1:9222`），没人监听、
-  或者听得见却不是 CDP 端点（端口被别的服务占了）时，
-  按 `agent_dir()/extensions/browser.json` 新增的 `browsers` 列表逐个检查候选——**已经在跑且开着调试端口
-  的优先**（按顺序连第一个连得上的，现成端点不会被「启动新实例」盖掉），已经在跑但没带
-  `--remote-debugging-port` 的跳过（再启动一次只会把命令行转交给已有实例），都没有才用一个自己挑的
-  空闲端口启动第一个没在跑的候选（分离子进程，prux 退出不影响它，浏览器留在桌面上给你用）。一个都不成时报错会逐个列明原因，并保留手动启动的命令提示。候选只列 Chromium 系：
-  Firefox 有意不列（141 起移除了 CDP，140 ESR 也要 profile 里开了 `remote.active-protocols` 才应答），
-  但手工写进 `browsers` 仍可用——它拿到的是自己的开关（`--no-remote --new-instance`），失败时报错会
-  点明远程端口只剩 WebDriver BiDi。
+  经 `tool_search` 载入。
 - **新增 `/giff`：全屏审阅工作树未提交改动**。左侧是文件列表、右侧是 diff，带语法高亮，
   `u` 在双栏与统一视图间切换；`Tab` / `h` / `l` 切焦点，`j`/`k`、翻页键与 `Home`/`End` 导航，
   `?` 打开帮助面板。按 `i` 调出主页输入框（发出的消息落回主页消息区，这也是回车提交会退出视图的
@@ -307,7 +308,8 @@ This release aligns prux with upstream pi 1.1.0.
   视图**只读**：只跑 `git diff`，不写文件、不 rebase、不提交。渲染用当前主题，隐藏顶部 banner
   与底栏，快捷键提示行固定在屏幕最后一行。
 - **这些新扩展都默认不启用**，且只在 `Dev` / `Creator` 扩展模式下可用：
-  `cache-usage`、`doctor`、`btw`、`recap`、`open`、`pdf`、`cache-watch`、`session-search`（在 `/extension` 面板里开启）。
+  `cache-usage`、`doctor`、`btw`、`recap`、`open`、`pdf`、`cache-watch`、`session-search`、
+  `browser`（在 `/extension` 面板里开启）。
 
 ### 变更
 
@@ -329,15 +331,10 @@ This release aligns prux with upstream pi 1.1.0.
   `system` 消息，在目录带 `compat.supportsMidConvoSystemMessages` 的模型上按原生对话中途系统消息下发；
   它会缓发到下一条非 tool 消息之前，保证 `tool_result` 仍紧跟 `tool_use`。其它模型上这类消息的文本
   并入首部系统提示词，而不是被静默丢弃。
-- **autoresearch 作业终结时会回报**：完成或失败都投一条通知（轮次、token、耗时、目标，
-  失败还带原因），作业不再在 dock 行消失时无声收场。通知只给人看，仍**不**往主会话注入消息，
-  看某一轮的结果走 `/agents result <id>`；用户自己停的作业不发（命令已经回过话）。
 - **内置 `/debug` 收进 `debug` 扩展的 `info` 子命令**：原 `debug-provider` 扩展更名为 `debug`，
   并按调试对象拆分子命令——`/debug info` 打印 agent 运行状态汇总，`/debug provider [on|off|dump]`
   仍是供应商原始流事件查看器，新增 `/debug system-prompt` 打印当前系统提示词原文。
   `/debug` 因此需要先启用该扩展（默认关闭，`Dev` 及以上模式可用），子命令会出现在 `/` 候选列表里。
-- **cache-watch 的时长文案改用通用档位**：`0s` / `5m` 这种自造写法换成
-  `0ms` / `1m0s`（与保温评估的状态行同一口径），不再各写一套。
 
 ### 修复
 
@@ -350,8 +347,8 @@ This release aligns prux with upstream pi 1.1.0.
 - 面板式覆盖层的滚动条与内容区对齐（此前 track 起点偏低一行），thumb 拖到顶端就是第一行。
 - 系统提示的 `Available tools` 段现在也列出扩展工具（此前只列内置工具）；未声明 snippet 的工具
   不再占一行空描述。
-- `open` 工具会把系统 opener 的标准错误一并回给模型（标准输出丢弃）；非零退出码、10 秒未退出
-  都算失败，不再一律回「已打开」。
 - 超过 1000 字节的 provider 错误信息不再因多字节字符跨在截断点上而 panic（截断回退到字符边界）。
 - 忙碌时回车排队的 steering 消息中的大粘贴会先展开为完整文本再入队，模型不再收到
   `[paste #N ...]` 这类 marker 原文。
+- **`/giff` 大 diff 下滚动不再卡顿**：高亮结果按「文件 + 视图模式 + 主题」缓存，滚动与改窗口尺寸
+  不再重跑语法高亮；`j`/`k`、`↓`/`↑` 按住不放时按间隔加速（孤立一次仍只走 1 行）。

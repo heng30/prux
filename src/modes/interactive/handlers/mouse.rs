@@ -57,7 +57,7 @@ impl App {
             1
         };
 
-        let now_ms = self.wheel_epoch.elapsed().as_millis() as u64;
+        let now_ms = self.accel_epoch.elapsed().as_millis() as u64;
         let lines = self.wheel_accel.next(direction, now_ms);
 
         if mouse.modifiers.contains(KeyModifiers::ALT) {

@@ -15,8 +15,9 @@
 use crate::{
     error::{Error, Result},
     modes::interactive::theme::{Theme, color},
+    utils::wheel::KeyRepeatAccelerator,
 };
-use ratatui::{layout::Rect, style::Color};
+use ratatui::{layout::Rect, style::Color, text::Line};
 use regex::Regex;
 use std::{collections::HashMap, process::Command, sync::LazyLock};
 
@@ -278,6 +279,26 @@ impl GiffStyle {
     }
 }
 
+/// 当前文件的渲染产物缓存：语法高亮后的左右栏行与内容行数。
+///
+/// 语法高亮（syntect）对整份 diff 是逐行解码，大文件下重跑一次要几百毫秒；滚动与窗口
+/// 尺寸变化都会重渲染，没有缓存就会变成「按一次 j 卡一下」。命中条件 = 文件 + 视图模式 +
+/// 主题指纹（含是否启用语法高亮），三者不变时滚动直接复用。
+pub(super) struct GiffContentCache {
+    /// 缓存对应的文件路径（切换文件即失效）。
+    pub(super) file: String,
+    /// 缓存对应的双栏 / 统一视图（切换视图即失效）。
+    pub(super) view_mode: ViewMode,
+    /// 缓存对应的主题指纹（切换主题 / 开关语法高亮即失效）。
+    pub(super) theme_fp: String,
+    /// 左栏高亮行（双栏模式的 `base` 侧）；统一模式下为空。
+    pub(super) left: Vec<Line<'static>>,
+    /// 右栏高亮行（双栏模式的 `head` 侧）或统一模式的单栏行。
+    pub(super) right: Vec<Line<'static>>,
+    /// 当前视图下的内容行数（滚动夹取的上界）。
+    pub(super) content_len: usize,
+}
+
 /// `/giff` 的跨次保留状态：按 `q` 退出后留在 `App` 上，下次 `/giff` 用它恢复
 /// 「上次查看的文件、各文件滚动位置、焦点窗格、双栏/统一视图」。
 ///
@@ -333,6 +354,10 @@ pub struct GiffView {
     pub(super) file_list_area: Option<Rect>,
     /// 最近一帧 diff 内容区域（鼠标滚轮命中判定）。
     pub(super) content_area: Option<Rect>,
+    /// 当前文件的高亮缓存（见 [`GiffContentCache`]）；`None` = 无当前文件。
+    pub(super) content_cache: Option<GiffContentCache>,
+    /// `j`/`k`、`↓`/`↑` 的连按加速状态（按住不放时步长递增）。
+    pub(super) key_repeat: KeyRepeatAccelerator,
 }
 
 impl GiffView {
@@ -378,6 +403,8 @@ impl GiffView {
             page_rows: 1,
             file_list_area: None,
             content_area: None,
+            content_cache: None,
+            key_repeat: KeyRepeatAccelerator::new(),
         }
     }
 
@@ -440,6 +467,18 @@ impl GiffView {
     pub fn page(&mut self, forward: bool) {
         let step = self.page_rows.max(1) as isize;
         self.scroll_by(if forward { step } else { -step });
+    }
+
+    /// 连续按同一导航键时的移动量：孤立一次按返回 ±1，按住不放按间隔加速
+    /// （最多 10 行 / 10 个文件）。`direction` 为 `1`（`j`/`↓`）或 `-1`（`k`/`↑`），
+    /// `now_ms` 需单调递增（取 `App::accel_epoch` 的 elapsed 毫秒）。
+    pub fn nav_step(&mut self, direction: i32, now_ms: u64) -> isize {
+        self.key_repeat.next(direction, now_ms) as isize
+    }
+
+    /// 复位连按加速：按下与导航无关的键时调用，避免把杂键并进同一个连按手势。
+    pub fn reset_nav_repeat(&mut self) {
+        self.key_repeat.reset();
     }
 
     /// 把当前文件的滚动位置重置到顶部。
@@ -708,6 +747,17 @@ diff --git a/h.rs b/h.rs
         assert_eq!(reopened.scroll_positions.get("src/b.rs"), Some(&5));
         assert_eq!(reopened.focused_pane(), Pane::DiffContent);
         assert_eq!(reopened.view_mode(), ViewMode::Unified);
+    }
+
+    /// 连按加速：孤立一次按 1 行，33ms 间隔（约 30 次/秒）加速到 3 行；
+    /// 复位后重新从 1 行起算。
+    #[test]
+    fn nav_step_accelerates_while_held() {
+        let mut view = view();
+        assert_eq!(view.nav_step(1, 0), 1, "孤立一次按 1 行");
+        assert_eq!(view.nav_step(1, 33), 3, "按住不放加速");
+        view.reset_nav_repeat();
+        assert_eq!(view.nav_step(1, 40), 1, "复位后重新从 1 行起算");
     }
 
     /// 文件选择夹在两端，不环绕。

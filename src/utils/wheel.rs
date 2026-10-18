@@ -1,8 +1,10 @@
-//! 滚轮事件 → 行数换算
+//! 滚轮事件与按键连按 → 行数换算
 //!
 //! `auto` 模式下：孤立的一格滚 1 行；快速连滚按事件间隔加速（100ms 间隔 1 行、
 //! 50ms 2 行、20ms 5 行，上限 6 行）；间隔 <5ms 视为同一物理格的高分辨率分片，恒 1 行。
 //! 本地 macOS 终端已由系统加速过滚轮增量，此时 auto 恒 1 行。
+//!
+//! [`KeyRepeatAccelerator`] 复用同一套速度换算，给「按住 j/k、↑/↓ 不放」的导航键加速。
 
 use serde_json::Value;
 
@@ -148,7 +150,7 @@ impl WheelScrollAccelerator {
     }
 
     /// 清空手势历史与行数余量（时间、方向、平均间隔、carry）。
-    fn reset(&mut self) {
+    pub fn reset(&mut self) {
         self.last_time_ms = f64::NEG_INFINITY;
         self.last_direction = 0;
         self.average_gap_ms = None;
@@ -156,9 +158,66 @@ impl WheelScrollAccelerator {
     }
 }
 
+/// 连续按下同一个导航键时的步长加速：孤立一次按 1 行，按住不放按间隔加速（最多
+/// [`MAX_AUTO_LINES`] 行）。速度手感与滚轮 `auto` 同源，但**固定启用加速**，不受
+/// `fullscreenWheelScrollLines` 设置与「本地 macOS 终端」判定的影响。
+#[derive(Debug, Clone)]
+pub struct KeyRepeatAccelerator {
+    /// 内部的速度换算（只用 auto 模式，历史状态即连按手势）。
+    accel: WheelScrollAccelerator,
+}
+
+impl Default for KeyRepeatAccelerator {
+    /// 等价于 [`KeyRepeatAccelerator::new`]。
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl KeyRepeatAccelerator {
+    /// 新建：auto 行数 + 固定启用加速，连按历史清空。
+    pub fn new() -> Self {
+        Self {
+            accel: WheelScrollAccelerator::new(WheelScrollLines::Auto, true),
+        }
+    }
+
+    /// 返回本次按键应移动的行数（正数）；`direction` 为 ±1（下/上），
+    /// `now_ms` 需单调递增（调用方用 [`std::time::Instant`] 的 elapsed 毫秒）。
+    pub fn next(&mut self, direction: i32, now_ms: u64) -> usize {
+        self.accel.next(direction, now_ms)
+    }
+
+    /// 复位连按历史：按下与导航无关的键时调用，避免把它当成连按手势的延续。
+    pub fn reset(&mut self) {
+        self.accel.reset();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn key_repeat_accelerates_while_held() {
+        let mut acc = KeyRepeatAccelerator::new();
+        assert_eq!(acc.next(1, 0), 1, "孤立一次按 1 行");
+        assert_eq!(acc.next(1, 33), 3, "33ms 间隔（约 30 次/秒）加速到 3 行");
+        assert_eq!(acc.next(1, 66), 3);
+        assert_eq!(acc.next(-1, 70), 1, "换方向即新手势");
+        assert_eq!(acc.next(1, 800), 1, "停顿超过手势上限后重新从 1 行起算");
+
+        acc.reset();
+        assert_eq!(acc.next(1, 810), 1, "reset 后回到 1 行");
+    }
+
+    #[test]
+    fn key_repeat_ignores_terminal_and_fixed_lines() {
+        // 连按加速与滚轮设置无关：即便终端是「已被系统加速」的场景也照常加速
+        let mut acc = KeyRepeatAccelerator::new();
+        acc.next(1, 0);
+        assert!(acc.next(1, 20) > 1, "极快连按应加速");
+    }
 
     #[test]
     fn fixed_lines_ignores_velocity() {

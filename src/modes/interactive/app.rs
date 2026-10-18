@@ -618,8 +618,8 @@ pub struct App {
     pub autocomplete_max_visible: usize,
     /// /settings Wheel scroll lines：滚轮事件 → 行数（auto = 按速度加速）
     pub wheel_accel: WheelScrollAccelerator,
-    /// 滚轮加速器的时间基准（单调时钟，启动时固定）
-    pub wheel_epoch: Instant,
+    /// 滚轮与导航键连按加速器共用的时间基准（单调时钟，启动时固定）
+    pub accel_epoch: Instant,
     /// /settings History max entries：prompt 历史保留条数（0 = 不落盘）。
     /// 启动时读设置；提交时用于追加落盘与内存截断。
     pub history_max_entries: usize,
@@ -952,7 +952,7 @@ impl App {
             ext_settings: ExtSettingsPanel::new(),
             autocomplete_max_visible: 5,
             wheel_accel: WheelScrollAccelerator::default(),
-            wheel_epoch: Instant::now(),
+            accel_epoch: Instant::now(),
             history_max_entries: HISTORY_MAX_ENTRIES_DEFAULT,
             msg_cache: HashMap::new(),
             edit_previews: HashMap::new(),
