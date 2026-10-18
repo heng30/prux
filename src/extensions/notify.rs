@@ -534,9 +534,10 @@ mod tests {
         let dir = crate::core::settings_manager::agent_dir();
         let out = dir.join("msg.txt");
         let script = dir.join("capture.sh");
+        // 用单引号包住重定向目标：路径里含 `\`（Windows），裸写会被 shell 当转义字符吃掉
         std::fs::write(
             &script,
-            format!("#!/bin/sh\nprintf '%s' \"$1\" > {}\n", out.display()),
+            format!("#!/bin/sh\nprintf '%s' \"$1\" > '{}'\n", out.display()),
         )
         .unwrap();
 

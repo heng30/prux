@@ -219,6 +219,8 @@ mod tests {
             .unwrap_or_else(|e| e.into_inner());
         let agent_dir = settings_manager::agent_dir();
         let cwd = "/tmp/prux-trust-panel-cwd";
+        // 决策表里的键是规范化后的绝对路径（Windows 上会带上当前盘符），不写死字符串
+        let key = crate::utils::paths::normalize_cwd(Path::new(cwd));
 
         let mut app = App {
             cwd: cwd.to_string(),
@@ -240,7 +242,7 @@ mod tests {
         );
         assert_eq!(
             core::project_trust::trust_decision(Path::new(cwd), &agent_dir),
-            Some((cwd.to_string(), true)),
+            Some((key.clone(), true)),
             "Trust 应写盘"
         );
 
@@ -276,7 +278,7 @@ mod tests {
         );
         assert_eq!(
             core::project_trust::trust_decision(Path::new(cwd), &agent_dir),
-            Some((cwd.to_string(), false)),
+            Some((key, false)),
             "Do not trust 应写盘"
         );
 

@@ -197,8 +197,10 @@ fn export_session_expands_tilde_and_defaults_theme_path() {
         .map(|s| s.to_string_lossy().to_string())
         .unwrap();
     let written = prux::core::export_html::export_session(&s, None, None).unwrap();
-    assert_eq!(written, format!("{}/prux-session-{}.html", cwd, stem));
-    assert!(std::path::Path::new(&written).exists());
+    // 默认名落在会话 cwd 下（对齐 pi exportSessionToHtml）；用 Path 拼，分隔符随平台
+    let expected = dir.path().join(format!("prux-session-{stem}.html"));
+    assert_eq!(written, expected.to_str().unwrap());
+    assert!(expected.exists());
 }
 
 #[test]

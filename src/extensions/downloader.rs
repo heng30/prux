@@ -552,10 +552,12 @@ mod tests {
 
     #[test]
     fn confirm_label_splits_by_source() {
-        let local = present_fd();
-        let label = confirm_action_label("fd", &local);
+        let snapshot = present_fd();
+        let label = confirm_action_label("fd", &snapshot);
         assert!(label.starts_with("Re-download (overwrite "), "{label}");
-        assert!(label.ends_with("/fd)"), "{label}");
+        // 本地副本名随平台带后缀（Windows 是 `fd.exe`）：期望值直接取同一处的路径
+        let local = tools_manager::tool_local_path("fd");
+        assert!(label.ends_with(&format!("{})", local.display())), "{label}");
 
         let system = snap(
             "rg",

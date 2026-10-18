@@ -386,11 +386,17 @@ mod tests {
             .find(|r| r.name == "grill-me")
             .expect("应列出 grill-me");
         assert!(
-            row.path.starts_with(&home.path().display().to_string()),
+            std::path::Path::new(&row.path).starts_with(home.path()),
             "应选用户副本而不是内置副本: {row:?}"
         );
+        // 用 Path::ends_with 而非字符串后缀：分隔符随平台变
         assert!(
-            row.path.ends_with(".agents/skills/grill-me/SKILL.md"),
+            std::path::Path::new(&row.path).ends_with(
+                std::path::Path::new(".agents")
+                    .join("skills")
+                    .join("grill-me")
+                    .join("SKILL.md")
+            ),
             "{row:?}"
         );
     }

@@ -73,13 +73,17 @@ mod tests {
     #[test]
     fn session_global_dir_sits_under_agent_dir_extensions_tasks() {
         let _g = AgentDirGuard::temp();
+        let cwd = "/Users/me/work/repo";
+        // 工作区键由 [`project_key`] 编码（同一根路径在 Windows 上会带上当前盘符，
+        // 故这里不写死字符串）；本用例要钉的是目录层级，键本身的编码在 util 的
+        // project_key_matches_pi_encoding 里。
         assert_eq!(
-            global_session_tasks_dir("/Users/me/work/repo"),
+            global_session_tasks_dir(cwd),
             agent_dir()
                 .join("extensions")
                 .join("tasks")
                 .join("sessions")
-                .join("--Users-me-work-repo--")
+                .join(project_key(cwd))
         );
     }
 

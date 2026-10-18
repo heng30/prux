@@ -555,11 +555,18 @@ mod tests {
         let key = normalize_cwd(&repo);
         let path = trust_file_path(&agent_dir);
 
-        std::fs::write(&path, format!("{{\"{key}\": true}}")).unwrap();
+        // 自己拼 JSON 会把 Windows 路径里的 `\` 写成非法转义：必须交给 serde_json 编码
+        let write_decision = |trusted: bool| {
+            let mut map = Map::new();
+            map.insert(key.clone(), Value::Bool(trusted));
+            std::fs::write(&path, serde_json::to_string(&Value::Object(map)).unwrap()).unwrap();
+        };
+
+        write_decision(true);
         assert!(is_project_trusted(&repo, &agent_dir));
 
         // 外部改写 → 缓存失效，读到新决策
-        std::fs::write(&path, format!("{{\"{key}\": false}}")).unwrap();
+        write_decision(false);
         assert!(!is_project_trusted(&repo, &agent_dir));
 
         // 删除文件同样让缓存失效，回落默认策略（Ask → 不信任）

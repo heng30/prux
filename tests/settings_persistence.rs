@@ -57,15 +57,37 @@ fn persisted_disabled_extensions_select_rich_footer() {
     );
 }
 
+/// 重试一次「可能因取锁超时而失败」的写。
+///
+/// 取锁超时（等待预算约 1s）只说明另一个写者还在临界区里，本次读-改-写压根没发生，
+/// 不属于本用例要抓的「丢更新」；退避后重试那一整次写入即可。重试仍失败则把错误交回。
+fn retry_until_written(mut write: impl FnMut() -> Result<(), String>) -> Result<(), String> {
+    let mut last = String::new();
+    for attempt in 0..6 {
+        match write() {
+            Ok(()) => return Ok(()),
+            Err(e) => last = e,
+        }
+        if attempt < 5 {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+    Err(last)
+}
+
 /// 子进程写循环：`a` 单调写 autocompleteMaxVisible，`b` 单调写 historyMaxEntries。
 /// 两个键互不相同——任一丢失更新都会让最终值 < N。
 fn child_write_loop(which: &str, n: usize) {
     for i in 0..n {
-        match which {
-            "a" => settings_manager::write_settings_autocomplete_max_visible(i + 1).unwrap(),
-            "b" => settings_manager::write_settings_history_max_entries(i + 1).unwrap(),
-            _ => {}
-        }
+        let written = retry_until_written(|| {
+            match which {
+                "a" => settings_manager::write_settings_autocomplete_max_visible(i + 1),
+                "b" => settings_manager::write_settings_history_max_entries(i + 1),
+                _ => Ok(()),
+            }
+            .map_err(|e| e.to_string())
+        });
+        assert!(written.is_ok(), "第 {i} 次写入 {which} 失败：{written:?}");
     }
 }
 

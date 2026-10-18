@@ -517,17 +517,30 @@ mod tests {
 
         // TTL 内重新写入且没读回缓存 → 意外未命中
         handle_turn_end(&turn_end("anthropic", model, 0, 800));
-        match take_pending_ui().expect("应提示意外未命中") {
-            ExtensionUiRequest::Notify { text, level } => {
-                assert!(text.contains("Unexpected prompt cache miss"), "{text}");
-                assert_eq!(level, UiNotifyLevel::Warning);
+        // 全局 UI 队列是所有扩展共用的：并行跑的其它测试会入队自己的请求，
+        // 不做过滤就会拿到别人的条目而随机失败（与 cache-watch 自身无关）。
+        let level = loop {
+            match take_pending_ui() {
+                Some(ExtensionUiRequest::Notify { text, level }) => {
+                    assert!(text.contains("Unexpected prompt cache miss"), "{text}");
+                    break level;
+                }
+                Some(_) => continue,
+                None => panic!("应提示意外未命中"),
             }
-            other => panic!("期望 Notify，得到 {other:?}"),
-        }
+        };
+        assert_eq!(level, UiNotifyLevel::Warning);
 
         // 命中缓存：既不该提示，也不该再记录
         handle_turn_end(&turn_end("anthropic", model, 900, 0));
-        assert!(take_pending_ui().is_none(), "命中不该提示");
+        while let Some(request) = take_pending_ui() {
+            if let ExtensionUiRequest::Notify { text, .. } = request {
+                assert!(
+                    !text.contains("Unexpected prompt cache miss"),
+                    "命中不该提示: {text}"
+                );
+            }
+        }
     }
 
     #[test]

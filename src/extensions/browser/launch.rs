@@ -426,6 +426,19 @@ mod tests {
         }
     }
 
+    /// 当前平台第一个内置候选的进程名别名。
+    ///
+    /// 不写死 `google-chrome`：那是 Linux 的程序名，Windows 的候选是
+    /// `${ProgramFiles}\Google\Chrome\Application\chrome.exe`，别名只有 `chrome`，
+    /// 写死了就只能一路判成 `Absent`。
+    fn builtin_aliases() -> Vec<String> {
+        let program = default_browsers()
+            .into_iter()
+            .next()
+            .expect("内置候选列表非空");
+        process_names(&program)
+    }
+
     /// 内置候选列表非空，且每项都能算出进程名别名。
     #[test]
     fn builtin_candidates_are_listed_with_aliases() {
@@ -484,21 +497,22 @@ mod tests {
     /// 判定：只有渲染子进程（没端口）算「在跑但没端口」，主进程带端口则给出端口列表。
     #[test]
     fn classify_distinguishes_child_processes_from_the_owner() {
-        let names = process_names("google-chrome");
+        let names = builtin_aliases();
+        let alias = names[0].clone();
 
-        let renderer_only = vec![process("chrome", "chrome --type=renderer")];
+        let renderer_only = vec![process(&alias, "chrome --type=renderer")];
         assert_eq!(classify(&renderer_only, &names), Running::NoDebugPort);
 
         let with_port = vec![
-            process("chrome", "chrome --type=renderer"),
-            process("chrome", "chrome --remote-debugging-port=9333"),
+            process(&alias, "chrome --type=renderer"),
+            process(&alias, "chrome --remote-debugging-port=9333"),
         ];
         assert_eq!(
             classify(&with_port, &names),
             Running::DebugPorts(vec![9333])
         );
 
-        let pipe = vec![process("chrome", "chrome --remote-debugging-pipe")];
+        let pipe = vec![process(&alias, "chrome --remote-debugging-pipe")];
         assert_eq!(classify(&pipe, &names), Running::NoDebugPort);
 
         let unrelated = vec![process("firefox", "firefox --remote-debugging-port=9333")];
@@ -544,14 +558,13 @@ mod tests {
     /// 相同端口只记一次（多个子进程都带同一个端口参数）。
     #[test]
     fn classify_deduplicates_ports() {
+        let names = builtin_aliases();
+        let alias = names[0].clone();
         let commands = vec![
-            process("chrome", "chrome --remote-debugging-port=9222"),
-            process("chrome", "chrome --remote-debugging-port=9222"),
+            process(&alias, "chrome --remote-debugging-port=9222"),
+            process(&alias, "chrome --remote-debugging-port=9222"),
         ];
-        assert_eq!(
-            classify(&commands, &process_names("google-chrome")),
-            Running::DebugPorts(vec![9222])
-        );
+        assert_eq!(classify(&commands, &names), Running::DebugPorts(vec![9222]));
     }
 
     /// 默认候选**不含** Firefox（141+ 没有 CDP、140 ESR 默认不启用），但手工写进来时

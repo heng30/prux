@@ -451,9 +451,20 @@ mod tests {
         assert_eq!(session_id_of(Some("")), None);
     }
 
+    #[cfg(unix)]
     #[test]
     fn project_key_matches_pi_encoding() {
         assert_eq!(project_key("/Users/me/work/repo"), "--Users-me-work-repo--");
+    }
+
+    /// Windows 上 `absolute` 会把根目录形式的路径挂到当前盘，再经 `-` 编码：盘符前缀保留。
+    #[cfg(windows)]
+    #[test]
+    fn project_key_matches_pi_encoding() {
+        assert_eq!(
+            project_key(r"C:\Users\me\work\repo"),
+            "--C--Users-me-work-repo--"
+        );
     }
 
     #[test]

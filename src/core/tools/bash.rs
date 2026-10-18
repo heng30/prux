@@ -789,8 +789,11 @@ mod tests {
     use super::*;
     use std::fs;
 
+    #[cfg(unix)]
     #[test]
     fn search_prefers_executable_bash_in_path_order() {
+        use std::os::unix::fs::PermissionsExt;
+
         let dir = tempfile::tempdir().unwrap();
         // 第一个目录里的 bash 不可执行 → 跳过；第二个目录里的可执行 → 命中
         let not_exec = dir.path().join("not-exec");
@@ -800,22 +803,45 @@ mod tests {
         fs::write(not_exec.join(bash_bin_name()), "#!/bin/sh\n").unwrap();
         let exec = yes_exec.join(bash_bin_name());
         fs::write(&exec, "#!/bin/sh\n").unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&exec, fs::Permissions::from_mode(0o755)).unwrap();
-        }
+        fs::set_permissions(&exec, fs::Permissions::from_mode(0o755)).unwrap();
 
         let paths = vec![not_exec.clone(), yes_exec.clone()];
         let found = search_bash_in_paths(paths.into_iter()).unwrap();
         assert_eq!(found, yes_exec.join(bash_bin_name()));
     }
 
+    /// 非 Unix 没有可执行位，[`is_executable`] 只认「是常规文件」：先到的目录即命中。
+    #[cfg(not(unix))]
+    #[test]
+    fn search_takes_the_first_existing_bash_in_path_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("first");
+        let second = dir.path().join("second");
+        fs::create_dir_all(&first).unwrap();
+        fs::create_dir_all(&second).unwrap();
+        fs::write(first.join(bash_bin_name()), "#!/bin/sh\n").unwrap();
+        fs::write(second.join(bash_bin_name()), "#!/bin/sh\n").unwrap();
+
+        let paths = vec![first.clone(), second.clone()];
+        let found = search_bash_in_paths(paths.into_iter()).unwrap();
+        assert_eq!(found, first.join(bash_bin_name()));
+    }
+
+    #[cfg(unix)]
     #[test]
     fn search_returns_none_when_no_executable_bash() {
         let dir = tempfile::tempdir().unwrap();
         let dir2 = tempfile::tempdir().unwrap();
         fs::write(dir.path().join(bash_bin_name()), "#!/bin/sh\n").unwrap();
+        let paths = vec![dir.path().to_path_buf(), dir2.path().to_path_buf()];
+        assert!(search_bash_in_paths(paths.into_iter()).is_none());
+    }
+
+    /// 候选目录里根本没有 bash → 返回 None（与平台无关）。
+    #[test]
+    fn search_returns_none_when_no_bash_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let dir2 = tempfile::tempdir().unwrap();
         let paths = vec![dir.path().to_path_buf(), dir2.path().to_path_buf()];
         assert!(search_bash_in_paths(paths.into_iter()).is_none());
     }

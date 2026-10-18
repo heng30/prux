@@ -134,16 +134,27 @@ mod tests {
         assert!(lines[0].contains("agent_start"));
         assert!(lines[2].contains("\"turn\":2"));
         // 路径形状：<tmp>/prux-subagents-*/<encoded-cwd>/<session>/tasks/<id>.output
-        assert!(
-            path.to_string_lossy().contains("/s1/tasks/"),
+        // 逐层取目录名（而不是断言字符串里含 `/s1/tasks/`）：路径分隔符随平台变
+        assert_eq!(
+            path.parent().and_then(|p| p.file_name()),
+            Some(std::ffi::OsStr::new("tasks")),
+            "{}",
+            path.display()
+        );
+        assert_eq!(
+            path.parent()
+                .and_then(|p| p.parent())
+                .and_then(|p| p.file_name()),
+            Some(std::ffi::OsStr::new("s1")),
             "{}",
             path.display()
         );
         assert!(path.ends_with(format!("{id}.output")));
         // 无会话键（未落盘的会话）退化为不带会话层
         let bare = output_path(&cwd, None, "x");
-        assert!(
-            bare.to_string_lossy().contains("/tasks/"),
+        assert_eq!(
+            bare.parent().and_then(|p| p.file_name()),
+            Some(std::ffi::OsStr::new("tasks")),
             "{}",
             bare.display()
         );

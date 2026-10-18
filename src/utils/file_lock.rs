@@ -480,7 +480,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let target = dir.path().join("nested/deeper/state.json");
 
-        FileLock::acquire(&target).unwrap();
+        // 必须绑住 guard：写成 `FileLock::acquire(&target).unwrap();` 时它是语句末就析构的
+        // 临时值，非 unix 的 Drop 会把锁文件一并删掉，断言随之失败。
+        let _lock = FileLock::acquire(&target).unwrap();
         assert!(lock_path_for(&target).exists());
     }
 
@@ -501,6 +503,12 @@ mod tests {
         link::acquire(&lock_path, tuning).unwrap();
     }
 
+    /// 持有者 PID 远超 pid_max：视作已死，锁可被夺走。
+    ///
+    /// 只测 unix：非 unix 没有探测进程存活的手段（见 `is_process_running`），
+    /// 陈旧回收全看锁文件年龄，
+    /// 对应用例是 [`link_backend_reclaims_stale_lock_by_age`]。
+    #[cfg(unix)]
     #[test]
     fn link_backend_reclaims_stale_lock_of_dead_process() {
         let (_dir, target) = temp_target();
@@ -509,6 +517,28 @@ mod tests {
         let tuning = fast_tuning_never_stale();
 
         // 持有者 PID 远超 pid_max：视作已死，锁可被夺走。
+        std::fs::write(&lock_path, format!("{}:dead", i32::MAX)).unwrap();
+        let held = link::acquire(&lock_path, tuning).unwrap();
+
+        // 夺锁后旧 token 的持有者不能再删我们的锁。
+        link::release(&lock_path, &format!("{}:dead", i32::MAX));
+        assert!(lock_path.exists(), "旧持有者不得删掉后继者的锁");
+        drop(held);
+    }
+
+    /// 非 unix 的对应补位：探测不了 PID，只能靠锁文件年龄收回崩溃遗留的锁。
+    #[cfg(not(unix))]
+    #[test]
+    fn link_backend_reclaims_stale_lock_by_age() {
+        let (_dir, target) = temp_target();
+        let lock_path = lock_path_for(&target);
+        std::fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
+        // 阈值取 0：任何年龄的锁文件都算陈旧，等价于 unix 那边的「持有者已死」
+        let tuning = Tuning {
+            stale_age: Duration::ZERO,
+            ..fast_tuning()
+        };
+
         std::fs::write(&lock_path, format!("{}:dead", i32::MAX)).unwrap();
         let held = link::acquire(&lock_path, tuning).unwrap();
 

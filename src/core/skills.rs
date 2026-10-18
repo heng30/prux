@@ -262,6 +262,9 @@ impl SkillCollector {
 
 /// 递归扫描 `dir` 下的技能：目录直接含 SKILL.md 即收录并停止下钻，否则继续遍历子目录；
 /// `include_root_files` 为真时把根目录下的 `.md` 文件也视为技能。
+///
+/// 同一层里子目录一律先于散装 `.md` 收集：两者同名时，目录形式（`<name>/SKILL.md`）
+/// 稳定胜出，不受 `read_dir` 返回顺序（随文件系统变）左右。
 /// `visited` 记录已访问 realpath 以防符号链接环，忽略规则逐层累积到 `ig`。
 #[stacksafe::stacksafe]
 fn load_skills_from_dir_inner(
@@ -309,28 +312,38 @@ fn load_skills_from_dir_inner(
             continue;
         }
         let path = entry.path();
-        let Some(kind) = entry_kind(&path) else {
+        if entry_kind(&path) != Some(EntryKind::Dir) {
             continue;
-        };
+        }
         let rel = relative_posix(root, &path);
-        match kind {
-            EntryKind::Dir => {
-                if ig_ignores(ig, &rel, true) {
-                    continue;
-                }
-                load_skills_from_dir_inner(&path, root, false, source, ig, visited, skills);
-            }
-            EntryKind::File => {
-                if !include_root_files || !name.ends_with(".md") {
-                    continue;
-                }
-                if ig_ignores(ig, &rel, false) {
-                    continue;
-                }
-                if let Some(skill) = load_skill_from_file(&path, source) {
-                    skills.push(skill);
-                }
-            }
+        if ig_ignores(ig, &rel, true) {
+            continue;
+        }
+        load_skills_from_dir_inner(&path, root, false, source, ig, visited, skills);
+    }
+
+    if !include_root_files {
+        return;
+    }
+
+    for entry in &entries {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') || name == "node_modules" || !name.ends_with(".md") {
+            continue;
+        }
+
+        let path = entry.path();
+        if entry_kind(&path) != Some(EntryKind::File) {
+            continue;
+        }
+
+        let rel = relative_posix(root, &path);
+        if ig_ignores(ig, &rel, false) {
+            continue;
+        }
+
+        if let Some(skill) = load_skill_from_file(&path, source) {
+            skills.push(skill);
         }
     }
 }
@@ -922,8 +935,10 @@ mod tests {
             false,
             &["!drop-*".to_string()],
         );
-        let names: Vec<_> = skills.iter().map(|s| s.name.as_str()).collect();
-        assert_eq!(names, vec!["keep", "forced"]);
+        let mut names: Vec<_> = skills.iter().map(|s| s.name.as_str()).collect();
+        // 同一层子目录的枚举顺序随 read_dir 变，这里只断言集合（顺序不参与过滤语义）
+        names.sort_unstable();
+        assert_eq!(names, vec!["forced", "keep"]);
 
         // -name 精确强制排除
         let skills = load_skills(

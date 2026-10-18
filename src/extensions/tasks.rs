@@ -1437,7 +1437,12 @@ mod tests {
 
         let (key, _) =
             resolve_store_target(Some("/tmp/proj"), Some("s1"), config::TaskScope::Project);
-        assert!(key.ends_with("tasks/tasks.json"), "{key}");
+        // 键形如 `path:<cwd>/.prux/tasks/tasks.json`；分隔符随平台变，按 Path 组件比
+        assert!(
+            std::path::Path::new(key.trim_start_matches("path:"))
+                .ends_with(std::path::Path::new("tasks").join("tasks.json")),
+            "{key}"
+        );
     }
 
     #[test]

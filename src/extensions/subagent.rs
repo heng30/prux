@@ -2754,9 +2754,10 @@ mod tests {
             "export const meta = { name: 'child', description: 'd' }\nconst a = await agent('hi')\nreturn { a }\n",
         )
         .unwrap();
+        // 路径必须转义后再进 JS 字符串字面量：Windows 路径带 `\`，裸插会被 JS 当转义序列吃掉
         let parent = format!(
-            "export const meta = {{ name: 'parent', description: 'd' }}\nconst got = await workflow({{ scriptPath: '{}' }})\nreturn {{ nested: got }}\n",
-            child_path.display()
+            "export const meta = {{ name: 'parent', description: 'd' }}\nconst got = await workflow({{ scriptPath: {} }})\nreturn {{ nested: got }}\n",
+            serde_json::to_string(&child_path.display().to_string()).unwrap()
         );
 
         let rt = rt();
@@ -2802,10 +2803,19 @@ mod tests {
         workflow::task::reset_all();
         while crate::core::extensions::take_pending_ui().is_some() {}
 
-        let script = "export const meta = { name: 'g', description: 'd' }\n\
-                      const ok = await agent('pass', { gate: 'true' })\n\
-                      const bad = await agent('fail', { gate: 'echo gate-broke >&2; exit 3' })\n\
-                      return { ok, bad }";
+        // gate 走平台自己的 shell（unix `sh -c` / Windows `cmd /c`），命令按平台写：
+        // unix 用 POSIX 重定向与 `;`，cmd 用 `1>&2` 与 `&`。
+        #[cfg(windows)]
+        let (pass_gate, fail_gate) = ("exit 0", "echo gate-broke 1>&2 & exit 3");
+
+        #[cfg(not(windows))]
+        let (pass_gate, fail_gate) = ("true", "echo gate-broke >&2; exit 3");
+        let script = format!(
+            "export const meta = {{ name: 'g', description: 'd' }}\n\
+             const ok = await agent('pass', {{ gate: '{pass_gate}' }})\n\
+             const bad = await agent('fail', {{ gate: '{fail_gate}' }})\n\
+             return {{ ok, bad }}"
+        );
         let rt = rt();
         let out = rt
             .block_on(dispatch_tool(

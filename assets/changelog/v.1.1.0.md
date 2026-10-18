@@ -209,6 +209,10 @@ This release aligns prux with upstream pi 1.1.0.
   character. Creating the file was rejected by the OS and the write failed silently, so history was
   always empty after a restart. The verbatim prefix (`\\?\C:\x`, `\\?\UNC\srv\share\x`) is now
   stripped before encoding, and both spellings of a directory map to the same history file.
+- A skill directory (`<name>/SKILL.md`) now wins over a loose `.md` file that declares the same
+  frontmatter name inside the same folder. Which of the two was loaded used to depend on the order
+  the file system returned entries in, so the same skill tree could resolve to a different skill on
+  a different machine.
 
 ## 中文
 
@@ -368,3 +372,5 @@ This release aligns prux with upstream pi 1.1.0.
   的结果，而 Windows 的 `\\?\` 形式里带 `?`——非法文件名字符。系统直接拒绝建文件、写入静默失败，
   于是重启后历史永远为空。编码前先剥掉 verbatim 前缀（`\\?\C:\x`、`\\?\UNC\srv\share\x`），
   同一目录的 verbatim 与普通写法现在落到同一份历史。
+- **同名技能固定由目录形式胜出**：同一层里既有 `<名称>/SKILL.md` 又有散装 `.md`、且 frontmatter 名称相同时，
+  现在稳定取目录那份；此前由文件系统返回顺序决定，同一份技能目录在不同机器上可能挑中不同的那份。
