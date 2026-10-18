@@ -5,7 +5,8 @@
 > 规模：`src/` 11 个文件、3 994 行；依赖 `ratatui 0.30`（`all-widgets`）、`crossterm 0.28.1`、
 > `syntect 5.3` + `two-face 0.5.1`、`clap`、`toml`、`regex`，`edition 2021`。
 >
-> **目标**：`src/modes/interactive/giff/`（视图本体）+ `src/modes/interactive/` 下 6 个接入点。
+> **目标**：`src/modes/interactive/giff.rs`（数据与状态）+ `render/giff.rs`（渲染）+ `handlers/giff.rs`（输入），
+> 外加 `src/modes/interactive/` 下的接线点。
 > 本档与 `migration-subagents.md` / `migration-tasks.md`（上游插件整体移植）不同：
 > giff **不是 pi 生态插件**，它自带渲染与事件循环，所以本文档记的是
 > 「一个独立 TUI 应用被**收编**成 prux 的一个全屏视图」时的裁剪、重映射与接缝。
@@ -38,14 +39,14 @@
 | 主题 | 自带 dark/light + `~/.config/giff/config.toml` | 只读当前 prux 主题（`GiffStyle` 取色快照） |
 | 语法 | `two_face` 的 `extra_newlines`（130+ 语言） | prux `render::syntax_hl`（默认集 ~75 + 内置 Zig） |
 | 输入 | 无（纯浏览） | `i` 调出主页输入框，`Esc` 退回导航，`Enter` 提交并退出视图 |
-| 代码量 | 3 994 行 | 1 726 行（5 个文件，含 18 个单测） |
+| 代码量 | 3 994 行 | 2 016 行（3 个文件，含 18 个单测） |
 
 ### 路线图
 
 | Tier | 主题 | 内容 | 状态 |
 |---|---|---|---|
-| **Tier1** | 数据 | 只读 `git diff` 采集 + 解析（文件切分 / hunk 行号 / 元数据与 `\ No newline` 丢弃） | ✅ 已实施（`giff/diff.rs`） |
-| **Tier2** | 视图 | 状态机（焦点 / 视图模式 / 每文件滚动）+ header / 文件列表 / 双栏 / 统一 / 帮助模态 / 键位行 | ✅ 已实施（`giff/{mod,types,render}.rs`） |
+| **Tier1** | 数据 | 只读 `git diff` 采集 + 解析（文件切分 / hunk 行号 / 元数据与 `\ No newline` 丢弃） | ✅ 已实施（`giff.rs`） |
+| **Tier2** | 视图 | 状态机（焦点 / 视图模式 / 每文件滚动）+ header / 文件列表 / 双栏 / 统一 / 帮助模态 / 键位行 | ✅ 已实施（`giff.rs` 与 `render/giff.rs`） |
 | **Tier3** | 接入 | `App` 字段与渲染/按键/鼠标分流 + `/giff` 内置命令 | ✅ 已实施（§4） |
 | **Tier4** | 宿主化 | 主题映射、语法高亮换用 prux 实现、`i`/`Esc` 输入态、退出恢复位置 | ✅ 已实施 |
 | — | rebase 体系 | 见 §6 | 🚫 明确不做 |
@@ -56,15 +57,15 @@
 
 | 上游文件 | 行数 | 内容 | 处置 |
 |---|---|---|---|
-| `src/diff.rs` | 570 | `git diff` 调用、解析、`ChangeOp`/`apply_operations`（rebase 写回）、upstream 检测、`perform_rebase` | 只留**前两项**（`giff/diff.rs`，264 行含测试） |
-| `src/ui/render.rs` | 984 | header / 文件列表 / 双栏 / unified / rebase 通知模态 / 帮助模态 / 键位行 / 行对齐 | 去掉 rebase 通知，其余搬（`giff/render.rs`，833 行） |
+| `src/diff.rs` | 570 | `git diff` 调用、解析、`ChangeOp`/`apply_operations`（rebase 写回）、upstream 检测、`perform_rebase` | 只留**前两项**（并入 `giff.rs`） |
+| `src/ui/render.rs` | 984 | header / 文件列表 / 双栏 / unified / rebase 通知模态 / 帮助模态 / 键位行 / 行对齐 | 去掉 rebase 通知，其余搬（`render/giff.rs`） |
 | `src/ui/rebase.rs` | 390 | 变更配对（删除/新增配对 + context）、rebase 视图渲染 | **不搬** |
-| `src/ui/event_loop.rs` | 572 | crossterm 事件循环、按键分发、鼠标滚轮、`commit_rebase_changes` | 只搬**导航键语义**（重写成 `handlers.rs` 的 `giff_navigate`） |
+| `src/ui/event_loop.rs` | 572 | crossterm 事件循环、按键分发、鼠标滚轮、`commit_rebase_changes` | 只搬**导航键语义**（重写成 `handlers/giff.rs` 的 `navigate`） |
 | `src/ui/theme.rs` | 366 | 自带 dark/light 主题、`ThemeConfig`、`by_name` | 换成 `GiffStyle::from_theme(&prux Theme)` |
 | `src/ui/syntax.rs` | 153 | `two_face` 语法集 + `HighlightLines` 逐行高亮 | 换成 `render::syntax_hl::session_for_filename` |
-| `src/ui/types.rs` | 60 | `AppMode`/`ChangeState`/`Change`/`App`/`Pane`/`ViewMode` | 只留 `Pane` / `ViewMode`（`giff/types.rs`） |
+| `src/ui/types.rs` | 60 | `AppMode`/`ChangeState`/`Change`/`App`/`Pane`/`ViewMode` | 只留 `Pane` / `ViewMode`（并入 `giff.rs`） |
 | `src/ui/mod.rs` | 118 | 终端 setup/restore、panic hook、`App` 构造、主题轮换 | 不搬（宿主已接管终端） |
-| `src/ui/tests.rs` | 561 | `TestBackend` 渲染断言 | 重写为 `giff/tests.rs`（263 行，13 个单测） |
+| `src/ui/tests.rs` | 561 | `TestBackend` 渲染断言 | 重写为 `render/giff.rs` / `giff.rs` / `handlers/giff.rs` 的就近单测（9 + 8 + 1） |
 | `src/config.rs` | 126 | `~/.config/giff/config.toml` 与自定义主题 | **不搬**（用 `/settings` 与主题文件的既有机制） |
 | `src/main.rs` | 94 | clap 参数、rebase 前置检查、主题解析 | **不搬**（入口是 `/giff`） |
 
@@ -74,11 +75,9 @@
 
 | prux 落点 | 内容 | 与上游的对应 |
 |---|---|---|
-| `src/modes/interactive/giff/mod.rs` | `GiffView` 状态与导航方法、`GiffStyle`、`GiffRestore` | 上游 `ui/types.rs` 的 `App`（去掉 rebase 字段）+ `ui/theme.rs` 的取色 |
-| `src/modes/interactive/giff/diff.rs` | `FileChanges` / `LineChange` / `parse` / `collect_uncommitted`（含 4 个单测） | 上游 `src/diff.rs` 的采集与解析部分 |
-| `src/modes/interactive/giff/render.rs` | `render` + header / 列表 / 双栏 / 统一 / 帮助 / 键位行 / 高亮 | 上游 `ui/render.rs` + `ui/syntax.rs` |
-| `src/modes/interactive/giff/types.rs` | `Pane` / `ViewMode` | 上游 `ui/types.rs` 的同名枚举 |
-| `src/modes/interactive/giff/tests.rs` | 对齐 / unified / 截断 / 恢复 / 渲染 / 键位（13 个单测） | 上游 `ui/tests.rs` |
+| `src/modes/interactive/giff.rs` | 数据与状态：`FileChanges` / `LineChange` / `parse` / `collect_uncommitted`、`Pane` / `ViewMode`、`GiffStyle`、`GiffRestore`、`GiffView` 状态机（含 8 个单测） | 上游 `src/diff.rs` 的采集与解析 + `ui/types.rs` 的 `App` / `Pane` / `ViewMode`（去掉 rebase 字段）+ `ui/theme.rs` 的取色 |
+| `src/modes/interactive/render/giff.rs` | 渲染：`render`（header / 文件列表 / 双栏 / 统一 / 帮助模态）+ `render_keybar`（底部键位行）+ 行对齐与高亮（含 9 个单测） | 上游 `ui/render.rs` + `ui/syntax.rs` + `ui/tests.rs` |
+| `src/modes/interactive/handlers/giff.rs` | 输入：`handle_key`（键盘分流）、`navigate`（导航键）、`App::close_giff`、`App::giff_wheel`（含 1 个单测） | 上游 `ui/event_loop.rs` 的导航键语义 + 鼠标滚轮命中 |
 
 上游的 `AppMode`（`Diff`/`Rebase`）、`ChangeState`、`Change`、`rebase_changes`、
 `current_change_idx`、`show_rebase_modal`、`rebase_notification`、`status_message`、
@@ -113,15 +112,17 @@
 
 ## 四、核心改动清单
 
-视图本体之外，prux 侧共 7 个接入点（全部为最小接线，无新抽象）：
+数据与状态在 `giff.rs`，渲染与输入分别落在 `render/giff.rs` 与 `handlers/giff.rs`；其余为接线点（全部为最小接线，无新抽象）：
 
 | 文件 | 改动 |
 |---|---|
 | `src/modes/interactive.rs` | `pub mod giff;` |
 | `src/modes/interactive/app.rs` | 字段 `pub giff: Option<GiffView>`、`pub giff_restore: GiffRestore` 与 `App::new` 初始化 |
-| `src/modes/interactive/render.rs` | `render_fullscreen_giff`（**不渲染 banner**、保留底栏、输入态插主页输入框与光标）；在 `render_frame_widgets` 里分流；`mod syntax_hl` 提为 `pub(crate)` |
-| `src/modes/interactive/handlers.rs` | `handle_event` 的键盘分流 + `handle_giff_key` / `giff_navigate` + `App::close_giff` |
-| `src/modes/interactive/handlers/mouse.rs` | `handle_mouse_event` 的 giff 分支 + `App::giff_wheel` + `rect_contains` |
+| `src/modes/interactive/render.rs` | `render_fullscreen_giff`（**不渲染 banner 与底栏**：最后一行是视图自己的键位行，输入态时输入框插在主体与键位行之间）；在 `render_frame_widgets` 里分流；`mod giff;`；`mod syntax_hl` 提为 `pub(crate)` |
+| `src/modes/interactive/render/giff.rs` | 视图主体与底部键位行的渲染（`mod giff;` 的子模块） |
+| `src/modes/interactive/handlers.rs` | `handle_event` 的键盘分流（`giff::handle_key`）；`mod giff;` |
+| `src/modes/interactive/handlers/giff.rs` | 键盘导航 / 输入态 / 退出 / 鼠标滚轮 |
+| `src/modes/interactive/handlers/mouse.rs` | `handle_mouse_event` 的 giff 分支（只处理滚轮）；`wheel_lines` 提为 `pub(super)` |
 | `src/modes/interactive/handlers/commands.rs` | `BUILTIN_COMMANDS` 加 `giff`、“Review uncommitted changes”、分发到 `cmd_giff` |
 | `src/modes/interactive/render/syntax_hl.rs` | 新增 `session_for_filename`（按文件扩展名取语法，供 diff 按文件高亮） |
 
@@ -194,7 +195,7 @@
 1. **位置恢复不跨进程**：`GiffRestore` 只活在 `App` 里（`q` 退出时写入），重启 prux 后
    `/giff` 从头开始。要跨重启需落盘到 `agent_dir()` 下的状态文件（并考虑工作树已变的失效语义）。
 2. **键位不接 `keybindings.json`**：`j`/`k`/`u`/`i`/`q` 等硬编码，用户不能改绑（上游也无此机制）。
-   若要接，需把 `giff_navigate` 换成 `keybindings::matches` 判定，并为每个动作加 id。
+   若要接，需把 `handlers/giff.rs` 的 `navigate` 换成 `keybindings::matches` 判定，并为每个动作加 id。
 3. **鼠标只支持滚轮**：不支持下拖选文本、不支持点击切换文件/焦点；文件列表命中用上一帧区域矩形。
 4. **帮助模态按高度截断**：窄终端（< 26 行）下条目会被 `lines.truncate(inner.height)` 砍掉，
    不做滚动。
@@ -208,14 +209,14 @@
 
 ## 八、验证记录
 
-- **单测 18 个**：`giff/diff.rs` 4 个（文件切分与上下文、hunk 行号、元数据/`\ No newline` 丢弃、
-  空输入）+ `giff/tests.rs` 13 个（对齐配对与补齐、unified 顺序、路径截断含全角、
-  整帧 header/列表/键位行断言、`u` 切换、输入态键位行、状态恢复与回落、导航夹取、滚动夹取、
-  帮助模态）+ `handlers.rs` 1 个（`i` 进输入态、字符入框、`Esc` 只退输入态、`q` 关闭并置 `full_redraw`）。
+- **单测 18 个（就近放置）**：`giff.rs` 8 个（文件切分与上下文、hunk 行号、元数据/`\ No newline` 丢弃、
+  空输入、状态恢复与回落、`into_restore`、导航夹取）+ `render/giff.rs` 9 个（对齐配对与补齐、
+  unified 顺序、路径截断含全角、整帧 header/列表/键位行断言、`u` 切换、输入态键位行、滚动夹取、
+  帮助模态）+ `handlers/giff.rs` 1 个（`i` 进输入态、字符入框、`Esc` 只退输入态、`q` 关闭并置 `full_redraw`）。
 - **全量**：`cargo test` 3 568 个 lib 测试 + 全部集成测试通过；`cargo fmt --check` 干净；
   `cargo clippy --all-targets` 对新增文件零警告（既有警告不变）。
 - **未做的验证**：真机 TUI 交互（本仓约定不用 tmux 调试 TUI；渲染走 `TestBackend` 断言，
   交互走 `handle_event` 级别的测试）。首次人工验收需覆盖：`/giff` 进入、`i` 输入、`Esc` 退回、
   `q` 退出、再次 `/giff` 是否回到原文件与滚动位置。
-- **changelog**：`assets/changelog/v.1.1.0.md` 的 Added 段已加中英条目（隐藏 banner、
-  保留底栏、只读、位置恢复）。
+- **changelog**：`assets/changelog/v.1.1.0.md` 的 Added 段已加中英条目（隐藏 banner 与底栏、
+  键位行贴屏幕最底、只读、位置恢复）。

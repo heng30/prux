@@ -138,8 +138,8 @@ This release aligns prux with upstream pi 1.1.0.
   you send lands in the main transcript, which is also why `Enter` closes the view — `Esc` leaves
   input mode without leaving the view, and `q` quits. Opening it again restores the file and scroll
   position you left. The view is read-only: it runs `git diff` and nothing else, so no file is
-  written and nothing is rebased or committed. It renders with the current theme, hides the banner
-  and keeps the bottom bar.
+  written and nothing is rebased or committed. It renders with the current theme and hides both the
+  banner and the bottom bar, so the key hints sit on the last screen line.
 - **These new extensions are disabled by default** and live in the `Dev` and `Creator`
   extension modes: `cache-usage`, `doctor`, `btw`, `recap`, `open`, `pdf`, `cache-watch`,
   `session-search` (turn them on in the `/extension` panel).
@@ -304,8 +304,8 @@ This release aligns prux with upstream pi 1.1.0.
   `u` 在双栏与统一视图间切换；`Tab` / `h` / `l` 切焦点，`j`/`k`、翻页键与 `Home`/`End` 导航，
   `?` 打开帮助面板。按 `i` 调出主页输入框（发出的消息落回主页消息区，这也是回车提交会退出视图的
   原因），`Esc` 退出输入态但留在视图内，`q` 退出视图；再次 `/giff` 会恢复上次看的文件与滚动位置。
-  视图**只读**：只跑 `git diff`，不写文件、不 rebase、不提交。渲染用当前主题，隐藏顶部 banner、
-  保留底栏。
+  视图**只读**：只跑 `git diff`，不写文件、不 rebase、不提交。渲染用当前主题，隐藏顶部 banner
+  与底栏，快捷键提示行固定在屏幕最后一行。
 - **这些新扩展都默认不启用**，且只在 `Dev` / `Creator` 扩展模式下可用：
   `cache-usage`、`doctor`、`btw`、`recap`、`open`、`pdf`、`cache-watch`、`session-search`（在 `/extension` 面板里开启）。
 

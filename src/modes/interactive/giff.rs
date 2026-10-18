@@ -2,24 +2,192 @@
 //!
 //! **只读**——本视图不修改任何文件，也不执行 rebase 或提交。
 //!
-//! 生命周期由 TUI 侧掌握：`/giff` 采集数据后把 [`GiffView`] 装进 `App`，渲染与按键
-//! 分流见 [`crate::modes::interactive::render`] 与 `handlers`；按 `q` 退出时视图转成
-//! [`GiffRestore`] 留在 `App` 上，下次 `/giff` 重新采集数据但恢复上次看的文件与滚动位置。
+//! 本模块持有视图的**数据与状态**：`git diff` 的采集与解析（[`collect_uncommitted`] /
+//! [`parse`]）、基础枚举（[`Pane`] / [`ViewMode`]）、配色快照（[`GiffStyle`]）、跨次保留
+//! 状态（[`GiffRestore`]）与状态机本体（[`GiffView`]）。渲染在
+//! [`crate::modes::interactive::render::giff`]，按键与鼠标在
+//! [`crate::modes::interactive::handlers::giff`]。
+//!
+//! 生命周期由 TUI 侧掌握：`/giff` 采集数据后把 [`GiffView`] 装进 `App`，按 `q` 退出时
+//! 视图转成 [`GiffRestore`] 留在 `App` 上，下次 `/giff` 重新采集数据但恢复上次看的文件
+//! 与滚动位置。
 
-mod diff;
-mod types;
-
-pub(super) mod render;
-
-#[cfg(test)]
-mod tests;
-
-use crate::modes::interactive::theme::{Theme, color};
+use crate::{
+    error::{Error, Result},
+    modes::interactive::theme::{Theme, color},
+};
 use ratatui::{layout::Rect, style::Color};
-use std::collections::HashMap;
+use regex::Regex;
+use std::{collections::HashMap, process::Command, sync::LazyLock};
 
-pub use diff::{FileChanges, LineChange, collect_uncommitted};
-pub use types::{Pane, ViewMode};
+/// 一行改动：(源文件里的行号, 行文本)；行号为 `0` 表示左右对齐时补的占位空行。
+pub type LineChange = (usize, String);
+
+/// 一个文件的改动：左侧 `base`（`-` 行与上下文行）、右侧 `head`（`+` 行与上下文行）。
+pub type FileChanges = HashMap<String, (Vec<LineChange>, Vec<LineChange>)>;
+
+/// `diff --git a/<旧路径> b/<新路径>` 的文件头；取第二个捕获组（`b/` 侧路径）作为文件名。
+static DIFF_FILE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^diff --git a/(.+) b/(.+)$").unwrap());
+
+/// hunk 头 `@@ -<base 起始行>[,行数] +<head 起始行>[,行数] @@`，用于恢复两侧行号。
+static HUNK_HEADER_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^@@ -(\d+),?\d* \+(\d+),?\d* @@").unwrap());
+
+/// ANSI 颜色转义：已加 `--no-color`，但用户 `diff.color` 配置可能仍强制上色，这里兜底剥掉。
+static ANSI_ESCAPE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\x1b\[.*?m").unwrap());
+
+/// 采集未提交改动（等价 `git diff`：HEAD ↔ 工作树）。
+///
+/// 返回 `(改动, 左侧标签, 右侧标签)`；标签用于界面 header 与两栏标题。
+pub fn collect_uncommitted() -> Result<(FileChanges, String, String)> {
+    let output = git_diff()?;
+    Ok((
+        parse(&output),
+        "HEAD".to_string(),
+        "Working Tree".to_string(),
+    ))
+}
+
+/// 执行 `git diff --no-color` 并返回标准输出文本。
+///
+/// `git` 无法启动（未安装）或命令失败（非 git 仓库）时返回可展示的错误，
+/// 错误里带 `git` 自己写的 stderr。
+fn git_diff() -> Result<String> {
+    let output = Command::new("git")
+        .args(["diff", "--no-color"])
+        .output()
+        .map_err(|e| Error::Message(format!("failed to run git: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(Error::Message(format!(
+            "git diff failed: {}",
+            stderr.trim()
+        )));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// 解析 `git diff` 输出。
+///
+/// 逐行走：文件头切分文件、hunk 头恢复两侧起始行号、`-`/`+` 分别推进左右、其余行
+/// 作为上下文同时进两侧。`\ No newline at end of file` 与各类元数据行丢弃（不是内容）。
+pub fn parse(diff_output: &str) -> FileChanges {
+    let mut file_changes = FileChanges::new();
+    let mut current_file = String::new();
+    let mut base_lines: Vec<LineChange> = Vec::new();
+    let mut head_lines: Vec<LineChange> = Vec::new();
+    let mut base_line_number = 1usize;
+    let mut head_line_number = 1usize;
+
+    for raw_line in diff_output.lines() {
+        let trimmed = raw_line.trim_end();
+
+        // "no newline" 标记不是内容，既不渲染也不占行号
+        if trimmed.starts_with("\\ ") {
+            continue;
+        }
+
+        let line = ANSI_ESCAPE_RE.replace_all(trimmed, "");
+
+        if let Some(caps) = DIFF_FILE_RE.captures(line.as_ref()) {
+            if !current_file.is_empty() {
+                file_changes.insert(
+                    std::mem::take(&mut current_file),
+                    (
+                        std::mem::take(&mut base_lines),
+                        std::mem::take(&mut head_lines),
+                    ),
+                );
+            }
+            current_file = match caps.get(2) {
+                Some(m) => m.as_str().to_string(),
+                None => continue,
+            };
+            base_line_number = 1;
+            head_line_number = 1;
+            continue;
+        }
+
+        if let Some(caps) = HUNK_HEADER_RE.captures(line.as_ref()) {
+            base_line_number = caps
+                .get(1)
+                .and_then(|m| m.as_str().parse::<usize>().ok())
+                .unwrap_or(1);
+            head_line_number = caps
+                .get(2)
+                .and_then(|m| m.as_str().parse::<usize>().ok())
+                .unwrap_or(1);
+            continue;
+        }
+
+        if is_metadata(line.as_ref()) {
+            continue;
+        }
+
+        if let Some(rest) = line.strip_prefix('-') {
+            base_lines.push((base_line_number, format!("-{rest}")));
+            base_line_number += 1;
+        } else if let Some(rest) = line.strip_prefix('+') {
+            head_lines.push((head_line_number, format!("+{rest}")));
+            head_line_number += 1;
+        } else {
+            base_lines.push((base_line_number, line.to_string()));
+            head_lines.push((head_line_number, line.to_string()));
+            base_line_number += 1;
+            head_line_number += 1;
+        }
+    }
+
+    if !current_file.is_empty() {
+        file_changes.insert(current_file, (base_lines, head_lines));
+    }
+
+    file_changes
+}
+
+/// 是否为 diff 的元数据行（文件模式、重命名、二进制标记等，不属于任何一侧的内容）。
+fn is_metadata(line: &str) -> bool {
+    [
+        "index",
+        "---",
+        "+++",
+        "@@",
+        "new file mode",
+        "new mode",
+        "old mode",
+        "deleted file mode",
+        "rename from",
+        "rename to",
+        "copy from",
+        "copy to",
+        "similarity index",
+        "dissimilarity index",
+        "Binary files",
+    ]
+    .iter()
+    .any(|prefix| line.starts_with(prefix))
+}
+
+/// 当前获得键盘焦点的窗格（`Tab` / `h` / `l` 切换）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pane {
+    /// 左侧文件列表：`j`/`k` 移动选中文件。
+    FileList,
+    /// 右侧 diff 内容：`j`/`k` 滚动当前文件。
+    DiffContent,
+}
+
+/// diff 内容的排布方式（`u` 切换）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewMode {
+    /// 左右两栏对照：左 `-` 与上下文、右 `+` 与上下文，按改动块对齐。
+    SideBySide,
+    /// 单栏统一视图：同一改动块里先列删除行、再列新增行。
+    Unified,
+}
 
 /// 视图用到的颜色集合：全部取自当前生效主题，只是「取色快照」
 /// （不新建主题、不落盘、不可配置），主题切换后每帧重建。
@@ -128,25 +296,29 @@ pub struct GiffRestore {
 }
 
 /// `/giff` 审阅视图的全部状态。
+///
+/// 字段可见度为 `pub(super)`（= `crate::modes::interactive` 内）：渲染在
+/// [`crate::modes::interactive::render::giff`]、按键与鼠标在
+/// [`crate::modes::interactive::handlers::giff`]，两处都要直接读写这些状态。
 pub struct GiffView {
     /// 各文件的左右行序列（每次 `/giff` 重新采集）。
-    file_changes: FileChanges,
+    pub(super) file_changes: FileChanges,
     /// 左侧标签（如 `HEAD`）。
-    left_label: String,
+    pub(super) left_label: String,
     /// 右侧标签（如 `Working Tree`）。
-    right_label: String,
+    pub(super) right_label: String,
     /// 按路径排序后的文件列表。
-    file_names: Vec<String>,
+    pub(super) file_names: Vec<String>,
     /// 当前选中文件在 [`Self::file_names`] 中的下标；列表为空时为 0。
-    current_file_idx: usize,
+    pub(super) current_file_idx: usize,
     /// 文件路径 → 滚动行偏移。
-    scroll_positions: HashMap<String, usize>,
+    pub(super) scroll_positions: HashMap<String, usize>,
     /// 当前焦点窗格。
-    focused_pane: Pane,
+    pub(super) focused_pane: Pane,
     /// 双栏 / 统一视图。
-    view_mode: ViewMode,
+    pub(super) view_mode: ViewMode,
     /// 帮助模态是否打开（打开期间只接受关闭键）。
-    show_help: bool,
+    pub(super) show_help: bool,
     /// 是否处于输入态：`true` 时主页输入框显示并接收按键，`Esc` 回到导航。
     pub input_active: bool,
     /// 颜色快照（每帧由当前主题重建）。
@@ -156,7 +328,7 @@ pub struct GiffView {
     /// 生成 [`Self::syntect_theme`] 时的主题指纹。
     pub(super) syntect_fp: String,
     /// 最近一帧 diff 内容区的高度（翻页步长，减去上下边框）。
-    page_rows: u16,
+    pub(super) page_rows: u16,
     /// 最近一帧文件列表区域（鼠标滚轮命中判定）。
     pub(super) file_list_area: Option<Rect>,
     /// 最近一帧 diff 内容区域（鼠标滚轮命中判定）。
@@ -341,8 +513,214 @@ impl GiffView {
         self.page_rows.max(1) as usize
     }
 
+    /// 文件路径 → 滚动行偏移（渲染后已夹回可视范围）；渲染断言与调试用。
+    pub fn scroll_positions(&self) -> &HashMap<String, usize> {
+        &self.scroll_positions
+    }
+
     /// 当前视图模式（渲染断言用）。
     pub fn view_mode(&self) -> ViewMode {
         self.view_mode
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::modes::interactive::theme::Theme;
+    use std::collections::HashMap;
+
+    /// 两文件样本：`src/a.rs` 一处替换（hunk 前带元数据行），`src/b.rs` 全新增。
+    const SAMPLE: &str = "\
+diff --git a/src/a.rs b/src/a.rs
+index 1111111..2222222 100644
+--- a/src/a.rs
++++ b/src/a.rs
+@@ -1,4 +1,4 @@
+ fn main() {
+-    println!(\"old\");
++    println!(\"new\");
+     // keep
+ }
+diff --git a/src/b.rs b/src/b.rs
+new file mode 100644
+index 0000000..3333333
+--- /dev/null
++++ b/src/b.rs
+@@ -0,0 +1,2 @@
++line one
++line two
+";
+
+    /// 用样本 diff 构造视图（默认无历史状态）。
+    fn view() -> GiffView {
+        GiffView::new(
+            parse(SAMPLE),
+            "HEAD".to_string(),
+            "Working Tree".to_string(),
+            &Theme::default(),
+            &GiffRestore::default(),
+        )
+    }
+
+    /// 文件按 `b/` 侧路径切分，上下文行同时进两侧。
+    #[test]
+    fn parse_splits_files_and_context() {
+        let changes = parse(SAMPLE);
+        assert_eq!(changes.len(), 2);
+
+        let (base, head) = &changes["src/a.rs"];
+        assert_eq!(base.len(), 4, "上下文 2 + 删除 1 + 上下文 1");
+        assert_eq!(head.len(), 4);
+        assert_eq!(base[0], (1, " fn main() {".to_string()));
+        assert_eq!(base[1], (2, "-    println!(\"old\");".to_string()));
+        assert_eq!(head[1], (2, "+    println!(\"new\");".to_string()));
+        assert_eq!(base[3].0, 4, "删除行之后的行号继续推进");
+
+        let (base, head) = &changes["src/b.rs"];
+        assert!(base.is_empty(), "新增文件没有左侧内容");
+        assert_eq!(head.len(), 2);
+        assert_eq!(head[0], (1, "+line one".to_string()));
+    }
+
+    /// hunk 头恢复行号：第二个 hunk 从它自己的起始行继续，而不是接着上一个 hunk 数。
+    #[test]
+    fn hunk_header_resets_line_numbers() {
+        let diff = "\
+diff --git a/f.rs b/f.rs
+--- a/f.rs
++++ b/f.rs
+@@ -1,1 +1,1 @@
+-a
++b
+@@ -10,1 +10,1 @@
+-c
++d
+";
+        let (base, head) = &parse(diff)["f.rs"];
+        assert_eq!(base[0], (1, "-a".to_string()));
+        assert_eq!(base[1], (10, "-c".to_string()));
+        assert_eq!(head[1], (10, "+d".to_string()));
+    }
+
+    /// 元数据行与 `\ No newline` 标记不进内容。
+    #[test]
+    fn metadata_and_no_newline_marker_are_skipped() {
+        let diff = "\
+diff --git a/f.rs b/f.rs
+old mode 100644
+new mode 100755
+rename from f.rs
+rename to g.rs
+Binary files a/x.bin and b/x.bin differ
+diff --git a/h.rs b/h.rs
+--- a/h.rs
++++ b/h.rs
+@@ -1,1 +1,1 @@
+-a
+\\ No newline at end of file
++b
+\\ No newline at end of file
+";
+        let changes = parse(diff);
+        let (base, head) = &changes["f.rs"];
+        assert!(
+            base.is_empty() && head.is_empty(),
+            "纯元数据的文件两侧都没有内容"
+        );
+        let (base, head) = &changes["h.rs"];
+        assert_eq!(base.len(), 1);
+        assert_eq!(head.len(), 1);
+    }
+
+    /// 非 diff 输出（空串）解析为空表，调用方据此提示「没有改动」。
+    #[test]
+    fn empty_input_yields_no_changes() {
+        assert!(parse("").is_empty());
+    }
+
+    /// 状态恢复：上次选中的文件与滚动位置在下次进入时生效。
+    #[test]
+    fn restore_reselects_last_file_and_scroll() {
+        let restore = GiffRestore {
+            file: Some("src/b.rs".to_string()),
+            scroll_positions: HashMap::from([("src/b.rs".to_string(), 3)]),
+            ..GiffRestore::default()
+        };
+
+        let view = GiffView::new(
+            parse(SAMPLE),
+            "HEAD".to_string(),
+            "Working Tree".to_string(),
+            &Theme::default(),
+            &restore,
+        );
+
+        assert_eq!(view.current_file(), Some("src/b.rs"));
+        assert_eq!(view.scroll_positions.get("src/b.rs"), Some(&3));
+    }
+
+    /// 上次的文件已不在本次改动里时回落到第一个文件，且不恢复它的滚动位置。
+    #[test]
+    fn restore_falls_back_when_file_gone() {
+        let restore = GiffRestore {
+            file: Some("gone.rs".to_string()),
+            scroll_positions: HashMap::from([("gone.rs".to_string(), 7)]),
+            view_mode: Some(ViewMode::Unified),
+            ..GiffRestore::default()
+        };
+
+        let view = GiffView::new(
+            parse(SAMPLE),
+            "HEAD".to_string(),
+            "Working Tree".to_string(),
+            &Theme::default(),
+            &restore,
+        );
+
+        assert_eq!(view.current_file(), Some("src/a.rs"));
+        assert!(
+            view.scroll_positions.is_empty(),
+            "已消失文件的滚动位置被丢弃"
+        );
+        assert_eq!(view.view_mode(), ViewMode::Unified, "视图模式仍恢复");
+    }
+
+    /// 退出时保存的状态带回「当前文件 / 滚动位置 / 焦点 / 视图模式」。
+    #[test]
+    fn into_restore_captures_state() {
+        let mut view = view();
+        view.move_file(1);
+        view.scroll_by(5);
+        view.toggle_focus();
+        view.toggle_view();
+
+        let restore = view.into_restore();
+        let reopened = GiffView::new(
+            parse(SAMPLE),
+            "HEAD".to_string(),
+            "Working Tree".to_string(),
+            &Theme::default(),
+            &restore,
+        );
+
+        assert_eq!(reopened.current_file(), Some("src/b.rs"));
+        assert_eq!(reopened.scroll_positions.get("src/b.rs"), Some(&5));
+        assert_eq!(reopened.focused_pane(), Pane::DiffContent);
+        assert_eq!(reopened.view_mode(), ViewMode::Unified);
+    }
+
+    /// 文件选择夹在两端，不环绕。
+    #[test]
+    fn file_navigation_clamps() {
+        let mut view = view();
+        view.move_file(-1);
+        assert_eq!(view.current_file(), Some("src/a.rs"));
+
+        view.move_file(10);
+        assert_eq!(view.current_file(), Some("src/b.rs"));
+
+        view.select_edge(false);
+        assert_eq!(view.current_file(), Some("src/a.rs"));
     }
 }

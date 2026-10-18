@@ -5,6 +5,7 @@
 
 mod dock;
 mod ext_settings;
+mod giff;
 mod history;
 mod hyperlink;
 mod import;
@@ -29,7 +30,7 @@ pub(crate) mod trust;
 use self::history::message_lines;
 use super::{
     app::{App, ClickRow, LinkRow, MouseSel},
-    giff::{self, GiffView},
+    giff::GiffView,
     panel::PanelKind,
     theme::{Theme, color},
 };
@@ -218,10 +219,10 @@ fn render_frame_widgets(frame: &mut Frame, app: &mut App) {
         constraints.push(Constraint::Length(footer_height));
     }
 
-    // `/giff` 审阅视图：接管整屏（不渲染 banner），底部保留 prux 底栏；
-    // 输入态时在底栏之上插入主页输入框。
+    // `/giff` 审阅视图：接管整屏（不渲染 banner 也不渲染底栏），最后一行是视图自己的键位行；
+    // 输入态时主页输入框插在视图主体与键位行之间。
     if app.giff.is_some() {
-        render_fullscreen_giff(frame, size, app, &footer_lines);
+        render_fullscreen_giff(frame, size, app);
         return;
     }
 
@@ -319,14 +320,9 @@ fn render_fullscreen_overlay(
     }
 }
 
-/// 渲染 `/giff` 审阅视图：占用整屏（**不渲染 banner**），底部保留 prux 底栏；
-/// 处于输入态时在底栏之上插入主页输入框与光标（`i` 进入、`Esc` 退出输入态）。
-fn render_fullscreen_giff(
-    frame: &mut Frame,
-    area: Rect,
-    app: &mut App,
-    footer_lines: &[FooterLine],
-) {
+/// 渲染 `/giff` 审阅视图：占用整屏（**不渲染 banner 与底栏**），最后一行固定是视图自己的
+/// 键位行；处于输入态时主页输入框与光标插在视图主体与键位行之间（`i` 进入、`Esc` 退出输入态）。
+fn render_fullscreen_giff(frame: &mut Frame, area: Rect, app: &mut App) {
     let width = area.width.max(20) as usize;
     let input_lines = if app.giff.as_ref().is_some_and(GiffView::is_input_active) {
         // 输入区高度按主页同一套折行计算，保证长草稿不会被压扁
@@ -334,13 +330,13 @@ fn render_fullscreen_giff(
     } else {
         0
     };
-    let footer_height = footer_lines.len() as u16;
 
-    let mut constraints = vec![Constraint::Min(1), Constraint::Length(input_lines)];
-    if footer_height > 0 {
-        constraints.push(Constraint::Length(footer_height));
-    }
-    let chunks = Layout::vertical(constraints).split(area);
+    let chunks = Layout::vertical([
+        Constraint::Min(1),
+        Constraint::Length(input_lines),
+        Constraint::Length(1),
+    ])
+    .split(area);
 
     // 拆开字段借用：视图渲染要 `&mut`，主题要 `&`
     let App {
@@ -351,17 +347,12 @@ fn render_fullscreen_giff(
     else {
         return;
     };
-    giff::render::render(frame, chunks[0], view, theme);
 
-    let mut idx = 1;
+    giff::render(frame, chunks[0], view, theme);
+    giff::render_keybar(frame, view, chunks[2]);
+
     if input_lines > 0 {
-        render_input_region(frame, chunks[idx], app);
-        idx += 1;
-    }
-    if footer_height > 0 {
-        status::render_bottom_bar(frame, chunks[idx], app, footer_lines);
-    }
-    if input_lines > 0 {
+        render_input_region(frame, chunks[1], app);
         render_cursor(frame, chunks[1], app, width);
     }
 }

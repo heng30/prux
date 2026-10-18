@@ -1,11 +1,14 @@
 //! `/giff` 视图渲染：header / 文件列表 / 双栏与统一 diff / 帮助模态 / 底部键位行。
 //!
-//! 内容全部由 [`GiffView`] 持有；渲染同时把最近一帧的区域与翻页步长写回视图
-//! （鼠标滚轮命中判定与 `PageUp`/`PageDown` 用）。
+//! 内容全部由 [`crate::modes::interactive::giff::GiffView`] 持有；渲染同时把最近一帧的
+//! 区域与翻页步长写回视图（鼠标滚轮命中判定与 `PageUp`/`PageDown` 用）。
 
-use super::{GiffStyle, GiffView, LineChange, Pane, ViewMode};
+use super::syntax_hl;
 use crate::{
-    modes::interactive::{render::syntax_hl, theme::Theme},
+    modes::interactive::{
+        giff::{GiffStyle, GiffView, LineChange, Pane, ViewMode},
+        theme::Theme,
+    },
     utils::glyphs::DEF_ELLIPSIS,
 };
 use ratatui::{
@@ -20,17 +23,15 @@ use ratatui::{
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-/// 渲染整个 `/giff` 视图。`area` 是 TUI 分给视图的整块区域（底栏与输入区由调用方排除）。
-pub fn render(frame: &mut Frame, area: Rect, view: &mut GiffView, theme: &Theme) {
+/// 渲染 `/giff` 视图主体（header + 文件列表 + diff / 帮助模态）。
+///
+/// 底部键位行不在此渲染：它由 [`render_keybar`] 画在整屏最后一行，因此 `area` 只到
+/// 输入区之上（输入态时输入框夹在主体与键位行之间）。
+pub(super) fn render(frame: &mut Frame, area: Rect, view: &mut GiffView, theme: &Theme) {
     view.style = GiffStyle::from_theme(theme);
     ensure_syntect_theme(view, theme);
 
-    let chunks = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Min(0),
-        Constraint::Length(1),
-    ])
-    .split(area);
+    let chunks = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(area);
 
     render_header(frame, view, chunks[0]);
 
@@ -73,8 +74,6 @@ pub fn render(frame: &mut Frame, area: Rect, view: &mut GiffView, theme: &Theme)
             }
         }
     }
-
-    render_help(frame, view, chunks[2]);
 
     if view.show_help {
         render_help_modal(frame, view, area);
@@ -336,7 +335,7 @@ fn render_unified_diff(frame: &mut Frame, view: &GiffView, area: Rect) {
 }
 
 /// 生成左右对齐的行序列：改动块内逐行配对，短的一侧补 `(0, "")` 占位行。
-pub(super) fn align_lines(
+fn align_lines(
     base_lines: &[LineChange],
     head_lines: &[LineChange],
 ) -> (Vec<LineChange>, Vec<LineChange>) {
@@ -424,7 +423,7 @@ fn aligned_line_count(base_lines: &[LineChange], head_lines: &[LineChange]) -> u
 }
 
 /// 统一视图下的总行数（不分配行序列，供滚动夹取使用）。
-pub(super) fn unified_line_count(base_lines: &[LineChange], head_lines: &[LineChange]) -> usize {
+fn unified_line_count(base_lines: &[LineChange], head_lines: &[LineChange]) -> usize {
     let mut count = 0;
     let mut bi = 0;
     let mut hi = 0;
@@ -457,10 +456,7 @@ pub(super) fn unified_line_count(base_lines: &[LineChange], head_lines: &[LineCh
 }
 
 /// 生成统一视图的行序列：同一改动块内先列删除、再列新增，上下文行取左侧一份。
-pub(super) fn build_unified_lines(
-    base_lines: &[LineChange],
-    head_lines: &[LineChange],
-) -> Vec<LineChange> {
+fn build_unified_lines(base_lines: &[LineChange], head_lines: &[LineChange]) -> Vec<LineChange> {
     let mut unified = Vec::new();
     let mut bi = 0;
     let mut hi = 0;
@@ -575,8 +571,8 @@ fn highlight_with_bg(
     }
 }
 
-/// 底部一行键位提示：输入态与实际导航键位不同，两套都给。
-fn render_help(frame: &mut Frame, view: &GiffView, area: Rect) {
+/// 渲染底部键位行（`area` 应为整屏最后一行）：输入态与实际导航键位不同，两套都给。
+pub(super) fn render_keybar(frame: &mut Frame, view: &GiffView, area: Rect) {
     let t = &view.style;
     let pairs: &[(&str, &str)] = if view.input_active {
         &[("Enter", "Send"), ("Esc", "Cancel input")]
@@ -811,7 +807,7 @@ fn count_file_changes(view: &GiffView, file: &str) -> (usize, usize) {
 }
 
 /// 从左侧截断路径到 `max_width` 显示列，保留文件名（尾部）；放不下时前缀 `…`。
-pub(super) fn truncate_path(path: &str, max_width: usize) -> String {
+fn truncate_path(path: &str, max_width: usize) -> String {
     if UnicodeWidthStr::width(path) <= max_width {
         return path.to_string();
     }
@@ -834,4 +830,185 @@ pub(super) fn truncate_path(path: &str, max_width: usize) -> String {
     }
 
     format!("{}{}", DEF_ELLIPSIS, &path[start_byte..])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::modes::interactive::giff::{GiffRestore, parse};
+    use ratatui::{Terminal, backend::TestBackend};
+
+    /// 两文件样本：`a.rs` 一处替换，`b.rs` 全新增。
+    const SAMPLE: &str = "\
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1,3 +1,3 @@
+ fn main() {
+-    old();
++    new();
+ }
+diff --git a/b.rs b/b.rs
+--- /dev/null
++++ b/b.rs
+@@ -0,0 +1,2 @@
++one
++two
+";
+
+    /// 构造视图（默认无历史状态）。
+    fn view(diff: &str) -> GiffView {
+        GiffView::new(
+            parse(diff),
+            "HEAD".to_string(),
+            "Working Tree".to_string(),
+            &Theme::default(),
+            &GiffRestore::default(),
+        )
+    }
+
+    /// 渲染一帧并返回终端，供逐行断言；布局与 TUI 侧一致：主体占满，键位行固定在最后一行。
+    fn draw(view: &mut GiffView, width: u16, height: u16) -> Terminal<TestBackend> {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        let theme = Theme::default();
+        terminal
+            .draw(|frame| {
+                let area = Rect::new(0, 0, width, height);
+                let chunks =
+                    Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(area);
+                render(frame, chunks[0], view, &theme);
+                render_keybar(frame, view, chunks[1]);
+            })
+            .unwrap();
+        terminal
+    }
+
+    /// 取某一行可见文本（右侧空格已裁剪）。
+    fn row(terminal: &Terminal<TestBackend>, y: u16, width: u16) -> String {
+        let buf = terminal.backend().buffer();
+        (0..width)
+            .map(|x| buf.cell((x, y)).unwrap().symbol())
+            .collect::<String>()
+            .trim_end()
+            .to_string()
+    }
+
+    /// 改动块按行配对：删除与新增各 1 行时对齐成 2 行，上下文行两侧各一份。
+    #[test]
+    fn align_pairs_change_blocks() {
+        let (base, head) = &parse(SAMPLE)["a.rs"];
+        let (aligned_base, aligned_head) = align_lines(base, head);
+
+        assert_eq!(aligned_base.len(), aligned_head.len());
+        assert_eq!(aligned_base.len(), 3, "上下文 1 + 改动块 1 + 上下文 1");
+        assert!(aligned_base[1].1.starts_with('-'));
+        assert!(aligned_head[1].1.starts_with('+'));
+        assert_eq!(aligned_base[0], head[0], "上下文行两侧一致");
+    }
+
+    /// 改动块里删除多于新增时，短的一侧补 `(0, "")` 占位行。
+    #[test]
+    fn align_pads_shorter_side() {
+        let base = vec![(1, "-a".to_string()), (2, "-b".to_string())];
+        let head = vec![(1, "+a".to_string())];
+        let (aligned_base, aligned_head) = align_lines(&base, &head);
+
+        assert_eq!(aligned_base.len(), 2);
+        assert_eq!(aligned_head[1], (0, String::new()));
+    }
+
+    /// 统一视图：同一改动块先列删除再列新增，上下文行只出现一次。
+    #[test]
+    fn unified_lists_removals_before_additions() {
+        let (base, head) = &parse(SAMPLE)["a.rs"];
+        let unified = build_unified_lines(base, head);
+
+        assert_eq!(unified.len(), 4, "上下文 1 + 删除 1 + 新增 1 + 上下文 1");
+        assert_eq!(unified[1].1, "-    old();");
+        assert_eq!(unified[2].1, "+    new();");
+        assert_eq!(unified_line_count(base, head), unified.len());
+    }
+
+    /// 路径从左侧截断，保留文件名尾部。
+    #[test]
+    fn truncate_path_keeps_tail() {
+        assert_eq!(truncate_path("src/main.rs", 20), "src/main.rs");
+        assert_eq!(truncate_path("abcdefghij", 6), "…fghij");
+        assert_eq!(truncate_path("あいうえお", 5), "…えお", "全角按 2 列计");
+        assert_eq!(truncate_path("abcdef", 1), "…");
+    }
+
+    /// 整帧：header 显示两侧标签与计数，左侧列出文件，底部是键位行。
+    #[test]
+    fn render_shows_header_files_and_keybar() {
+        let mut view = view(SAMPLE);
+        let terminal = draw(&mut view, 100, 20);
+
+        let header = row(&terminal, 0, 100);
+        assert!(header.contains("HEAD → Working Tree"), "header: {header}");
+        assert!(header.contains("Side-by-Side"), "header: {header}");
+        assert!(header.contains("1/2"), "header: {header}");
+
+        let files = row(&terminal, 2, 100);
+        assert!(files.contains("a.rs"), "文件列表: {files}");
+
+        let keybar = row(&terminal, 19, 100);
+        assert!(keybar.contains("Quit"), "键位行: {keybar}");
+        assert!(keybar.contains("Input"), "键位行: {keybar}");
+    }
+
+    /// `u` 切换统一视图后 header 与内容标题随之变化。
+    #[test]
+    fn toggle_view_updates_header() {
+        let mut view = view(SAMPLE);
+        view.toggle_view();
+        assert_eq!(view.view_mode(), ViewMode::Unified);
+
+        let terminal = draw(&mut view, 100, 20);
+        assert!(row(&terminal, 0, 100).contains("Unified"));
+    }
+
+    /// 输入态切换底部键位行文案（输入框本身由核心渲染，不在此视图内）。
+    #[test]
+    fn input_mode_switches_keybar() {
+        let mut view = view(SAMPLE);
+        view.set_input_active(true);
+
+        let terminal = draw(&mut view, 100, 20);
+        let keybar = row(&terminal, 19, 100);
+        assert!(keybar.contains("Send"), "输入态键位行: {keybar}");
+        assert!(keybar.contains("Cancel input"), "输入态键位行: {keybar}");
+    }
+
+    /// 滚动位置在渲染时按内容长度夹回（内容比视口短 → 归零）。
+    #[test]
+    fn scroll_is_clamped_to_content() {
+        let mut view = view(SAMPLE);
+        view.scroll_to_bottom();
+        let _ = draw(&mut view, 100, 20);
+
+        assert_eq!(
+            view.scroll_positions().get("a.rs"),
+            Some(&0),
+            "内容不足一屏时归零"
+        );
+    }
+
+    /// 帮助模态开关。
+    #[test]
+    fn help_modal_toggles() {
+        let mut view = view(SAMPLE);
+        assert!(!view.is_help_open());
+        view.toggle_help();
+        assert!(view.is_help_open());
+
+        let terminal = draw(&mut view, 100, 30);
+        assert!(
+            (0..30).any(|y| row(&terminal, y, 100).contains("Keybindings")),
+            "模态框标题应可见"
+        );
+
+        view.close_help();
+        assert!(!view.is_help_open());
+    }
 }
