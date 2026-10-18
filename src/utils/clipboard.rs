@@ -440,6 +440,9 @@ mod tests {
         assert!(matches!(write_osc52(&big), Osc52Result::TooLarge));
     }
 
+    /// [`parse_file_uri_list`] 及其调用链只在 Linux 编译（Wayland 剪贴板专用），
+    /// 断言必须跟着门控，否则 Windows 的 `cargo test` 直接编译不过。
+    #[cfg(target_os = "linux")]
     #[test]
     fn file_uri_list_keeps_local_paths_in_order() {
         // 取本地 file:// 条目、按顺序保留、百分号解码；注释行与远程主机条目丢弃

@@ -13,7 +13,7 @@ use crate::{
     },
     error::{Error, Result},
     utils::{
-        paths::{normalize_dir, read_first_line},
+        paths::{normalize_dir, read_first_line, strip_verbatim_prefix},
         time::{chrono_ms_to_iso, now_ms},
     },
 };
@@ -1784,9 +1784,15 @@ fn entry_to_json(entry: &Entry) -> Value {
     serde_json::to_value(entry).unwrap_or(Value::Null)
 }
 
-/// 目录名编码：--<path>--，开头的 / 去掉，/ 和 : 替换为 -
+/// 目录名编码：--<path>--，开头的 / 去掉，/ 和 : 替换为 -。
+///
+/// 编码前先剥掉 Windows 的 verbatim 前缀（[`strip_verbatim_prefix`]）：Windows 上
+/// `normalize_cwd` / `canonicalize` 返回的 `\\?\...` 路径带 `?`，而 `?` 在文件名里非法，
+/// 编码结果拿去建目录/文件会被系统直接拒绝（prompt 历史就是这么悄无声息丢掉的）。
+/// 剥离后 `\\?\C:\a` 与 `C:\a` 编码到同一个桶。
 pub fn encode_cwd_dir(cwd: &str) -> String {
-    let trimmed = cwd.trim_start_matches(['/', '\\']);
+    let trimmed = strip_verbatim_prefix(cwd);
+    let trimmed = trimmed.trim_start_matches(['/', '\\']);
     let safe = trimmed.replace(['/', '\\', ':'], "-");
     format!("--{}--", safe)
 }
@@ -2036,6 +2042,32 @@ mod tests {
     fn session_at(dir: &Path) -> Session {
         let d = dir.join("sessions");
         Session::create(dir.to_str().unwrap(), Some(d.clone()), true).unwrap()
+    }
+
+    /// Windows 上 `canonicalize` 返回 `\\?\...`，`?` 不能进文件名：
+    /// 编码必须先剥掉 verbatim 前缀，否则 `sessions/` 与 `history/` 下的落盘全部失败。
+    #[test]
+    fn encode_cwd_dir_strips_windows_verbatim_prefix() {
+        assert_eq!(
+            encode_cwd_dir(r"\\?\C:\target\debug"),
+            "--C--target-debug--"
+        );
+        assert_eq!(
+            encode_cwd_dir(r"\\?\UNC\srv\share\proj"),
+            "--srv-share-proj--"
+        );
+        // verbatim 与非 verbatim 写法指向同一个桶（不能把同一目录拆成两份）
+        assert_eq!(encode_cwd_dir(r"\\?\C:\a\b"), encode_cwd_dir(r"C:\a\b"));
+        // 编码结果里不得出现非法文件名字符
+        for cwd in [r"\\?\C:\a\b", r"\\?\UNC\srv\share", "/home/blue/repo"] {
+            let name = encode_cwd_dir(cwd);
+            assert!(
+                !name.contains(['?', '*', '"', '<', '>', '|']),
+                "{cwd} 编码出非法文件名: {name}"
+            );
+        }
+        // Unix 路径行为不变
+        assert_eq!(encode_cwd_dir("/home/blue/repo"), "--home-blue-repo--");
     }
 
     /// `create_with` 是唯一构造入口：`create` / `create_with_id` 是它的薄包装，

@@ -219,6 +219,29 @@ pub fn normalize_cwd(path: &Path) -> String {
     out.to_string_lossy().to_string()
 }
 
+/// 剥掉 Windows 规范化路径的 verbatim 前缀（`\\?\` 与 `\\?\UNC\`）。
+///
+/// `std::fs::canonicalize` 在 Windows 上返回 verbatim 路径（`\\?\C:\...`、
+/// `\\?\UNC\server\share\...`），而 `?` 是**非法文件名字符**：把这种路径当作
+/// 目录名/文件名的一部分编码出去（prompt 历史按项目根分桶即如此），
+/// `CreateFile` 会直接以 `ERROR_INVALID_NAME` 失败，写入被静默丢掉。
+///
+/// - `\\?\UNC\server\share\x` → `\\server\share\x`（还原成普通 UNC）
+/// - `\\?\C:\x` → `C:\x`（还原成普通盘符路径）
+/// - 其余（含非 Windows 路径、本就没有前缀的普通路径）原样返回，故 Linux 行为不变。
+///
+/// 剥离后同一目录的 verbatim / 普通两种写法编码结果一致，避免同一个桶被拆成两份。
+pub fn strip_verbatim_prefix(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{rest}");
+    }
+
+    if let Some(rest) = path.strip_prefix(r"\\?\") {
+        return rest.to_string();
+    }
+    path.to_string()
+}
+
 /// 项目根：从 `cwd` 向上找最近的 `.git`（目录或文件都认——文件是 git worktree / 链接工作树的写法），
 /// 找到即返回该层规范路径；一路到根都没有则回退 [`normalize_cwd`]。
 ///
@@ -386,6 +409,25 @@ mod tests {
 
         let expected = normalize_cwd(&plain);
         assert_eq!(project_root(plain.to_str().unwrap()), expected);
+    }
+
+    #[test]
+    fn strip_verbatim_prefix_removes_windows_prefixes_only() {
+        // Windows canonicalize 的两种 verbatim 形状
+        assert_eq!(
+            strip_verbatim_prefix(r"\\?\C:\Users\blue"),
+            r"C:\Users\blue"
+        );
+        assert_eq!(
+            strip_verbatim_prefix(r"\\?\UNC\srv\share\proj"),
+            r"\\srv\share\proj"
+        );
+        // 普通路径（含 UNC、Unix 绝对路径）原样返回
+        assert_eq!(strip_verbatim_prefix(r"C:\Users\blue"), r"C:\Users\blue");
+        assert_eq!(strip_verbatim_prefix(r"\\srv\share"), r"\\srv\share");
+        assert_eq!(strip_verbatim_prefix("/home/blue/repo"), "/home/blue/repo");
+        // `\\?` 后面不跟分隔符的只是普通名字，不能误剥
+        assert_eq!(strip_verbatim_prefix(r"\\?weird"), r"\\?weird");
     }
 
     #[test]

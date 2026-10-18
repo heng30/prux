@@ -204,6 +204,11 @@ This release aligns prux with upstream pi 1.1.0.
   `Tool powershell not found`, because the built-in tool lookup did not list the name. It now shares
   `bash`'s streaming output, truncation details and plan-mode read-only allowlist, and its call
   header shows the command being run.
+- Prompt history is no longer lost on restart on Windows: the per-project history file name was
+  derived from a `canonicalize`d path, whose Windows `\\?\` form contains `?`, an illegal file name
+  character. Creating the file was rejected by the OS and the write failed silently, so history was
+  always empty after a restart. The verbatim prefix (`\\?\C:\x`, `\\?\UNC\srv\share\x`) is now
+  stripped before encoding, and both spellings of a directory map to the same history file.
 
 ## 中文
 
@@ -359,3 +364,7 @@ This release aligns prux with upstream pi 1.1.0.
 - **Windows 上 `powershell` 工具真正可用**：此前它已声明给模型，但每次调用都被回以
   `Tool powershell not found`（内置工具判定没收录这个名字）。它现在与 `bash` 共用流式输出、截断
   details 与 plan mode 只读白名单，调用块也会显示所执行的命令。
+- **Windows 上输入历史不再一重启就丢**：prompt 历史按项目根分桶，文件名取自 `canonicalize`
+  的结果，而 Windows 的 `\\?\` 形式里带 `?`——非法文件名字符。系统直接拒绝建文件、写入静默失败，
+  于是重启后历史永远为空。编码前先剥掉 verbatim 前缀（`\\?\C:\x`、`\\?\UNC\srv\share\x`），
+  同一目录的 verbatim 与普通写法现在落到同一份历史。

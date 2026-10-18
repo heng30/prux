@@ -385,6 +385,25 @@ mod tests {
     }
 
     #[test]
+    fn history_path_uses_a_legal_file_name_for_canonical_cwd() {
+        with_env(|cwd| {
+            // Windows 上 `canonicalize` 返回 `\\?\...`（verbatim），项目根分桶后
+            // 文件名里若残留 `?`，建文件会被系统拒绝，历史就静默丢了。
+            let canon = std::fs::canonicalize(cwd).unwrap();
+            let canon = canon.to_string_lossy().to_string();
+            let name = history_path(&canon)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap();
+            assert!(!name.contains('?'), "历史文件名含非法字符: {name}");
+            // 同一目录的 canonical / 原始写法落进同一个桶
+            assert_eq!(history_path(&canon), history_path(cwd));
+            append(cwd, "roundtrip", 500);
+            assert_eq!(load(&canon, 500).len(), 1, "两种写法都要能读到同一份历史");
+        });
+    }
+
+    #[test]
     fn multiline_prompt_survives_roundtrip() {
         with_env(|cwd| {
             let text = "line one\nline two\n\nline four";
