@@ -46,6 +46,13 @@ This release aligns prux with upstream pi 1.3.0.
 
 ### Fixed
 
+- **A stream cut off before `finish_reason` now fails instead of ending the turn silently**: when a
+  provider that reports `finish_reason` closes the stream mid-answer, the partial text and tool
+  arguments are kept, but the turn ends with an error saying the response was truncated instead of
+  being reported as a normal stop.
+- **A final SSE frame without a trailing newline is no longer dropped**: such a frame (often the one
+  carrying `finish_reason`) used to be lost when the connection closed right after it.
+
 - **Three more transient provider errors are retried**: `The upstream provider returned an error`,
   `The service is temporarily unavailable` (which also made the first compaction attempt fail) and
   the gateway's `Unable to forward upstream stream`.
@@ -122,6 +129,12 @@ This release aligns prux with upstream pi 1.3.0.
   不再声称所有失败都抛错。
 
 ### 修复
+
+- **流在 `finish_reason` 之前被抳断时报错，不再静默结束回合**：会报告 `finish_reason` 的 provider
+  在中途关闭连接时，已收到的文本与工具参数仍会保留，但本回合以「响应被截断」的错误结束，
+  不再谎报成正常收尾。
+- **末尾不带换行的 SSE 帧不再被丢掉**：这类帧（常常正是携带 `finish_reason` 的那一帧）
+  此前会随连接关闭一起丢失。
 
 - **三条瞬时 provider 错误现在会重试**：`The upstream provider returned an error`、
   `The service is temporarily unavailable`（此前还会让压缩首次尝试就失败）、以及网关的

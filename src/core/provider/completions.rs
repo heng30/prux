@@ -27,6 +27,11 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 
+/// 声明支持 finish_reason 的端点在流结束却没给 finish_reason 帧时的错误说明：
+/// 连接被抳断（超时 / 代理丢尾帧），响应内容是残缺的。
+const TRUNCATED_STREAM_ERROR: &str =
+    "provider stream ended without finish_reason: the response was truncated";
+
 /// 工具结果转换结果。
 struct ConvertedToolResult {
     /// `role: "tool"` 消息
@@ -697,7 +702,22 @@ pub(crate) async fn stream(
     // 供应商原始流事件：无扩展订阅时零开销（一次流只查一次）
     let capture_stream_events = core::extensions::has_provider_stream_event_handlers();
 
-    while let Some(chunk) = stream.next().await {
+    'sse: loop {
+        let Some(chunk) = stream.next().await else {
+            // 连接断开：缓冲里可能还留着一条没以换行结尾的尾行（常常正是携带
+            // finish_reason 的那一帧），补处理，否则它会被连同断流一起丢掉。
+            if !buf.is_empty() {
+                let tail = String::from_utf8_lossy(&buf).to_string();
+                handle_sse_line(
+                    &tail,
+                    &mut state,
+                    model,
+                    &mut on_event,
+                    capture_stream_events,
+                )?;
+            }
+            break;
+        };
         let chunk = match chunk {
             Ok(c) => c,
             Err(e) => return Err(Error::msg(format!("stream read failed: {}", e))),
@@ -708,34 +728,56 @@ pub(crate) async fn stream(
         buf = carry;
 
         for line in lines {
-            let line = line.trim();
-            if line.is_empty() {
-                continue;
+            // 读到 [DONE]：端点已宣告本次流结束，不必再等它关连接
+            if handle_sse_line(
+                &line,
+                &mut state,
+                model,
+                &mut on_event,
+                capture_stream_events,
+            )? {
+                break 'sse;
             }
-            let Some(data) = line.strip_prefix("data:") else {
-                continue;
-            };
-            let data = data.trim();
-            if data == "[DONE]" {
-                break;
-            }
-            let chunk_val: Value = match serde_json::from_str(data) {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-            if capture_stream_events {
-                core::extensions::dispatch_provider_stream_event(
-                    &model.provider,
-                    &model.api,
-                    &model.model_id,
-                    &chunk_val,
-                );
-            }
-            state.handle_chunk(&chunk_val, model, &mut on_event)?;
         }
     }
 
     state.finish(model, &mut on_event)
+}
+
+/// 处理一行 SSE 文本：跳过空行与非 `data:` 行，解析 JSON 后交给 [`StreamState`]。
+/// 返回 `true` 表示读到 `data: [DONE]`（端点宣告本次流结束，调用方应停止读取）。
+fn handle_sse_line(
+    line: &str,
+    state: &mut StreamState,
+    model: &ModelConfig,
+    on_event: &mut Option<&mut PartialTranslator<'_>>,
+    capture_stream_events: bool,
+) -> Result<bool> {
+    let line = line.trim();
+    if line.is_empty() {
+        return Ok(false);
+    }
+    let Some(data) = line.strip_prefix("data:") else {
+        return Ok(false);
+    };
+    let data = data.trim();
+    if data == "[DONE]" {
+        return Ok(true);
+    }
+    let chunk_val: Value = match serde_json::from_str(data) {
+        Ok(v) => v,
+        Err(_) => return Ok(false),
+    };
+    if capture_stream_events {
+        core::extensions::dispatch_provider_stream_event(
+            &model.provider,
+            &model.api,
+            &model.model_id,
+            &chunk_val,
+        );
+    }
+    state.handle_chunk(&chunk_val, model, on_event)?;
+    Ok(false)
 }
 
 /// 按模型能力钳制级别；"off" 归一到 None
@@ -1452,16 +1494,26 @@ impl StreamState {
             }
         }
 
-        // 流结束时无 finish_reason 帧，按是否存在工具调用推断 stop/toolUse
-        let stop_reason = self.stop_reason.or_else(|| {
+        // 流结束了却没有 finish_reason 帧：声明支持 finish_reason 的端点（目录缺省即支持）
+        // 只会因连接被掐断（超时 / 代理丢尾帧）而如此，此时正文与工具参数都是残缺的。
+        // 不能悄悄收尾成 stop/toolUse，否则表现为「说到一半就停」且不给任何信号。
+        let truncated = model.supports_finish_reason && self.stop_reason.is_none();
+        let stop_reason = self.stop_reason.clone().or_else(|| {
             if model.supports_finish_reason {
-                None
+                Some("error".to_string())
             } else if !self.tool_calls.is_empty() {
                 Some("toolUse".to_string())
             } else {
                 Some("stop".to_string())
             }
         });
+
+        // 端点自己的 finish_reason 说明（content_filter 等）优先保留，无则用截断说明
+        let error_message = if truncated {
+            Some(TRUNCATED_STREAM_ERROR.to_string())
+        } else {
+            self.error_message.clone()
+        };
 
         let mut usage = self.usage;
         if let Some(u) = usage.as_mut() {
@@ -1476,7 +1528,7 @@ impl StreamState {
             tool_name: None,
             is_error: false,
             stop_reason,
-            error_message: self.error_message.clone(),
+            error_message: error_message.clone(),
             model: self.response_model.or(Some(model.model_id.clone())),
             provider: Some(model.provider.clone()),
             api: Some("openai-completions".to_string()),
@@ -1497,7 +1549,7 @@ impl StreamState {
         Ok(StreamResult {
             message,
             usage,
-            error_message: self.error_message,
+            error_message,
         })
     }
 }
@@ -2460,6 +2512,12 @@ mod tests {
     /// grammar 调用的裸源码（累积的 `custom.input`）被包成 `{"<prop>":"…"}` 的 JSON 参数。
     #[test]
     fn grammar_custom_input_is_wrapped_into_json_arguments() {
+        // 属性名回退依赖「codemode 未注册」这一前提，而注册表是进程级全局：
+        // 必须与注册 probe 的测试串行，否则井行跑会读到别人的注册态
+        let _g = crate::test_support::AUTH_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::core::extensions::unregister_extension("zz-codemode-replay-probe");
         let m = model(false, None);
         let mut st = StreamState::new();
         let mut on_event = None;

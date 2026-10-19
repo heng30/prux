@@ -193,6 +193,82 @@ fn completions_streams_text_and_tool_call() {
     });
 }
 
+/// 声明支持 finish_reason 的端点中途断流（无 finish_reason 帧直接 EOF）：
+/// 必须判定为截断错误，而不是静默收尾成 stop —— 否则正文/参数残缺且不报错。
+#[test]
+fn completions_truncated_stream_reports_error() {
+    run_net_test(|| {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let events = vec![
+                r#"{"id":"cmpl_1","choices":[{"index":0,"delta":{"role":"assistant","content":"half"}}]}"#,
+                r#"{"id":"cmpl_1","choices":[{"index":0,"delta":{"content":"-way"}}]}"#,
+            ];
+            let (base, handle) = mock_server(events, false).await;
+            let m = model_with_base(&base, "openai-completions");
+            let result = completions::stream(&m, &[], "", &[], None, None, None, None, None, None)
+                .await
+                .unwrap();
+            handle.await.unwrap();
+
+            assert_eq!(result.message.stop_reason.as_deref(), Some("error"));
+            let err = result.message.error_message.clone().unwrap_or_default();
+            assert!(err.contains("without finish_reason"), "{err}");
+            // 已收到的片段仍要保留，便于用户判断到底跑到哪
+            assert_eq!(result.message.text(), "half-way");
+        });
+    });
+}
+
+/// 端点声明不支持 finish_reason（本地推理服务等）时不能误判成截断：
+/// 仍按有无工具调用推断 stop/toolUse，且不填错误说明。
+#[test]
+fn completions_inference_without_finish_reason_capability() {
+    run_net_test(|| {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let events = vec![
+                r#"{"id":"cmpl_1","choices":[{"index":0,"delta":{"role":"assistant","content":"ok"}}]}"#,
+            ];
+            let (base, handle) = mock_server(events, false).await;
+            let mut m = model_with_base(&base, "openai-completions");
+            m.supports_finish_reason = false;
+            let result = completions::stream(&m, &[], "", &[], None, None, None, None, None, None)
+                .await
+                .unwrap();
+            handle.await.unwrap();
+
+            assert_eq!(result.message.stop_reason.as_deref(), Some("stop"));
+            assert!(result.message.error_message.is_none());
+        });
+    });
+}
+
+/// 服务端把最后的 finish_reason 帧写成不带结尾换行的裸行后直接断流：
+/// 尾行必须补处理，否则这一帧会随断流一起丢掉、被误判成截断。
+#[test]
+fn completions_flushes_final_frame_without_trailing_newline() {
+    run_net_test(|| {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let body = r#"data: {"id":"cmpl_1","choices":[{"index":0,"delta":{"content":"hi"}}]}
+
+data: {"id":"cmpl_1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":1}}"#;
+            let (base, handle) = mock_server_raw(vec![body.as_bytes().to_vec()]).await;
+            let m = model_with_base(&base, "openai-completions");
+            let result = completions::stream(&m, &[], "", &[], None, None, None, None, None, None)
+                .await
+                .unwrap();
+            handle.await.unwrap();
+
+            assert_eq!(result.message.stop_reason.as_deref(), Some("stop"));
+            assert!(result.message.error_message.is_none());
+            assert_eq!(result.message.text(), "hi");
+            assert_eq!(result.usage.unwrap().output, 1);
+        });
+    });
+}
+
 // =========================================================================
 // responses
 // =========================================================================
