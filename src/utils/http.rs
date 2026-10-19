@@ -172,6 +172,34 @@ pub async fn error_summary(response: reqwest::Response) -> String {
     format!("HTTP {status}: {trimmed}")
 }
 
+/// GET 一个 JSON 端点：2xx 时解析响应体，否则把状态码与响应体摘要拼成错误消息。
+///
+/// 错误一律是**可展示的字符串**（调用方通常直接把它写进面板或错误提示）：
+/// 请求失败是 `request failed: ...`，非 2xx 是 [`error_summary`] 的 `HTTP <status>: <摘要>`，
+/// 2xx 但响应体不是 JSON 是 `invalid JSON: ...`。
+pub async fn get_json(
+    client: &Client,
+    url: &str,
+    headers: &[(String, String)],
+) -> Result<serde_json::Value, String> {
+    let mut request = client.get(url).header("Accept", "application/json");
+    for (name, value) in headers {
+        request = request.header(name.as_str(), value.as_str());
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|err| format!("request failed: {err}"))?;
+    if !response.status().is_success() {
+        return Err(error_summary(response).await);
+    }
+    let body = response
+        .text()
+        .await
+        .map_err(|err| format!("request failed: {err}"))?;
+    serde_json::from_str(&body).map_err(|err| format!("invalid JSON: {err}"))
+}
+
 /// 从 `retry-after-ms`（毫秒）或 `retry-after`（秒或 HTTP-date）头解析服务端要求的等待时长；
 /// 两个头都缺失、或取值非法（非有限数、无法解析的日期、已过期）时返回 None，
 /// 调用方改用指数退避——**不可**把非法值当作 0 立即重试。
@@ -369,6 +397,36 @@ mod tests {
             );
         }
         m
+    }
+
+    #[test]
+    fn get_json_parses_body_and_summarizes_failures() {
+        use crate::test_support::{run_with_timeout, spawn_json_server};
+        run_with_timeout(Duration::from_secs(30), || {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async {
+                let (base, handle) = spawn_json_server(vec![
+                    (200, "{\"ok\":true}".to_string()),
+                    (401, "{\"error\":\"bad token\"}".to_string()),
+                    (200, "not json".to_string()),
+                ])
+                .await;
+                let client = reqwest::Client::new();
+                let url = format!("{base}/v1/thing");
+                let headers = vec![("Authorization".to_string(), "Bearer t".to_string())];
+
+                let json = get_json(&client, &url, &headers).await.unwrap();
+                assert_eq!(json["ok"], true);
+
+                let err = get_json(&client, &url, &headers).await.unwrap_err();
+                assert!(err.contains("401"), "{err}");
+                assert!(err.contains("bad token"), "{err}");
+
+                let err = get_json(&client, &url, &headers).await.unwrap_err();
+                assert!(err.contains("invalid JSON"), "{err}");
+                handle.abort();
+            });
+        });
     }
 
     #[test]

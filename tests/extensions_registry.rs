@@ -62,6 +62,7 @@ fn register_all_collects_and_sorts_slices() {
         "open",
         "pdf",
         "session-search",
+        "usage",
         "footer(normal)",
         "footer(minimal)",
         "footer(rich)",
@@ -71,8 +72,8 @@ fn register_all_collects_and_sorts_slices() {
 
     prux::extensions::register_all();
 
-    // 分布式切片确实汇聚：29 个工具扩展 + 3 个底栏扩展
-    assert_eq!(extension_count(), 29, "普通扩展应全被切片收集");
+    // 分布式切片确实汇聚：30 个工具扩展 + 3 个底栏扩展
+    assert_eq!(extension_count(), 30, "普通扩展应被切片收集");
     assert_eq!(footer_extension_count(), 3, "footer 扩展应全被切片收集");
 
     // plan-mode / goal / subagent / tasks / web-access / proxy / doc-helper / notify 是声明 default_enabled() == false 的默认可选扩展：
@@ -156,6 +157,10 @@ fn register_all_collects_and_sorts_slices() {
     assert!(
         !is_extension_enabled("session-search"),
         "session-search 应默认不启用（Dev / Creator 工具）"
+    );
+    assert!(
+        !is_extension_enabled("usage"),
+        "usage 应默认不启用（会带凭据发网络请求）"
     );
     // update-check 默认启用（版本提示属于开箱能力）
     assert!(

@@ -70,6 +70,7 @@ core::extensions::register_banner_extension(extensions::banner::Banner::new());
 | `open` | 扩展 | 用系统默认程序打开文件或 URL：`open` 工具（参数 `path`）。`http`/`https`/`file` URL 原样透传，本地路径按工作目录展开且必须存在；只把用户引到内容面前，**不把内容读回上下文**。**默认不启用**（`Dev` / `Creator` 模式） |
 | `pdf` | 扩展 | 抽取 PDF 的**文本层**：`read_pdf` 工具（参数 `path`）。超过 32 MiB 的文件在解析前拒绝，抽出的文本按 `read` 的口径截断（2000 行 / 50KB）；扫描件（图片型 PDF）没有文本层时明确提示，解析失败报错而不是崩。**默认不启用**（`Dev` / `Creator` 模式） |
 | `session-search` | 扩展 | 跨会话检索：`session_search` 工具（**延迟工具**，模型先用 `tool_search` 载入）。扫描 `agent_dir()/sessions` 下最新的 200 份会话文件，按关键词返回**按会话分组**的片段；默认隐藏当前会话、工具调用与结果、以及 `<system-reminder>` 注入消息，每个会话默认只出 1 条。**默认不启用**（`Dev` / `Creator` 模式） |
+| `usage` | 扩展 | provider 配额用量面板：`/usage` 逐个**已连接** provider 显示配额 / 限额用量与重置时间——Claude 订阅的 5 小时 / 7 天 / 模型周窗口（`/api/oauth/usage`）、ChatGPT 的 5 小时 / 周与按模型窗口（`backend-api/wham/usage`）、GitHub Copilot 的各功能已用/上限、OpenRouter 的额度与今日/本周/本月花费、Kimi for Coding 的窗口、Z.AI Coding Plan 的 5 小时/周/MCP 月窗口，以及 DeepSeek / Moonshot 的余额。面板每行画 24 格用量条 + 百分比 + 重置倒计时，没有窗口的 provider 只列余额/键状态；其余已配置但**没有配额端点**的 provider 由末行点名。报告缓存 120 秒，`--offline` / `PRUX_OFFLINE` 不发请求。**默认不启用**（`Dev` / `Creator` 模式） |
 | `jet` | 扩展 | 虚拟模型路由器：注册虚拟模型 `jet/auto`，**用强模型规划、用便宜模型实现**——本轮第一次成功的 `edit`/`write` 之后同轮切到实现模型并留在那里，因此每个会话最多切换一次模型、最多吃一次 prompt-cache miss。配置在 `agent_dir()/extensions/jet.json`（**没有默认值**：路由目标不完整或解析不到就不注册进 `/model`），`/jet set` 配分类器、`/jet router` 增量配路由目标（三档可各用不同 provider）、`/jet reset` 清空。**默认不启用**（`Dev`/`Creator` 模式可用）。详见下文与 [virtual-models.md](virtual-models.md) |
 | `tasks` | 扩展 | 任务跟踪与协调：7 个模型可见工具（`TaskCreate` / `TaskList` / `TaskGet` / `TaskUpdate` / `TaskOutput` / `TaskStop` / `TaskExecute`）、常驻任务 widget、`/tasks` 命令与系统提醒注入，`TaskExecute` 经 RPC 联动 `subagent` 扩展。**默认不启用**（`Dev`/`Creator` 模式可用） |
 | `tool-search` | 扩展 | 延迟工具检索：扩展可把工具声明为 `ToolExposure::Deferred`（仍可执行但不进模型可见列表），本扩展提供 `tool_search` 工具按 BM25 检索延迟工具元数据，命中项在**下一次模型调用**变为可见。**默认启用**（`Dev`/`Creator` 模式可用；无延迟工具时它只会占一个工具位） |
@@ -119,6 +120,28 @@ TTL 取目录 `promptCache.{short,long}`（按 `PRUX_CACHE_RETENTION` 选档）�
 **范围**：只搜 `agent_dir()/sessions` 下**本机已存的 prux 会话**，按文件修改时间取最新一批；不读别的工具的会话文件，也不联网。打不开或需要修复的会话文件直接跳过（检索不是修复工具），所以一份坏文件不会让整次检索失败。超长会话有扫描上限（单条消息 5 万字符、单份会话 400 万字符），超出部分不参与检索。
 
 **当前会话的判定**：优先用启动与会话切换时记下的会话文件路径；扩展是在会话中途被启用时没有这份记录，退回「当前工作目录的会话目录里最新那份」这一近似。
+
+### usage
+
+`/usage` 回答「我还剩多少额度」。与 [cache-usage](#cache-usage) 的分工：那个统计**本机会话历史**的
+prompt cache 命中率（读会话文件、可离线），这个查 **provider 侧**的配额（发请求、要凭据）。
+
+只有少数 provider 暴露配额端点，本扩展覆盖这些：
+
+- **订阅型（OAuth 登录）**：Claude 的 5 小时 / 7 天 / 模型周窗口，ChatGPT 的 5 小时 / 周与按模型窗口，
+  GitHub Copilot 的各功能已用/上限，OpenRouter 的额度条与今日 / 本周 / 本月花费；
+- **API key**：Kimi for Coding 的 5 小时 / 周 / 月窗口，Z.AI Coding Plan 的 5 小时 / 周 / MCP 月窗口，
+  DeepSeek 与 Moonshot 的账户余额。
+
+面板每个 provider 一段：首行是名称与状态（`error` / `(balance only)`），随后是各配额窗口
+（名称 + 24 格条 + 百分比 + `resets in 2h`），再是附加信息（余额、套餐、键状态、重置券张数）。
+已配置凭据、但没有配额端点的 provider 由末行的 `no quota endpoint: …` 点名，不会静默消失。
+
+**边界**：
+
+- 报告缓存 120 秒：刚看过再执行 `/usage` 直接复用缓存，过期才重新拉；拉取失败只影响该 provider 那一行；
+- `--offline` / `PRUX_OFFLINE` 不发任何请求，只提示跳过；
+- 配额端点是各家的内部接口，会随 provider 变动：某个端点改了形状，表现为该行报错，其余照旧。
 
 ### cache-usage
 
@@ -762,7 +785,7 @@ banner 扩展**互斥**：注册/面板切换时启用一个会自动禁用其�
 ## settings 与启用状态
 
 - **`disabledExtensions`**：settings.json 中禁用的扩展名数组。注册时据此恢复初始状态（对默认启用的扩展 = 关闭）；/extension 面板切换后写回**全局**。项目 `.prux/settings.json` 里的同名字段与全局取并集（只在本项目禁用某内置扩展；未受信任的项目不生效）。
-- **`enabledExtensions`**：settings.json 中显式启用的扩展名数组，仅对声明 [`default_enabled() == false`] 的默认可选扩展（`plan-mode`、`goal`、`web-access`、`proxy`、`doc-helper`、`subagent`、`loop-detect`、`hang-detect`、`notify`、`rewind`、`codemode`、`mcp`、`browser`、`jet`、`tasks`、`debug`、`cache-usage`、`doctor`、`btw`、`recap`、`open`、`pdf`、`cache-watch`、`session-search`）有意义。这些扩展注册后默认禁用，必须在此列出（或经 `/extension` 面板开启）才参与钩子/工具/命令分发；关闭时从列表移除（回到默认态）。项目层同样与全局取并集（项目可自行开启默认关闭的扩展）；两层冲突时禁用优先（与 `disabledExtensions` 的并集语义一致）。
+- **`enabledExtensions`**：settings.json 中显式启用的扩展名数组，仅对声明 [`default_enabled() == false`] 的默认可选扩展（`plan-mode`、`goal`、`web-access`、`proxy`、`doc-helper`、`subagent`、`loop-detect`、`hang-detect`、`notify`、`rewind`、`codemode`、`mcp`、`browser`、`jet`、`tasks`、`debug`、`cache-usage`、`doctor`、`btw`、`recap`、`open`、`pdf`、`cache-watch`、`session-search`、`usage`）有意义。这些扩展注册后默认禁用，必须在此列出（或经 `/extension` 面板开启）才参与钩子/工具/命令分发；关闭时从列表移除（回到默认态）。项目层同样与全局取并集（项目可自行开启默认关闭的扩展）；两层冲突时禁用优先（与 `disabledExtensions` 的并集语义一致）。
 - **`extensionMode`**：`"minimal"`、`"dev"`、`"creator"`、`"all"`（默认，兜底全集）。`All` 是兜底模式，所有扩展隐式属于它；扩展声明的模式（如 `Minimal`）表示“该级别及以上可用”，列出多个（如 `[Dev, Creator]`）则覆盖两个并排模式。是运行时过滤层，不触碰各扩展 enabled 状态；切回全部模式即恢复原状。
 
 settings 相关键见 [settings.md](settings.md)。修改 settings 后重启生效；`/reload` 会重新接线扩展并重建工具列表与系统提示，但无法加载新编译的扩展代码。

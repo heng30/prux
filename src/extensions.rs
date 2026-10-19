@@ -38,6 +38,7 @@ pub mod subagent;
 pub mod tasks;
 pub mod tool_search;
 pub mod update_check;
+pub mod usage;
 pub mod web_access;
 
 pub use plan_mode::PlanMode;
@@ -97,6 +98,8 @@ pub const PRIORITY_CACHE_WATCH: u32 = 58;
 pub const PRIORITY_SESSION_SEARCH: u32 = 57;
 /// update-check 启动时版本检查扩展的注册优先级。
 pub const PRIORITY_UPDATE_CHECK: u32 = 55;
+/// usage provider 配额面板扩展的注册优先级。
+pub const PRIORITY_USAGE: u32 = 54;
 /// doc-helper 按需文档查询扩展的注册优先级。
 pub const PRIORITY_DOC_HELPER: u32 = 50;
 /// debug 调试工具集扩展注册优先级。

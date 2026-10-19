@@ -51,8 +51,8 @@ const DEFAULT_THINKING_BUDGET: u32 = 1024;
 /// 错误工具结果里被移走的图片在 tool_result 中的占位文本。
 const ERROR_TOOL_IMAGE_PLACEHOLDER: &str = "(image attached after the tool results)";
 
-/// OAuth 订阅登录时模拟的 Claude Code 版本
-const CLAUDE_CODE_VERSION: &str = "2.1.280";
+/// OAuth 订阅登录时模拟的 Claude Code 版本（`/usage` 的配额端点也要求同一个 UA）
+pub(crate) const CLAUDE_CODE_VERSION: &str = "2.1.280";
 
 /// 连续的 toolResult 消息可能带 signature 的 thinking 要做 redacted 判定，重放时按文本内容识别
 fn is_redacted_thinking(block: &ContentBlock) -> bool {

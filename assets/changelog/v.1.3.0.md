@@ -33,6 +33,13 @@ This release aligns prux with upstream pi 1.3.0.
   catalog order. `--models` and `enabledModels` add an entry for every provider that offers the
   model and warn that the name is ambiguous.
 
+- **`/usage` shows provider quota usage**: enabling the `usage` extension adds `/usage`, an overlay
+  listing the connected providers with their rate-limit windows (Claude's 5-hour / 7-day / model-scoped
+  windows, ChatGPT's 5-hour / weekly windows, Copilot quotas, OpenRouter credits, Kimi and Z.AI Coding
+  Plan windows) plus balances for DeepSeek and Moonshot. Each row draws a 24-cell bar with the used
+  percentage and reset countdown. Providers that expose no quota endpoint are named in the last line.
+  Reports are cached for 120 seconds; `--offline` skips the requests entirely. Off by default.
+
 ### Changed
 
 - **`read` shows its line range as `:start-end`** in the transcript and in HTML exports, the same
@@ -117,6 +124,12 @@ This release aligns prux with upstream pi 1.3.0.
 - **`--model <名字>` 能解析被多个 provider 提供的模型**：优先选有凭据的 provider，否则直接报歧义，
   不再按目录顺序静默挑一个。`--models` 与 `enabledModels` 会为每个提供该模型的 provider 各加一条，
   并提示该名字有歧义。
+
+- **新增 `/usage` provider 配额面板**：开启 `usage` 扩展后可用 `/usage` 查看各 provider 的
+  限额窗口（Claude 的 5 小时 / 7 天 / 模型周窗口、ChatGPT 的 5 小时 / 周窗口、Copilot 各功能配额、
+  OpenRouter 额度、Kimi 与 Z.AI Coding Plan 窗口）以及 DeepSeek / Moonshot 的余额。
+  每行是 24 格用量条 + 百分比 + 重置倒计时；没有配额端点的 provider 由末行点名。
+  报告缓存 120 秒，`--offline` 不发请求。默认不启用。
 
 ### 变更
 

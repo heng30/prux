@@ -17,7 +17,8 @@
 //! - 有 spawn 的异步测试（worker/agent 运行时在别的线程读 settings）：
 //!   thread_local 传不过去，必须保留进程级 env 隔离见本模块 `pin_test_agent_dir`，
 //!   由调用侧持单把叶级锁串行（无嵌套 → 无锁序死锁）。
-//! - 网络/服务器类测试：`test_support::run_with_timeout(dur, || { ... })` 包住测试体。
+//! - 网络/服务器类测试：`test_support::run_with_timeout(dur, || { ... })` 包住测试体，
+//!   假服务端用 `test_support::spawn_json_server`（只监听回环，全程不联网）。
 //!   回调/闭包体内禁止再取任何锁（std `Mutex` 不可重入）。
 #![cfg(any(test, feature = "test-support"))]
 
@@ -327,4 +328,37 @@ pub fn png_base64_two_tone(width: u32, height: u32) -> String {
         .expect("双色 PNG 编码不应失败");
 
     base64::engine::general_purpose::STANDARD.encode(&buf)
+}
+
+/// 起一个本地假 JSON 服务器：`bodies` 里的 `(状态码, 响应体)` 按连接顺序各回放一次。
+///
+/// 返回 `(base_url, 句柄)`；base_url 形如 `http://127.0.0.1:<port>`，用例结束前 `abort()`
+/// 句柄即可。只监听回环地址，因此**不联网**，适合给 HTTP 客户端的成功 / 非 2xx / 坏 JSON
+/// 三条分支做端到端驱动。
+pub async fn spawn_json_server(
+    bodies: Vec<(u16, String)>,
+) -> (String, tokio::task::JoinHandle<()>) {
+    use tokio::{
+        io::{AsyncReadExt as _, AsyncWriteExt as _},
+        net::TcpListener,
+    };
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let handle = tokio::spawn(async move {
+        for (status, body) in bodies {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                break;
+            };
+            let mut buf = [0u8; 4096];
+            let _ = socket.read(&mut buf).await;
+            let response = format!(
+                "HTTP/1.1 {status} OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = socket.write_all(response.as_bytes()).await;
+            let _ = socket.shutdown().await;
+        }
+    });
+    (format!("http://{addr}"), handle)
 }

@@ -37,8 +37,8 @@ jcode 与 prux 的重叠面与 kiss 类似：**自动化与 provider 那一半�
 本地 OpenAI 兼容网关、终端图形协议、mermaid 渲染），对照见 §2。
 
 按 §头部「判断口径」逐项过筛后，jcode 多出来、**且能作为独立扩展**的功能共 **10 项**（§3）：
-其中 5 项已落地（`browser`、`pdf`、`open`、`cache-watch`、`session-search`）、
-2 项（`bg`、`usage`）明确不做、余下 3 项待落地。
+其中 6 项已落地（`browser`、`pdf`、`open`、`cache-watch`、`session-search`、`usage`）、
+3 项（`agent-grep`、`panel`、`bg`）明确不做、余下 1 项（`memory`）待落地。
 **其余全部明确不做**（§4）：包括 3 项被筛掉的「辅助项 / 机制」、2 项属 core 的策略与机制，
 以及 11 项扩展层够不到的能力。
 
@@ -48,9 +48,9 @@ jcode 与 prux 的重叠面与 kiss 类似：**自动化与 provider 那一半�
 |---|---|---|
 | 可作为扩展 | §3.1 记忆系统 `memory` | 📋 待落地（词法召回，见 §4.15） |
 | 可作为扩展 | §3.2 跨会话检索 `session-search` | ✅ 已落地（2026-10-11） |
-| 可作为扩展 | §3.3 结构感知检索 `agent-grep` | 📋 待落地 |
-| 不做 | §3.4 provider 配额用量 `usage` | 🚫 明确不做（2026-10-11） |
-| 可作为扩展 | §3.5 侧面板工具 `panel` | 📋 待落地 |
+| 不做 | §3.3 结构感知检索 `agent-grep` | 🚫 明确不做（2026-10-19） |
+| 可作为扩展 | §3.4 provider 配额用量 `usage` | ✅ 已落地（2026-10-19，翻案） |
+| 不做 | §3.5 侧面板工具 `panel` | 🚫 明确不做（2026-10-19） |
 | 可作为扩展 | §3.6 PDF 文本读取 `pdf` | ✅ 已落地（2026-10-11，`pdf-extract` 0.12） |
 | 不做 | §3.7 后台长任务 `bg` | 🚫 明确不做（2026-10-11） |
 | 可作为扩展 | §3.8 外部程序打开 `open` | ✅ 已落地（2026-10-11） |
@@ -163,6 +163,21 @@ self-dev、浏览器 bridge 的常驻进程）扩展层够不到；其余都能�
 
 ### 3.1 语义记忆系统（`memory`）
 
+**功能：** 让 agent 记住「跨会话仍然成立的事」。分三步，都不需要用户手动整理：
+
+1. **抽取**：每跑若干轮（+ 会话结束时）用一次额外的小请求，把对话里的**事实 / 偏好 / 纠正 /
+   实体**抽成结构化条目（带 category、置信度、可信度），落盘成一份**记忆图**（JSON，全局一份
+   加每个项目一份）——「用户偏好 pnpm」「这个仓库用 `make check` 而不是 `cargo test`」这类；
+2. **召回**：之后每次调用模型前，按当前对话的相关性从图里挑出少量条目，作为一段稳定的文本
+   注入上下文（有字符/条数预算），所以第二天的会话也不必重新交代一遍；
+3. **工具**：另给模型一个 `memory` 工具主动读写（记住 / 回忆 / 搜索 / 列出 / 忘记 / 打标签 /
+   建关联），用户可以显式要求「记住这件事」或「忘掉它」。
+
+它与 `subagent` 的 per-agent `MEMORY.md` 的区别：那个是**用户/开发者手写**的说明文件，
+按作用域整份注入；这个是**agent 自动抽取 + 按相关性挑选**，且带条目级治理
+（覆盖 `superseded_by`、置信度、忘记入口）。风险是记忆污染（错误记忆长期生效），
+所以必须有「忘记」与置信度这两条闸门。
+
 | 维度 | 内容 |
 |---|---|
 | 一句话 | 把对话里的事实/偏好/纠正抽成**记忆图**，之后每轮按相关性召回并注入上下文；另给模型 `memory` 工具主动读写 |
@@ -227,6 +242,18 @@ self-dev、浏览器 bridge 的常驻进程）扩展层够不到；其余都能�
 | 工作量 | 中—大（裁剪逻辑复杂；只做结构信息则中等） |
 | 默认状态 | 默认不启用（`Dev` / `Creator`） |
 
+> **决定（2026-10-19）**：🚫 **明确不做**。两条路都不划算：
+> ① 结构信息的价值靠**准确率**撑着，而 prux 侧没有 tree-sitter，只能自研启发式（按语言写正则/缩进/大括号
+> 匹配），误判的函数边界比没有结构信息更坏；引入 `agentgrep` 外部 crate 又等于把一块无人维护的
+> 解析器塞进内置扩展（§4.15 拒本地 embedding 是同一套理由）。
+> ② 真正有价值的自适应裁剪（`trace`/`outline` 按「agent 是否看过」裁掉已见内容）要复刻 jcode
+> 上千行的置信度模型：记忆衰减档位、压缩点感知、文件 mtime 判定、跨调用的已见状态累积——
+> 这是「省上下文」的优化，不是缺功能，而 prux 已经有压缩与 `context` 预算两条主线在管上下文。
+> 另：prux 的内置 `grep` 是 `ripgrep --json` 流式实现，扩展只能**新增** `agentgrep` 工具
+> （模型要在两个 grep 之间自己选）或用 `after_tool_call_ext` 改写内置输出（每次调用重解析）——
+> 两条都比「内置 grep 直接变好」差。
+> **本档不再把本项列为待落地项**；若将来内置 `grep` 要上结构信息，那是 core 的一次改动，不是扩展。
+
 ### 3.4 provider 配额用量（`usage`）
 
 | 维度 | 内容 |
@@ -242,7 +269,47 @@ self-dev、浏览器 bridge 的常驻进程）扩展层够不到；其余都能�
 | 工作量 | 中（本地台账小；配额端点适配是大头） |
 | 默认状态 | 默认不启用（`Dev` / `Creator`） |
 
-> **决定（2026-10-11）**：🚫 **明确不做**。两条路都不够干净：
+> **决定（2026-10-19，翻案）**：✅ **改为落地**。上面那条「明确不做」的理由里，
+> 「本地台账与 `cache-usage` 完全同源」依然成立（所以首版**不做本地台账**，只做配额端点）；
+> 但配额端点这一侧的维护成本是可以收窄的——把适配面限定在 **prux 真实支持的 provider**
+> （而不是 jcode 那份含 Cursor / Antigravity / Copilot 多账号的长清单），并且让**每个 provider 的
+> 失败只影响它自己那一行**，端点变了也只是某行开始报错，不会拖垮面板。
+> 原决定里那条「得先改 core 才能读 `anthropic-ratelimit-*` 响应头」不影响本项：走各家的**配额端点**
+> 而不是响应头，纯扩展可完成。
+
+> **落地记录（2026-10-19）**：落点 `src/extensions/usage.rs`（扩展层：命令、面板、状态、缓存）
+> + `src/extensions/usage/fetch.rs`（数据层：各 provider 的端点、请求与**纯函数解析**）。
+> 命令 `/usage` 打开 Panel 覆盖层。
+>
+> **覆盖的 provider**（`fetch::SUPPORTED`，只在已配置凭据时才查）：
+> `anthropic`（`GET /api/oauth/usage`，5 小时 / 7 天 / 7 天 Opus + `limits[]` 里的模型周窗口 + extra usage）、
+> `openai`（`GET chatgpt.com/backend-api/wham/usage`，`rate_limit.primary_window`/`secondary_window`
+> + `additional_rate_limits` + 重置券张数；账户 id 从 access token 的 JWT 声明里取，取不到就不带该头）、
+> `github-copilot`（`GET copilot_internal/v2/token`，`limited_user_quotas` 的已用/上限 + 重置日期，
+> 用 `cred.refresh` 里的 GitHub token 认证，网关头复用 `model_resolver::provider_headers`）、
+> `openrouter`（`/api/v1/credits` + `/api/v1/key`：额度条 + 今日/本周/本月花费 + key 限额）、
+> `kimi-coding`（`/coding/v1/usages`，新版 `limits[]` 与旧版 `usages` 映射都接受）、
+> `zai` / `zai-coding-cn`（`monitor/usage/quota/limit`，按 key 区域选 origin：`api.z.ai` / `open.bigmodel.cn`）、
+> `deepseek`（`/user/balance`）与 `moonshotai` / `moonshotai-cn`（`/users/me/balance`）。
+> 其余已配置凭据、但没有配额端点的 provider 由面板末行 `no quota endpoint: …` 点名。
+>
+> **与本节原计划的差异**：
+> - 原计划的「首版先做本地台账」**没有做**：它与 `cache-usage` 同源，价值增量小（原决定的第一条理由仍然成立），
+>   配额端点才是本项唯一不可替代的部分；
+> - 缓存策略从「120 秒内不重复拉」落到 state 的 `fetched_at` + `REPORT_TTL_MS`：TTL 内再执行 `/usage`
+>   直接复用报告（`overlay_view` 因此永远只读缓存、无 I/O）；
+> - 面板没做 jcode 的过滤/键位（`handle_overlay_key`），只保留 ↑↓ 滚动与 Esc 关闭：prux 的 provider 数
+>   远少于 jcode（且只列有端点的），过滤属于没有用户的复杂度；
+> - 每个 provider 的解析全部是纯函数（`parse_anthropic` / `parse_openai` / `parse_copilot` /
+>   `parse_openrouter_*` / `parse_kimi` / `parse_zai`），网络函数另有 `*_at(base)` 变体，
+>   测试用**本地假 HTTP 服务**驱动端到端路径，全程不联网。
+>
+> 验证：`cargo test --lib extensions::usage`（29 个用例：百分比/重置时间归一化、各 provider 解析、
+> 余额与错误渲染、离线跳过、TTL 缓存、陈旧面板丢弃、本地假服务端到端）。
+> 声明 `fork_project()` 指向 jcode 0.94.0（来源版本取自本档），供 `/extension` 面板展示来源链接。
+> 默认不启用、`modes() == [Dev, Creator]`。
+>
+> **原决定（2026-10-11，已被上面取代）**：🚫 **明确不做**。两条路都不够干净：
 > ① 配额端点（Anthropic 的 `GET /api/oauth/usage`、ChatGPT 的 `backend-api/wham/usage`、
 > Copilot 的 `copilot_internal/v2/token`、Cursor 的 `GetCurrentPeriodUsage`、Antigravity 的
 > `fetchAvailableModels`、OpenRouter、Kimi、Z.ai 等）要逐 provider 适配、要读 OAuth 凭据、
@@ -266,6 +333,15 @@ self-dev、浏览器 bridge 的常驻进程）扩展层够不到；其余都能�
 | 验证 | 面板认领与滚动、工具动作解析（缺参数报错）、`update` 覆盖同 id、`close` 释放；渲染用纯函数断言 |
 | 工作量 | 中 |
 | 默认状态 | 默认不启用（`Dev` / `Creator`） |
+
+> **决定（2026-10-19）**：🚫 **明确不做**。jcode 的 `panel` 是**桌面窗口**面板（内容可以是
+> Markdown/PDF 文件、有尺寸上限），prux 只能把它降级成终端覆盖层——而 prux 已经有两条更贴合
+> 终端的能力：`render_custom_message`（模型结果落成聊天区卡片）与 `overlay_view`（扩展自己的
+> 常驻面板）。再加一个「模型请求开面板」的工具，真正多出来的只有
+> 「模型能主动弹块 Markdown 给用户看」这一件事，而这件事用**普通回答 + 聊天区渲染**已经能做到，
+> 代价却是新增一族需要分页/滚动/更新/关闭状态机的 UI 面（还要和 `render_custom_message` 划清职责）。
+> **本档不再把本项列为待落地项**；若将来确有「模型驱动的常驻信息区」需求，先定义清楚它与
+> 聊天区卡片的分工再单独立项。
 
 ### 3.6 PDF 文本读取（`pdf`）
 
@@ -598,11 +674,13 @@ prux 的 `doctor` 扩展只做不带凭据的 `HEAD` 可达性探测。
 | `hooks` 的归属 | 是不是「独立功能」 | **不是**：是扩展机制的用户脚本一环，与 prux 的钩子总线同层 |
 | `provider-doctor` 的 full 档是否计费 | — | **是**，`DoctorTier::spends_balance`（`provider_e2e.rs`） |
 | agentgrep 是否自研 | — | 底层是**外部 crate** `agentgrep v0.1.7`（`crates/jcode-app-core/Cargo.toml:111`），jcode 只封装 |
-| `bg` / `panel` / `open` 是否被别的东西覆盖 | — | 未被 prux 任何现有扩展覆盖 |
+| `bg` / `panel` / `open` 是否被别的东西覆盖 | — | 未被 prux 任何现有扩展覆盖（`usage` 落地后仍成立：它不做本地台账，与 `cache-usage` 不重叠） |
 | `browser` 是否算「独立扩展」 | 需外部 bridge 是否等于「够不到扩展层」 | **不算够不到**：外部依赖只是运行期前置条件（同 `mcp` 需 MCP server、`web-access` 需网络）；扩展可自建 CDP/bridge 客户端，故列为 §3.10 |
 
 ### 6.2 落地前需要确认的决策点
 
 1. **§3.1 `memory` 的召回范围**：只做词法（本档建议），还是要先补 embedding API 面（§4.15 已判不做）？
-2. **§3.3 `agent-grep` 的结构提取**：轻量启发式（自研）还是引入 `agentgrep` 依赖？
-3. ~~**§3.6 `pdf` 的落点**~~：已定——走「新起 `read_pdf` 工具」，不动内置 `read`（见 §3.6 落地记录）。
+2. ~~**§3.3 `agent-grep` 的结构提取**~~：已定——**不做**（2026-10-19，见 §3.3 决定）。
+3. ~~**§3.5 `panel` 的终端降级形态**~~：已定——**不做**（2026-10-19，见 §3.5 决定）。
+4. ~~**§3.4 `usage` 的数据源**~~：已定——只做**配额端点**，不做本地台账（2026-10-19，见 §3.4 落地记录）。
+5. ~~**§3.6 `pdf` 的落点**~~：已定——走「新起 `read_pdf` 工具」，不动内置 `read`（见 §3.6 落地记录）。
