@@ -7,10 +7,20 @@
     "baseUrl": "https://token-plan-ams.xiaomimimo.com/v1",
     "compat": {
       "supportsStrictMode": true,
+      "supportsReasoningEffort": false,
       "requiresReasoningContentOnAssistantMessages": true,
       "thinkingFormat": "deepseek"
     },
     "reasoning": true,
+    "thinkingLevelMap": {
+      "off": "off",
+      "minimal": null,
+      "low": null,
+      "medium": null,
+      "high": "high",
+      "xhigh": null,
+      "max": null
+    },
     "input": [
       "text",
       "image"
@@ -43,10 +53,20 @@
     "baseUrl": "https://token-plan-ams.xiaomimimo.com/v1",
     "compat": {
       "supportsStrictMode": true,
+      "supportsReasoningEffort": false,
       "requiresReasoningContentOnAssistantMessages": true,
       "thinkingFormat": "deepseek"
     },
     "reasoning": true,
+    "thinkingLevelMap": {
+      "off": "off",
+      "minimal": null,
+      "low": null,
+      "medium": null,
+      "high": "high",
+      "xhigh": null,
+      "max": null
+    },
     "input": [
       "text"
     ],
@@ -68,10 +88,20 @@
     "baseUrl": "https://token-plan-ams.xiaomimimo.com/v1",
     "compat": {
       "supportsStrictMode": true,
+      "supportsReasoningEffort": false,
       "requiresReasoningContentOnAssistantMessages": true,
       "thinkingFormat": "deepseek"
     },
     "reasoning": true,
+    "thinkingLevelMap": {
+      "off": "off",
+      "minimal": null,
+      "low": null,
+      "medium": null,
+      "high": "high",
+      "xhigh": null,
+      "max": null
+    },
     "input": [
       "text",
       "image"
@@ -104,10 +134,20 @@
     "baseUrl": "https://token-plan-ams.xiaomimimo.com/v1",
     "compat": {
       "supportsStrictMode": true,
+      "supportsReasoningEffort": false,
       "requiresReasoningContentOnAssistantMessages": true,
       "thinkingFormat": "deepseek"
     },
     "reasoning": true,
+    "thinkingLevelMap": {
+      "off": "off",
+      "minimal": null,
+      "low": null,
+      "medium": null,
+      "high": "high",
+      "xhigh": null,
+      "max": null
+    },
     "input": [
       "text",
       "image"

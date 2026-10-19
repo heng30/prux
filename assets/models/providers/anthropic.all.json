@@ -227,7 +227,6 @@
     "contextWindow": 1000000,
     "maxTokens": 128000,
     "thinkingLevelMap": {
-      "off": null,
       "minimal": null,
       "low": "low",
       "medium": "medium",
@@ -507,7 +506,6 @@
       "supportsStrictTools": true
     },
     "thinkingLevelMap": {
-      "off": null,
       "xhigh": "xhigh",
       "max": "max"
     },
@@ -600,7 +598,7 @@
       "cacheRead": 0.3,
       "cacheWrite": 3.75
     },
-    "contextWindow": 1000000,
+    "contextWindow": 200000,
     "maxTokens": 64000,
     "compat": {
       "supportsStrictTools": true
@@ -612,7 +610,7 @@
     "inputLimits": {
       "maxRequestBytes": 33554432,
       "images": {
-        "maxPerRequest": 600,
+        "maxPerRequest": 100,
         "resize": {
           "maxWidth": 2000,
           "maxHeight": 2000,
@@ -640,7 +638,7 @@
       "cacheRead": 0.3,
       "cacheWrite": 3.75
     },
-    "contextWindow": 1000000,
+    "contextWindow": 200000,
     "maxTokens": 64000,
     "compat": {
       "supportsStrictTools": true
@@ -652,7 +650,7 @@
     "inputLimits": {
       "maxRequestBytes": 33554432,
       "images": {
-        "maxPerRequest": 600,
+        "maxPerRequest": 100,
         "resize": {
           "maxWidth": 2000,
           "maxHeight": 2000,
@@ -766,7 +764,7 @@
     "cost": {
       "input": 2,
       "output": 10,
-      "cacheRead": 0.2,
+      "cacheRead": 0.1,
       "cacheWrite": 2.5
     },
     "contextWindow": 1000000,

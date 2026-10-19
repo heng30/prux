@@ -1431,7 +1431,8 @@
       "supportsAdditionalTools": true,
       "supportsToolSearch": true,
       "supportsMidConvoSystemMessages": true,
-      "supportsExplicitPromptCacheMode": true
+      "supportsExplicitPromptCacheMode": true,
+      "supportsMidConvoEffort": true
     },
     "inputLimits": {
       "maxRequestBytes": 536870912,
@@ -1490,7 +1491,8 @@
       "supportsAdditionalTools": true,
       "supportsToolSearch": true,
       "supportsMidConvoSystemMessages": true,
-      "supportsExplicitPromptCacheMode": true
+      "supportsExplicitPromptCacheMode": true,
+      "supportsMidConvoEffort": true
     },
     "inputLimits": {
       "maxRequestBytes": 536870912,
@@ -1549,7 +1551,8 @@
       "supportsAdditionalTools": true,
       "supportsToolSearch": true,
       "supportsMidConvoSystemMessages": true,
-      "supportsExplicitPromptCacheMode": true
+      "supportsExplicitPromptCacheMode": true,
+      "supportsMidConvoEffort": true
     },
     "inputLimits": {
       "maxRequestBytes": 536870912,
@@ -1608,7 +1611,8 @@
       "supportsAdditionalTools": true,
       "supportsToolSearch": true,
       "supportsMidConvoSystemMessages": true,
-      "supportsExplicitPromptCacheMode": true
+      "supportsExplicitPromptCacheMode": true,
+      "supportsMidConvoEffort": true
     },
     "inputLimits": {
       "maxRequestBytes": 536870912,

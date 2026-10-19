@@ -755,6 +755,48 @@
     },
     "type": "chat"
   },
+  "gemini-4-argon": {
+    "id": "gemini-4-argon",
+    "name": "Gemini 4 Argon",
+    "api": "google-generative-ai",
+    "provider": "google",
+    "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "off": null,
+      "minimal": null,
+      "low": "low",
+      "medium": "medium",
+      "high": "high",
+      "xhigh": null,
+      "max": null
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 2,
+      "output": 10,
+      "cacheRead": 0.1,
+      "cacheWrite": 0
+    },
+    "contextWindow": 1048576,
+    "maxTokens": 32768,
+    "inputLimits": {
+      "maxRequestBytes": 20971520,
+      "images": {
+        "maxPerRequest": 3600,
+        "resize": {
+          "maxWidth": 2000,
+          "maxHeight": 2000,
+          "maxBytes": 4718592,
+          "jpegQuality": 80
+        }
+      }
+    },
+    "type": "chat"
+  },
   "gemini-flash-latest": {
     "id": "gemini-flash-latest",
     "name": "Gemini Flash Latest",

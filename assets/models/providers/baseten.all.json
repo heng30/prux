@@ -172,7 +172,7 @@
   },
   {
     "id": "deepseek-ai/DeepSeek-V4.1-Flash-Fast",
-    "name": "deepseek-ai/DeepSeek-V4.1-Flash-Fast",
+    "name": "DeepSeek V4.1 Flash Fast",
     "api": "openai-completions",
     "provider": "baseten",
     "baseUrl": "https://inference.baseten.co/v1",

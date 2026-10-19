@@ -1,4 +1,28 @@
 {
+  "MiniMaxAI/MiniMax-M1-80k": {
+    "id": "MiniMaxAI/MiniMax-M1-80k",
+    "name": "MiniMax M1 80K",
+    "api": "openai-completions",
+    "provider": "huggingface",
+    "baseUrl": "https://router.huggingface.co/v1",
+    "reasoning": true,
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 0.55,
+      "output": 2.2,
+      "cacheRead": 0,
+      "cacheWrite": 0
+    },
+    "compat": {
+      "supportsStrictMode": true,
+      "supportsDeveloperRole": false
+    },
+    "contextWindow": 1000000,
+    "maxTokens": 80000,
+    "type": "chat"
+  },
   "MiniMaxAI/MiniMax-M2": {
     "id": "MiniMaxAI/MiniMax-M2",
     "name": "MiniMax-M2",
@@ -461,6 +485,41 @@
       "xhigh": null,
       "max": null
     },
+    "inputLimits": {
+      "images": {
+        "resize": {
+          "maxWidth": 2000,
+          "maxHeight": 2000,
+          "maxBytes": 4718592,
+          "jpegQuality": 80
+        }
+      }
+    },
+    "type": "chat"
+  },
+  "Qwen/Qwen3-VL-30B-A3B-Instruct": {
+    "id": "Qwen/Qwen3-VL-30B-A3B-Instruct",
+    "name": "Qwen3 VL 30B A3B Instruct",
+    "api": "openai-completions",
+    "provider": "huggingface",
+    "baseUrl": "https://router.huggingface.co/v1",
+    "reasoning": false,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.2,
+      "output": 0.7,
+      "cacheRead": 0,
+      "cacheWrite": 0
+    },
+    "compat": {
+      "supportsStrictMode": true,
+      "supportsDeveloperRole": false
+    },
+    "contextWindow": 131072,
+    "maxTokens": 32768,
     "inputLimits": {
       "images": {
         "resize": {
