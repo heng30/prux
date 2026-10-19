@@ -20,6 +20,7 @@ use crate::{
         extensions,
         provider::{AgentMessage, ContentBlock},
         skills::{self, SkillBlock},
+        tools,
     },
     modes::interactive::{
         app::{MsgLevel, SysMsg, SysSpan, sys_spans_text},
@@ -1870,8 +1871,8 @@ fn render_sub_calls(
 ///
 /// - shell 类（`bash` / `powershell`）：整行 title 样式（`$ cmd` / `PS> cmd`，带 timeout）；
 /// - `mcp`：`server/tool` 标题 + 参数（见 [`mcp_call_header`]）；
-/// - [`CUSTOM_CALL_HEADER_TOOLS`]：title + 路径/pattern + limit(muted)；
-/// - 其余工具：pi 的通用形式（[`generic_call_header`]）。
+/// - [`CUSTOM_CALL_HEADER_TOOLS`]：title + 路径/pattern + 行范围（`read`，`:start-end`）或 limit(muted)（其余）；
+/// - 其余工具：通用形式（[`generic_call_header`]）。
 fn tool_call_header(
     name: &str,
     args: &Value,
@@ -1917,7 +1918,13 @@ fn tool_call_header(
         spans.push(Span::raw(format!(" {}", p)));
     }
 
-    if let Some(lim) = args.get("limit").and_then(|v| v.as_i64()) {
+    if name == "read" {
+        // read 显示行范围（`:12-20`）而不是 `(limit N)`，与导出 HTML 的同名标签一致
+        let range = tools::format_line_range(args);
+        if !range.is_empty() {
+            spans.push(Span::styled(range, *muted));
+        }
+    } else if let Some(lim) = args.get("limit").and_then(|v| v.as_i64()) {
         spans.push(Span::styled(format!(" (limit {})", lim), *muted));
     }
 
@@ -5404,6 +5411,40 @@ mod tests {
         for l in &rows {
             assert!(display_width(l) <= 20, "行超宽: {l:?}");
         }
+    }
+
+    #[test]
+    fn read_call_header_shows_line_range_and_others_keep_limit() {
+        // read 用行范围标签（与导出 HTML 一致），其余工具仍显示 `(limit N)`
+        let rows = t(&render_tool_block(
+            "read",
+            &serde_json::json!({ "path": "src/lib.rs", "offset": 12, "limit": 8 }),
+            None,
+            None,
+            None,
+            None,
+            &[],
+            80,
+            &theme(),
+            false,
+        ));
+        let joined = rows.join("\n");
+        assert!(joined.contains("src/lib.rs:12-19"), "{rows:?}");
+        assert!(!joined.contains("limit"), "read 不应再显示 limit: {rows:?}");
+
+        let rows = t(&render_tool_block(
+            "ls",
+            &serde_json::json!({ "path": "src", "limit": 5 }),
+            None,
+            None,
+            None,
+            None,
+            &[],
+            80,
+            &theme(),
+            false,
+        ));
+        assert!(rows.join("\n").contains("(limit 5)"), "{rows:?}");
     }
 
     #[test]

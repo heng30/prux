@@ -36,7 +36,7 @@ use self::{
         messages::{CachedMsg, ImageLayout},
         render_frame, startup,
     },
-    theme::{DEFAULT_THEME_NAME, Theme},
+    theme::{DEFAULT_THEME_NAME, Theme, theme_load_warnings},
 };
 use crate::{
     APP_NAME,
@@ -741,6 +741,12 @@ fn init_app(
         // 无效 settings 文件：TUI 中显示警告而非静默忽略
         if let Some(e) = settings_manager::settings_load_error() {
             st.push_msg(e, MsgLevel::Warning);
+        }
+
+        // 非法主题文件（缺必需颜色 token / 非法取值）：主题发现本就宽松（直接忽略、回退内置），
+        // 启动时逐条报出原因，否则「主题怎么没生效」无从排查
+        for warning in theme_load_warnings() {
+            st.push_msg(warning, MsgLevel::Warning);
         }
 
         // 内置 find/grep 已启用、但后端程序（fd/rg）缺失：给出下载地址 / `/download` 指引。

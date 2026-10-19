@@ -1171,6 +1171,52 @@ pub fn write_settings_follow_up_mode(mode: &str) -> Result<()> {
     write_settings_value("followUpMode", json!(mode))
 }
 
+/// settings.json `sessionShareDestination` 的档位：`/share` 把当前会话传到哪里。
+///
+/// 档位与字符串（`auto` / `gist` / `radius`）的互转由 `strum` 派生，
+/// 见 [`SessionShareDestination::as_str`] / [`SessionShareDestination::parse`]。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumString, IntoStaticStr)]
+pub enum SessionShareDestination {
+    /// `"auto"`：有 Radius 凭据时走 Radius，否则建一个私密 gist；
+    /// prux 未实现 Radius provider，等同 [`SessionShareDestination::Gist`]。
+    #[strum(serialize = "auto")]
+    Auto,
+    /// `"gist"`：只建私密 gist（`gh gist create --public=false`）。
+    #[strum(serialize = "gist")]
+    Gist,
+    /// `"radius"`：只走 Radius；prux 未实现该 provider，`/share` 会直接报错而不是降级。
+    #[strum(serialize = "radius")]
+    Radius,
+}
+
+impl SessionShareDestination {
+    /// 档位名（`strum` 派生：`auto` / `gist` / `radius`），写回 settings.json 与设置面板显示共用。
+    pub fn as_str(self) -> &'static str {
+        self.into()
+    }
+
+    /// 档位名（去首尾空白）→ 档位；无法识别（含未设置）时为 `None`。
+    pub fn parse(value: &str) -> Option<SessionShareDestination> {
+        value.trim().parse().ok()
+    }
+}
+
+/// settings.json: sessionShareDestination（缺失 / 非法值按 [`SessionShareDestination::Auto`]）。
+pub fn read_settings_session_share_destination() -> SessionShareDestination {
+    settings_value()
+        .get("sessionShareDestination")
+        .and_then(|v| v.as_str())
+        .and_then(SessionShareDestination::parse)
+        .unwrap_or(SessionShareDestination::Auto)
+}
+
+/// 写回 settings.json 的 sessionShareDestination（/settings Session share destination）。
+pub fn write_settings_session_share_destination(
+    destination: SessionShareDestination,
+) -> Result<()> {
+    write_settings_value("sessionShareDestination", json!(destination.as_str()))
+}
+
 /// settings.json: hideThinkingBlock（/settings Hide thinking；缺失默认 false）。
 /// TUI 启动时读取覆盖 App.show_thinking。
 pub fn read_settings_hide_thinking() -> bool {
@@ -1938,6 +1984,41 @@ mod tests {
             // 覆盖主题
             write_theme("dark").unwrap();
             assert_eq!(read_settings().theme.as_deref(), Some("dark"));
+            let _ = std::fs::remove_file(&path);
+        });
+    }
+
+    #[test]
+    fn session_share_destination_roundtrip_and_defaults() {
+        with_temp_agent_dir(|| {
+            let path = agent_dir().join("settings.json");
+            let _ = std::fs::remove_file(&path);
+
+            // 缺失时默认 auto；手改出的非法值也回落 auto
+            assert_eq!(
+                read_settings_session_share_destination(),
+                SessionShareDestination::Auto
+            );
+            std::fs::write(&path, r#"{"sessionShareDestination":"elsewhere"}"#).unwrap();
+            assert_eq!(
+                read_settings_session_share_destination(),
+                SessionShareDestination::Auto
+            );
+
+            // 三档均可写回并读回，且不覆盖同级键
+            write_settings_session_share_destination(SessionShareDestination::Radius).unwrap();
+            write_settings_follow_up_mode("all").unwrap();
+            assert_eq!(
+                read_settings_session_share_destination(),
+                SessionShareDestination::Radius
+            );
+            assert_eq!(read_settings_follow_up_mode(), "all");
+
+            write_settings_session_share_destination(SessionShareDestination::Gist).unwrap();
+            assert_eq!(
+                read_settings_session_share_destination(),
+                SessionShareDestination::Gist
+            );
             let _ = std::fs::remove_file(&path);
         });
     }

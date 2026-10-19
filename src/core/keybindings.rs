@@ -839,6 +839,11 @@ pub fn load_user_config(agent_dir: &Path) -> HashMap<String, Vec<String>> {
     };
     let mut out: HashMap<String, Vec<String>> = HashMap::new();
     for (id, val) in obj {
+        // `$schema` 是给编辑器用的 schema 引用，不是键位声明
+        if id == "$schema" {
+            continue;
+        }
+
         match val {
             Value::String(s) => {
                 out.insert(id.clone(), vec![s.clone()]);
@@ -1092,6 +1097,23 @@ mod tests {
         // 缺失文件 → 空配置
         let empty = load_user_config(tempfile::tempdir().unwrap().path());
         assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn user_config_ignores_schema_reference() {
+        // `$schema` 是给编辑器用的元数据，不得当成键位声明（否则会混进冲突检测）
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("keybindings.json"),
+            r#"{
+                "$schema": "https://pi.dev/schemas/keybindings.schema.json",
+                "app.clear": "ctrl+q"
+            }"#,
+        )
+        .unwrap();
+        let cfg = load_user_config(dir.path());
+        assert!(!cfg.contains_key("$schema"), "{cfg:?}");
+        assert_eq!(cfg.get("app.clear").unwrap(), &vec!["ctrl+q".to_string()]);
     }
 
     #[test]

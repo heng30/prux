@@ -26,17 +26,15 @@
 | 分类 | 条目 | 数量 |
 |---|---|---|
 | ✅ 已落地（bug 修复，2025 本轮全部完成） | 1.1–1.15，1.17，1.18 | 17 |
-| ⚠️ 待定（prux 未实现 `strict`，无 bug 可修） | 1.5 | 1 |
-| ⚠️ 可选（read 标签显示口径，与 pi 本就不同） | 1.16 | 1 |
-| 🆕 候选移植（区间新增能力，prux 尚缺） | 2.1–2.8 | 8 |
+| ✅ 已落地（read 行范围标签口径统一） | 1.16 | 1 |
+| ✅ 已落地（区间新增能力，第二轮实施） | 2.1–2.5 | 5 |
 | ✅ 已满足 / 数据面已同步 | 2.10–2.15，3.1–3.4、3.9–3.10 | 12 |
-| 🚫 决定不实现 | 2.9（`supportsMidConvoEffort`）、3.7（`mcp login --timeout`，沿用 1.1.0 决定） | 2 |
+| 🚫 决定不实现 | 1.5（`strict`）、2.6–2.8、2.9（`supportsMidConvoEffort`）、3.7（`mcp login --timeout`） | 5 |
 | ❌ 结构性不适用 | 2.16–2.21，3.5、3.6、3.8、3.11–3.13，以及第五节整段 | — |
 
-> 上表是**终局状态**：第一节的 bug 修复已全部落地（明细见第七节），剩下的 1.5 / 1.16
-> 为可选或口径差异，第二～四节里的 🆕 项尚未开工。
-> 验收：`cargo test` 全绿（lib 3602 + 全部集成测试目标）、`cargo fmt --check` 通过、
-> `cargo clippy --lib --tests` 只剩改动前就存在的 3 条 warning（`settings_manager` 1、`tasks/widget` 2）。
+> 上表是**终局状态**：第一节的 bug 修复、第二～三节的可选与新增项均已收口；
+> 剩下的就是明确不实现（🚫）与结构性不适用（❌）两类。
+> 验收：`cargo test` 全绿、`cargo fmt --check` 通过、`cargo clippy --lib --tests` 无新增 warning。
 
 **建议实施顺序**（按性价比）：
 
@@ -246,7 +244,7 @@ provider 前缀；裸模型名在 `(None, None)` 分支落到 `SUPPORTED_PROVIDE
 **建议**：`resolve_provider_model` 的裸模型名分支改为「按凭据优先，否则报歧义」；
 `model_scope` 的歧义路径改为「每个 provider 各推一条 + 一条 `Ambiguous` 诊断」，面板/CLI 显示警告。
 
-### 1.16 ⚠️ read 行范围标签（数字字符串 / null，且缺 offset）
+### 1.16 ✅ read 行范围标签（数字字符串 / null，且缺 offset）
 
 **pi 1.3.0 Fixed**（#9887/#10938）：TUI、session tree、HTML 导出共用一个
 `formatReadLineRange`——宽松解析数字字符串与 null，`offset` 缺省为 1，输出 `:start-end`。
@@ -289,7 +287,7 @@ provider 前缀；裸模型名在 `(None, None)` 分支落到 `SUPPORTED_PROVIDE
 
 ## 二、本区间新增 / 变更功能（候选移植）
 
-### 2.1 🆕 `/share` 的上传目标可配置（`sessionShareDestination`）
+### 2.1 ✅ `/share` 的上传目标可配置（`sessionShareDestination`）
 
 **pi 1.3.0 New Feature**（#10870）：新增设置项，取值 `auto` / `gist` / `radius`，
 决定 `/share` 往哪里传。
@@ -302,7 +300,7 @@ provider 前缀；裸模型名在 `(None, None)` 分支落到 `SUPPORTED_PROVIDE
 **建议**：在 `settings_manager` 加该字段 + `/settings` 项，`dispatch_share` 按取值分支。
 Radius 依赖对应 provider，可先只做 `auto` / `gist`（`auto` 在无 Radius 时等同 gist 并提示）。
 
-### 2.2 🆕 `PI_CLIPBOARD_OSC52` 强制走 OSC 52
+### 2.2 ✅ `PRUX_CLIPBOARD_OSC52` 强制走 OSC 52
 
 **pi 1.2.0 New Feature**（#10826）：本地剪贴板写成功后，若 `PI_CLIPBOARD_OSC52=1`
 再向终端发一次 OSC 52，使复制能到达「检测不到远程会话」的远端客户端（多路复用器 attach、
@@ -315,7 +313,7 @@ Radius 依赖对应 provider，可先只做 `auto` / `gist`（`auto` 在无 Radi
 **建议**：本地写成功后，若 `PI_CLIPBOARD_OSC52=1` 再追加一次 `write_osc52`（失败忽略，
 不影响返回值）。注意语义差异：pi 是「追加」，prux 现在是「二选一」。
 
-### 2.3 🆕 配置文件的 `$schema` 与启动期校验
+### 2.3 ✅ 配置文件的 `$schema` 与启动期校验
 
 **pi 1.2.0 New Feature / Breaking**（#9880/#10751）：`settings.json`、`models.json`、
 keybindings、themes 都带 `$schema`（`https://pi.dev/schemas/*.schema.json`），
@@ -330,7 +328,7 @@ keybindings、themes 都带 `$schema`（`https://pi.dev/schemas/*.schema.json`�
 **建议**：`vars` 无需改。若要对齐，至少给默认 settings / models / keybindings / theme 模板
 补 `$schema` 字段；启动期校验可后置（prux 现在对非法配置普遍是静默忽略或给默认值）。
 
-### 2.4 🆕 OpenRouter 按 key 定制模型目录（`GET /models/user`）
+### 2.4 ✅ OpenRouter 按 key 定制模型目录（`GET /models/user`）
 
 **pi 1.2.0 New Feature**（#10353/#10672）：持 OpenRouter key 时只列该 key 可用的 chat 模型，
 带该 key 的上下文长度 / 最大输出 / 价格（含 `models.json` 里设置的区域端点），
@@ -344,7 +342,7 @@ keybindings、themes 都带 `$schema`（`https://pi.dev/schemas/*.schema.json`�
 **建议**：给 openrouter 加专属分支（持 key 时打 `/models/user`），刷新上下文带上
 `models.json` 里的 base URL 覆盖。需保留「离线时回退到已保存目录」的现有行为。
 
-### 2.5 🆕 codemode 声明标注输入约束（`@integer` / `@minimum` / …）
+### 2.5 ✅ codemode 声明标注输入约束（`@integer` / `@minimum` / …）
 
 **pi 1.2.0 Changed**（#10707）：`schemaToType()` 把 TS 类型表达不了的约束写成属性注释行上的
 `@` 标签（`// @integer @minimum 0 @maximum 30000 @default 0`），覆盖 `integer`、数值上下界、
@@ -608,16 +606,15 @@ provider 的 `api` 由目录条目决定，无需代码改动。
 - [x] codemode 描述不再声称「所有失败都 reject」（1.17）
 - [x] 补 `while (true) await null` 中断用例（1.18，结论：已满足）
 - [x] 改动完成后：`cargo fmt`、`cargo test`（3602 + 集成全绿）、`cargo clippy`
-- [ ] （可选）`login_registry.rs:125` 的 kimi-coding `base_url` 补 `/v1`（2.10 附注）
-- [ ] （可选）Anthropic `strict` 与回落重试一起移植（1.5，现无 strict 故无此 bug）
-- [ ] （可选）read 行范围标签统一口径（1.16）
-- [ ] （可选）`sessionShareDestination`（2.1）
-- [ ] （可选）`PI_CLIPBOARD_OSC52`（2.2）
-- [ ] （可选）配置 `$schema` 与启动期校验（2.3，主题 `vars` 已支持）
-- [ ] （可选）OpenRouter `/models/user` 定制目录（2.4）
-- [ ] （可选）codemode 声明约束 `@` 标签（2.5）
-- [ ] （可选）`reachesTools` / `aliases` / `mcp list --json` 形状（2.6–2.8）
-- [x] 🚫 不实现项记录在案：`supportsMidConvoEffort`（2.9）、`mcp login --timeout`（3.7）
+- [x] （可选）`login_registry.rs:125` 的 kimi-coding `base_url` 补 `/v1`（2.10 附注）
+- [x] （可选）read 行范围标签统一口径（1.16）
+- [x] （可选）`sessionShareDestination`（2.1）
+- [x] （可选）`PRUX_CLIPBOARD_OSC52`（2.2）
+- [x] （可选）配置 `$schema` 与启动期校验（2.3，主题 `vars` 已支持）
+- [x] （可选）OpenRouter `/models/user` 定制目录（2.4）
+- [x] （可选）codemode 声明约束 `@` 标签（2.5）
+- [x] 🚫 不实现项记录在案：`strict`（1.5）、`supportsMidConvoEffort`（2.9）、
+  `mcp login --timeout`（3.7）、`reachesTools` / `aliases` / `mcp list --json`（2.6–2.8）
 
 ---
 
@@ -663,3 +660,34 @@ provider 的 `api` 由目录条目决定，无需代码改动。
 - 1.12：压缩/分支摘要/bug report 的序列化不再含 thinking。
 - 1.13：codemode 里位置不对的 `// @options:` 以前静默失效，现在整次调用在脚本运行前失败。
 
+
+---
+
+## 八、实施记录（第二轮：可选 / 新增能力，已完成）
+
+本轮做第二、三节里剩下的可选与新增项；`strict`（1.5）与 2.6–2.8 明确不实现。
+
+| # | 项 | 改动位置 | 关键测试 |
+|---|---|---|---|
+| 2.10 | kimi-coding `base_url` 补 `/v1` | `core/login_registry.rs` | 现有 `registry_exposes_providers` / `subscription_supports_account_login` |
+| 2.2 | `PRUX_CLIPBOARD_OSC52` | `utils/clipboard.rs`：`is_remote_session` 纳入该变量；远程会话下本地写成功后**再追加**一次 OSC52 | `env_var_forces_remote_session` |
+| 2.1 | `sessionShareDestination` | `core/settings_manager.rs`（`SessionShareDestination` + 读写）、`settings_selector.rs`、`handlers/settings.rs`、`worker.rs`（`dispatch_share` / `share_via_gist`） | `session_share_destination_roundtrip_and_defaults`、`settings_list_matches_pi_order_and_skips_unsupported` |
+| 1.16 | read 行范围标签 | `core/tools/read.rs::format_line_range`（含 `parse_line_number` / `format_line_number`）、`render/messages.rs` 调用头、`assets/export-html/template.js`（`parseLineNumber` / `formatReadLineRange`） | `line_range_tag_follows_pi_format`、`read_call_header_shows_line_range_and_others_keep_limit` |
+| 2.4 | OpenRouter `/models/user` | `core/model_refresh.rs`：`personalize_catalog` / `fetch_open_router_user_models` / `personalize_open_router_catalog` / `apply_open_router_limits` / `open_router_cost`（+ `OPENROUTER_BASE_URL` 与超时常量） | `open_router_personalization_filters_and_overrides`、`…_keeps_catalog_values_on_missing_limits`、`open_router_cost_converts_prices_and_tiers`、`…_rejects_invalid_body` |
+| 2.3 | `$schema` 与启动期校验 | `modes/interactive/theme.rs`：`validate_theme_json`、`theme_load_warnings`、`theme_dirs` / `expand_theme_path`（`available_theme_names` 复用）、`Theme::load` 跳过非法文件；`interactive.rs` 启动警告；`core/keybindings.rs` 忽略 `$schema` | `packaged_themes_pass_validation`、`theme_validation_reports_missing_tokens_and_bad_values`、`invalid_theme_file_is_skipped_and_reported`、`user_config_ignores_schema_reference` |
+| 2.5 | codemode `@` 约束标签 | `extensions/codemode/declarations.rs`：`TAG_KEYWORDS` / `LOWER_BOUNDS` / `UPPER_BOUNDS` / `MAX_TAG_CHARS`、`constraint_tags`、`escape_line_terminators`；`SchemaContext.tags`；`schema_to_type` 超预算时先去标签再退 `unknown` | `puts_constraints_the_type_cannot_express_on_comment_lines`、`reads_constraints_of_optional_fields_from_the_non_null_branch`、`reads_draft04_boolean_exclusive_bounds`、`leaves_out_long_tags_and_escapes_line_terminators`、`drops_constraint_tags_before_rendering_over_the_budget_as_unknown` |
+
+**行为口径变化（升级后用户可见）**：
+
+- `/share` 现在读 `sessionShareDestination`：`auto` / `gist` 都是私密 gist；`radius` 直接报错
+  （本版没有 Radius 上传），不再像以前那样无条件走 gist。
+- `PRUX_CLIPBOARD_OSC52=1` 时，本地剪贴板写成功后**也会**向终端发一次 OSC 52。
+  语义是「追加」，不是「本地失败才兜底」；SSH / mosh 会话本来就是这个行为（此前 prux 只在本地写失败时才发）。
+  变量名取 prux 自己的 `PRUX_` 前缀，不认 pi 的 `PI_CLIPBOARD_OSC52`。
+- read 的调用头从 `(limit N)` 改为 `:start-end`，对话区与 HTML 导出一致；`offset` / `limit`
+  为数字字符串或 `null` 时也能正常显示。
+- OpenRouter 持凭据刷新目录时会按该 key 收窄 chat 模型并覆盖 limits / 价格：换了 key 之后要重新
+  `/login` 触发刷新才看得到新目录；不带凭据（或端点拒绝该 key）时行为不变。
+- codemode 声明里，带 constraints / `default` / `deprecated` 的属性现在会多出一行 `// @...` 注释，
+  模型能看到 `@integer`、`@minimum` / `@maximum`、`@pattern`、`@format`、长度/数量界限、
+  `@uniqueItems`、`@default`、`@deprecated`；声明因此变长，超预算时先去掉标签再降级为 `unknown`。

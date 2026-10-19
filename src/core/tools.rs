@@ -33,7 +33,7 @@ pub use index::{
     tool_execution_mode, validate_tool_arguments,
 };
 pub use ls::execute_ls;
-pub use read::{ReadImageOptions, execute_read, execute_read_with_options};
+pub use read::{ReadImageOptions, execute_read, execute_read_with_options, format_line_range};
 pub use write::execute_write;
 
 #[cfg(windows)]

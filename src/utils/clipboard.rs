@@ -48,23 +48,31 @@ pub fn read_clipboard() -> Option<String> {
     paste_from_clipboard().ok().filter(|t| !t.is_empty())
 }
 
-/// 写剪贴板：本地系统剪贴板优先（可真实验证）。
-/// OSC52 仅在「远程会话 / 无显示的 Linux」作为兜底——桌面终端忽略 OSC52 时不得虚报
-/// 成功（pi #9618/#9688）。失败返回带平台指引的说明。
+/// 写剪贴板：本地系统剪贴板优先（可真实验证），**远程会话**（SSH / mosh，或
+/// `PRUX_CLIPBOARD_OSC52=1`）在本地写入之后再追加一次 OSC52——多路复用器 attach、远端 IDE daemon
+/// 这类客户端不带 SSH 标记，只能靠终端序列把内容送到客户端剪贴板。
+/// 无显示的 Linux 上没有本地剪贴板，OSC52 是唯一通道；
+/// 桌面终端忽略 OSC52 时不得虚报成功。失败返回带平台指引的说明。
 pub fn write_clipboard(text: &str) -> std::result::Result<(), String> {
-    if copy_to_clipboard(text).is_ok() {
-        return Ok(());
-    }
+    let copied = copy_to_clipboard(text).is_ok();
+    let mut oversized = false;
 
-    if is_remote_session() || is_headless_linux() {
+    if is_remote_session() || (!copied && is_headless_linux()) {
         match write_osc52(text) {
             Osc52Result::Emitted => return Ok(()),
-            Osc52Result::TooLarge => {
-                return Err("Clipboard unavailable: text exceeds the OSC 52 size limit".to_string());
-            }
+            Osc52Result::TooLarge => oversized = true,
             Osc52Result::Failed => {}
         }
     }
+
+    if copied {
+        return Ok(());
+    }
+
+    if oversized {
+        return Err("Clipboard unavailable: text exceeds the OSC 52 size limit".to_string());
+    }
+
     Err(clipboard_failure_hint())
 }
 
@@ -117,12 +125,19 @@ fn copy_to_termux_clipboard(text: &str) -> Result<()> {
     Ok(())
 }
 
-/// 是否处于远程会话（SSH / mosh）：`SSH_CONNECTION`、`SSH_CLIENT`、`MOSH_CONNECTION`
-/// 任一环境变量存在即为真。
+/// 是否处于远程会话：`SSH_CONNECTION`、`SSH_CLIENT`、`MOSH_CONNECTION` 任一环境变量存在，
+/// 或显式设了 `PRUX_CLIPBOARD_OSC52=1`（覆盖不留 SSH 标记的远端客户端）即为真。
 fn is_remote_session() -> bool {
-    ["SSH_CONNECTION", "SSH_CLIENT", "MOSH_CONNECTION"]
-        .iter()
-        .any(|k| std::env::var_os(k).is_some())
+    clipboard_osc52_forced()
+        || ["SSH_CONNECTION", "SSH_CLIENT", "MOSH_CONNECTION"]
+            .iter()
+            .any(|k| std::env::var_os(k).is_some())
+}
+
+/// 是否显式要求追加 OSC 52：`PRUX_CLIPBOARD_OSC52` 等于 `1`。
+/// 其余取值（含 `0`）视为未设置。
+fn clipboard_osc52_forced() -> bool {
+    std::env::var("PRUX_CLIPBOARD_OSC52").is_ok_and(|v| v == "1")
 }
 
 /// 无显示环境的 Linux（容器 / WSL 无 WSLg）：终端是唯一剪贴板通道。
@@ -457,6 +472,25 @@ mod tests {
     fn failure_hint_is_actionable() {
         // 任何平台都必须给出可操作的失败说明，而非静默成功
         assert!(clipboard_failure_hint().starts_with("Clipboard unavailable"));
+    }
+
+    #[test]
+    fn env_var_forces_remote_session() {
+        // PRUX_CLIPBOARD_OSC52=1 让本地写入成功后也追加一次 OSC 52（多路复用 attach 等场景）
+        let _lock = crate::test_support::env_key_lock();
+        let saved = std::env::var_os("PRUX_CLIPBOARD_OSC52");
+        unsafe { std::env::remove_var("PRUX_CLIPBOARD_OSC52") };
+        assert!(!is_remote_session());
+
+        unsafe { std::env::set_var("PRUX_CLIPBOARD_OSC52", "1") };
+        assert!(is_remote_session());
+        unsafe { std::env::set_var("PRUX_CLIPBOARD_OSC52", "yes") };
+        assert!(!is_remote_session(), "只有 1 算真");
+
+        match saved {
+            Some(v) => unsafe { std::env::set_var("PRUX_CLIPBOARD_OSC52", v) },
+            None => unsafe { std::env::remove_var("PRUX_CLIPBOARD_OSC52") },
+        }
     }
 
     #[test]

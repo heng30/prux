@@ -42,7 +42,7 @@ impl Default for ReadImageOptions {
     }
 }
 
-/// read 工具入口：按行范围（`offset`/`limit`，从 0 起）读取文件，图片按默认选项处理。
+/// read 工具入口：按行范围（`offset`/`limit`，`offset` 从 1 起）读取文件，图片按默认选项处理。
 /// 路径会先尝试若干变体（空格/NFD/弯引号）定位实际文件；文件不存在或不可读时返回 `ToolError`。
 pub async fn execute_read(
     path: &str,
@@ -263,6 +263,61 @@ pub(crate) fn output_schema() -> serde_json::Value {
     })
 }
 
+/// read 调用头的行范围标签：`:start` 或 `:start-end`（如 `:12`、`:12-20`）。
+///
+/// 宽松解析：数值与数字字符串都接受，`null` / 缺失按未给出处理（`offset` 缺省为 1）；
+/// 两侧都缺省、或值畸形时返回空串，调用方据此不显示标签。
+/// `end` 算成 0 时也只显示起点（`offset=1, limit=0` → `:1`）。
+/// 导出 HTML 的模板里有一段同语义的 `formatReadLineRange`，两处口径必须保持一致。
+pub fn format_line_range(args: &serde_json::Value) -> String {
+    let offset = args.get("offset").filter(|v| !v.is_null());
+    let limit = args.get("limit").filter(|v| !v.is_null());
+    if offset.is_none() && limit.is_none() {
+        return String::new();
+    }
+
+    let start = match offset {
+        Some(v) => match parse_line_number(v) {
+            Some(n) => n,
+            None => return String::new(),
+        },
+        None => 1.0,
+    };
+
+    let Some(limit) = limit else {
+        return format!(":{}", format_line_number(start));
+    };
+    let Some(count) = parse_line_number(limit) else {
+        return String::new();
+    };
+
+    let end = start + count - 1.0;
+    if end == 0.0 {
+        format!(":{}", format_line_number(start))
+    } else {
+        format!(":{}-{}", format_line_number(start), format_line_number(end))
+    }
+}
+
+/// 解析行号：数字、或去首尾空白后非空的数字字符串；其余（`null` / 布尔 / 非数字文本 / NaN）为 `None`。
+fn parse_line_number(value: &serde_json::Value) -> Option<f64> {
+    let parsed = match value {
+        serde_json::Value::Number(n) => n.as_f64(),
+        serde_json::Value::String(s) if !s.trim().is_empty() => s.trim().parse::<f64>().ok(),
+        _ => None,
+    };
+    parsed.filter(|n| n.is_finite())
+}
+
+/// 行号标签里的数字：整数值去掉小数点（`12.0` → `12`），非整数保留小数。
+fn format_line_number(value: f64) -> String {
+    if value.fract() == 0.0 {
+        format!("{}", value as i64)
+    } else {
+        format!("{value}")
+    }
+}
+
 /// 给 read 的结果补上结构化输出：文本文件是字符串本体，图片是
 /// `{ type, data, mimeType, note }`（`note` 是随图的提示文本，如缩放/不支持视觉的说明）。
 ///
@@ -369,6 +424,35 @@ mod tests {
             .write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Bmp)
             .unwrap();
         buf
+    }
+
+    #[test]
+    fn line_range_tag_follows_pi_format() {
+        // 缺省 / 畸形 / null 都不显示标签
+        assert_eq!(format_line_range(&serde_json::json!({})), "");
+        assert_eq!(
+            format_line_range(&serde_json::json!({"offset": null, "limit": null})),
+            ""
+        );
+        assert_eq!(format_line_range(&serde_json::json!({"offset": "abc"})), "");
+        assert_eq!(
+            format_line_range(&serde_json::json!({"offset": 5, "limit": "x"})),
+            ""
+        );
+
+        // 只给 offset 时只显示起点；offset 缺省按 1 算
+        assert_eq!(format_line_range(&serde_json::json!({"offset": 12})), ":12");
+        assert_eq!(format_line_range(&serde_json::json!({"limit": 5})), ":1-5");
+
+        // 数字字符串宽松解析；`end` 算成 0 时只显示起点（对齐 pi）
+        assert_eq!(
+            format_line_range(&serde_json::json!({"offset": "12", "limit": "8"})),
+            ":12-19"
+        );
+        assert_eq!(
+            format_line_range(&serde_json::json!({"offset": 1, "limit": 0})),
+            ":1"
+        );
     }
 
     #[test]

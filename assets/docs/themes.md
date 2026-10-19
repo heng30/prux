@@ -101,36 +101,68 @@ mkdir -p ~/.prux/themes
 vim ~/.prux/themes/my-theme.json
 ```
 
-2. 定义颜色（prux 只读取它需要的键，未定义的键走代码内默认值，无需填满全部）：
+2. 定义颜色（`colors` 必须给出全部必需颜色键，否则主题不会被启用，缺哪个键会在启动时列出来）：
 
 ```json
 {
   "name": "my-theme",
   "vars": {
     "primary": "#00aaff",
-    "muted2": "#808080"
+    "muted2": "#808080",
+    "panel": "#1e1e2e"
   },
   "colors": {
     "accent": "primary",
     "border": "primary",
-    "success": "#00ff00",
-    "error": "#ff0000",
-    "warning": "#ffff00",
+    "borderAccent": "primary",
+    "borderMuted": "muted2",
+    "success": "#4caf50",
+    "error": "#e05561",
+    "warning": "#e5c07b",
     "muted": "muted2",
     "dim": "#666666",
     "text": "",
-    "userMessageBg": "#2d2d30",
+    "thinkingText": "muted2",
+    "selectedBg": "#2d2d44",
+    "userMessageBg": "panel",
     "userMessageText": "",
+    "customMessageBg": "#2a2a3a",
+    "customMessageText": "",
+    "customMessageLabel": "primary",
     "toolPendingBg": "#1e1e2e",
     "toolSuccessBg": "#1e2e1e",
     "toolErrorBg": "#2e1e1e",
     "toolTitle": "primary",
     "toolOutput": "",
+    "mdHeading": "primary",
+    "mdLink": "primary",
+    "mdLinkUrl": "muted2",
     "mdCode": "#00ffff",
     "mdCodeBlock": "",
+    "mdCodeBlockBorder": "muted2",
+    "mdQuote": "muted2",
+    "mdQuoteBorder": "muted2",
+    "mdHr": "muted2",
+    "mdListBullet": "primary",
+    "toolDiffAdded": "#4caf50",
+    "toolDiffRemoved": "#e05561",
+    "toolDiffContext": "muted2",
+    "syntaxComment": "muted2",
     "syntaxKeyword": "primary",
-    "syntaxString": "#00ff00",
-    "thinkingText": "muted2"
+    "syntaxFunction": "#61afef",
+    "syntaxVariable": "#e5c07b",
+    "syntaxString": "#98c379",
+    "syntaxNumber": "#d19a66",
+    "syntaxType": "#e5c07b",
+    "syntaxOperator": "primary",
+    "syntaxPunctuation": "muted2",
+    "thinkingOff": "muted2",
+    "thinkingMinimal": "muted2",
+    "thinkingLow": "primary",
+    "thinkingMedium": "primary",
+    "thinkingHigh": "primary",
+    "thinkingXhigh": "#c678dd",
+    "bashMode": "#98c379"
   }
 }
 ```
@@ -143,13 +175,25 @@ vim ~/.prux/themes/my-theme.json
 
 prux 读取主题 JSON 的五个字段：
 
-- `name`（可选）— 主题显示名（`/theme` 面板与顶部展示的就是它）。
+- `name`（可选）— 主题显示名（`/theme` 面板与顶部展示的就是它）；不能包含 `/`，`/` 留给 `auto` 明暗主题。
 - `appearance`（可选）— `"dark"` 或 `"light"`，声明主题明暗外观；缺省时先从 `vars` 里的颜色推导，再回退到终端当前的明暗。
 - `vars`（可选）— 可复用的颜色，供 `colors` 引用。
-- `colors`（可选）— 实际渲染用到的颜色；与 `vars` 合并进同一张表，`colors` 覆盖同名项。
-- `export`（可选）— `/export` HTML 导出的配色（见 [颜色键](#颜色键)）。
+- `colors`（必需）— 实际渲染用到的颜色；与 `vars` 合并进同一张表，`colors` 覆盖同名项。
+- `export`（可选）— `/export` HTML 导出的配色（见 [颜色键](#颜色键)），只接受 `pageBg` / `cardBg` / `infoBg`。
 
-`$schema` 字段用于编辑器自动补全与校验，非必需。prux 不校验「必需 token」数量——它只读取渲染用到的键，未定义的键回退到代码内默认色。
+`$schema` 字段用于编辑器自动补全与校验，非必需。
+
+### 校验
+
+prux 在每个用户主题目录里校验主题文件，并在启动时把每一份不合法主题的完整原因显示在对话区：
+
+- 缺少必需颜色键：列“Missing required color tokens”并逐个列出缺失的键（见 [颜色键](#颜色键)）；
+- 出现未知的顶层字段或未知的颜色键：按 `路径: unexpected property` 报出（因此写错键名会直接看到）；
+- 颜色值不是颜色字符串、也不是 `0`-`255` 的整数：按 `路径: must be a color string …` 报出；
+- `name` 缺失、含 `/`，或 JSON 本身不合法。
+
+不合法的主题**不会被启用**（继续找下一个候选文件，都找不到时回退内置 `dark` / `light`）。
+五个可选键未给出时回落到同类颜色，无需填：`scrollbarTrack`、`scrollbarThumb`、`searchMatchBg`、`searchMatchText`、`thinkingMax`。
 
 ## 颜色键
 

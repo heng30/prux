@@ -243,6 +243,7 @@ impl App {
             "expose-session-env" => self.apply_change_expose_session_env(new_value),
             "steering-mode" => self.apply_change_steering_mode(new_value),
             "follow-up-mode" => self.apply_change_follow_up_mode(new_value),
+            "share-destination" => self.apply_change_share_destination(new_value),
             "hide-thinking" => self.apply_change_hide_thinking(new_value),
             "show-images" => self.apply_change_show_images(new_value),
             "quiet-startup" => self.apply_change_quiet_startup(new_value),
@@ -361,6 +362,18 @@ impl App {
         self.persist(
             "followUpMode",
             settings_manager::write_settings_follow_up_mode(new_value),
+        );
+    }
+
+    /// 设置项切换：sessionShareDestination 写盘并持久化（`/share` 每次读取）。
+    fn apply_change_share_destination(&mut self, new_value: &str) {
+        let Some(destination) = settings_manager::SessionShareDestination::parse(new_value) else {
+            return;
+        };
+
+        self.persist(
+            "sessionShareDestination",
+            settings_manager::write_settings_session_share_destination(destination),
         );
     }
 

@@ -11,6 +11,30 @@ const MAX_REF_EXPANSIONS: usize = 32;
 /// 渲染出的输入类型超过这个字符数就退化成 `unknown`
 pub const DEFAULT_INPUT_SCHEMA_MAX_CHARS: usize = 16_000;
 
+/// 取值是数字或字符串、并以 `@keyword value` 形式写进属性注释的 JSON Schema 关键字。
+const TAG_KEYWORDS: [&str; 11] = [
+    "minimum",
+    "exclusiveMinimum",
+    "maximum",
+    "exclusiveMaximum",
+    "multipleOf",
+    "minLength",
+    "maxLength",
+    "pattern",
+    "format",
+    "minItems",
+    "maxItems",
+];
+
+/// 下界关键字：多个值同时成立时只有最大的那个有效。
+const LOWER_BOUNDS: [&str; 4] = ["minimum", "exclusiveMinimum", "minLength", "minItems"];
+
+/// 上界关键字：多个值同时成立时只有最小的那个有效。
+const UPPER_BOUNDS: [&str; 4] = ["maximum", "exclusiveMaximum", "maxLength", "maxItems"];
+
+/// 单个标签的最大长度：更长的（大段默认值、长 pattern）直接舍弃。
+const MAX_TAG_CHARS: usize = 80;
+
 /// 脚本用的工具标识符：不合法的字符变成 `_`（`my-tool` → `my_tool`）。
 pub fn to_codemode_identifier(name: &str) -> String {
     let mut identifier = String::new();
@@ -30,12 +54,27 @@ pub fn to_codemode_identifier(name: &str) -> String {
     }
 }
 
-/// JSON Schema → TypeScript 类型表达式；超过 `max_chars` 时返回 `unknown`。
+/// JSON Schema → TypeScript 类型表达式；超过 `max_chars` 时先退一步去掉约束标签，还超就返回 `unknown`。
 pub fn schema_to_type(schema: &Value, max_chars: Option<usize>) -> String {
-    let ty = to_type(schema, &mut SchemaContext::new(schema));
-    match max_chars {
-        Some(max) if ty.chars().count() > max => "unknown".to_string(),
-        _ => ty,
+    let render = |tags: bool| {
+        let mut ctx = SchemaContext::new(schema);
+        ctx.tags = tags;
+        to_type(schema, &mut ctx)
+    };
+
+    let ty = render(true);
+    let Some(max) = max_chars else {
+        return ty;
+    };
+    if ty.chars().count() <= max {
+        return ty;
+    }
+
+    let untagged = render(false);
+    if untagged.chars().count() <= max {
+        untagged
+    } else {
+        "unknown".to_string()
     }
 }
 
@@ -96,15 +135,18 @@ struct SchemaContext<'a> {
     resolving: Vec<String>,
     /// 本次渲染已展开的 `$ref` 累计次数，达到 `MAX_REF_EXPANSIONS` 后不再展开
     expansions: usize,
+    /// 属性注释里是否带约束标签（输出超长时会不带标签重渲一次）
+    tags: bool,
 }
 
 impl<'a> SchemaContext<'a> {
-    /// 以 `root` 为 `$ref` 解析基准开一份空上下文。
+    /// 以 `root` 为 `$ref` 解析基准开一份空上下文（默认带约束标签）。
     fn new(root: &'a Value) -> Self {
         SchemaContext {
             root,
             resolving: Vec::new(),
             expansions: 0,
+            tags: true,
         }
     }
 }
@@ -194,7 +236,148 @@ fn array_type(schema: &serde_json::Map<String, Value>, ctx: &mut SchemaContext<'
     format!("[{}]", parts.join(", "))
 }
 
-/// 对象类型：单行（无属性描述）或逐属性一行 + `//` 注释（有描述）。
+/// 属性的 TS 类型表达不了的约束，渲染成 JSDoc 风格标签：
+/// `@integer @minimum 1 @maximum 100 @default 20`；没有约束时返回空串。
+///
+/// 可空字段（如 `int | None`）把约束放在非 null 分支：分支与属性自身的约束同时生效。
+fn constraint_tags(schema: &Value) -> String {
+    let Some(property) = schema.as_object() else {
+        return String::new();
+    };
+
+    // 可空联合取唯一的非 null 分支（`null` 本身不携带约束）
+    let variants = property
+        .get("anyOf")
+        .and_then(Value::as_array)
+        .or_else(|| property.get("oneOf").and_then(Value::as_array));
+    let non_null: Vec<&Value> = variants
+        .map(|list| {
+            list.iter()
+                .filter(|variant| variant.get("type").and_then(Value::as_str) != Some("null"))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let mut branches: Vec<&serde_json::Map<String, Value>> = vec![property];
+    if non_null.len() == 1
+        && let Some(branch) = non_null[0].as_object()
+    {
+        branches.push(branch);
+    }
+
+    // Draft-04 / OpenAPI 3.0：布尔 `exclusiveMinimum` / `exclusiveMaximum` 把 `minimum` / `maximum` 改成排他的
+    let normalized: Vec<serde_json::Map<String, Value>> = branches
+        .iter()
+        .map(|branch| {
+            let mut out = (*branch).clone();
+            if out.get("exclusiveMinimum") == Some(&Value::Bool(true))
+                && let Some(minimum) = out.get("minimum").cloned()
+            {
+                out.insert("exclusiveMinimum".to_string(), minimum);
+                out.remove("minimum");
+            }
+            if out.get("exclusiveMaximum") == Some(&Value::Bool(true))
+                && let Some(maximum) = out.get("maximum").cloned()
+            {
+                out.insert("exclusiveMaximum".to_string(), maximum);
+                out.remove("maximum");
+            }
+            out
+        })
+        .collect();
+
+    let mut tags: Vec<String> = Vec::new();
+    let is_integer = |kind: Option<&Value>| match kind {
+        Some(Value::String(s)) => s == "integer",
+        Some(Value::Array(types)) => types.iter().any(|t| t.as_str() == Some("integer")),
+        _ => false,
+    };
+    if normalized
+        .iter()
+        .any(|branch| is_integer(branch.get("type")))
+    {
+        tags.push("@integer".to_string());
+    }
+
+    for keyword in TAG_KEYWORDS {
+        let values: Vec<&Value> = normalized.iter().filter_map(|b| b.get(keyword)).collect();
+        if LOWER_BOUNDS.contains(&keyword) || UPPER_BOUNDS.contains(&keyword) {
+            let numbers: Vec<f64> = values.iter().filter_map(|v| v.as_f64()).collect();
+            if numbers.is_empty() {
+                continue;
+            }
+            // 下界取最大、上界取最小：同时成立时只有那个有效
+            let bound = if LOWER_BOUNDS.contains(&keyword) {
+                numbers.iter().copied().fold(f64::NEG_INFINITY, f64::max)
+            } else {
+                numbers.iter().copied().fold(f64::INFINITY, f64::min)
+            };
+            tags.push(format!("@{keyword} {}", format_bound(bound)));
+            continue;
+        }
+
+        // 其余关键字（pattern / format / multipleOf 等）：不同取值各出一个标签
+        let mut seen: Vec<&Value> = Vec::new();
+        for value in values {
+            if !matches!(value, Value::Number(_) | Value::String(_)) || seen.contains(&value) {
+                continue;
+            }
+            seen.push(value);
+            tags.push(format!("@{keyword} {}", format_tag_value(value)));
+        }
+    }
+
+    if normalized
+        .iter()
+        .any(|branch| branch.get("uniqueItems") == Some(&Value::Bool(true)))
+    {
+        tags.push("@uniqueItems".to_string());
+    }
+    // 注解类只从属性自身取（不跟非 null 分支合并）
+    if let Some(default) = property.get("default").filter(|v| !v.is_null()) {
+        tags.push(format!("@default {default}"));
+    }
+    if property.get("deprecated") == Some(&Value::Bool(true)) {
+        tags.push("@deprecated".to_string());
+    }
+
+    tags.retain(|tag| tag.chars().count() <= MAX_TAG_CHARS);
+    tags.iter()
+        .map(|tag| escape_line_terminators(tag))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// 标签里的数字：整数值去掉小数点，非整数保留小数。
+fn format_bound(value: f64) -> String {
+    if value.fract() == 0.0 && value.abs() < 1e15 {
+        format!("{}", value as i64)
+    } else {
+        format!("{value}")
+    }
+}
+
+/// 标签里的取值：数字原样，字符串不加引号（`@format date-时间` 这类约定）。
+fn format_tag_value(value: &Value) -> String {
+    match value {
+        Value::String(s) => s.clone(),
+        other => other.to_string(),
+    }
+}
+
+/// `//` 注释行在换行符处会被截断：`\r` / `\n` / U+2028 / U+2029 转成 `\uXXXX`。
+fn escape_line_terminators(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match ch {
+            '\r' | '\n' | '\u{2028}' | '\u{2029}' => out.push_str(&format!("\\u{:04x}", ch as u32)),
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// 对象类型：单行（属性既无描述也无约束）或逐属性一行 + `//` 注释（描述与约束标签）。
 fn object_type(schema: &serde_json::Map<String, Value>, ctx: &mut SchemaContext<'_>) -> String {
     let empty = serde_json::Map::new();
     let properties = schema
@@ -238,19 +421,28 @@ fn object_type(schema: &serde_json::Map<String, Value>, ctx: &mut SchemaContext<
         return "{}".to_string();
     }
 
-    if !typed_names
-        .iter()
-        .any(|n| !description_of(&properties[*n]).is_empty())
-    {
+    let has_comments = typed_names.iter().any(|n| {
+        !description_of(&properties[*n]).is_empty()
+            || (ctx.tags && !constraint_tags(&properties[*n]).is_empty())
+    });
+    if !has_comments {
         return format!("{{ {} }}", members.join(" "));
     }
 
     let mut lines = vec!["{".to_string()];
     for (index, name) in typed_names.iter().enumerate() {
-        for line in description_of(&properties[*name]).split(['\r', '\n']) {
+        for line in description_of(&properties[*name]).split(['\r', '\n', '\u{2028}', '\u{2029}']) {
             if !line.trim().is_empty() {
                 lines.push(format!("{INDENT}// {}", line.trim()));
             }
+        }
+        let tags = if ctx.tags {
+            constraint_tags(&properties[*name])
+        } else {
+            String::new()
+        };
+        if !tags.is_empty() {
+            lines.push(format!("{INDENT}// {tags}"));
         }
         lines.push(format!("{INDENT}{}", members[index]));
     }
@@ -529,6 +721,148 @@ mod tests {
         let schema = json!({"type": "string"});
         assert_eq!(schema_to_type(&schema, Some(3)), "unknown");
         assert_eq!(schema_to_type(&schema, Some(100)), "string");
+    }
+
+    /// 属性的 type 表达不了的约束写成注释行上的 `@` 标签（对齐 pi 的格式与顺序）。
+    #[test]
+    fn puts_constraints_the_type_cannot_express_on_comment_lines() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "timeoutMs": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 30000,
+                    "default": 0,
+                    "description": "Wait in milliseconds."
+                },
+                "id": {"type": "string", "pattern": "^[a-z]+$", "maxLength": 8},
+                "tags": {"type": "array", "items": {"type": "string"}, "maxItems": 5, "uniqueItems": true, "deprecated": true},
+                "name": {"type": "string"}
+            },
+            "required": ["id"]
+        });
+        assert_eq!(
+            schema_to_type(&schema, None),
+            [
+                "{",
+                "  // @maxLength 8 @pattern ^[a-z]+$",
+                "  id: string;",
+                "  name?: string;",
+                "  // @maxItems 5 @uniqueItems @deprecated",
+                "  tags?: Array<string>;",
+                "  // Wait in milliseconds.",
+                "  // @integer @minimum 0 @maximum 30000 @default 0",
+                "  timeoutMs?: number;",
+                "}",
+            ]
+            .join("\n")
+        );
+    }
+
+    /// 可空联合（`int | None`）的约束写在非 null 分支上，与属性自身的约束同时生效。
+    #[test]
+    fn reads_constraints_of_optional_fields_from_the_non_null_branch() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "anyOf": [{"type": "integer", "minimum": 1, "maximum": 100}, {"type": "null"}],
+                    "default": null,
+                    "title": "Limit"
+                }
+            }
+        });
+        assert_eq!(
+            schema_to_type(&schema, None),
+            "{\n  // @integer @minimum 1 @maximum 100\n  limit?: number | null;\n}"
+        );
+
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "n": {
+                    "anyOf": [{"type": "integer", "minimum": 10, "maximum": 50, "format": "int32"}, {"type": "null"}],
+                    "minimum": 0,
+                    "maximum": 20,
+                    "format": "port"
+                }
+            }
+        });
+        assert_eq!(
+            schema_to_type(&schema, None),
+            "{\n  // @integer @minimum 10 @maximum 20 @format port @format int32\n  n?: number | null;\n}"
+        );
+    }
+
+    /// Draft-04 / OpenAPI 3.0 的布尔 `exclusiveMinimum` / `exclusiveMaximum`。
+    #[test]
+    fn reads_draft04_boolean_exclusive_bounds() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "n": {"type": "integer", "minimum": 0, "exclusiveMinimum": true, "maximum": 10, "exclusiveMaximum": false},
+                "m": {"anyOf": [{"type": "number", "maximum": 5, "exclusiveMaximum": true}, {"type": "null"}], "maximum": 8}
+            }
+        });
+        assert_eq!(
+            schema_to_type(&schema, None),
+            [
+                "{",
+                "  // @maximum 8 @exclusiveMaximum 5",
+                "  m?: number | null;",
+                "  // @integer @exclusiveMinimum 0 @maximum 10",
+                "  n?: number;",
+                "}",
+            ]
+            .join("\n")
+        );
+    }
+
+    /// 过长的标签舍弃；标签与描述里的换行符转成 `\uXXXX`（否则 `//` 注释会被截断）。
+    #[test]
+    fn leaves_out_long_tags_and_escapes_line_terminators() {
+        // default 太长 → 整个标签被丢弃（因此不需要多行渲染）
+        let schema = json!({
+            "type": "object",
+            "properties": {"config": {"type": "object", "default": {"text": "x".repeat(100)}}}
+        });
+        assert_eq!(
+            schema_to_type(&schema, None),
+            "{ config?: { [key: string]: unknown; }; }"
+        );
+
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "sep": {"type": "string", "pattern": "^[\r\n\u{2028}\u{2029}]$", "default": "\u{2028}", "description": "a\u{2028}b"}
+            }
+        });
+        assert_eq!(
+            schema_to_type(&schema, None),
+            [
+                "{",
+                "  // a",
+                "  // b",
+                "  // @pattern ^[\\u000d\\u000a\\u2028\\u2029]$ @default \"\\u2028\"",
+                "  sep?: string;",
+                "}",
+            ]
+            .join("\n")
+        );
+    }
+
+    /// 超预算时先去标签，仍然超才退成 `unknown`。
+    #[test]
+    fn drops_constraint_tags_before_rendering_over_the_budget_as_unknown() {
+        let schema =
+            json!({"type": "object", "properties": {"n": {"type": "integer", "minimum": 1}}});
+        assert_eq!(
+            schema_to_type(&schema, None),
+            "{\n  // @integer @minimum 1\n  n?: number;\n}"
+        );
+        assert_eq!(schema_to_type(&schema, Some(20)), "{ n?: number; }");
+        assert_eq!(schema_to_type(&schema, Some(10)), "unknown");
     }
 
     /// 签名与样例：标识符归一 + 输出类型 + `declare const tools` 包裹。

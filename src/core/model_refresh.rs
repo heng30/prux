@@ -9,8 +9,9 @@
 
 use crate::{
     core::{
-        auth::has_auth,
+        auth::{self, has_auth},
         config_cache::ConfigCache,
+        model_config,
         settings_manager::{agent_dir, atomic_write_config},
     },
     error::{Error, Result},
@@ -20,7 +21,7 @@ use crate::{
     },
 };
 use serde_json::{Value, json};
-use std::{fs, path::PathBuf, sync::RwLock};
+use std::{collections::HashMap, fs, path::PathBuf, sync::RwLock};
 
 /// 远程目录服务
 pub const CATALOG_BASE_URL: &str = "https://pi.dev";
@@ -31,6 +32,12 @@ const REFRESH_TIMEOUT_MS: u64 = 15_000;
 /// 远程目录请求的模型类型：
 /// 不传该参数时服务端只回 chat-only 分片，image / classifier 条目在远程刷新里永远拿不到。
 const REMOTE_CATALOG_MODEL_TYPES: &str = "chat,image,classifier";
+
+/// OpenRouter 目录服务的默认 base URL（models.json 未覆盖时用它拼 `/models/user`）。
+const OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
+
+/// OpenRouter `GET /models/user` 的请求超时。
+const OPENROUTER_USER_MODELS_TIMEOUT_MS: u64 = 15_000;
 
 /// 刷新结果
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -138,6 +145,8 @@ pub async fn refresh_provider_models(provider: &str, force: bool) -> Result<Refr
         source,
     })?;
     let refreshed = parse_catalog(provider, &value);
+    // OpenRouter：持 key 时用 `GET /models/user` 按该 key 收窄 chat 目录并覆盖 limits / 价格
+    let refreshed = personalize_catalog(provider, refreshed).await?;
     // lastModified 保持 0：prux 无 localGeneratedAt 语义（仅要求字段存在以启用缓存窗）
     let mut entry = json!({
         "models": refreshed,
@@ -152,6 +161,200 @@ pub async fn refresh_provider_models(provider: &str, force: bool) -> Result<Refr
     }
     write_stored_entry(provider, entry)?;
     Ok(RefreshStatus::Updated)
+}
+
+/// 对拉到的目录做 provider 专属收尾（目前只有 OpenRouter）。
+///
+/// OpenRouter 持凭据时改用 `GET /models/user` 列该 key 可用的模型：
+/// 拿不到凭据、端点拒绝该 key（401/403/404，如 models.json 指向代理）时原样返回。
+async fn personalize_catalog(provider: &str, catalog: Vec<Value>) -> Result<Vec<Value>> {
+    if provider != "openrouter" {
+        return Ok(catalog);
+    }
+
+    let Some(key) = auth::resolve_api_key("openrouter", None) else {
+        return Ok(catalog);
+    };
+    // models.json 的区域端点（如 `https://us.openrouter.ai/api/v1`）生效于该 key 的可见范围
+    let base_url = model_config::provider_config("openrouter")
+        .and_then(|c| c.base_url)
+        .unwrap_or_else(|| OPENROUTER_BASE_URL.to_string());
+
+    match fetch_open_router_user_models(&base_url, &key).await? {
+        Some(body) => personalize_open_router_catalog(catalog, &body),
+        None => Ok(catalog),
+    }
+}
+
+/// 请求 OpenRouter `GET /models/user`：`Ok(None)` 表示端点不接受该 key（401/403/404），
+/// 调用方保留原目录；其余非 2xx 响应与请求失败都返回错误。
+async fn fetch_open_router_user_models(base_url: &str, key: &str) -> Result<Option<Value>> {
+    let url = format!("{}/models/user", base_url.trim_end_matches('/'));
+    let client = http::client_builder(None).build()?;
+    let response = client
+        .get(&url)
+        .timeout(std::time::Duration::from_millis(
+            OPENROUTER_USER_MODELS_TIMEOUT_MS,
+        ))
+        .header("accept", "application/json")
+        .header("authorization", format!("Bearer {}", key))
+        .header("user-agent", concat!("prux/", env!("CARGO_PKG_VERSION")))
+        .send()
+        .await
+        .map_err(|source| Error::Io {
+            context: format!("OpenRouter model list request failed: {}", source),
+            source: std::io::Error::other(source.to_string()),
+        })?;
+
+    let status = response.status();
+    if matches!(status.as_u16(), 401 | 403 | 404) {
+        return Ok(None);
+    }
+    if !status.is_success() {
+        return Err(Error::msg(format!(
+            "OpenRouter model list request failed: {}",
+            status
+        )));
+    }
+
+    let text = response.text().await.map_err(|source| Error::Io {
+        context: format!("Failed to read OpenRouter model list body: {}", source),
+        source: std::io::Error::other(source.to_string()),
+    })?;
+    let body: Value = serde_json::from_str(&text).map_err(|source| Error::Json {
+        context: "Invalid OpenRouter model list response".to_string(),
+        source,
+    })?;
+    Ok(Some(body))
+}
+
+/// 用 `GET /models/user` 的响应体收窄目录：只保留该 key 可用的 chat 模型
+///（image / classifier 原样保留），并用 key 自己的 limits 与价格覆盖
+/// `contextWindow` / `maxTokens` / `cost`。
+///
+/// 响应体不含 `data` 数组时返回错误；limits 缺失 / `null` / `0` 都视为未提供，保留目录原值。
+fn personalize_open_router_catalog(catalog: Vec<Value>, body: &Value) -> Result<Vec<Value>> {
+    let data = body
+        .get("data")
+        .and_then(Value::as_array)
+        .ok_or_else(|| Error::msg("Invalid OpenRouter model list response"))?;
+    let allowed: HashMap<&str, &Value> = data
+        .iter()
+        .filter_map(|entry| Some((entry.get("id")?.as_str()?, entry)))
+        .collect();
+
+    Ok(catalog
+        .into_iter()
+        .filter_map(|model| {
+            if !is_chat_model(&model) {
+                return Some(model);
+            }
+            let entry = model
+                .get("id")
+                .and_then(Value::as_str)
+                .and_then(|id| allowed.get(id).copied())?;
+            Some(apply_open_router_limits(model, entry))
+        })
+        .collect())
+}
+
+/// 条目是否是 chat 模型：`type` 缺失（旧目录 / 用户配置）按 chat 处理，对齐
+/// `model_resolver` 的目录约定。
+fn is_chat_model(model: &Value) -> bool {
+    matches!(
+        model.get("type").and_then(Value::as_str),
+        None | Some("chat")
+    )
+}
+
+/// 把该 key 的 limits 与价格写回目录条目（`/models/user` 里非 chat 的字段不动）。
+fn apply_open_router_limits(mut model: Value, entry: &Value) -> Value {
+    let Some(obj) = model.as_object_mut() else {
+        return model;
+    };
+
+    let positive = |v: Option<&Value>| v.and_then(Value::as_u64).filter(|n| *n > 0);
+    let top = entry.get("top_provider");
+
+    if let Some(v) = positive(top.and_then(|t| t.get("context_length")))
+        .or_else(|| positive(entry.get("context_length")))
+        .or_else(|| positive(obj.get("contextWindow")))
+    {
+        obj.insert("contextWindow".into(), json!(v));
+    }
+    if let Some(v) = positive(top.and_then(|t| t.get("max_completion_tokens")))
+        .or_else(|| positive(obj.get("maxTokens")))
+    {
+        obj.insert("maxTokens".into(), json!(v));
+    }
+    if let Some(pricing) = entry.get("pricing") {
+        obj.insert("cost".into(), open_router_cost(pricing));
+    }
+
+    model
+}
+
+/// OpenRouter 的 `$/token` 价格（十进制字符串）→ prux 的 `$/1M token`：
+/// 缺失 / 非法 / 负价都回落 `fallback`（路由器模型报 `-1`，价格取决于实际选中的模型）。
+fn per_million(source: &Value, key: &str, fallback: f64) -> f64 {
+    let per_token = source.get(key).and_then(|v| match v {
+        Value::String(s) => s.trim().parse::<f64>().ok(),
+        Value::Number(n) => n.as_f64(),
+        _ => None,
+    });
+    match per_token.filter(|n| *n >= 0.0) {
+        Some(n) => (n * 1_000_000.0 * 1e6).round() / 1e6,
+        None => fallback,
+    }
+}
+
+/// OpenRouter `pricing` → prux 的 cost 对象：基础价四项 + 按输入长度分层的 tier。
+///
+/// 时刻 / 星期维度的 overrides 被跳过（cost 模型表达不了）；某个 tier 未列出的费率沿用基础价。
+fn open_router_cost(pricing: &Value) -> Value {
+    let base_input = per_million(pricing, "prompt", 0.0);
+    let base_output = per_million(pricing, "completion", 0.0);
+    let base_cache_read = per_million(pricing, "input_cache_read", 0.0);
+    let base_cache_write = per_million(pricing, "input_cache_write", 0.0);
+
+    let tiers: Vec<Value> = pricing
+        .get("overrides")
+        .and_then(Value::as_array)
+        .map(|overrides| {
+            overrides
+                .iter()
+                .filter_map(|override_| {
+                    let above = override_.get("min_prompt_tokens")?.as_u64()?;
+                    if ["utc_start", "utc_end", "utc_days"]
+                        .iter()
+                        .any(|k| override_.get(*k).is_some())
+                    {
+                        return None;
+                    }
+                    Some(json!({
+                        "inputTokensAbove": above,
+                        "input": per_million(override_, "prompt", base_input),
+                        "output": per_million(override_, "completion", base_output),
+                        "cacheRead": per_million(override_, "input_cache_read", base_cache_read),
+                        "cacheWrite": per_million(override_, "input_cache_write", base_cache_write),
+                    }))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let mut cost = json!({
+        "input": base_input,
+        "output": base_output,
+        "cacheRead": base_cache_read,
+        "cacheWrite": base_cache_write,
+    });
+    if !tiers.is_empty() {
+        cost.as_object_mut()
+            .unwrap()
+            .insert("tiers".into(), json!(tiers));
+    }
+    cost
 }
 
 /// 单 provider 目录请求 URL：`{base}/api/models/providers/{provider}?types=chat,image,classifier`。
@@ -349,6 +552,103 @@ mod tests {
             catalog_url("a/b c"),
             "https://pi.dev/api/models/providers/a%2Fb%20c?types=chat%2Cimage%2Cclassifier"
         );
+    }
+
+    /// OpenRouter：`GET /models/user` 只留该 key 可用的 chat 模型，image 原样保留，
+    /// limits 与价格用 key 自己的值覆盖。
+    #[test]
+    fn open_router_personalization_filters_and_overrides() {
+        let catalog = json!([
+            {"id": "a", "type": "chat", "contextWindow": 1000, "maxTokens": 100,
+             "cost": {"input": 9.0, "output": 9.0, "cacheRead": 9.0, "cacheWrite": 9.0}},
+            {"id": "b", "type": "chat", "contextWindow": 2000},
+            {"id": "img", "type": "image", "contextWindow": 500},
+            {"id": "cls", "type": "classifier"}
+        ]);
+        let body = json!({"data": [
+            {"id": "a", "context_length": 4000,
+             "top_provider": {"context_length": 8000, "max_completion_tokens": 6400},
+             "pricing": {"prompt": "0.000001", "completion": "0.000002", "input_cache_read": "0.0000005"}},
+            {"id": "img"}
+        ]});
+
+        let out =
+            personalize_open_router_catalog(catalog.as_array().unwrap().clone(), &body).unwrap();
+        let ids: Vec<&str> = out.iter().map(|m| m["id"].as_str().unwrap()).collect();
+        // 该 key 不可用的 chat 模型 `b` 被剔除；image / classifier 不参与／不受影响
+        assert_eq!(ids, vec!["a", "img", "cls"]);
+
+        let a = &out[0];
+        assert_eq!(a["contextWindow"], json!(8000));
+        assert_eq!(a["maxTokens"], json!(6400));
+        assert_eq!(a["cost"]["input"], json!(1.0));
+        assert_eq!(a["cost"]["output"], json!(2.0));
+        assert_eq!(a["cost"]["cacheRead"], json!(0.5));
+        assert_eq!(a["cost"]["cacheWrite"], json!(0.0));
+        assert!(
+            a["cost"].get("tiers").is_none(),
+            "无 overrides 时不出 tiers"
+        );
+    }
+
+    /// limits 缺失 / `null` / `0` 都视为未提供，保留目录原值；pricing 缺失则保留原价。
+    #[test]
+    fn open_router_personalization_keeps_catalog_values_on_missing_limits() {
+        let catalog = json!([
+            {"id": "a", "type": "chat", "contextWindow": 1000, "maxTokens": 100,
+             "cost": {"input": 9.0}},
+            {"id": "c", "contextWindow": 3000, "maxTokens": 300}
+        ]);
+        let body = json!({"data": [
+            {"id": "a", "context_length": 0,
+             "top_provider": {"context_length": null, "max_completion_tokens": 0}},
+            {"id": "c"}
+        ]});
+
+        let out =
+            personalize_open_router_catalog(catalog.as_array().unwrap().clone(), &body).unwrap();
+        assert_eq!(out[0]["contextWindow"], json!(1000));
+        assert_eq!(out[0]["maxTokens"], json!(100));
+        assert_eq!(out[0]["cost"]["input"], json!(9.0));
+        // 缺 `type` 的旧条目按 chat 处理
+        assert_eq!(out[1]["id"], json!("c"));
+        assert_eq!(out[1]["contextWindow"], json!(3000));
+    }
+
+    /// 价格两层：基础价 + 按输入长度分层的 tier；时刻 / 星期维度的 overrides 跳过；
+    /// 负价（路由器模型）回落 fallback。
+    #[test]
+    fn open_router_cost_converts_prices_and_tiers() {
+        let pricing = json!({
+            "prompt": "-1",
+            "completion": "0.000002",
+            "input_cache_write": "oops",
+            "overrides": [
+                {"min_prompt_tokens": 200000, "prompt": "0.000003"},
+                {"min_prompt_tokens": 100000, "utc_start": 0, "prompt": "0.000004"}
+            ]
+        });
+        let cost = open_router_cost(&pricing);
+        // 负价与非法值都回落 0；未列出的费率沿用基础价
+        assert_eq!(cost["input"], json!(0.0));
+        assert_eq!(cost["output"], json!(2.0));
+        assert_eq!(cost["cacheWrite"], json!(0.0));
+        let tiers = cost["tiers"].as_array().unwrap();
+        assert_eq!(tiers.len(), 1, "utc_* 的 override 不算 tier：{cost:?}");
+        assert_eq!(tiers[0]["inputTokensAbove"], json!(200000));
+        assert_eq!(tiers[0]["input"], json!(3.0));
+        assert_eq!(tiers[0]["output"], json!(2.0), "tier 未列出时沿用基础价");
+    }
+
+    /// 响应体没有 `data` 数组时视为非法（不能静默地把目录清空）。
+    #[test]
+    fn open_router_personalization_rejects_invalid_body() {
+        let catalog = json!([{"id": "a", "type": "chat"}]);
+        let out = personalize_open_router_catalog(
+            catalog.as_array().unwrap().clone(),
+            &json!({"models": []}),
+        );
+        assert!(out.is_err());
     }
 
     #[test]

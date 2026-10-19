@@ -52,6 +52,23 @@ return b;
 各类原型与迭代器原型）也在脚本运行前被冻结，改原型（如 `Array.prototype.toJSON = …`）不再生效；
 堆上限 256 MB，超出时脚本内抛 `InternalError: out of memory`。
 
+## 工具声明里的约束标签
+
+`ALL_TOOLS`、`describeTool()` 与 `searchTools()` 给出的声明样例，与描述里的签名清单同源：
+属性类型里表达不了的 JSON Schema 约束写在属性注释行上。
+
+```ts
+declare const tools: { bash(args: {
+  // @integer @minimum 0 @maximum 30000 @default 0
+  timeout?: number;
+}): Promise<unknown>; };
+```
+
+标签覆盖 `@integer`、`@minimum` / `@exclusiveMinimum`、`@maximum` / `@exclusiveMaximum`、
+`@multipleOf`、`@minLength` / `@maxLength`、`@pattern`、`@format`、`@minItems` / `@maxItems`、
+`@uniqueItems`、`@default`、`@deprecated`。可空字段（`anyOf` / `oneOf` 里带 `null` 分支）的约束
+取非 null 分支；同时成立的上下界合并成最紧的那个；过长的标签（大段默认值、长 pattern）会被省略。
+
 ## `models.*` 的类型定义
 
 描述里只写一行签名清单（模型每次请求都要承担那份固定开销），类型与字段语义在这里：

@@ -122,7 +122,7 @@ pub const LOGIN_PROVIDERS: &[LoginProviderInfo] = &[
     LoginProviderInfo {
         id: "kimi-coding",
         name: "Kimi For Coding",
-        base_url: "https://api.kimi.com/coding",
+        base_url: "https://api.kimi.com/coding/v1",
         is_subscription: true,
         supports_api_key: true,
     },

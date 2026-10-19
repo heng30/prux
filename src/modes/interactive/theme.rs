@@ -12,6 +12,7 @@ use crate::{
     },
     utils::{
         color::{color_to_rgb, indexed_to_rgb, parse_color_str, rgb_to_oklch},
+        paths::home_dir,
         terminal_caps::detect_terminal_capabilities,
         terminal_colors::terminal_colors,
     },
@@ -35,6 +36,78 @@ pub const DEFAULT_THEME_NAME: &str = "system";
 
 /// 由终端上报配色推导的主题名
 pub const SYSTEM_THEME_NAME: &str = "system";
+
+/// 主题 JSON `colors` 里必须齐全的颜色 token（缺任一即主题非法）。
+/// 顺序与发布出去的主题 schema 一致。
+const REQUIRED_THEME_TOKENS: [&str; 51] = [
+    "accent",
+    "border",
+    "borderAccent",
+    "borderMuted",
+    "success",
+    "error",
+    "warning",
+    "muted",
+    "dim",
+    "text",
+    "thinkingText",
+    "selectedBg",
+    "userMessageBg",
+    "userMessageText",
+    "customMessageBg",
+    "customMessageText",
+    "customMessageLabel",
+    "toolPendingBg",
+    "toolSuccessBg",
+    "toolErrorBg",
+    "toolTitle",
+    "toolOutput",
+    "mdHeading",
+    "mdLink",
+    "mdLinkUrl",
+    "mdCode",
+    "mdCodeBlock",
+    "mdCodeBlockBorder",
+    "mdQuote",
+    "mdQuoteBorder",
+    "mdHr",
+    "mdListBullet",
+    "toolDiffAdded",
+    "toolDiffRemoved",
+    "toolDiffContext",
+    "syntaxComment",
+    "syntaxKeyword",
+    "syntaxFunction",
+    "syntaxVariable",
+    "syntaxString",
+    "syntaxNumber",
+    "syntaxType",
+    "syntaxOperator",
+    "syntaxPunctuation",
+    "thinkingOff",
+    "thinkingMinimal",
+    "thinkingLow",
+    "thinkingMedium",
+    "thinkingHigh",
+    "thinkingXhigh",
+    "bashMode",
+];
+
+/// 未给出时回落到其它 token 的可选颜色 token。
+const OPTIONAL_THEME_TOKENS: [&str; 5] = [
+    "scrollbarTrack",
+    "scrollbarThumb",
+    "searchMatchBg",
+    "searchMatchText",
+    "thinkingMax",
+];
+
+/// 主题 JSON 顶层允许出现的键，其余键视为非法。
+const THEME_TOP_LEVEL_KEYS: [&str; 6] =
+    ["$schema", "name", "appearance", "vars", "colors", "export"];
+
+/// `export` 段允许的键（HTML 导出的背景色），其余键视为非法。
+const THEME_EXPORT_KEYS: [&str; 3] = ["pageBg", "cardBg", "infoBg"];
 
 /// 已加载的主题：主题名 + 颜色变量表 + 渲染功能开关。
 ///
@@ -184,9 +257,16 @@ impl Theme {
             let Ok(text) = std::fs::read_to_string(&path) else {
                 continue;
             };
+
             let Ok(v) = serde_json::from_str::<Value>(&text) else {
                 continue;
             };
+
+            // 非法主题文件跳过（启动时的逐条报告见 theme_load_warnings），继续找下一个候选
+            if validate_theme_json(&path.display().to_string(), &v).is_err() {
+                continue;
+            }
+
             ingest_theme_json(&v, &mut loaded_name, &mut vars, &mut explicit_appearance);
             found = true;
             break;
@@ -408,27 +488,8 @@ pub fn available_theme_names(cwd: &str, agent_dir: &Path, include_discovered: bo
     let mut names = HashSet::new();
 
     if include_discovered {
-        let mut dirs = vec![
-            agent_dir.join("themes"),
-            PathBuf::from(cwd).join(PROJECT_SCOPE_NAME).join("themes"),
-        ];
-
-        // settings.json 的 themes 字段：自定义主题目录（与 Theme::load 同一来源）
-        for raw in settings_manager::read_settings().themes {
-            let p = if raw == "~" {
-                PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".to_string()))
-            } else if let Some(rest) = raw.strip_prefix("~/") {
-                PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".to_string())).join(rest)
-            } else {
-                PathBuf::from(raw)
-            };
-
-            if p.is_dir() {
-                dirs.push(p);
-            }
-        }
-
-        for dir in dirs {
+        // 用户主题目录（与 Theme::load 的候选来源一致）
+        for dir in theme_dirs(cwd, agent_dir) {
             let Ok(entries) = std::fs::read_dir(&dir) else {
                 continue;
             };
@@ -512,6 +573,207 @@ fn ingest_theme_json(
 
     ingest_section(v.get("vars"), vars);
     ingest_section(v.get("colors"), vars);
+}
+
+/// 校验一份主题 JSON，非法时返回可直接展示的错误文案（对齐发布出去的主题 schema）。
+///
+/// `label` 是报错时显示的名字（主题名或文件路径）。规则：
+/// 顶层只允许 `$schema` / `name` / `appearance` / `vars` / `colors` / `export`；
+/// `name` 必需且不能含 `/`（`/` 留给自动明暗主题）；`colors` 必需、须含全部必需 token，
+/// 取值只能是颜色字符串或 0-255 的索引；`vars` 是可选的 `名字 → 颜色` 映射；
+/// `export` 只允许 `pageBg` / `cardBg` / `infoBg`。内置主题随二进制发布，不需要校验。
+pub fn validate_theme_json(label: &str, json: &Value) -> std::result::Result<(), String> {
+    if let Some(name) = json.get("name").and_then(Value::as_str)
+        && name.contains('/')
+    {
+        return Err(format!(
+            "Invalid theme name \"{name}\": theme names cannot contain \"/\" because it is reserved for automatic light/dark theme settings."
+        ));
+    }
+
+    let Some(obj) = json.as_object() else {
+        return Err(format!(
+            "Invalid theme \"{label}\": expected an object with a \"colors\" map."
+        ));
+    };
+
+    let mut missing_colors: Vec<&str> = Vec::new();
+    let mut other_errors: Vec<String> = Vec::new();
+
+    for key in obj.keys() {
+        if !THEME_TOP_LEVEL_KEYS.contains(&key.as_str()) {
+            other_errors.push(format!("/: unexpected property \"{key}\""));
+        }
+    }
+
+    match obj.get("name") {
+        Some(Value::String(_)) => {}
+        Some(_) => other_errors.push("/name: must be a string".to_string()),
+        None => other_errors.push("/name: is required".to_string()),
+    }
+
+    if let Some(appearance) = obj.get("appearance")
+        && !matches!(appearance.as_str(), Some("dark" | "light"))
+    {
+        other_errors.push("/appearance: must be \"dark\" or \"light\"".to_string());
+    }
+
+    match obj.get("colors") {
+        Some(Value::Object(colors)) => {
+            for token in REQUIRED_THEME_TOKENS {
+                if !colors.contains_key(token) {
+                    missing_colors.push(token);
+                }
+            }
+            for (key, value) in colors {
+                if !REQUIRED_THEME_TOKENS.contains(&key.as_str())
+                    && !OPTIONAL_THEME_TOKENS.contains(&key.as_str())
+                {
+                    other_errors.push(format!("/colors/{key}: unexpected property"));
+                } else if !is_theme_color_value(value) {
+                    other_errors.push(format!(
+                        "/colors/{key}: must be a color string or a 256-color index (0-255)"
+                    ));
+                }
+            }
+        }
+        Some(_) => other_errors.push("/colors: must be an object".to_string()),
+        // 整个 `colors` 缺失时视为全部必需 token 都缺（与 schema 的 required 报告一致）
+        None => missing_colors.extend(REQUIRED_THEME_TOKENS),
+    }
+
+    if let Some(vars) = obj.get("vars") {
+        match vars.as_object() {
+            Some(map) => {
+                for (key, value) in map {
+                    if !is_theme_color_value(value) {
+                        other_errors.push(format!(
+                            "/vars/{key}: must be a color string or a 256-color index (0-255)"
+                        ));
+                    }
+                }
+            }
+            None => other_errors.push("/vars: must be an object".to_string()),
+        }
+    }
+
+    if let Some(export) = obj.get("export") {
+        match export.as_object() {
+            Some(map) => {
+                for (key, value) in map {
+                    if !THEME_EXPORT_KEYS.contains(&key.as_str()) {
+                        other_errors.push(format!("/export/{key}: unexpected property"));
+                    } else if !is_theme_color_value(value) {
+                        other_errors.push(format!(
+                            "/export/{key}: must be a color string or a 256-color index (0-255)"
+                        ));
+                    }
+                }
+            }
+            None => other_errors.push("/export: must be an object".to_string()),
+        }
+    }
+
+    if missing_colors.is_empty() && other_errors.is_empty() {
+        return Ok(());
+    }
+
+    let mut message = format!("Invalid theme \"{label}\":\n");
+    if !missing_colors.is_empty() {
+        let list = missing_colors
+            .iter()
+            .map(|token| format!("  - {token}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        message.push_str(&format!("\nMissing required color tokens:\n{list}"));
+        message.push_str("\n\nPlease add these colors to your theme's \"colors\" object.");
+        message.push_str("\nSee the built-in themes (dark.json, light.json) for reference values.");
+    }
+
+    if !other_errors.is_empty() {
+        message.push_str(&format!("\n\nOther errors:\n{}", other_errors.join("\n")));
+    }
+    Err(message)
+}
+
+/// 主题颜色取值：颜色字符串，或 0-255 的 256 色索引。
+fn is_theme_color_value(value: &Value) -> bool {
+    matches!(value, Value::String(_)) || value.as_u64().is_some_and(|n| n <= 255)
+}
+
+/// 用户主题目录：项目 `.prux/themes`、`agent_dir()/themes`，以及 settings `themes`
+/// 里声明的目录（去重保序）。内置主题不经目录发现，不在此列。
+fn theme_dirs(cwd: &str, agent_dir: &Path) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    let push = |path: PathBuf, dirs: &mut Vec<PathBuf>| {
+        if path.is_dir() && !dirs.contains(&path) {
+            dirs.push(path);
+        }
+    };
+
+    push(
+        PathBuf::from(cwd).join(PROJECT_SCOPE_NAME).join("themes"),
+        &mut dirs,
+    );
+    push(agent_dir.join("themes"), &mut dirs);
+
+    for raw in settings_manager::read_settings().themes {
+        push(expand_theme_path(&raw), &mut dirs);
+    }
+    dirs
+}
+
+/// 展开 settings `themes` 条目里的 `~` / `~/` 前缀。
+fn expand_theme_path(raw: &str) -> PathBuf {
+    if raw == "~" {
+        home_dir()
+    } else if let Some(rest) = raw.strip_prefix("~/") {
+        home_dir().join(rest)
+    } else {
+        PathBuf::from(raw)
+    }
+}
+
+/// 校验所有用户主题文件，返回逐条警告。
+///
+/// 主题发现是宽松的（非法主题直接忽略、回退内置默认），但静默忽略会让「主题怎么没生效」无从排查，
+/// 因此启动时把每一份非法主题的完整原因报告出来。内置主题不参与校验。
+pub fn theme_load_warnings() -> Vec<String> {
+    let Ok(cwd) = std::env::current_dir() else {
+        return Vec::new();
+    };
+    let agent_dir = settings_manager::agent_dir();
+
+    let mut paths: Vec<PathBuf> = Vec::new();
+    for dir in theme_dirs(&cwd.to_string_lossy(), &agent_dir) {
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            paths.extend(entries.flatten().map(|e| e.path()));
+        }
+    }
+
+    // settings `themes` 里直接指向 .json 文件的条目
+    for raw in settings_manager::read_settings().themes {
+        let path = expand_theme_path(&raw);
+        if path.extension().and_then(|e| e.to_str()) == Some("json") {
+            paths.push(path);
+        }
+    }
+    paths.retain(|p| p.extension().and_then(|e| e.to_str()) == Some("json"));
+    paths.sort();
+    paths.dedup();
+
+    let mut warnings: Vec<String> = Vec::new();
+    for path in paths {
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let label = path.display().to_string();
+        match serde_json::from_str::<Value>(&text) {
+            Ok(v) => warnings.extend(validate_theme_json(&label, &v).err()),
+            Err(e) => warnings.push(format!("Failed to parse theme {label}: {e}")),
+        }
+    }
+    warnings
 }
 
 /// 从主题自身颜色推导明暗外观：背景 token 比前景 token 暗 → 深色
@@ -692,19 +954,134 @@ fn rgb_to_ansi256(r: u8, g: u8, b: u8) -> u8 {
 mod tests {
     use super::*;
 
+    /// 构造一份能通过校验的主题 JSON：全部必需 token 先填 `#000000`，调用方再覆盖。
+    fn valid_theme_json(name: &str) -> Value {
+        let mut colors = serde_json::Map::new();
+        for token in REQUIRED_THEME_TOKENS {
+            colors.insert(token.to_string(), serde_json::json!("#000000"));
+        }
+        serde_json::json!({ "name": name, "colors": colors })
+    }
+
+    /// [`valid_theme_json`] 的可覆盖版：`edit` 直接改这份 JSON（返回序列化后的文本）。
+    fn valid_theme_json_with(name: &str, edit: impl FnOnce(&mut Value)) -> String {
+        let mut json = valid_theme_json(name);
+        edit(&mut json);
+        json.to_string()
+    }
+
+    /// 随二进制发布的内置主题必须自洽（否则它们自己就被启动校验拦下了）。
+    #[test]
+    fn packaged_themes_pass_validation() {
+        for (name, text) in [
+            ("dark", embedded!("themes/dark.json")),
+            ("light", embedded!("themes/light.json")),
+        ] {
+            let json: Value = serde_json::from_str(text).unwrap();
+            assert_eq!(
+                validate_theme_json(name, &json),
+                Ok(()),
+                "内置主题 {name} 应通过校验"
+            );
+        }
+    }
+
+    #[test]
+    fn theme_validation_reports_missing_tokens_and_bad_values() {
+        // 缺必需 token：列出缺失项并给出修复指引
+        let json = serde_json::json!({"name": "x", "colors": {"accent": "#ffffff"}});
+        let err = validate_theme_json("x", &json).unwrap_err();
+        assert!(err.starts_with("Invalid theme \"x\":"), "{err}");
+        assert!(err.contains("Missing required color tokens:"), "{err}");
+        assert!(err.contains("  - border"), "{err}");
+        assert!(err.contains("Please add these colors"), "{err}");
+        assert!(
+            !err.contains("  - accent\n"),
+            "已给出的 token 不应列入缺失：{err}"
+        );
+
+        // 主题名不能含 `/`（`/` 留给 auto 明暗主题）
+        let json = valid_theme_json("a/b");
+        let err = validate_theme_json("/tmp/a.json", &json).unwrap_err();
+        assert!(err.contains("theme names cannot contain \"/\""), "{err}");
+
+        // 未知顶层键 / 未知颜色 token / 越界的 256 色索引
+        let mut json = valid_theme_json("x");
+        json["extra"] = serde_json::json!(1);
+        json["colors"]["nope"] = serde_json::json!("#000000");
+        json["colors"]["accent"] = serde_json::json!(256);
+        let err = validate_theme_json("x", &json).unwrap_err();
+        assert!(err.contains("Other errors:"), "{err}");
+        assert!(err.contains("/: unexpected property \"extra\""), "{err}");
+        assert!(err.contains("/colors/nope: unexpected property"), "{err}");
+        assert!(
+            err.contains("/colors/accent: must be a color string"),
+            "{err}"
+        );
+
+        // 可选 token、256 色索引与 export 都是合法的
+        let mut json = valid_theme_json("x");
+        json["colors"]["thinkingMax"] = serde_json::json!(199);
+        json["export"] = serde_json::json!({"pageBg": "#101010"});
+        assert_eq!(validate_theme_json("x", &json), Ok(()));
+
+        // 非对象 / 整块 `colors` 缺失
+        assert!(validate_theme_json("x", &serde_json::json!("nope")).is_err());
+        let err = validate_theme_json("x", &serde_json::json!({"name": "x"})).unwrap_err();
+        assert!(err.contains("Missing required color tokens:"), "{err}");
+    }
+
+    /// 非法主题文件被跳过（回退内置），并能在启动警告里查到原因
+    #[test]
+    fn invalid_theme_file_is_skipped_and_reported() {
+        let _ad = crate::test_support::AgentDirGuard::temp();
+        let dir = crate::core::settings_manager::agent_dir().join("themes");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("half.json"),
+            r##"{"name":"half","colors":{"accent":"#ffffff"}}"##,
+        )
+        .unwrap();
+        std::fs::write(dir.join("broken.json"), "{oops").unwrap();
+        std::fs::write(dir.join("good.json"), valid_theme_json("good").to_string()).unwrap();
+
+        // 候选里的 half.json 非法 → 跳过 → 回退内置 dark
+        assert_eq!(Theme::load("half").name, "dark");
+        // 合法的用户主题照旧生效
+        assert_eq!(Theme::load("good").name, "good");
+
+        let warnings = theme_load_warnings();
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("half.json") && w.contains("Missing required color tokens")),
+            "{warnings:?}"
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("broken.json") && w.starts_with("Failed to parse theme")),
+            "{warnings:?}"
+        );
+        assert!(
+            !warnings.iter().any(|w| w.contains("good.json")),
+            "合法主题不应报警：{warnings:?}"
+        );
+    }
+
     /// 只读主题视图：外观、具体色值（`oklch()`/变量引用都解成 `#rrggbb`）、终端默认色兜底。
     #[test]
     fn view_resolves_keys_to_concrete_colors() {
         let _ad = crate::test_support::AgentDirGuard::temp();
         let dir = crate::core::settings_manager::agent_dir().join("themes");
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(
-            dir.join("view-test.json"),
-            r##"{ "name": "view-test", "appearance": "light",
-                   "vars": { "neutral": "oklch(0.5 0 0)" },
-                   "colors": { "accent": "neutral", "text": "", "bg": "#123456" } }"##,
-        )
-        .unwrap();
+        let mut json = valid_theme_json("view-test");
+        json["appearance"] = serde_json::json!("light");
+        json["vars"] = serde_json::json!({ "neutral": "oklch(0.5 0 0)" });
+        json["colors"]["accent"] = serde_json::json!("neutral");
+        json["colors"]["text"] = serde_json::json!("");
+        json["colors"]["toolTitle"] = serde_json::json!("#123456");
+        std::fs::write(dir.join("view-test.json"), json.to_string()).unwrap();
 
         let view = Theme::load("view-test").view();
         assert_eq!(view.appearance, "light");
@@ -712,7 +1089,7 @@ mod tests {
         assert_eq!(view.name, "view-test");
         // 变量引用的 oklch 被解成具体 hex；空串（终端默认色）用默认前景色兜底
         assert_eq!(view.color("accent"), Some("#636363"), "{:?}", view.colors);
-        assert_eq!(view.color("bg"), Some("#123456"));
+        assert_eq!(view.color("toolTitle"), Some("#123456"));
         assert_eq!(view.color("text"), Some(view.default_fg.as_str()));
         assert!(view.default_fg.starts_with('#'), "{:?}", view.default_fg);
         // 未知键不猜测
@@ -759,7 +1136,9 @@ mod tests {
         let _ = std::fs::create_dir_all(&themes_dir);
         std::fs::write(
             themes_dir.join("my-theme.json"),
-            r##"{"name": "my-theme", "accent": "#ff0000"}"##,
+            valid_theme_json_with("my-theme", |json| {
+                json["colors"]["accent"] = serde_json::json!("#ff0000");
+            }),
         )
         .unwrap();
         // available_theme_names：agent_dir/themes 中的主题应出现在列表
@@ -836,17 +1215,15 @@ mod tests {
         let _ = std::fs::create_dir_all(&themes_dir);
         std::fs::write(
             themes_dir.join("color-syntax.json"),
-            r##"{
-                "name": "color-syntax",
-                "appearance": "light",
-                "vars": { "accent": "oklch(60% 0.15 250)" },
-                "colors": {
-                    "text": "#abc",
-                    "success": "okhsl(200 60% 40%)",
-                    "error": "ansi:196",
-                    "warning": ""
-                }
-            }"##,
+            valid_theme_json_with("color-syntax", |json| {
+                json["appearance"] = serde_json::json!("light");
+                json["vars"] = serde_json::json!({ "accent": "oklch(60% 0.15 250)" });
+                json["colors"]["accent"] = serde_json::json!("oklch(60% 0.15 250)");
+                json["colors"]["text"] = serde_json::json!("#abc");
+                json["colors"]["success"] = serde_json::json!("okhsl(200 60% 40%)");
+                json["colors"]["error"] = serde_json::json!("ansi:196");
+                json["colors"]["warning"] = serde_json::json!("");
+            }),
         )
         .unwrap();
 
@@ -888,12 +1265,18 @@ mod tests {
         let _ = std::fs::create_dir_all(&themes_dir);
         std::fs::write(
             themes_dir.join("detect-dark.json"),
-            r##"{"name":"detect-dark","colors":{"text":"#e0e0e0","userMessageBg":"#101010"}}"##,
+            valid_theme_json_with("detect-dark", |json| {
+                json["colors"]["text"] = serde_json::json!("#e0e0e0");
+                json["colors"]["userMessageBg"] = serde_json::json!("#101010");
+            }),
         )
         .unwrap();
         std::fs::write(
             themes_dir.join("detect-light.json"),
-            r##"{"name":"detect-light","colors":{"text":"#202020","userMessageBg":"#fefefe"}}"##,
+            valid_theme_json_with("detect-light", |json| {
+                json["colors"]["text"] = serde_json::json!("#202020");
+                json["colors"]["userMessageBg"] = serde_json::json!("#fefefe");
+            }),
         )
         .unwrap();
 

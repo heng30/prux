@@ -335,6 +335,20 @@ impl SettingsSelector {
             ]),
         });
         items.push(SettingItem {
+            id: "share-destination",
+            label: "Session share destination".to_string(),
+            description: "Where to upload sessions with /share ('auto' prefers Radius when authenticated, otherwise GitHub Gist). Radius is not available in this build."
+                .to_string(),
+            current_value: settings_manager::read_settings_session_share_destination()
+                .as_str()
+                .to_string(),
+            kind: SettingKind::Cycle(vec![
+                "auto".to_string(),
+                "gist".to_string(),
+                "radius".to_string(),
+            ]),
+        });
+        items.push(SettingItem {
             id: "retry",
             label: "Retry".to_string(),
             description:
@@ -682,6 +696,7 @@ mod tests {
                 "Wheel scroll lines",
                 "Steering mode",
                 "Follow-up mode",
+                "Session share destination",
                 "Retry",
                 "Retry max attempts",
                 "Compact reserve tokens",
@@ -703,45 +718,42 @@ mod tests {
                 "Theme",
             ]
         );
-        // thinking / theme 只读（默认 trust 在 expose 后）；历史档位与 mermaid/latex 为 cycle
-        assert!(
-            matches!(sel.items[3].kind, SettingKind::Cycle { .. }),
-            "历史档位为 cycle"
-        );
-        assert!(
-            matches!(sel.items[1].kind, SettingKind::Cycle { .. }),
-            "缓存保温为 cycle"
-        );
-        assert!(matches!(sel.items[6].kind, SettingKind::Cycle { .. }));
-        assert!(matches!(sel.items[7].kind, SettingKind::Cycle { .. }));
-        assert!(
-            matches!(sel.items[15].kind, SettingKind::Cycle { .. }),
-            "cache miss notices 为 cycle"
-        );
-        assert!(
-            matches!(sel.items[17].kind, SettingKind::Cycle { .. }),
-            "LaTeX 为 cycle"
-        );
-        assert!(
-            matches!(sel.items[18].kind, SettingKind::Cycle { .. }),
-            "expose 为 cycle"
-        );
-        assert!(
-            matches!(sel.items[23].kind, SettingKind::Cycle { .. }),
-            "show images 为 cycle"
-        );
-        // 新增的数值/开关项也是 cycle
-        for idx in [8usize, 9, 10, 11, 19, 20] {
+        // thinking / theme 只读（默认 trust 在 expose 后）；历史档位与 mermaid/latex 为 cycle。
+        // 按 label 定位：新增设置项不应让下标断言集体位移
+        let idx = |label: &str| {
+            sel.items
+                .iter()
+                .position(|i| i.label == label)
+                .unwrap_or_else(|| panic!("缺少设置项 {label}"))
+        };
+        for label in [
+            "History max entries",
+            "Cache warming",
+            "Steering mode",
+            "Follow-up mode",
+            "Session share destination",
+            "Cache miss notices",
+            "Quiet startup",
+            "LaTeX",
+            "Expose session env",
+            "Show images",
+            // 数值/开关项也是 cycle
+            "Retry max attempts",
+            "Compact reserve tokens",
+            "Compact keep recent tokens",
+            "Images auto resize",
+            "Images block",
+        ] {
             assert!(
-                matches!(sel.items[idx].kind, SettingKind::Cycle { .. }),
-                "{} 为 cycle",
-                sel.items[idx].label
+                matches!(sel.items[idx(label)].kind, SettingKind::Cycle { .. }),
+                "{label} 为 cycle"
             );
         }
+        let builtin_tools = idx("Built-in tools");
         // 内置工具为勾选子面板
         assert!(
             matches!(
-                sel.items[21].kind,
+                sel.items[builtin_tools].kind,
                 SettingKind::Submenu {
                     kind: SubmenuKind::Toggle,
                     ..
@@ -749,8 +761,14 @@ mod tests {
             ),
             "built-in tools 为勾选子面板"
         );
-        assert!(matches!(sel.items[24].kind, SettingKind::ReadOnly));
-        assert!(matches!(sel.items[25].kind, SettingKind::ReadOnly));
+        assert!(matches!(
+            sel.items[idx("Thinking level")].kind,
+            SettingKind::ReadOnly
+        ));
+        assert!(matches!(
+            sel.items[idx("Theme")].kind,
+            SettingKind::ReadOnly
+        ));
     }
 
     #[test]

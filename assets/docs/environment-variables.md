@@ -65,6 +65,7 @@ fi
 | `PRUX_TERMINAL_COLORS` | 设为 `0`/`false`/`no` 关闭启动时的终端配色查询（OSC 10/11/4），此时 `system` 主题改用索引兜底色 |
 | `PRUX_IMAGE_PROTOCOL` | 强制内联图片的图形协议，取值 `kitty`/`iterm2`/`sixel`/`halfblocks`/`none`（`none`/`0` 等于关闭内联图片）；仅在 `showImages` 开启时有意义，详见 [settings.md](settings.md) 的「内联图片」 |
 | `PRUX_TRUE_COLOR` | 覆盖真彩色探测，取值 `1`/`0`/`auto` |
+| `PRUX_CLIPBOARD_OSC52` | 设为 `1` 时，本地剪贴板写入成功后仍追加一次 OSC 52。用于把内容复制到检测不到远程会话的客户端（多路复用 attach、远端 IDE daemon）：SSH / mosh 会话本来就会追加，无需设置 |
 | `VISUAL`, `EDITOR` | `externalEditor` 未设置时的外部编辑器回退 |
 | `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY` | 出站 HTTP 代理与直连配置（大小写变体均可，小写优先）；规则见 [出站 HTTP 代理（http-proxy.md）](http-proxy.md) |
 

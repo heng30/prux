@@ -4,6 +4,23 @@ This release aligns prux with upstream pi 1.3.0.
 
 ### Added
 
+- **`/share` destination is configurable**: `settings.json` takes
+  `sessionShareDestination` (`auto` / `gist` / `radius`), switchable from `/settings`. `auto` and
+  `gist` create a private gist; `radius` fails with a clear message instead of silently falling back,
+  because this build has no Radius upload.
+- **`PRUX_CLIPBOARD_OSC52=1` also emits OSC 52** after a successful local clipboard write, so remote
+  clients that leave no SSH markers (multiplexer attaches, remote IDE daemons) still receive the copy.
+- **OpenRouter catalogs are personalized per key**: a refresh with credentials asks
+  `GET /models/user` instead of the public catalog, keeps only the chat models that key may use and
+  applies the key's context length, max output and prices.
+- **Theme files are validated at startup**: a theme missing required color tokens, using unknown
+  keys or an out-of-range palette index is reported with the full reason instead of being silently
+  replaced by the built-in default.
+- **codemode declarations tag constraints the TypeScript type cannot express**: properties with
+  bounds, `pattern`, `format`, length or item limits, `uniqueItems`, a non-null `default` or
+  `deprecated` get a `// @integer @minimum 0 @maximum 30000 @default 0` comment line. Reachable
+  bounds are merged (the tightest wins), a nullable `anyOf` / `oneOf` is read from its non-null
+  branch, and tags are dropped before a declaration over the size budget degrades to `unknown`.
 - **Refreshed model catalog** from pi-ai 1.3.0: 102 models were added and 40 removed across
   `github-copilot`, `google`, `huggingface`, `meta`, `nvidia`, `opencode`, `opencode-go`,
   `openrouter` and `vercel-ai-gateway`. OpenCode Zen and OpenCode Go now use the
@@ -18,6 +35,9 @@ This release aligns prux with upstream pi 1.3.0.
 
 ### Changed
 
+- **`read` shows its line range as `:start-end`** in the transcript and in HTML exports, the same
+  shape the session viewer uses. Numeric strings and `null` are accepted, so `offset: "5"` now shows
+  a range instead of nothing. `read`'s `offset` is documented as 1-based.
 - **Switching models no longer feeds the previous model's reasoning to the new model.** Thinking
   blocks produced by a different provider, API or model are dropped instead of being sent as plain
   text, so the new model no longer treats another model's reasoning as part of its own reply.
@@ -56,6 +76,9 @@ This release aligns prux with upstream pi 1.3.0.
 - **Key bindings named `+` or `ctrl++` work** instead of being silently ignored.
 - **codemode stops an awaiting loop** (`while (true) await null`) at the same interrupt points as a
   synchronous loop.
+- **The `kimi-coding` login entry points at `https://api.kimi.com/coding/v1`**, matching the base
+  URL the model catalog uses.
+- **`keybindings.json` ignores its `$schema` reference** instead of treating it as an action entry.
 
 ## 中文
 
@@ -63,6 +86,19 @@ This release aligns prux with upstream pi 1.3.0.
 
 ### 新增
 
+- **`/share` 的上传目标可配置**：`settings.json` 新增 `sessionShareDestination`（`auto` / `gist` /
+  `radius`），在 `/settings` 里可切换。`auto` 与 `gist` 建私密 gist；本版没有 Radius 上传，
+  `radius` 直接给出明确报错，而不是静默降级成 gist。
+- **设 `PRUX_CLIPBOARD_OSC52=1` 时追加一次 OSC 52**：本地剪贴板写入成功后仍会向终端发一次，
+  让多路复用 attach、远端 IDE daemon 这类不带 SSH 标记的客户端也能拿到复制内容。
+- **OpenRouter 目录按 key 定制**：持凭据刷新时改打 `GET /models/user`，只保留该 key 可用的 chat
+  模型，并用该 key 的上下文长度、最大输出与价格覆盖目录。
+- **启动时校验主题文件**：缺必需颜色 token、含未知键或越界色号的主题会逐条报出完整原因，
+  而不是静默回退内置默认。
+- **codemode 声明会标注类型表达不了的约束**：带界限、`pattern`、`format`、长度/数量限制、
+  `uniqueItems`、非 null `default` 或 `deprecated` 的属性会多出一行
+  `// @integer @minimum 0 @maximum 30000 @default 0` 注释。同时成立的界限会合并（取最紧的那个），
+  可空的 `anyOf` / `oneOf` 取其非 null 分支，超预算时先去掉标签再降级为 `unknown`。
 - **模型目录刷新**（来自 pi-ai 1.3.0）：新增 102 个模型、移除 40 个，涉及 `github-copilot`、
   `google`、`huggingface`、`meta`、`nvidia`、`opencode`、`opencode-go`、`openrouter`、
   `vercel-ai-gateway`。OpenCode Zen / Go 改用 `opencode.ai/inference` 端点；`kimi-coding`
@@ -74,6 +110,9 @@ This release aligns prux with upstream pi 1.3.0.
 
 ### 变更
 
+- **`read` 的行范围标签统一为 `:start-end`**：对话区与 HTML 导出都按这个形状显示（与 session
+  视图一致）。数字字符串与 `null` 也能解析，`offset: "5"` 不再什么都不显示；`read` 的
+  `offset` 文档改为 1 起。
 - **切换模型不再把上一个模型的推理喂给新模型**：其它 provider / API / 模型产生的 thinking 块被丢弃，
   而不是当普通文本发出去，新模型不会再把他人的推理当成自己回答的一部分。
 - **codemode 的工具描述**改为说明「声明了 output schema 的工具失败时返回自己的值」，
@@ -104,3 +143,5 @@ This release aligns prux with upstream pi 1.3.0.
   `timeout_ms` 从不生效。
 - **键位 `+` 与 `ctrl++` 可用**，不再被静默忽略。
 - **codemode 能停下 await 循环**（`while (true) await null`），与同步死循环在同一批中断点生效。
+- **`kimi-coding` 的登录条目指向 `https://api.kimi.com/coding/v1`**，与模型目录用的 base URL 一致。
+- **`keybindings.json` 忽略 `$schema` 引用**，不再把它当成一个动作条目。

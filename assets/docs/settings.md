@@ -65,6 +65,7 @@ prux 只有全局一个配置入口，项目级 `.prux/settings.json` 用于覆�
 | `steeringMode` | string | `"one-at-a-time"` | 流式时发送 steering 消息：`"one-at-a-time"`（发一条等回应）或 `"all"`（一次全发）（`/settings` → Steering mode） |
 | `followUpMode` | string | `"one-at-a-time"` | 排队 follow-up 消息的发送方式：同上（`/settings` → Follow-up mode） |
 | `exposeSessionEnvironment` | boolean | `true` | 向 shell 工具环境注入会话变量：`PRUX_SESSION_ID`、`PRUX_SESSION_FILE`、`PRUX_PROVIDER`、`PRUX_MODEL`、`PRUX_REASONING_LEVEL`（`/settings` → Expose session env） |
+| `sessionShareDestination` | string | `"auto"` | `/share` 把会话传到哪里：`"auto"` / `"gist"` 建一个私密 gist（`"auto"` 是“有 Radius 凭据就走 Radius、否则 gist”，本版没有 Radius 上传，两者等价），`"radius"` 只走 Radius 并在分享时报错；非法取值按 `"auto"` 处理（`/settings` → Session share destination） |
 
 ### 上下文压缩
 
@@ -194,6 +195,7 @@ prux 只有全局一个配置入口，项目级 `.prux/settings.json` 用于覆�
   "temperature": 0.7,
   "steeringMode": "one-at-a-time",
   "followUpMode": "one-at-a-time",
+  "sessionShareDestination": "auto",
   "exposeSessionEnvironment": true,
   "autoCompact": true,
   "compactReserveTokens": 16384,

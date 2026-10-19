@@ -520,61 +520,74 @@ async fn dispatch_system_prompt(agent: &Arc<Mutex<Agent>>) -> Option<RoundFuture
     None
 }
 
-/// 处理 AgentCommand::Share。
+/// 处理 AgentCommand::Share：把当前会话导出成 HTML，按 `sessionShareDestination`
+/// 决定上传目标（`auto` / `gist` 建私密 gist；`radius` 未实现，直接报错）。
 async fn dispatch_share(agent: &Arc<Mutex<Agent>>, theme: Option<String>) -> Option<RoundFuture> {
+    // 不持 agent 锁读配置：配置缓存内部有自己的锁，避免与持锁顺序反向
+    let destination = settings_manager::read_settings_session_share_destination();
     let a = agent.lock().await;
     let session = a.session.clone();
     let msg = match session {
-        Some(session) => {
-            let tmp = tempfile::Builder::new()
-                .prefix(&format!("{APP_NAME}-share-"))
-                .suffix(".html")
-                .tempfile()
-                .ok();
-            match tmp {
-                Some(tmp) => {
-                    let path = tmp.path().to_string_lossy().to_string();
-                    let session_file = session
-                        .get_session_file()
-                        .map(|p| p.to_string_lossy().to_string())
-                        .unwrap_or_default();
-
-                    match core::export_html::export_session_extra(
-                        &session,
-                        Some(&path),
-                        theme.as_deref(),
-                        Some(serde_json::json!({ "sessionFile": session_file })),
-                    ) {
-                        Ok(_) => {
-                            // 直走 gh gist 私密上传
-                            let out = std::process::Command::new("gh")
-                                .args(["gist", "create", "--public=false", &path])
-                                .output();
-
-                            match out {
-                                Ok(o) if o.status.success() => format!(
-                                    "shared via gist: {}",
-                                    String::from_utf8_lossy(&o.stdout).trim()
-                                ),
-                                Ok(o) => format!(
-                                    "share failed: {}",
-                                    String::from_utf8_lossy(&o.stderr).trim()
-                                ),
-                                Err(e) => format!("share failed: {}", e),
-                            }
-                        }
-                        Err(e) => format!("share failed: {}", e),
-                    }
-                }
-                None => "share failed: could not create temp file".to_string(),
+        Some(session) => match destination {
+            settings_manager::SessionShareDestination::Radius => {
+                "share failed: Radius upload is not supported; set sessionShareDestination to \"auto\" or \"gist\""
+                    .to_string()
             }
-        }
+            // prux 没有 Radius provider，`auto` 与 `gist` 同样走 gist
+            settings_manager::SessionShareDestination::Auto
+            | settings_manager::SessionShareDestination::Gist => {
+                share_via_gist(&session, theme.as_deref())
+            }
+        },
         None => "share failed: no current session".to_string(),
     };
 
     let ok = !msg.starts_with("share failed");
     _ = run_in_event_loop(move |ui| ui.on_share_done(ok, msg));
     None
+}
+
+/// 导出会话 HTML 并用 `gh gist create --public=false` 上传，返回给聊天区的回执文本。
+fn share_via_gist(session: &Session, theme: Option<&str>) -> String {
+    let Ok(tmp) = tempfile::Builder::new()
+        .prefix(&format!("{APP_NAME}-share-"))
+        .suffix(".html")
+        .tempfile()
+    else {
+        return "share failed: could not create temp file".to_string();
+    };
+
+    let path = tmp.path().to_string_lossy().to_string();
+    let session_file = session
+        .get_session_file()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    if let Err(e) = core::export_html::export_session_extra(
+        session,
+        Some(&path),
+        theme,
+        Some(serde_json::json!({ "sessionFile": session_file })),
+    ) {
+        return format!("share failed: {e}");
+    }
+
+    match std::process::Command::new("gh")
+        .args(["gist", "create", "--public=false", &path])
+        .output()
+    {
+        Ok(o) if o.status.success() => {
+            format!(
+                "shared via gist: {}",
+                String::from_utf8_lossy(&o.stdout).trim()
+            )
+        }
+        Ok(o) => format!(
+            "share failed: {}",
+            String::from_utf8_lossy(&o.stderr).trim()
+        ),
+        Err(e) => format!("share failed: {e}"),
+    }
 }
 
 /// 处理 AgentCommand::BugReport：可选模型摘要 → 脱敏元数据 + 诊断 → 写 zip →
