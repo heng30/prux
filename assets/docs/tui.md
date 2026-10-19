@@ -70,7 +70,7 @@ prux 以全屏终端界面（TUI）运行，用于读写会话、执行斜杠命
 | `hotkeys` | 打印键位绑定摘要 |
 | `thinking [level]` | 设置思考级别（无参数打开面板；级别：off/minimal/low/medium/high/xhigh/max） |
 | `session [index]` | 显示当前会话信息，或按序号切换会话 |
-| `changelog` | 显示当前版本的更新日志（编译期内嵌，非会话内容） |
+| `changelog` | 显示当前版本的更新日志（编译期内嵌的 Markdown，按 Markdown 渲染；非会话内容） |
 | `resume` | 打开会话选择器（面板） |
 | `history [term]` | 打开 prompt 历史搜索面板（实时过滤；`@clear` / `@clear-all` 删除历史） |
 | `tree` | 显示会话树（只读文本视图，无交互式导航） |

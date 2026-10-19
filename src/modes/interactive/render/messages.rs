@@ -275,6 +275,35 @@ fn format_tool_duration(ms: u64) -> String {
     format!("{}h {}m {remainder}s", minutes / 60, minutes % 60)
 }
 
+/// 渲染一条系统消息：`markdown` 为 true 时把片段拼出的文本交给聊天区 Markdown 渲染器
+/// （标题/列表/代码块/链接），否则走纯文本 + 逐段配色。
+/// 两者的可用内容宽度口径一致（总宽 - 2，不额外缩进）。
+pub(crate) fn render_sys_msg(msg: &SysMsg, width: usize, theme: &Theme) -> Vec<Line<'static>> {
+    if msg.markdown {
+        render_sys_markdown(&sys_spans_text(&msg.spans), width, theme)
+    } else {
+        render_sys_message(&msg.spans, msg.level, width, theme)
+    }
+}
+
+/// 以 Markdown 渲染系统消息正文：走与普通 LLM 正文完全相同的渲染流程
+/// （正文用终端默认前景色，标题/列表/链接/代码块各取主题色，代码块走语法高亮），
+/// 不按消息级别上色（`level` 不参与配色）。宽度为总宽 - 2，出口补块尾空行。
+fn render_sys_markdown(text: &str, width: usize, theme: &Theme) -> Vec<Line<'static>> {
+    if text.trim().is_empty() {
+        return Vec::new();
+    }
+
+    let out_w = width.saturating_sub(2);
+    if out_w == 0 {
+        return Vec::new();
+    }
+
+    let mut out = render_markdown_styled(text, out_w, theme, Style::default());
+    push_blank_gap(&mut out);
+    out
+}
+
 /// 渲染系统消息：保留 \n 换行 + 按段配色 + 超宽自动换行（对齐 pi Text 组件）。
 /// 颜色解析：级别决定默认色（info→灰、success→绿、warning→黄、error→红，后两者加粗）；
 /// `fg` 为主题键或 hex 时覆盖级别默认色（如 /session 富文本的自定义分段配色），None 时用级别默认色。
@@ -2581,7 +2610,7 @@ pub(crate) fn render_timeline_item(
             images,
             layout,
         ),
-        TimelineRef::Sys(s) => render_sys_message(&s.spans, s.level, width, theme),
+        TimelineRef::Sys(s) => render_sys_msg(s, width, theme),
     };
     // 链接区域在**最终行**上扫描：块内缩进/折叠/裁剪都已定型，列不会再平移。
     links.extend(collect_link_spans(&lines, theme));
@@ -3561,7 +3590,7 @@ mod tests {
                     &std::collections::HashMap::new(),
                     &edit_map,
                 ),
-                ItemRef::Sys(s) => render_sys_message(&s.spans, s.level, width, theme),
+                ItemRef::Sys(s) => render_sys_msg(s, width, theme),
             };
             if lines.is_empty() {
                 continue;
@@ -4661,6 +4690,72 @@ mod tests {
             "内容尾部折叠+块尾间隔空行: {:?}",
             t
         );
+    }
+
+    #[test]
+    fn markdown_system_message_renders_markdown() {
+        // markdown 模式：标题/粗体/列表按 Markdown 渲染，星号标记不落到屏幕上
+        let msg = SysMsg::markdown(
+            MsgLevel::Info,
+            "## Title\n\nSome **bold** text.\n\n- one\n- two",
+        );
+        let lines = render_sys_msg(&msg, 60, &theme());
+        let t = t(&lines);
+        assert!(t.contains(&"Some bold text.".to_string()), "{:?}", t);
+        assert!(
+            t.iter().any(|l| l.contains("one") && l.contains('-')),
+            "列表应带 bullet: {:?}",
+            t
+        );
+        assert!(
+            !t.iter().any(|l| l.contains("**")),
+            "粗体标记不应原样输出: {:?}",
+            t
+        );
+    }
+
+    #[test]
+    fn markdown_system_message_uses_normal_text_colors() {
+        // /changelog：按普通 LLM 正文的流程渲染——正文是终端默认前景（不套 Info 的 dim 灰），
+        // 标题取主题色，代码块走语法高亮
+        let th = theme();
+        let msg = SysMsg::markdown(
+            MsgLevel::Info,
+            "## Title\n\nplain body\n\n```rust\nfn main() {}\n```",
+        );
+        let lines = render_sys_msg(&msg, 60, &th);
+        let find = |s: &str| {
+            lines
+                .iter()
+                .flat_map(|l| l.spans.iter())
+                .find(|sp| sp.content.as_ref() == s)
+                .unwrap_or_else(|| panic!("缺少片段 {s}: {:?}", t(&lines)))
+        };
+
+        // 段落文本折行时按词切成多个片段，取其中一个词断言
+        assert_eq!(
+            find("plain").style.fg,
+            None,
+            "正文应用终端默认前景，而非 Info 级别的 dim"
+        );
+        assert_eq!(
+            find("Title").style.fg,
+            th.style("mdHeading", "#f0c674").fg,
+            "标题仍取主题标题色"
+        );
+        assert_ne!(
+            find("main").style.fg,
+            th.style("mdCodeBlock", "#b5bd68").fg,
+            "代码块应经语法高亮着色，而非回退纯 codeBlock 色"
+        );
+    }
+
+    #[test]
+    fn plain_system_message_is_not_markdown() {
+        // 默认（非 markdown）路径：标记原样保留，逐段配色仍生效
+        let msg = SysMsg::plain(MsgLevel::Info, "a **b** c");
+        let lines = render_sys_msg(&msg, 60, &theme());
+        assert_eq!(t(&lines)[0], "a **b** c");
     }
 
     #[test]

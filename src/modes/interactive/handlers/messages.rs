@@ -32,6 +32,16 @@ impl App {
         self.follow_bottom_if_at_end();
         self.dirty = true;
     }
+    /// 向消息流追加一条 Markdown 系统消息（/changelog 等）。
+    /// 渲染时走聊天区同一套 Markdown 渲染流程（标题/列表/代码块/可点链接，代码块走语法高亮），
+    /// 颜色与普通 LLM 正文一致（不按 `level` 上色）；与其它系统消息一样不进 LLM 上下文。
+    pub fn push_msg_markdown(&mut self, text: String, level: MsgLevel) {
+        let ts = now_ms();
+        self.system_messages
+            .push((ts, SysMsg::markdown(level, &text)));
+        self.follow_bottom_if_at_end();
+        self.dirty = true;
+    }
     /// 按类别推送提示：最后一条系统消息以 `key` 开头时原地替换（时间戳不变，级别同步更新），
     /// 否则追加。用于循环切换类操作（thinking 级别 / 主题），避免连续切换产生多条同类提示堆积。
     pub fn push_msg_dedup(&mut self, text: String, key: &str, level: MsgLevel) {

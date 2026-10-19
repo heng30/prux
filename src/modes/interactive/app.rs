@@ -203,17 +203,35 @@ pub struct SysMsg {
     pub level: MsgLevel,
     /// 消息片段（每段可单独覆盖颜色/加粗）
     pub spans: Vec<SysSpan>,
+    /// true 时把 `spans` 拼接出的文本按 Markdown 渲染（标题/列表/代码块/链接），
+    /// 片段自身的配色与加粗被忽略；false 时按纯文本 + 逐段配色渲染。
+    pub markdown: bool,
 }
 
 impl SysMsg {
     /// 由级别与片段组装一条消息（片段可逐个覆盖级别默认色）。
     pub fn new(level: MsgLevel, spans: Vec<SysSpan>) -> Self {
-        SysMsg { level, spans }
+        SysMsg {
+            level,
+            spans,
+            markdown: false,
+        }
     }
 
     /// 单段纯文本消息
     pub fn plain(level: MsgLevel, text: &str) -> Self {
         SysMsg::new(level, vec![SysSpan::plain(text)])
+    }
+
+    /// 单段 Markdown 消息：渲染时走聊天气泡同一套 Markdown 渲染流程（含语法高亮），
+    /// 颜色按普通正文取（不按 `level` 配色，`level` 仅作记录）。
+    /// 只存入一个片段（不参与逐段配色），`fg`/`bold` 无意义。
+    pub fn markdown(level: MsgLevel, text: &str) -> Self {
+        SysMsg {
+            level,
+            spans: vec![SysSpan::plain(text)],
+            markdown: true,
+        }
     }
 }
 

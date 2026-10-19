@@ -34,3 +34,9 @@ clean:
 
 app-name:
 	echo "$(app-name)" > target/app-name
+
+publish:
+	cargo publish --allow-dirty
+
+publish-test:
+	cargo publish --dry-run --registry crates-io --allow-dirty

@@ -149,6 +149,9 @@ This release aligns prux with upstream pi 1.1.0.
 
 ### Changed
 
+- **`/changelog` renders its embedded Markdown**: headings, lists, bold text, code blocks and
+  links now go through the same renderer the transcript uses instead of printing the Markdown
+  source, and links in it are clickable.
 - **Output limits are clamped to the context window.** Before a request is sent, `max_tokens` is
   capped at `context window − estimated context − 4096`, so requests that would exceed the window
   are no longer rejected outright. Estimation uses tiktoken BPE counts and includes the system
@@ -179,6 +182,10 @@ This release aligns prux with upstream pi 1.1.0.
 
 ### Fixed
 
+- Markdown no longer drops blank lines around lists, and a block quote no longer swallows the
+  rest of the document: a quoted paragraph used to leave every following block inside the quote's
+  gutter, and blank lines between a list and the blocks around it were removed. Both are visible
+  in any rendered Markdown, including `/changelog`.
 - `server_busy` / `servers are currently busy` provider errors are retried instead of ending the turn.
 - A cancelled or superseded OAuth refresh no longer discards the rotated refresh token.
 - Text selection is reset when switching sessions, forking, or rewinding, so stale selections no
@@ -326,6 +333,8 @@ This release aligns prux with upstream pi 1.1.0.
 
 ### 变更
 
+- **`/changelog` 的内嵌 Markdown 按 Markdown 渲染**：标题、列表、粗体、代码块与链接走消息区同一套
+  渲染器，不再输出 Markdown 源码，其中的链接可点击。
 - **输出上限按上下文窗口钳制**：请求发出前，`max_tokens` 会被压到
   「上下文窗口 − 已用上下文 − 4096 安全余量」以内，超窗请求不再被供应商直接拒绝。
   估算走 tiktoken BPE 真实计数，并计入系统提示与工具声明。
@@ -351,6 +360,9 @@ This release aligns prux with upstream pi 1.1.0.
 
 ### 修复
 
+- **Markdown 不再丢掉列表前后的空行，引用块也不再吞掉后续内容**：引用段落会把其后所有块
+  一起框进 `│ ` 边框，列表与其上下块之间的空行会被删除。任何 Markdown 渲染（包括 `/changelog`）
+  都可见到这个差异。
 - `server_busy` / `servers are currently busy` 这类供应商瞬时错误现在会重试，而不是直接结束回合。
 - OAuth 刷新被取消或被替代时，不再丢掉轮转后的 refresh token。
 - 切换会话、分支、回退时重置文本选择，旧选区不再命中无关文本。

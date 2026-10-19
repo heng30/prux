@@ -1,7 +1,7 @@
 //! Markdown 渲染规则
 //!
-//! - heading：`# ` 前缀，h1 加粗+下划线，h>=2 加粗，h>=3 前缀同色；块后空行（除非后随列表/空行）
-//! - paragraph：块后空行（除非后随列表/空行）
+//! - heading：`# ` 前缀，h1 加粗+下划线，h>=2 加粗，h>=3 前缀同色；块后空行
+//! - paragraph：块后空行
 //! - code block：```lang 边框行（codeBlockBorder）+ 2 空格缩进内容（codeBlock）+ ```；
 //!   流式未闭合围栏的最后一行若为部分围栏则修剪
 //! - list：4 空格×depth 缩进，`- `/`N. ` marker（listBullet），task `[x] `，嵌套递归
@@ -51,25 +51,6 @@ const MD_HR: (&str, &str) = ("mdHr", "#808080");
 const MD_LIST_BULLET: (&str, &str) = ("mdListBullet", "#8abeb7");
 /// 公式（行内 `$...$` / 块级 `$$...$$`）渲染结果的前景色：沿用代码块色 `mdCodeBlock`。
 const MD_MATH: (&str, &str) = ("mdCodeBlock", "#b5bd68");
-
-/// 已解析块的大类，仅用于决定相邻块之间是否插入空行。
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum BlockKind {
-    /// 标题块（`#` 前缀），h1 加粗带下划线。
-    Heading,
-    /// 普通段落块。
-    Paragraph,
-    /// 围栏代码块（含 mermaid 图）。
-    Code,
-    /// 有序/无序列表块。
-    List,
-    /// 引用块。
-    Quote,
-    /// GFM 表格块。
-    Table,
-    /// 水平分隔线块（`---`）。
-    Rule,
-}
 
 /// 渲染结果行：`Wrap` 需词级折行，`Fixed` 已格式化（列表/引用/表格行）不再折行，`Code` 代码行折行时保留行首缩进
 enum OutLine {
@@ -454,21 +435,19 @@ impl MdRenderer<'_> {
         base: Style,
     ) -> Vec<OutLine> {
         let mut out: Vec<OutLine> = Vec::new();
-        let mut last: Option<BlockKind> = None;
 
         while let Some(ev) = src.next_event() {
-            let (lines, kind) = match ev {
+            let lines: Vec<OutLine> = match ev {
                 Event::Start(Tag::Heading { level, .. }) => self.render_heading(src, *level),
                 Event::Start(Tag::Paragraph) => {
                     let spans = self.collect_inline(src, base);
-                    (vec![OutLine::Wrap(spans)], BlockKind::Paragraph)
+                    vec![OutLine::Wrap(spans)]
                 }
                 Event::Start(Tag::CodeBlock(kind)) => {
                     match self.render_code_block(src, kind.clone()) {
-                        CodeBlockOutcome::Done(lines) => (lines, BlockKind::Code),
+                        CodeBlockOutcome::Done(lines) => lines,
                         CodeBlockOutcome::Mermaid(lines) => {
                             out.extend(lines);
-                            last = Some(BlockKind::Code);
                             continue;
                         }
                     }
@@ -478,52 +457,39 @@ impl MdRenderer<'_> {
                         Some(n) => (true, *n),
                         None => (false, 1),
                     };
-                    (
-                        self.render_list(src, width, depth, ordered, start_num, base),
-                        BlockKind::List,
-                    )
+                    self.render_list(src, width, depth, ordered, start_num, base)
                 }
                 Event::Start(Tag::BlockQuote(_)) => self.render_blockquote(src, width, depth, base),
+                // 引用块结束：内层 render_blocks 必须在此停下，否则会把其后整篇文档
+                // 都当成引用正文渲染（嵌套引用由内层递归先消费自己的 End）。
+                Event::End(TagEnd::BlockQuote(_)) => break,
                 Event::Start(Tag::Table(_)) => {
                     let (header, rows) = self.collect_table(src, base);
-                    (self.render_table(&header, &rows, base), BlockKind::Table)
+                    self.render_table(&header, &rows, base)
                 }
                 Event::Rule => {
                     let style = self.style(MD_HR);
-                    (
-                        vec![OutLine::Wrap(vec![Span::styled(
-                            "─".repeat(width.min(80)),
-                            style,
-                        )])],
-                        BlockKind::Rule,
-                    )
+                    vec![OutLine::Wrap(vec![Span::styled(
+                        "─".repeat(width.min(80)),
+                        style,
+                    )])]
                 }
                 Event::Text(t) => {
                     let text = t.to_string();
                     if text.trim().is_empty() {
                         continue;
                     }
-                    (
-                        vec![OutLine::Wrap(vec![Span::styled(text, base)])],
-                        BlockKind::Paragraph,
-                    )
+                    vec![OutLine::Wrap(vec![Span::styled(text, base)])]
                 }
-                Event::SoftBreak => (
-                    vec![OutLine::Wrap(vec![Span::styled("\n", Style::default())])],
-                    BlockKind::Paragraph,
-                ),
+                Event::SoftBreak => vec![OutLine::Wrap(vec![Span::styled("\n", Style::default())])],
                 _ => continue,
             };
 
-            // 块间空行：除非前后为列表
-            if let Some(prev) = last
-                && prev != BlockKind::List
-                && kind != BlockKind::List
-                && !out.is_empty()
-            {
+            // 块间空行：每个块之间都补一行间隔（列表也是块，不豁免），
+            // 与源文档的「段落/列表/标题之间空一行」一致。
+            if !out.is_empty() {
                 out.push(OutLine::Fixed(vec![Span::raw("")]));
             }
-            last = Some(kind);
             out.extend(lines);
         }
         out
@@ -534,7 +500,7 @@ impl MdRenderer<'_> {
         &self,
         src: &mut dyn EventSource<'a>,
         level: HeadingLevel,
-    ) -> (Vec<OutLine>, BlockKind) {
+    ) -> Vec<OutLine> {
         let mut style = self.style(MD_HEADING);
         let level: usize = match level {
             HeadingLevel::H1 => 1,
@@ -557,7 +523,7 @@ impl MdRenderer<'_> {
             line.push(Span::raw(prefix));
         }
         line.extend(self.collect_inline(src, style));
-        (vec![OutLine::Wrap(line)], BlockKind::Heading)
+        vec![OutLine::Wrap(line)]
     }
 
     /// 渲染代码块：采集块体文本，mermaid 直接成行返回 `Mermaid`（跳过块间空行逻辑），
@@ -654,7 +620,7 @@ impl MdRenderer<'_> {
         width: usize,
         depth: usize,
         base: Style,
-    ) -> (Vec<OutLine>, BlockKind) {
+    ) -> Vec<OutLine> {
         let inner = self.render_blocks(src, width.saturating_sub(2).max(1), depth, base);
         let quote = self.style(MD_QUOTE).add_modifier(Modifier::ITALIC);
         let border = self.style(MD_QUOTE_BORDER);
@@ -679,7 +645,7 @@ impl MdRenderer<'_> {
                 }
             }
         }
-        (lines, BlockKind::Quote)
+        lines
     }
 
     /// 收集行内事件直到 `end` 事件。style 为当前累积样式。
@@ -1658,6 +1624,50 @@ mod tests {
         let lines = render_markdown("$x^2", 60, &theme());
         let t = text_of(&lines);
         assert!(t[0].contains("$x^2"), "未闭合公式应原样显示: {:?}", t);
+    }
+
+    #[test]
+    fn blockquote_ends_before_following_blocks() {
+        // 回归：引用块必须在内层 End(BlockQuote) 处收尾，否则其后整篇文档都会被
+        // 当成引用正文渲染（迁移文档里表现为整篇加 `│ ` 边框）
+        let lines = render_markdown("> quoted\n\nafter quote\n\n## heading", 40, &theme());
+        let t = text_of(&lines);
+        assert!(t[0].starts_with("│ "), "{:?}", t);
+        assert!(
+            t.iter().any(|l| l == "after quote"),
+            "引用之后的段落不应带边框: {:?}",
+            t
+        );
+        assert!(
+            t.iter()
+                .any(|l| l.contains("## heading") && !l.starts_with("│ ")),
+            "引用之后的标题不应带边框: {:?}",
+            t
+        );
+    }
+
+    #[test]
+    fn blank_lines_separate_lists_from_surrounding_blocks() {
+        // 回归：列表前后也要补块间空行（曾对列表豁免，渲染后标题/段落与列表紧贴）
+        let lines = render_markdown("## H\n\n- a\n- b\n\nP", 40, &theme());
+        let t = text_of(&lines);
+        let idx_h = t.iter().position(|l| l.contains("## H")).unwrap();
+        let idx_list = t
+            .iter()
+            .position(|l| l.trim_start().starts_with("- a"))
+            .unwrap();
+        let idx_p = t.iter().position(|l| l == "P").unwrap();
+        assert!(
+            t[idx_h + 1].trim().is_empty(),
+            "标题与列表之间应有空行: {:?}",
+            t
+        );
+        assert!(
+            t[idx_list + 2].trim().is_empty(),
+            "列表与段落之间应有空行: {:?}",
+            t
+        );
+        assert!(idx_p > idx_list, "{:?}", t);
     }
 
     #[test]

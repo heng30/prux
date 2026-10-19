@@ -168,6 +168,9 @@ struct HighlightDone {
     snap_id: u64,
     /// 快照时的消息条数，提交前校验列表未变化。
     msg_len: usize,
+    /// 快照时的系统消息条数；后台补高亮期间新推的系统提示（如 /changelog 的代码块）
+    /// 是按 Fast（无高亮）渲染并入缓存的，必须一并校验，否则它永远不会被重渲染成高亮版。
+    sys_len: usize,
     /// 渲染使用的终端列宽。
     width: usize,
     /// 快照时是否展开全部块（提交前校验）。
@@ -897,6 +900,7 @@ fn maybe_start_backlog_highlight(shared: &Rc<RefCell<App>>) {
     if let Some((snap_id, snap)) = hl_snapshot {
         let done = HighlightDone {
             msg_len: snap.msgs.len(),
+            sys_len: snap.sys.len(),
             width: snap.width,
             expand_all: snap.expand_all,
             show_thinking: snap.show_thinking,
@@ -912,6 +916,7 @@ fn maybe_start_backlog_highlight(shared: &Rc<RefCell<App>>) {
                     ui,
                     HighlightDone {
                         msg_len: done.msg_len,
+                        sys_len: done.sys_len,
                         width: done.width,
                         expand_all: done.expand_all,
                         show_thinking: done.show_thinking,
@@ -958,14 +963,15 @@ fn render_tick(
 
 /// 处理后台补高亮结果：只接受最新快照的结果（切换会话/重新快照后，旧线程结果
 /// 直接丢弃、不触碰任何状态，避免误清 highlight_started 或过早恢复高亮打断
-/// /resume 后的 Fast 渲染）；再校验指纹（消息数/宽度/参数），期间变化则丢弃结果，并在下一帧重新快照。
+/// /resume 后的 Fast 渲染）；再校验指纹（消息数/系统消息数/宽度/参数），期间变化则丢弃结果，并在下一帧重新快照。
 fn on_highlight_done(st: &mut App, done: HighlightDone) {
     if done.snap_id != st.highlight_snap_id {
         return;
     }
 
-    // 再校验指纹（消息数/宽度/参数）
+    // 再校验指纹（消息数/系统消息数/宽度/参数）
     let ok = st.messages.len() == done.msg_len
+        && st.system_messages.len() == done.sys_len
         && st.cache_width == done.width
         && st.cache_expand_all == done.expand_all
         && st.cache_show_thinking == done.show_thinking

@@ -18,7 +18,7 @@ use crate::{
     extensions::skills::bundled_skill_names,
     modes::interactive::{
         agent_actor::AgentCommand,
-        app::{App, MsgLevel, SysSpan, WorkingKind},
+        app::{App, MsgLevel, WorkingKind},
         giff::{self, GiffView},
         theme::{Theme, available_theme_names},
     },
@@ -816,18 +816,16 @@ impl App {
     /// /changelog：显示当前版本的更新日志。
     ///
     /// 内容为编译期内嵌的 Markdown（`assets/changelog/v.<version>.md`，见
-    /// [`crate::core::changelog`]），不进入 LLM 上下文，因此按系统消息展示
-    /// （与 /hotkeys 一致）；标题段用 accent 加粗，正文为默认系统色。
+    /// [`crate::core::changelog`]），与标题一起作为 Markdown 系统消息展示
+    /// （标题/列表/代码块/链接均按 Markdown 渲染，配色与代码高亮同普通正文）；
+    /// 不进入 LLM 上下文。
     fn cmd_changelog(&mut self) {
-        self.push_msg_rich(
-            vec![
-                SysSpan {
-                    fg: Some("accent".to_string()),
-                    bold: true,
-                    text: format!("What's New in v{}?\n\n", env!("CARGO_PKG_VERSION")),
-                },
-                SysSpan::plain(CHANGELOG),
-            ],
+        self.push_msg_markdown(
+            format!(
+                "# What's New in v{}?\n\n{}",
+                env!("CARGO_PKG_VERSION"),
+                CHANGELOG
+            ),
             MsgLevel::Info,
         );
     }
@@ -1845,6 +1843,13 @@ mod tests {
         assert!(
             text.contains(crate::core::changelog::CHANGELOG.trim()),
             "got: {text}"
+        );
+        assert!(
+            st.system_messages
+                .last()
+                .map(|(_, m)| m.markdown)
+                .unwrap_or(false),
+            "changelog 应按 Markdown 渲染"
         );
         assert!(st.messages.is_empty(), "changelog 不应进入 LLM 上下文");
     }
