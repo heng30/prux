@@ -610,7 +610,8 @@ provider 的 `api` 由目录条目决定，无需代码改动。
 - [x] （可选）read 行范围标签统一口径（1.16）
 - [x] （可选）`sessionShareDestination`（2.1）
 - [x] （可选）`PRUX_CLIPBOARD_OSC52`（2.2）
-- [x] （可选）配置 `$schema` 与启动期校验（2.3，主题 `vars` 已支持）
+- [x] （可选）配置 `$schema` 与启动期校验（2.3：主题校验 + `settings.json` 写盘补 `$schema`，
+  打包主题改指 `https://pi.dev/schemas/theme.schema.json`；`models.json` / `keybindings.json` 不由 prux 创建）
 - [x] （可选）OpenRouter `/models/user` 定制目录（2.4）
 - [x] （可选）codemode 声明约束 `@` 标签（2.5）
 - [x] 🚫 不实现项记录在案：`strict`（1.5）、`supportsMidConvoEffort`（2.9）、
@@ -674,7 +675,7 @@ provider 的 `api` 由目录条目决定，无需代码改动。
 | 2.1 | `sessionShareDestination` | `core/settings_manager.rs`（`SessionShareDestination` + 读写）、`settings_selector.rs`、`handlers/settings.rs`、`worker.rs`（`dispatch_share` / `share_via_gist`） | `session_share_destination_roundtrip_and_defaults`、`settings_list_matches_pi_order_and_skips_unsupported` |
 | 1.16 | read 行范围标签 | `core/tools/read.rs::format_line_range`（含 `parse_line_number` / `format_line_number`）、`render/messages.rs` 调用头、`assets/export-html/template.js`（`parseLineNumber` / `formatReadLineRange`） | `line_range_tag_follows_pi_format`、`read_call_header_shows_line_range_and_others_keep_limit` |
 | 2.4 | OpenRouter `/models/user` | `core/model_refresh.rs`：`personalize_catalog` / `fetch_open_router_user_models` / `personalize_open_router_catalog` / `apply_open_router_limits` / `open_router_cost`（+ `OPENROUTER_BASE_URL` 与超时常量） | `open_router_personalization_filters_and_overrides`、`…_keeps_catalog_values_on_missing_limits`、`open_router_cost_converts_prices_and_tiers`、`…_rejects_invalid_body` |
-| 2.3 | `$schema` 与启动期校验 | `modes/interactive/theme.rs`：`validate_theme_json`、`theme_load_warnings`、`theme_dirs` / `expand_theme_path`（`available_theme_names` 复用）、`Theme::load` 跳过非法文件；`interactive.rs` 启动警告；`core/keybindings.rs` 忽略 `$schema` | `packaged_themes_pass_validation`、`theme_validation_reports_missing_tokens_and_bad_values`、`invalid_theme_file_is_skipped_and_reported`、`user_config_ignores_schema_reference` |
+| 2.3 | `$schema` 与启动期校验 | `modes/interactive/theme.rs`：`validate_theme_json`、`theme_load_warnings`、`theme_dirs` / `expand_theme_path`（`available_theme_names` 复用）、`Theme::load` 跳过非法文件；`interactive.rs` 启动警告；`core/keybindings.rs` 忽略 `$schema`；`core/settings_manager.rs`：`SETTINGS_SCHEMA_URL` + `ensure_settings_schema`（每次写盘补 `$schema`，已有值不覆写）；`assets/themes/*.json` 的 `$schema` 改指 `https://pi.dev/schemas/theme.schema.json`；`assets/docs/{settings,models,keybindings}.md` 说明该字段 | `packaged_themes_pass_validation`、`theme_validation_reports_missing_tokens_and_bad_values`、`invalid_theme_file_is_skipped_and_reported`、`user_config_ignores_schema_reference`、`writes_schema_reference_and_keeps_user_value` |
 | 2.5 | codemode `@` 约束标签 | `extensions/codemode/declarations.rs`：`TAG_KEYWORDS` / `LOWER_BOUNDS` / `UPPER_BOUNDS` / `MAX_TAG_CHARS`、`constraint_tags`、`escape_line_terminators`；`SchemaContext.tags`；`schema_to_type` 超预算时先去标签再退 `unknown` | `puts_constraints_the_type_cannot_express_on_comment_lines`、`reads_constraints_of_optional_fields_from_the_non_null_branch`、`reads_draft04_boolean_exclusive_bounds`、`leaves_out_long_tags_and_escapes_line_terminators`、`drops_constraint_tags_before_rendering_over_the_budget_as_unknown` |
 
 **行为口径变化（升级后用户可见）**：
@@ -691,3 +692,6 @@ provider 的 `api` 由目录条目决定，无需代码改动。
 - codemode 声明里，带 constraints / `default` / `deprecated` 的属性现在会多出一行 `// @...` 注释，
   模型能看到 `@integer`、`@minimum` / `@maximum`、`@pattern`、`@format`、长度/数量界限、
   `@uniqueItems`、`@default`、`@deprecated`；声明因此变长，超预算时先去掉标签再降级为 `unknown`。
+- `settings.json` 每次写盘都会补上 `$schema`（`https://pi.dev/schemas/settings.schema.json`），
+  已有该键时保持原值；prux 自身不读取它，读取侧各设置项照旧按具体键取值。
+  `models.json` / `keybindings.json` 不由 prux 创建，只在文档示例与键位解析（忽略该键）里涉及。

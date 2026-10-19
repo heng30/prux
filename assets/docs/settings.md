@@ -10,6 +10,8 @@ prux 的配置是单个 JSON 文件。
 
 手动编辑 `settings.json` 后：`/reload` 会重读键位、扩展、技能、提示模板、主题、上下文文件，以及 `hideThinkingBlock`、`autocompleteMaxVisible`、`fullscreenWheelScrollLines`、`historyMaxEntries` 四项设置；其余设置在启动或每回合读取，修改需重启 prux。带 BOM 的 JSON 可正常解析；文件损坏时启动会打印警告（不会静默忽略），且不会静默回写覆盖：读取会回退到最近一次成功读取的配置，并尽力从损坏原文恢复完整的顶层键值对（破坏点之后残缺的条目除外）；交互模式下首次写盘会弹确认窗，选择 `Overwrite` 则以「已恢复的配置 + 本次改动」重写（不会只剩本次改动的键），选择 `Cancel` 则保留原文件、不写入；非交互模式则直接拒绝覆写并报错。修复或删除损坏文件后写入即恢复（删除视为重置），未知/新增键在写入时原样保留。
 
+写盘时 prux 会在文件顶部保留 `$schema` 字段（`https://pi.dev/schemas/settings.schema.json`），只供编辑器做补全与校验；prux 自身不读取该键，删掉后下次写盘会补回，改成别的值则保持不改。
+
 ## 项目级设置与信任
 
 prux 只有全局一个配置入口，项目级 `.prux/settings.json` 用于覆盖 `defaultTools` 与扩展启停（`disabledExtensions` / `enabledExtensions`，见 [extensions.md](extensions.md)），不参与其它设置的合并。

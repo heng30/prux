@@ -9,6 +9,7 @@
 
 ```json
 {
+  "$schema": "https://pi.dev/schemas/models.schema.json",
   "providers": {
     "my-ollama": {
       "baseUrl": "http://localhost:11434/v1",
@@ -22,6 +23,8 @@
   }
 }
 ```
+
+顶部的 `$schema` 只供编辑器补全与校验，可选，不写也能正常加载。
 
 文件每次使用实时读取：打开 `/model` 或重新发起请求即生效，无需重启。
 

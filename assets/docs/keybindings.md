@@ -6,6 +6,8 @@
 
 - Linux/macOS：`~/.prux/keybindings.json`（或 `$PRUX_AGENT_DIR/keybindings.json`）
 
+文件顶部的 `$schema` 只供编辑器补全与校验，可选；prux 解析时忽略它，不会把它当成键位声明。
+
 每个动作（action）可绑定一个或多个键。键 id 按命名空间分组（`tui.editor.*`、`tui.input.*`、`tui.select.*`、`app.*`）。修改配置后可用 `/reload` 即时生效（也重新注册扩展）。
 
 ## 键格式

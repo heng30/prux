@@ -79,6 +79,9 @@ This release aligns prux with upstream pi 1.3.0.
 - **The `kimi-coding` login entry points at `https://api.kimi.com/coding/v1`**, matching the base
   URL the model catalog uses.
 - **`keybindings.json` ignores its `$schema` reference** instead of treating it as an action entry.
+- **`settings.json` now carries a `$schema` reference** (`https://pi.dev/schemas/settings.schema.json`)
+  for editor completion and validation, and the packaged themes point their `$schema` at
+  `https://pi.dev/schemas/theme.schema.json`. prux never reads the key; a value you set yourself is kept.
 
 ## 中文
 
@@ -145,3 +148,6 @@ This release aligns prux with upstream pi 1.3.0.
 - **codemode 能停下 await 循环**（`while (true) await null`），与同步死循环在同一批中断点生效。
 - **`kimi-coding` 的登录条目指向 `https://api.kimi.com/coding/v1`**，与模型目录用的 base URL 一致。
 - **`keybindings.json` 忽略 `$schema` 引用**，不再把它当成一个动作条目。
+- **`settings.json` 会写入 `$schema` 引用**（`https://pi.dev/schemas/settings.schema.json`）供编辑器补全与校验，
+  内置主题的 `$schema` 也指向 `https://pi.dev/schemas/theme.schema.json`。prux 自身不读取该键，
+  你自己改过的值会保留。

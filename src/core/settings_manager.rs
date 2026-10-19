@@ -45,6 +45,10 @@ pub const COMPACT_KEEP_RECENT_TIERS: [u32; 5] = [8000, 12000, 20000, 40000, 8000
 /// `/settings` Temperature 的可选档位；`default` 表示删除该键、回落到模型自身的采样参数。
 pub const TEMPERATURE_TIERS: [&str; 6] = ["default", "0", "0.2", "0.5", "0.7", "1"];
 
+/// 写盘时补进 `settings.json` 的 `$schema` 引用：编辑器据此提供补全与校验，
+/// 自身不读取该键（读取侧各 `read_settings_*` 都按具体键取值）。
+pub const SETTINGS_SCHEMA_URL: &str = "https://pi.dev/schemas/settings.schema.json";
+
 /// settings.json 读写锁。锁作用域限定在 [`with_settings_read`] / [`with_settings_write`]
 /// 的闭包内；文件另有自己的缓存层（[`GLOBAL_SETTINGS_CACHE`] / [`PROJECT_SETTINGS_CACHE`]），
 /// 以 `(path, mtime, len)` 判定缓存有效性。写入口在写锁内完成整个读-改-写并回填缓存，
@@ -249,8 +253,15 @@ where
             .as_object_mut()
             .ok_or_else(|| Error::msg("settings.json is not an object"))?;
         f(obj);
+        ensure_settings_schema(obj);
         save_settings(v, path)
     })
+}
+
+/// 给待写对象补上 `$schema` 引用：已有该键即保留原位（不覆盖用户或编辑器写入的值）。
+fn ensure_settings_schema(obj: &mut serde_json::Map<String, Value>) {
+    obj.entry("$schema".to_string())
+        .or_insert_with(|| json!(SETTINGS_SCHEMA_URL));
 }
 
 /// 全局配置目录（agent 目录）：测试 override > `$PRUX_AGENT_DIR` > `~/.prux`。
@@ -2519,6 +2530,25 @@ mod tests {
             );
 
             let _ = std::fs::remove_file(&path);
+        });
+    }
+
+    /// 写盘补 `$schema` 引用供编辑器补全；用户已写入的值（例如改了 URL）不得被覆盖。
+    #[test]
+    fn writes_schema_reference_and_keeps_user_value() {
+        with_temp_agent_dir(|| {
+            write_settings_auto_compact(false).unwrap();
+            assert_eq!(settings_value()["$schema"], SETTINGS_SCHEMA_URL);
+            assert_eq!(settings_value()["autoCompact"], false);
+
+            let path = agent_dir().join("settings.json");
+            let custom = "https://example.com/my-settings.schema.json";
+            std::fs::write(&path, format!(r#"{{"$schema":"{custom}"}}"#)).unwrap();
+            write_settings_auto_compact(true).unwrap();
+
+            let v = settings_value();
+            assert_eq!(v["$schema"], custom, "用户改过的 $schema 不得被覆写");
+            assert_eq!(v["autoCompact"], true);
         });
     }
 
