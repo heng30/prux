@@ -74,6 +74,7 @@ fn convert_tool_calls() {
         arguments: serde_json::json!({ "path": "a.rs" }),
         thought_signature: None,
         namespace: None,
+        arguments_error: None,
     });
     let out = convert_messages(&[assistant], "", &m);
     // OpenAI 格式：tool_calls 在 assistant 消息顶层

@@ -830,6 +830,8 @@ fn attach_session(a: &mut Agent, s: Session) -> std::result::Result<SessionSwitc
     let name = s.name.clone();
     a.session = Some(s);
 
+    a.restore_session_tools();
+
     // 会话切换后刷新扩展的执行上下文（避免继续用旧会话的模板/cwd）
     core::extensions::dispatch_exec_ctx(&a.exec_ctx());
 

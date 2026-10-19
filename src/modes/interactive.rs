@@ -1674,6 +1674,7 @@ mod tests {
                 arguments: serde_json::json!({ "command": "sleep 5" }),
                 thought_signature: None,
                 namespace: None,
+                arguments_error: None,
             }];
             st.messages.push(m);
             st.tool_started_at

@@ -56,6 +56,13 @@ pub enum ScopeDiagnostic {
     NoMatch { pattern: String },
     /// pattern 带非法 thinking 后缀（仍按前缀解析，thinking 忽略）
     InvalidThinkingLevel { pattern: String },
+    /// 裸模型名被多个 provider 提供：已为每个 provider 各加一条
+    Ambiguous {
+        /// 原始 pattern
+        pattern: String,
+        /// 提供该模型的 provider 名（已按发现顺序去重）
+        providers: Vec<String>,
+    },
 }
 
 /// 解析结果：scoped 有序列表（去重保留首个）+ 诊断
@@ -120,8 +127,31 @@ fn resolve_glob_pattern(pattern: &str, available: &[AvailableModel], result: &mu
     }
 }
 
-/// 非 glob 分支：对齐 pi `parseModelPattern`（精确 → 包含匹配 → `:level` 后缀递归）
+/// 非 glob 分支：精确 → 包含匹配 → `:level` 后缀递归
 fn resolve_single_pattern(pattern: &str, available: &[AvailableModel], result: &mut ResolveResult) {
+    // 裸模型名（不含 `provider/`）被多个 provider 提供：为每个 provider 各加一条并报歧义，而不是凭 catalog 顺序静默挑一个。
+    let (bare, thinking) = strip_thinking_suffix(pattern);
+    if !bare.contains('/') {
+        let lower = bare.to_lowercase();
+        let matches: Vec<&AvailableModel> = available
+            .iter()
+            .filter(|m| m.id.to_lowercase() == lower)
+            .collect();
+
+        if matches.len() > 1 {
+            let providers: Vec<String> = matches.iter().map(|m| m.provider.clone()).collect();
+            for m in &matches {
+                push_scoped(result, &m.canonical(), thinking.clone());
+            }
+
+            result.diagnostics.push(ScopeDiagnostic::Ambiguous {
+                pattern: pattern.to_string(),
+                providers,
+            });
+            return;
+        }
+    }
+
     let (model, diag) = parse_single_pattern(pattern, available);
     if let Some(d) = diag {
         result.diagnostics.push(d);
@@ -427,6 +457,35 @@ mod tests {
             id: id.to_string(),
             name: id.to_string(),
         }
+    }
+
+    /// 裸模型名被多个 provider 提供时：每个 provider 各加一条 + 一条歧义诊断（pi #10160）。
+    #[test]
+    fn bare_model_offered_by_multiple_providers_is_added_for_each() {
+        let mut available = catalog();
+        available.push(avail("opencode", "claude-sonnet-4-5"));
+        let resolved = resolve_model_scope(&["claude-sonnet-4-5".to_string()], &available);
+        let ids: Vec<String> = resolved.scoped.iter().map(|s| s.canonical()).collect();
+        assert_eq!(
+            ids,
+            vec!["anthropic/claude-sonnet-4-5", "opencode/claude-sonnet-4-5"]
+        );
+        assert_eq!(
+            resolved.diagnostics,
+            vec![ScopeDiagnostic::Ambiguous {
+                pattern: "claude-sonnet-4-5".to_string(),
+                providers: vec!["anthropic".to_string(), "opencode".to_string()],
+            }]
+        );
+
+        // 带 provider 前缀时不再是歧义
+        let resolved = resolve_model_scope(&["opencode/claude-sonnet-4-5".to_string()], &available);
+        assert!(
+            resolved.diagnostics.is_empty(),
+            "{:?}",
+            resolved.diagnostics
+        );
+        assert_eq!(resolved.scoped.len(), 1);
     }
 
     fn catalog() -> Vec<AvailableModel> {

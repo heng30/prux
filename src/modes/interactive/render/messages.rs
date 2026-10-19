@@ -3075,6 +3075,7 @@ mod tests {
             arguments: serde_json::json!({ "path": "shot.png" }),
             thought_signature: None,
             namespace: None,
+            arguments_error: None,
         }];
 
         let mut tool_results: HashMap<String, ToolResultView> = HashMap::new();
@@ -3218,6 +3219,7 @@ mod tests {
             arguments: serde_json::json!({ "path": "shot.png" }),
             thought_signature: None,
             namespace: None,
+            arguments_error: None,
         }];
 
         let mut tool_results: HashMap<String, ToolResultView> = HashMap::new();
@@ -3272,6 +3274,7 @@ mod tests {
                 arguments: serde_json::json!({ "path": "shot.png" }),
                 thought_signature: None,
                 namespace: None,
+                arguments_error: None,
             },
         ];
 
@@ -3358,6 +3361,7 @@ mod tests {
             arguments: serde_json::json!({ "code": "return 1;" }),
             thought_signature: None,
             namespace: None,
+            arguments_error: None,
         }];
         let mut res = AgentMessage::user_text("Script completed");
         res.role = "toolResult".to_string();
@@ -3403,6 +3407,7 @@ mod tests {
             arguments: serde_json::json!({ "code": "await tools.bash('ls')" }),
             thought_signature: None,
             namespace: None,
+            arguments_error: None,
         }];
         let started = now_ms();
         let mut started_map = HashMap::new();
@@ -3449,6 +3454,7 @@ mod tests {
             arguments: serde_json::json!({ "code": "await models.classify(m, ctx)" }),
             thought_signature: None,
             namespace: None,
+            arguments_error: None,
         }];
         let mut res = AgentMessage::user_text("Script completed");
         res.role = "toolResult".to_string();
@@ -3727,6 +3733,7 @@ mod tests {
             arguments: serde_json::json!({ "path": "a.rs" }),
             thought_signature: None,
             namespace: None,
+            arguments_error: None,
         }];
         let mut pending = Vec::new();
         let lines = render_message(
@@ -3782,6 +3789,7 @@ mod tests {
             arguments: serde_json::json!({ "command": "ls -la" }),
             thought_signature: None,
             namespace: None,
+            arguments_error: None,
         }];
         let mut res =
             AgentMessage::user_text("total 8\ndrwxr-xr-x .\n-rw-r--r-- a.txt\n-rw-r--r-- b.txt");
@@ -3845,6 +3853,7 @@ mod tests {
             arguments: serde_json::json!({ "command": "seq 10" }),
             thought_signature: None,
             namespace: None,
+            arguments_error: None,
         }];
         let mut res = AgentMessage::user_text("1\n2\n3\n4\n5\n6\n7\n8\n9\n10");
         res.role = "toolResult".to_string();
@@ -3871,6 +3880,7 @@ mod tests {
             arguments: serde_json::json!({ "path": "." }),
             thought_signature: None,
             namespace: None,
+            arguments_error: None,
         }];
         let mut res2 = AgentMessage::user_text(
             &(1..=25)
@@ -3909,6 +3919,7 @@ mod tests {
             }),
             thought_signature: None,
             namespace: None,
+            arguments_error: None,
         }];
         let lines = render_all_messages(&[ai], &[], None, 60, &theme(), false, true);
         let tt = t(&lines);
@@ -3937,6 +3948,7 @@ mod tests {
             }),
             thought_signature: None,
             namespace: None,
+            arguments_error: None,
         }];
         let lines = render_all_messages(&[ai], &[], None, 60, &theme(), true, true);
         let joined = t(&lines).join("\n");
@@ -3966,6 +3978,7 @@ mod tests {
             arguments: serde_json::json!({ "command": "make noise" }),
             thought_signature: None,
             namespace: None,
+            arguments_error: None,
         }];
         let mut res = AgentMessage::user_text(&{
             let mut v: Vec<String> = (1..=20).map(|i| format!("line{}", i)).collect();
@@ -4061,6 +4074,7 @@ mod tests {
                 arguments: serde_json::json!({ "server": "docs", "tool": "lookup" }),
                 thought_signature: None,
                 namespace: None,
+                arguments_error: None,
             }];
             let mut res = AgentMessage::user_text("native output\nsecond line");
             res.role = "toolResult".to_string();
@@ -4158,6 +4172,7 @@ mod tests {
             arguments: serde_json::json!({ "action": "call", "server": "fs", "name": "read", "arguments": {} }),
             thought_signature: None,
             namespace: None,
+            arguments_error: None,
         }];
         // 单条 400 字符逻辑行：终端 20 列下折成 20 个视觉行
         let mut res = AgentMessage::user_text(&"x".repeat(400));
@@ -4198,6 +4213,7 @@ mod tests {
             arguments: serde_json::json!({ "command": "sleep 5" }),
             thought_signature: None,
             namespace: None,
+            arguments_error: None,
         }];
         // 进行中：无 toolResult，started_at = 当前墙钟 - 1.2s
         let started = crate::utils::time::now_ms().saturating_sub(1200);
@@ -4292,6 +4308,7 @@ mod tests {
             }),
             thought_signature: None,
             namespace: None,
+            arguments_error: None,
         }];
         let mut res = AgentMessage::user_text("Successfully replaced 1 block(s) in a.txt.");
         res.role = "toolResult".to_string();
@@ -4378,6 +4395,7 @@ mod tests {
             }),
             thought_signature: None,
             namespace: None,
+            arguments_error: None,
         }];
         let mut edit_map = HashMap::new();
         edit_map.insert(
@@ -4417,6 +4435,7 @@ mod tests {
             }),
             thought_signature: None,
             namespace: None,
+            arguments_error: None,
         }];
         let mut res = AgentMessage::user_text("Could not find the exact text in a.txt.");
         res.role = "toolResult".to_string();
@@ -5006,6 +5025,7 @@ mod tests {
                 arguments: serde_json::json!({}),
                 thought_signature: None,
                 namespace: None,
+                arguments_error: None,
             },
             ContentBlock::Text {
                 text: "result text".into(),
@@ -5237,6 +5257,7 @@ mod tests {
             arguments: serde_json::json!({ "command": "ls" }),
             thought_signature: None,
             namespace: None,
+            arguments_error: None,
         }];
         ai.timestamp = 10;
         let mut res = AgentMessage::user_text("");
@@ -5561,6 +5582,7 @@ mod tests {
             arguments: serde_json::json!({ "path": "a.rs" }),
             thought_signature: None,
             namespace: None,
+            arguments_error: None,
         }];
         m
     }

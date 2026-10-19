@@ -550,6 +550,7 @@ mod tests {
                 arguments: json!({}),
                 thought_signature: None,
                 namespace: None,
+                arguments_error: None,
             }];
             msg
         }

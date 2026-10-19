@@ -657,6 +657,7 @@ fn parse_assistant_tool_calls(msg: &Value, i: usize) -> Result<Vec<ContentBlock>
             arguments,
             thought_signature: None,
             namespace: None,
+            arguments_error: None,
         });
     }
     Ok(out)

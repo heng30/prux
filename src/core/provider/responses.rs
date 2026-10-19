@@ -18,9 +18,10 @@ use super::{
         flush_pending_system_messages, instruction_role, sanitize_surrogates,
         supports_mid_convo_system_messages, truncate_for_error,
     },
+    json_args::{parse_streaming_json, parse_tool_call_arguments},
     retry::{DEFAULT_MAX_RETRIES, send_with_retry},
     track_stream_bytes,
-    usage::{apply_service_tier_cost, compute_cost, parse_streaming_json},
+    usage::{apply_service_tier_cost, compute_cost},
 };
 use crate::{
     core::{
@@ -239,34 +240,21 @@ fn convert_responses_assistant_message(
     for block in &msg.content {
         match block {
             ContentBlock::Thinking {
-                thinking,
+                thinking: _,
                 thinking_signature,
                 ..
             } => {
-                if let Some(sig) = thinking_signature {
-                    // thinkingSignature 是完整 reasoning item JSON，原样透传
-                    if let Ok(item) = serde_json::from_str::<Value>(sig) {
-                        output_items.push(item);
-                    }
-                } else if !is_same_model && !thinking.trim().is_empty() {
-                    // 外来 thinking（跨模型）：降级为文本
-                    let id = if text_block_index == 0 {
-                        format!("msg_pi_{}", msg_index)
-                    } else {
-                        format!("msg_pi_{}_{}", msg_index, text_block_index)
-                    };
-                    text_block_index += 1;
-                    output_items.push(json!({
-                        "type": "message",
-                        "role": "assistant",
-                        "content": [{
-                            "type": "output_text",
-                            "text": sanitize_surrogates(thinking),
-                            "annotations": []
-                        }],
-                        "status": "completed",
-                        "id": id
-                    }));
+                // 其它模型产生的 thinking 一律丢弃：签名/加密推理只对造它的模型有效，
+                // 当文本发过去会让新模型把旧推理当成自己的回答。
+                if !is_same_model {
+                    continue;
+                }
+
+                // thinkingSignature 是完整 reasoning item JSON，原样透传
+                if let Some(sig) = thinking_signature
+                    && let Ok(item) = serde_json::from_str::<Value>(sig)
+                {
+                    output_items.push(item);
                 }
                 // 同模型无签名 thinking：responses 无意义，丢弃
             }
@@ -565,6 +553,8 @@ struct Slot {
     partial_json: Option<String>,
     /// tool call 定稿 arguments
     arguments: Value,
+    /// tool call 参数解析失败的说明（含原文）；解析成功或尚未定稿为 None。
+    arguments_error: Option<String>,
     /// tool call：call_id 与 item_id
     call_id: Option<String>,
     /// 工具调用的响应侧 item id（`fc_` 前缀），跨模型重放时置空。
@@ -603,6 +593,8 @@ enum AssistBlock {
         arguments: Value,
         /// 自定义工具的命名空间；普通工具为 None。
         namespace: Option<String>,
+        /// 参数解析失败的说明（含原文）；解析成功为 None。
+        arguments_error: Option<String>,
     },
 }
 
@@ -783,6 +775,7 @@ fn handle_output_item_added(
                     name: None,
                     namespace: None,
                     grammar: None,
+                    arguments_error: None,
                 },
             );
         }
@@ -806,6 +799,7 @@ fn handle_output_item_added(
                     name: None,
                     namespace: None,
                     grammar: None,
+                    arguments_error: None,
                 },
             );
         }
@@ -856,6 +850,7 @@ fn handle_output_item_added(
                     name,
                     namespace,
                     grammar: None,
+                    arguments_error: None,
                 },
             );
         }
@@ -904,6 +899,7 @@ fn handle_output_item_added(
                     started: false,
                     closed: false,
                 }),
+                arguments_error: None,
             };
 
             let delta = append_grammar_input(&mut slot, &initial);
@@ -1275,7 +1271,11 @@ fn handle_output_item_done(
                         .get("arguments")
                         .and_then(|v| v.as_str())
                         .unwrap_or("{}");
-                    s.arguments = parse_streaming_json(final_args);
+
+                    // 定稿：严格解析，非法 JSON 记下原文
+                    let (arguments, arguments_error) = parse_tool_call_arguments(Some(final_args));
+                    s.arguments = arguments;
+                    s.arguments_error = arguments_error;
                 }
                 s.partial_json = None;
             }
@@ -1291,6 +1291,7 @@ fn handle_output_item_done(
                 let id = format!("{}|{}", call_id, item_id);
                 let name = s.name.clone().unwrap_or_default();
                 let arguments = s.arguments.clone();
+                let arguments_error = s.arguments_error.clone();
                 finalized.insert(
                     s.content_index,
                     AssistBlock::ToolCall {
@@ -1298,6 +1299,7 @@ fn handle_output_item_done(
                         name,
                         arguments,
                         namespace: s.namespace.clone(),
+                        arguments_error,
                     },
                 );
             }
@@ -1470,6 +1472,7 @@ fn assemble_responses_blocks(
                 name,
                 arguments,
                 namespace,
+                arguments_error,
             } => {
                 content_blocks.push(ContentBlock::ToolCall {
                     id: id.clone(),
@@ -1477,6 +1480,7 @@ fn assemble_responses_blocks(
                     arguments: arguments.clone(),
                     thought_signature: None,
                     namespace,
+                    arguments_error,
                 });
                 if let Some(f) = on_event.as_mut() {
                     f.push(RawStreamEvent::ToolCallEnd {
@@ -1537,6 +1541,7 @@ fn assemble_responses_blocks(
                     arguments: arguments.clone(),
                     thought_signature: None,
                     namespace: None,
+                    arguments_error: s.arguments_error.clone(),
                 });
                 if let Some(f) = on_event.as_mut() {
                     f.push(RawStreamEvent::ToolCallEnd {
@@ -2033,6 +2038,10 @@ mod tests {
         .to_string();
         let mut a = AgentMessage::user_text("");
         a.role = "assistant".into();
+        // 同模型回放才透传
+        a.model = Some(m.model_id.clone());
+        a.provider = Some(m.provider.clone());
+        a.api = Some(m.api.clone());
         a.content = vec![ContentBlock::Thinking {
             thinking: "thinking...".into(),
             thinking_signature: Some(sig.clone()),
@@ -2043,6 +2052,29 @@ mod tests {
         assert_eq!(out[0]["type"], "reasoning");
         assert_eq!(out[0]["id"], "rs_1");
         assert_eq!(out[0]["encrypted_content"], "abc==");
+    }
+
+    /// 其它模型产生的 thinking（含加密 reasoning）不重放，也不降级为文本（pi #10995）。
+    #[test]
+    fn cross_model_thinking_is_dropped() {
+        let m = model(true);
+        let sig =
+            json!({"type": "reasoning", "id": "rs_1", "encrypted_content": "abc=="}).to_string();
+        let mut a = AgentMessage::user_text("");
+        a.role = "assistant".into();
+        a.model = Some("claude-sonnet-4-5".into());
+        a.provider = Some("anthropic".into());
+        a.api = Some("anthropic-messages".into());
+        a.content = vec![ContentBlock::Thinking {
+            thinking: "old reasoning".into(),
+            thinking_signature: Some(sig),
+            redacted: None,
+        }];
+        let out = convert_responses_messages(&[a], "", &m);
+        for item in &out {
+            assert_ne!(item["type"], "reasoning", "{item}");
+            assert_ne!(item["content"][0]["text"], "old reasoning", "{item}");
+        }
     }
 
     #[test]
@@ -2059,6 +2091,7 @@ mod tests {
             arguments: json!({ "path": "a.rs" }),
             thought_signature: None,
             namespace: None,
+            arguments_error: None,
         }];
         let out = convert_responses_messages(&[a], "", &m);
         assert_eq!(out[0]["type"], "function_call");
@@ -2082,6 +2115,7 @@ mod tests {
             arguments: json!({}),
             thought_signature: None,
             namespace: None,
+            arguments_error: None,
         }];
         let out = convert_responses_messages(&[a], "", &m);
         // 跨模型 + fc_ 前缀 → 置空 id 避免 pairing 校验
@@ -2104,6 +2138,7 @@ mod tests {
             arguments: json!({}),
             thought_signature: None,
             namespace: None,
+            arguments_error: None,
         }];
         let out = convert_responses_messages(&[a], "", &m);
         // 非白名单：id 归一化为单段（| → _），作为 call_id 使用
@@ -2211,6 +2246,7 @@ mod tests {
             arguments: json!({ "code": "return 1;" }),
             thought_signature: None,
             namespace: None,
+            arguments_error: None,
         }];
         let mut tr = AgentMessage::user_text("");
         tr.role = "toolResult".into();
@@ -2265,6 +2301,7 @@ mod tests {
             arguments: json!({ "code": "return 1;" }),
             thought_signature: None,
             namespace: None,
+            arguments_error: None,
         }];
         let mut tr = AgentMessage::user_text("");
         tr.role = "toolResult".into();
@@ -2307,6 +2344,7 @@ mod tests {
             arguments: json!({}),
             thought_signature: None,
             namespace: None,
+            arguments_error: None,
         }];
         let user = AgentMessage::user_text("next");
         let out = convert_responses_messages(&[a, user], "", &m);
@@ -2608,6 +2646,7 @@ mod tests {
             arguments: json!({}),
             thought_signature: None,
             namespace: None,
+            arguments_error: None,
         }];
         let mut note = AgentMessage::user_text("mid-run note");
         note.role = "system".into();

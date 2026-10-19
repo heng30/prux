@@ -44,6 +44,9 @@ fn truncate_for_summary(content: &str) -> String {
 }
 
 /// 对话序列化
+///
+/// assistant 的 thinking 块**不输出**：replay 出来的思考往往不在当前上下文里，
+/// 带上它会让摘要请求比被摘要的上下文还大，反而失败。
 pub fn serialize_conversation(messages: &[AgentMessage]) -> String {
     let mut parts: Vec<String> = Vec::new();
 
@@ -56,15 +59,11 @@ pub fn serialize_conversation(messages: &[AgentMessage]) -> String {
                 }
             }
             "assistant" => {
-                let mut thinking_parts: Vec<String> = Vec::new();
                 let mut tool_calls: Vec<String> = Vec::new();
                 let mut has_text = false;
 
                 for block in &msg.content {
                     match block {
-                        ContentBlock::Thinking { thinking, .. } => {
-                            thinking_parts.push(thinking.clone())
-                        }
                         ContentBlock::ToolCall {
                             name, arguments, ..
                         } => {
@@ -89,12 +88,6 @@ pub fn serialize_conversation(messages: &[AgentMessage]) -> String {
                     }
                 }
 
-                if !thinking_parts.is_empty() {
-                    parts.push(format!(
-                        "[Assistant thinking]: {}",
-                        thinking_parts.join("\n")
-                    ));
-                }
                 if has_text {
                     parts.push(format!("[Assistant]: {}", content_text(&msg.content)));
                 }

@@ -1086,6 +1086,36 @@ impl Agent {
         self.settings_default_tool_modifiers = modifiers;
     }
 
+    /// 会话恢复/切换后把会话记录的 active tools 装回来。
+    ///
+    /// - 只在启动选择是 `Default` 时生效：显式 `--tools 名单` / `--no-tools` / `--no-builtin-tools`
+    ///   仍然整体覆盖会话记录；
+    /// - 会话从未记录过 active tools 时不动（沿用当前选择）；
+    /// - 启动时的 `--tools +name`/`-name` 修饰符作用在会话记录之上。
+    ///
+    /// 调用时机是 [`Self::set_default_tool_modifiers`] 之后（否则拿不到修饰符）。
+    pub fn restore_session_tools(&mut self) {
+        if !matches!(self.rebuild_ctx.selection, ToolSelection::Default(_)) {
+            return;
+        }
+
+        let Some(recorded) = self.session.as_ref().and_then(|s| s.last_active_tools()) else {
+            return;
+        };
+
+        let names = settings_manager::apply_tool_modifiers(
+            &recorded,
+            &self.settings_default_tool_modifiers,
+        );
+        self.rebuild_ctx.selection = ToolSelection::Default(names.clone());
+
+        // 同步 `/reload` 的基线：后续重读 settings 的 defaultTools 时按同一组修饰符重算
+        if self.settings_default_tools.is_some() {
+            self.settings_default_tools = Some(names);
+        }
+        self.rebuild_tools();
+    }
+
     /// `/reload` 后重读 settings.json 的 `defaultTools`（调用方随后自己 [`Self::rebuild_tools`]）。
     ///
     /// 只增不减：新加入 `defaultTools` 的工具并入当前选择；从 `defaultTools` 移除的工具**保持启用**，
@@ -2333,6 +2363,9 @@ impl Agent {
             "overloaded",
             "server_busy",
             "servers are currently busy",
+            "the upstream provider returned an error",
+            "the service is temporarily unavailable",
+            "unable to forward upstream stream",
             "currently experiencing high demand",
             "model is at capacity",
             "rate limit",
@@ -2601,13 +2634,19 @@ impl Agent {
     ) -> Vec<Prepared> {
         let mut prepared: Vec<Prepared> = Vec::new();
         for tc in tool_calls {
-            let (id, name, arguments) = match tc {
+            let (id, name, arguments, arguments_error) = match tc {
                 ContentBlock::ToolCall {
                     id,
                     name,
                     arguments,
+                    arguments_error,
                     ..
-                } => (id.clone(), name.clone(), arguments.clone()),
+                } => (
+                    id.clone(),
+                    name.clone(),
+                    arguments.clone(),
+                    arguments_error.clone(),
+                ),
                 _ => continue,
             };
 
@@ -2620,6 +2659,11 @@ impl Agent {
             let tools_index = ToolIndex::resolve(injected, &name);
             if !tools_index.exists() {
                 immediate = Some(format!("Tool {} not found", name));
+            } else if let Some(err) = arguments_error.as_deref() {
+                // 模型给的参数不是合法 JSON：直接把原文回给模型，不拿「解析到的那部分字段」执行。
+                immediate = Some(format!(
+                    "Invalid JSON arguments for tool \"{name}\":\n{err}"
+                ));
             } else {
                 args = tools_index.prepare_arguments(&args);
 
@@ -2672,6 +2716,7 @@ impl Agent {
                     arguments,
                     thought_signature: None,
                     namespace: None,
+                    arguments_error,
                 },
                 name,
                 args,
@@ -4479,6 +4524,16 @@ mod tests {
         assert!(Agent::is_retryable_assistant_error(
             "The servers are currently busy, please retry"
         ));
+        // 上游返回 / 网关 / 服务暂不可用（pi 1.2.0/1.3.0 #10842 / #10965 / #10920）
+        assert!(Agent::is_retryable_assistant_error(
+            "The upstream provider returned an error"
+        ));
+        assert!(Agent::is_retryable_assistant_error(
+            "The service is temporarily unavailable"
+        ));
+        assert!(Agent::is_retryable_assistant_error(
+            "Unable to forward upstream stream"
+        ));
         // Cloudflare 520（#9627）
         assert!(Agent::is_retryable_assistant_error(
             "provider returned 520: 520 status code (no body)"
@@ -5915,6 +5970,71 @@ mod tests {
         assert_eq!(names, &vec!["bash".to_string()]);
     }
 
+    /// 会话恢复：装回会话记录的 active tools，`--tools +name`/`-name` 作用在其上（pi #10785）。
+    #[test]
+    fn restore_session_tools_restores_recorded_tools() {
+        let _g = crate::test_support::AUTH_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _ad = crate::test_support::AgentDirGuard::temp();
+        let dir = tempfile::tempdir().unwrap();
+
+        let mut agent = test_agent_selection(ToolSelection::tools(vec!["read".into()]), vec![]);
+        let mut session = crate::core::session_manager::Session::create(
+            ".",
+            Some(dir.path().to_path_buf()),
+            true,
+        )
+        .unwrap();
+        session.append_active_tools_change(&[
+            "read".to_string(),
+            "bash".to_string(),
+            "edit".to_string(),
+        ]);
+        agent.session = Some(session);
+        agent.set_settings_default_tools(Some(vec!["read".to_string()]));
+        agent.set_default_tool_modifiers(vec!["+ls".to_string(), "-edit".to_string()]);
+
+        agent.restore_session_tools();
+        let ToolSelection::Default(names) = &agent.rebuild_ctx.selection else {
+            panic!("Default 选择不应被改写成其它变体");
+        };
+        assert_eq!(
+            names,
+            &vec!["read".to_string(), "bash".to_string(), "ls".to_string()]
+        );
+        let active = agent.get_active_tools();
+        assert!(active.contains(&"ls".to_string()), "{active:?}");
+        assert!(!active.contains(&"edit".to_string()), "{active:?}");
+    }
+
+    /// 显式 `--tools 名单` 时，恢复会话不拿会话记录覆盖启动选择（pi #10785）。
+    #[test]
+    fn restore_session_tools_keeps_explicit_selection() {
+        let _g = crate::test_support::AUTH_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _ad = crate::test_support::AgentDirGuard::temp();
+        let dir = tempfile::tempdir().unwrap();
+
+        let mut agent =
+            test_agent_selection(ToolSelection::Allowlist(vec!["read".to_string()]), vec![]);
+        let mut session = crate::core::session_manager::Session::create(
+            ".",
+            Some(dir.path().to_path_buf()),
+            true,
+        )
+        .unwrap();
+        session.append_active_tools_change(&["read".to_string(), "bash".to_string()]);
+        agent.session = Some(session);
+
+        agent.restore_session_tools();
+        let ToolSelection::Allowlist(names) = &agent.rebuild_ctx.selection else {
+            panic!("--tools 的 allowlist 不应被会话记录改写");
+        };
+        assert_eq!(names, &vec!["read".to_string()]);
+    }
+
     /// 2.14：命令行 `--tools` / `--no-tools` / `--no-builtin-tools` 显式指定过工具集时，
     /// `/reload` 不重读 settings.json 的 `defaultTools`。
     #[test]
@@ -6242,6 +6362,43 @@ mod tests {
             // 第一条 assistant 含 toolCall
             assert_eq!(msgs[1]["content"][0]["type"], "toolCall");
         });
+    }
+
+    /// 模型给出的参数不是合法 JSON 时，不执行工具，直接产出带原文的错误（pi #10897）。
+    #[test]
+    fn malformed_tool_arguments_fail_before_execution() {
+        let call = ContentBlock::ToolCall {
+            id: "call_1".into(),
+            name: "read".into(),
+            arguments: json!({}),
+            thought_signature: None,
+            namespace: None,
+            arguments_error: Some(
+                "expected `,` or `}` at line 1 column 26\n\nReceived arguments:\n{\"path\":\"a.rs\",\"limit\":}"
+                    .to_string(),
+            ),
+        };
+        let assistant = AgentMessage::user_text("");
+        let prepared = Agent::prepare_tool_calls(&[call], &assistant, &[], &[]);
+        assert_eq!(prepared.len(), 1);
+        let err = prepared[0]
+            .immediate
+            .as_deref()
+            .expect("malformed arguments must fail immediately");
+        assert!(
+            err.contains("Invalid JSON arguments for tool \"read\""),
+            "{err}"
+        );
+        assert!(err.contains("Received arguments:"), "{err}");
+        assert!(err.contains(r#""limit":}"#), "{err}");
+        // 原文也要跟着 prepared call 保留下来
+        assert!(matches!(
+            &prepared[0].call,
+            ContentBlock::ToolCall {
+                arguments_error: Some(_),
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -7352,6 +7509,7 @@ mod tests {
                 arguments: json!({}),
                 thought_signature: None,
                 namespace: None,
+                arguments_error: None,
             },
             name: "codemode".into(),
             args: json!({}),
@@ -10037,6 +10195,7 @@ mod tests {
             arguments: json!({}),
             thought_signature: None,
             namespace: None,
+            arguments_error: None,
         };
         let fin = FinalizedToolCall::from_tool_result(
             &call,

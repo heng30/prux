@@ -3,7 +3,8 @@
 //! 关键差异点：
 //! - 认证用 `x-api-key`（`sk-ant-oat` 前缀才转 Bearer）+ `anthropic-version` + beta 头
 //! - thinking：adaptive 模型走 `{type:"adaptive"}` + effort；老模型走 budget（默认 1024）；
-//!   thinking 块重放必须携带 signature，无 signature 降级为文本
+//!   thinking 块重放必须携带 signature；无 signature 的同模型块降级为文本，
+//!   其它模型（或其它 provider/api）产生的 thinking 一律丢弃（pi #10995）
 //! - `signature_delta` 是追加不是覆盖；`input_json_delta` 累计解析
 //! - 连续 toolResult 合并为一条 user 消息（z.ai 兼容端点要求）
 //! - cache_control 挂在 system、最后一个 tool、最后一个 user 消息上
@@ -17,10 +18,11 @@ use super::{
         flush_pending_system_messages, sanitize_surrogates, supports_mid_convo_system_messages,
         truncate_for_error,
     },
+    json_args::{parse_streaming_json, parse_tool_call_arguments},
     provider_session_headers,
     retry::{DEFAULT_MAX_RETRIES, send_with_retry},
     session_affinity_headers, track_stream_bytes,
-    usage::{compute_cost, parse_streaming_json},
+    usage::compute_cost,
 };
 use crate::{
     core::{
@@ -46,6 +48,8 @@ const SERVER_SIDE_FALLBACK_BETA: &str = "server-side-fallback-2026-07-01";
 const REDACTED_THINKING_TEXT: &str = "[Reasoning redacted]";
 /// 未显式指定时每级 thinking 的默认 token 预算。
 const DEFAULT_THINKING_BUDGET: u32 = 1024;
+/// 错误工具结果里被移走的图片在 tool_result 中的占位文本。
+const ERROR_TOOL_IMAGE_PLACEHOLDER: &str = "(image attached after the tool results)";
 
 /// OAuth 订阅登录时模拟的 Claude Code 版本
 const CLAUDE_CODE_VERSION: &str = "2.1.280";
@@ -307,9 +311,15 @@ fn convert_anthropic_assistant_message(
                 thinking_signature,
                 ..
             } => {
+                // 其它模型（或其它 provider/api）产生的 thinking 一律丢弃：
+                // 签名只对造它的模型有效，而把推理当普通文本发过去会让新模型把旧推理当成自己的回答。
+                if !is_same_model {
+                    continue;
+                }
+
                 if is_redacted_thinking(block) {
-                    // 同模型才保留 opaque 的 redacted payload
-                    if is_same_model && let Some(sig) = thinking_signature {
+                    // opaque 的 redacted payload 只在同模型回放时保留
+                    if let Some(sig) = thinking_signature {
                         blocks.push(json!({
                             "type": "redacted_thinking",
                             "data": sig
@@ -333,7 +343,7 @@ fn convert_anthropic_assistant_message(
                             "signature": ""
                         }));
                     } else {
-                        // 无 signature（跨模型/中断流）：降级为普通文本
+                        // 同模型但无 signature（中断流）：降级为普通文本
                         blocks.push(json!({
                             "type": "text",
                             "text": sanitize_surrogates(thinking)
@@ -389,13 +399,77 @@ fn convert_anthropic_summary_message(msg: &AgentMessage) -> Value {
     })
 }
 
+/// 拆出错工具结果里的图片：Anthropic 拒绝内容不是纯文本的 error tool_result。
+///
+/// 返回 `(把图片换成占位文本后的 tool_result 内容, 要放到本回合全部 tool_result 之后的块)`；
+/// 非错误结果、或内容里没有图片时返回 `None`。
+fn split_error_tool_result_images(
+    msg: &AgentMessage,
+    converted: &Value,
+) -> Option<(Value, Vec<Value>)> {
+    if !msg.is_error {
+        return None;
+    }
+    let Value::Array(blocks) = converted else {
+        return None;
+    };
+    if !blocks.iter().any(|b| b["type"] == json!("image")) {
+        return None;
+    }
+
+    let mut content: Vec<Value> = Vec::new();
+    let mut images: Vec<Value> = Vec::new();
+    let mut previous_was_placeholder = false;
+    for block in blocks {
+        if block["type"] == json!("image") {
+            if !previous_was_placeholder {
+                content.push(json!({ "type": "text", "text": ERROR_TOOL_IMAGE_PLACEHOLDER }));
+            }
+            previous_was_placeholder = true;
+            images.push(block.clone());
+            continue;
+        }
+        previous_was_placeholder = block["text"] == json!(ERROR_TOOL_IMAGE_PLACEHOLDER);
+        content.push(block.clone());
+    }
+
+    let caption = format!(
+        "Images from the error result of tool call {} ({}):",
+        msg.tool_call_id.as_deref().unwrap_or_default(),
+        msg.tool_name.as_deref().unwrap_or("unknown")
+    );
+    let mut trailing = vec![json!({ "type": "text", "text": caption })];
+    trailing.extend(images);
+    Some((Value::Array(content), trailing))
+}
+
+/// 把上面拆出来的图片追加到本回合那条 user 消息的末尾（必须在全部 tool_result 之后）。
+fn flush_error_tool_result_images(params: &mut Vec<Value>, pending: &mut Vec<Value>) {
+    if pending.is_empty() {
+        return;
+    }
+    if let Some(last) = params.last_mut()
+        && last["role"] == json!("user")
+        && let Some(arr) = last["content"].as_array_mut()
+        && arr.iter().any(|b| b["type"] == json!("tool_result"))
+    {
+        arr.append(pending);
+    } else {
+        params.push(json!({ "role": "user", "content": std::mem::take(pending) }));
+    }
+}
+
 /// 推送 tool_result 到 user 消息；连续 toolResult 与上一条单块 tool_result
 /// 合并为同一条 user 消息（z.ai 兼容端点要求）。
+///
+/// 错误工具结果里的图片会被挤出 tool_result，收集到 `pending_error_images`，
+/// 由调用方在本回合 tool_result 全部写完后再追加。
 fn push_anthropic_tool_result(
     params: &mut Vec<Value>,
     msg: &AgentMessage,
     tool_call_id_map: &mut HashMap<String, String>,
     existing_tool_result_ids: &mut HashSet<String>,
+    pending_error_images: &mut Vec<Value>,
 ) {
     // 归一化 tool_call_id（同步 assistant 端的归一化）
     let tool_use_id = msg
@@ -410,6 +484,10 @@ fn push_anthropic_tool_result(
         .unwrap_or_default();
     existing_tool_result_ids.insert(tool_use_id.clone());
     let converted = convert_content_blocks(&msg.content);
+    let (converted, trailing) = match split_error_tool_result_images(msg, &converted) {
+        Some((content, trailing)) => (content, Some(trailing)),
+        None => (converted, None),
+    };
     let tool_result = json!({
         "type": "tool_result",
         "tool_use_id": tool_use_id,
@@ -427,9 +505,12 @@ fn push_anthropic_tool_result(
         && let Some(arr) = last["content"].as_array_mut()
     {
         arr.push(tool_result);
-        return;
+    } else {
+        params.push(json!({ "role": "user", "content": [tool_result] }));
     }
-    params.push(json!({ "role": "user", "content": [tool_result] }));
+    if let Some(trailing) = trailing {
+        pending_error_images.extend(trailing);
+    }
 }
 
 /// cache_control 挂在最后一个 user 消息的最后块上。
@@ -482,6 +563,8 @@ pub(crate) fn convert_anthropic_messages(
     let mut params: Vec<Value> = Vec::new();
     let supports_mid_convo = supports_mid_convo_system_messages(model);
     let mut pending_system: Vec<Value> = Vec::new();
+    // 错误工具结果里的图片：本回合最后一个 tool_result 写完后才能追加
+    let mut pending_error_images: Vec<Value> = Vec::new();
 
     for msg in messages {
         match msg.role.as_str() {
@@ -491,6 +574,7 @@ pub(crate) fn convert_anthropic_messages(
                     &mut pending_tool_calls,
                     &mut existing_tool_result_ids,
                 );
+                flush_error_tool_result_images(&mut params, &mut pending_error_images);
                 flush_pending_system_messages(&mut params, &mut pending_system);
                 if let Some(user_msg) = convert_anthropic_user_message(msg, model) {
                     params.push(user_msg);
@@ -504,6 +588,7 @@ pub(crate) fn convert_anthropic_messages(
                     &mut pending_tool_calls,
                     &mut existing_tool_result_ids,
                 );
+                flush_error_tool_result_images(&mut params, &mut pending_error_images);
                 flush_pending_system_messages(&mut params, &mut pending_system);
                 if let Some(assistant_msg) = convert_anthropic_assistant_message(
                     msg,
@@ -520,6 +605,7 @@ pub(crate) fn convert_anthropic_messages(
                     &mut pending_tool_calls,
                     &mut existing_tool_result_ids,
                 );
+                flush_error_tool_result_images(&mut params, &mut pending_error_images);
                 params.push(convert_anthropic_summary_message(msg));
             }
             "toolResult" => {
@@ -528,6 +614,7 @@ pub(crate) fn convert_anthropic_messages(
                     msg,
                     &mut tool_call_id_map,
                     &mut existing_tool_result_ids,
+                    &mut pending_error_images,
                 );
             }
             "system" => {
@@ -546,7 +633,7 @@ pub(crate) fn convert_anthropic_messages(
         &mut pending_tool_calls,
         &mut existing_tool_result_ids,
     );
-
+    flush_error_tool_result_images(&mut params, &mut pending_error_images);
     flush_pending_system_messages(&mut params, &mut pending_system);
     apply_anthropic_cache_control(&mut params);
 
@@ -794,6 +881,8 @@ enum AnthropicAssistBlock {
         name: String,
         /// 解析完成的参数对象。
         arguments: Value,
+        /// 参数解析失败的说明（含原文）；解析成功为 None。
+        arguments_error: Option<String>,
     },
 }
 
@@ -1233,13 +1322,16 @@ fn handle_anthropic_content_block_stop(
             SlotKind::ToolCall => {
                 let id = slot.id.clone();
                 let name = slot.name.clone();
-                let arguments = slot.arguments.clone();
+                // 定稿：对累积的参数原文做严格解析，非法 JSON 记下原文
+                let (arguments, arguments_error) =
+                    parse_tool_call_arguments(Some(slot.partial_json.as_str()));
                 finalized.insert(
                     slot.content_index,
                     AnthropicAssistBlock::ToolCall {
                         id,
                         name,
                         arguments,
+                        arguments_error,
                     },
                 );
             }
@@ -1349,6 +1441,7 @@ fn assemble_anthropic_blocks(
                 id,
                 name,
                 arguments,
+                arguments_error,
             } => {
                 content_blocks.push(ContentBlock::ToolCall {
                     id,
@@ -1356,6 +1449,7 @@ fn assemble_anthropic_blocks(
                     arguments,
                     thought_signature: None,
                     namespace: None,
+                    arguments_error,
                 });
             }
         }
@@ -1768,11 +1862,14 @@ mod tests {
 
     #[test]
     fn empty_thinking_signature_replayed_for_compat_models() {
-        // Fireworks（compat.allowEmptySignature=true）：保留 thinking 块 + 空 signature（pi #9323/#9676）
+        // Fireworks（compat.allowEmptySignature=true）：同模型回放时保留 thinking 块 + 空 signature（pi #9323/#9676）
         let mut m = model("accounts/fireworks/models/deepseek-v4p1-flash");
         m.provider = "fireworks".into();
         let mut a = AgentMessage::user_text("");
         a.role = "assistant".into();
+        a.model = Some(m.model_id.clone());
+        a.provider = Some(m.provider.clone());
+        a.api = Some(m.api.clone());
         a.content = vec![ContentBlock::Thinking {
             thinking: "reasoning".into(),
             thinking_signature: Some(String::new()),
@@ -1783,10 +1880,16 @@ mod tests {
         assert_eq!(asst["content"][0]["type"], "thinking");
         assert_eq!(asst["content"][0]["signature"], "");
 
-        // 普通 Anthropic（无该 compat）：仍降级为 text
+        // 换到别的模型（provider 不同）：整块丢弃，既不当 thinking 也不降级为文本（pi #10995）
         let out2 = convert_anthropic_messages(&[a], "", &model("claude-sonnet-4-5"));
-        let asst2 = out2.iter().find(|m| m["role"] == "assistant").unwrap();
-        assert_eq!(asst2["content"][0]["type"], "text");
+        for msg in &out2 {
+            if let Some(blocks) = msg["content"].as_array() {
+                for b in blocks {
+                    assert_ne!(b["type"], "thinking", "thinking 应被丢弃: {msg}");
+                    assert_ne!(b["text"], "reasoning", "不应降级为文本: {msg}");
+                }
+            }
+        }
     }
 
     /// pi #10047：OpenCode Zen / Go 的 qwen3.8-flash 端点返回空 thinking signature，
@@ -1802,6 +1905,9 @@ mod tests {
             );
             let mut a = AgentMessage::user_text("");
             a.role = "assistant".into();
+            a.model = Some(m.model_id.clone());
+            a.provider = Some(m.provider.clone());
+            a.api = Some(m.api.clone());
             a.content = vec![ContentBlock::Thinking {
                 thinking: "reasoning".into(),
                 thinking_signature: Some(String::new()),
@@ -1831,6 +1937,7 @@ mod tests {
                 arguments: json!({ "path": "a.rs" }),
                 thought_signature: None,
                 namespace: None,
+                arguments_error: None,
             },
         ];
         let out = convert_anthropic_messages(&[a], "", &m);
@@ -1862,6 +1969,67 @@ mod tests {
         assert_eq!(last["content"][0]["content"], "contents");
     }
 
+    /// 错误工具结果里的图片不能留在 tool_result 里：Anthropic 拒绝非纯文本的 error 结果，
+    /// 图片要排在本回合全部 tool_result 之后（pi #10794）。
+    #[test]
+    fn error_tool_result_images_move_after_the_tool_results() {
+        let m = model("claude-sonnet-4-5");
+        let mut a = AgentMessage::user_text("");
+        a.role = "assistant".into();
+        a.content = vec![ContentBlock::ToolCall {
+            id: "toolu_1".into(),
+            name: "read".into(),
+            arguments: json!({}),
+            thought_signature: None,
+            namespace: None,
+            arguments_error: None,
+        }];
+        let mut tr = AgentMessage::user_text("");
+        tr.role = "toolResult".into();
+        tr.tool_call_id = Some("toolu_1".into());
+        tr.tool_name = Some("read".into());
+        tr.is_error = true;
+        tr.content = vec![
+            ContentBlock::Text {
+                text: "boom".into(),
+                text_signature: None,
+            },
+            ContentBlock::Image {
+                data: "AAAA".into(),
+                mime_type: "image/png".into(),
+            },
+        ];
+
+        let out = convert_anthropic_messages(&[a, tr], "", &m);
+        let blocks = out.last().unwrap()["content"].as_array().unwrap();
+        assert_eq!(blocks[0]["type"], "tool_result");
+        // tool_result 内只剩文本（图片位置留占位）
+        let inner = blocks[0]["content"].as_array().unwrap();
+        assert!(
+            inner.iter().all(|b| b["type"] != json!("image")),
+            "{inner:?}"
+        );
+        assert!(
+            inner
+                .iter()
+                .any(|b| b["text"] == json!("(image attached after the tool results)")),
+            "{inner:?}"
+        );
+        // 图片与命名工具调用的 caption 在 tool_result 之后
+        let images: Vec<&Value> = blocks
+            .iter()
+            .filter(|b| b["type"] == json!("image"))
+            .collect();
+        assert_eq!(images.len(), 1, "{blocks:?}");
+        assert_eq!(images[0]["source"]["data"], "AAAA");
+        assert!(
+            blocks.iter().any(|b| b["text"].as_str().is_some_and(
+                |t| t.contains("Images from the error result of tool call toolu_1 (read)")
+            )),
+            "{blocks:?}"
+        );
+    }
+
     #[test]
     fn native_mid_convo_system_messages_are_held_until_the_next_assistant() {
         // 目录 compat.supportsMidConvoSystemMessages=true 的模型：系统消息原样下发，
@@ -1875,6 +2043,7 @@ mod tests {
             arguments: json!({}),
             thought_signature: None,
             namespace: None,
+            arguments_error: None,
         }];
         let mut note = AgentMessage::user_text("mid-run note");
         note.role = "system".into();
@@ -1907,6 +2076,7 @@ mod tests {
             arguments: json!({}),
             thought_signature: None,
             namespace: None,
+            arguments_error: None,
         }];
         let mut note = AgentMessage::user_text("late note");
         note.role = "system".into();
@@ -1931,6 +2101,7 @@ mod tests {
             arguments: json!({}),
             thought_signature: None,
             namespace: None,
+            arguments_error: None,
         }];
         let mut note = AgentMessage::user_text("note");
         note.role = "system".into();
@@ -2048,6 +2219,9 @@ mod tests {
         let m = model("claude-sonnet-4-5");
         let mut a = AgentMessage::user_text("");
         a.role = "assistant".into();
+        a.model = Some(m.model_id.clone());
+        a.provider = Some(m.provider.clone());
+        a.api = Some(m.api.clone());
         a.content = vec![ContentBlock::Thinking {
             thinking: "old thinking".into(),
             thinking_signature: None,
@@ -2070,6 +2244,7 @@ mod tests {
             arguments: json!({}),
             thought_signature: None,
             namespace: None,
+            arguments_error: None,
         }];
         let mut tr = AgentMessage::user_text("");
         tr.role = "toolResult".into();
@@ -2131,6 +2306,7 @@ mod tests {
             arguments: json!({}),
             thought_signature: None,
             namespace: None,
+            arguments_error: None,
         }];
         let out = convert_anthropic_messages(&[a], "", &m);
         // assistant tool_use 后补 synthetic tool_result

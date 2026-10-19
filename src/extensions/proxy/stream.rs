@@ -334,6 +334,7 @@ mod tests {
                 arguments: args,
                 thought_signature: None,
                 namespace: None,
+                arguments_error: None,
             },
             partial: AgentMessage::user_text(""),
         }
@@ -475,6 +476,7 @@ mod tests {
                 arguments: json!({"path": "a"}),
                 thought_signature: None,
                 namespace: None,
+                arguments_error: None,
             },
         ];
         msg.stop_reason = Some("toolUse".into());

@@ -20,6 +20,7 @@ fn main() {
         arguments: serde_json::json!({ "path": "src/main.rs" }),
         thought_signature: None,
         namespace: None,
+        arguments_error: None,
     });
     assistant.usage = Some(Usage {
         input: 1_200,

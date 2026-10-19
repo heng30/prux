@@ -1414,6 +1414,7 @@ mod tests {
                     arguments: json!({ "command": "cargo test" }),
                     thought_signature: None,
                     namespace: None,
+                    arguments_error: None,
                 },
             ],
             ..message("assistant", "")

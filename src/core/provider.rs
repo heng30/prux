@@ -30,6 +30,7 @@ pub mod responses;
 
 pub(crate) mod azure;
 pub(crate) mod decisions;
+pub(crate) mod json_args;
 pub(crate) mod usage;
 
 #[cfg(test)]
@@ -512,6 +513,12 @@ pub enum ContentBlock {
         /// OpenAI Responses 动态/命名空间工具的附加标识
         #[serde(default, skip_serializing_if = "Option::is_none")]
         namespace: Option<String>,
+        /// 参数解析失败的说明（含模型发来的原文）；解析成功为 None。
+        ///
+        /// 模型给出非法 JSON 时不静默执行「解析到的那部分字段」，
+        /// 而是带上这条错误让校验阶段直接失败、并把原文回给模型。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        arguments_error: Option<String>,
     },
     /// 图片内容块（用户附件或工具返回的图片）。
     #[serde(rename = "image")]
@@ -1363,6 +1370,7 @@ impl<'a> PartialTranslator<'a> {
                     arguments: Value::Null,
                     thought_signature: None,
                     namespace: None,
+                    arguments_error: None,
                 });
                 self.emit(|p| StreamEvent::ToolCallStart {
                     content_index,
@@ -1407,6 +1415,7 @@ impl<'a> PartialTranslator<'a> {
                         arguments: arguments.clone(),
                         thought_signature: None,
                         namespace: None,
+                        arguments_error: None,
                     };
                 }
                 let tool_call = ContentBlock::ToolCall {
@@ -1415,6 +1424,7 @@ impl<'a> PartialTranslator<'a> {
                     arguments,
                     thought_signature: None,
                     namespace: None,
+                    arguments_error: None,
                 };
                 self.emit(|p| StreamEvent::ToolCallEnd {
                     content_index,

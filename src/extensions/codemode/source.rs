@@ -98,6 +98,19 @@ pub fn parse_source(input: &str) -> Result<ParsedSource, String> {
         );
     }
 
+    // 非首行的 `// @options:` 会被静默当成普通注释，`timeout_ms` 不生效——
+    // 直接报错，在脚本运行前失败（pi #10631）。
+    if let Some(line_no) = input
+        .split('\n')
+        .enumerate()
+        .find(|(index, line)| *index > 0 && line.trim_start().starts_with(OPTIONS_PREFIX))
+        .map(|(index, _)| index + 1)
+    {
+        return Err(format!(
+            "The {OPTIONS_PREFIX} line must be the first line of the input; found one on line {line_no}"
+        ));
+    }
+
     let newline = input.find('\n');
     let first_line = match newline {
         Some(i) => input[..i].strip_suffix('\r').unwrap_or(&input[..i]),
@@ -183,11 +196,39 @@ mod tests {
         );
     }
 
-    /// 只有首行算选项行；前缀不完全匹配的注释按普通代码处理。
+    /// 只有首行算选项行；非首行的选项行报错（pi #10631）。
     #[test]
     fn only_first_line_is_an_options_line() {
-        let input = "text(1)\n// @options: {\"timeout_ms\": 1}";
-        assert_eq!(parse_source(input).unwrap().code, input);
+        // 非首行的选项行不再被静默忽略：报错且带上行号
+        for (input, line) in [
+            (
+                "// count things\n// @options: {\"timeout_ms\": 1000}\nwhile (true) {}",
+                2,
+            ),
+            (
+                "\n  // @options: {\"timeout_ms\": 1000}\nwhile (true) {}",
+                2,
+            ),
+            ("text(1)\r\n// @options: {\"timeout_ms\": 1}", 2),
+            (
+                "// @options: {\"timeout_ms\": 1}\ntext(1)\n// @options: {\"timeout_ms\": 2}",
+                3,
+            ),
+        ] {
+            let err = parse_source(input).unwrap_err();
+            assert_eq!(
+                err,
+                format!(
+                    "The // @options: line must be the first line of the input; found one on line {line}"
+                ),
+                "{input:?}"
+            );
+        }
+        // 首行不算错，字符串字面量里的前缀也不误判（pi 同样只看行首）
+        assert_eq!(
+            parse_source("text(\"// @options: {}\")").unwrap().code,
+            "text(\"// @options: {}\")"
+        );
         assert_eq!(
             parse_source("// @optionsx {}\ntext(1)").unwrap().options,
             SourceOptions::default()

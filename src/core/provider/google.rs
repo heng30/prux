@@ -24,10 +24,14 @@ use crate::{
     utils::{http, time::now_ms},
 };
 use futures_util::StreamExt;
+use regex::Regex;
 use serde_json::{Map, Value, json};
 use std::{
     collections::HashSet,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        OnceLock,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 /// 自动生成 tool call id 时追加的自增序号，保证同一毫秒内也不重名。
@@ -64,28 +68,39 @@ fn requires_tool_call_id(model_id: &str) -> bool {
 }
 
 /// 模型是否使用 Gemini 的离散 `thinkingLevel` 控制（而非 token 的 `thinkingBudget`）。
-/// Gemini 3 Pro/Flash（可带次版本号）、`gemini-flash-latest`/`gemini-flash-lite-latest`、Gemma 4（两种命名）。
+/// Gemini 3 Pro/Flash（可带次版本号）、Gemini 4 及以后、`gemini-flash-latest`/`gemini-flash-lite-latest`、
+/// Gemma 4（两种命名）。
 fn uses_google_thinking_level(model_id: &str) -> bool {
     let id = model_id.to_lowercase();
     is_gemini3_pro_or_flash(&id)
+        || is_gemini4_or_later(&id)
         || id == "gemini-flash-latest"
         || id == "gemini-flash-lite-latest"
         || is_gemma4(&id)
 }
 
+/// `gemini-4` 及以后的主版本号（`gemini-[4-9]` 或 `gemini-[1-9]\d`），
+/// 例如 `gemini-4-argon`——这批模型不支持 `thinkingBudget`（pi #10890）。
+fn is_gemini4_or_later(id: &str) -> bool {
+    /// 匹配 `gemini-[4-9]` / `gemini-[1-9]\d` 的编译后正则，只初始化一次。
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"gemini-(?:[4-9]|[1-9]\d)").expect("valid"))
+        .is_match(id)
+}
+
 /// `gemini-3(\.[0-9]+)?-(pro|flash)`
 fn is_gemini3_pro_or_flash(id: &str) -> bool {
     /// 匹配 `gemini-3[.x]-pro|flash` 的编译后正则，只初始化一次。
-    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    RE.get_or_init(|| regex::Regex::new(r"gemini-3(?:\.\d+)?-(?:pro|flash)").expect("valid"))
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"gemini-3(?:\.\d+)?-(?:pro|flash)").expect("valid"))
         .is_match(id)
 }
 
 /// `gemma-?4`（两种命名：`gemma-4-*` / `gemma4-*`）
 fn is_gemma4(id: &str) -> bool {
     /// 匹配 `gemma-4` / `gemma4` 两种写法的编译后正则，只初始化一次。
-    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    RE.get_or_init(|| regex::Regex::new(r"gemma-?4").expect("valid"))
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"gemma-?4").expect("valid"))
         .is_match(id)
 }
 
@@ -265,24 +280,26 @@ fn convert_google_assistant_message(
                 thinking_signature,
                 ..
             } => {
+                // 其它模型产生的 thinking 一律丢弃：签名只对造它的模型有效，
+                // 当文本发过去会让新模型把旧推理当成自己的回答。
+                if !is_same_provider_and_model {
+                    continue;
+                }
+
                 let sig = thinking_signature
                     .as_deref()
                     .filter(|s| valid_thought_signature(s));
-                if is_same_provider_and_model {
-                    if thinking.trim().is_empty() && sig.is_none() {
-                        continue;
-                    }
-                    let mut part = json!({
-                        "thought": true,
-                        "text": sanitize_surrogates(thinking)
-                    });
-                    if let Some(s) = sig {
-                        part["thoughtSignature"] = json!(s);
-                    }
-                    parts.push(part);
-                } else if !thinking.trim().is_empty() {
-                    parts.push(json!({ "text": sanitize_surrogates(thinking) }));
+                if thinking.trim().is_empty() && sig.is_none() {
+                    continue;
                 }
+                let mut part = json!({
+                    "thought": true,
+                    "text": sanitize_surrogates(thinking)
+                });
+                if let Some(s) = sig {
+                    part["thoughtSignature"] = json!(s);
+                }
+                parts.push(part);
             }
             ContentBlock::ToolCall {
                 id,
@@ -755,6 +772,7 @@ fn handle_google_function_call_part(
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
         namespace: None,
+        arguments_error: None,
     });
     if let Some(f) = on_event.as_mut() {
         f.push(RawStreamEvent::ToolCallStart { content_index: ci });
@@ -1198,6 +1216,7 @@ mod tests {
                 arguments: json!({ "path": "a.rs" }),
                 thought_signature: None,
                 namespace: None,
+                arguments_error: None,
             },
         ];
         let out = convert_google_messages(&[a], "", &m);
@@ -1227,19 +1246,28 @@ mod tests {
     }
 
     #[test]
-    fn thinking_cross_model_becomes_plain_text() {
+    fn thinking_cross_model_is_dropped() {
         let m = model("gemini-3.1-pro");
         let mut a = AgentMessage::user_text("");
         a.role = "assistant".into();
         a.provider = Some("anthropic".into());
+        a.model = Some("claude-sonnet-4-5".into());
+        a.api = Some("anthropic-messages".into());
         a.content = vec![ContentBlock::Thinking {
             thinking: "old reasoning".into(),
             thinking_signature: Some("not-base64!!".into()),
             redacted: None,
         }];
+        // 其它模型产生的 thinking 一律丢弃（pi #10995）：既不标 thought，也不当文本发过去
         let out = convert_google_messages(&[a], "", &m);
-        assert_eq!(out[0]["parts"][0]["text"], "old reasoning");
-        assert!(out[0]["parts"][0].get("thought").is_none());
+        for msg in &out {
+            if let Some(parts) = msg["parts"].as_array() {
+                for part in parts {
+                    assert_ne!(part["text"], "old reasoning", "{msg}");
+                    assert!(part.get("thought").is_none(), "{msg}");
+                }
+            }
+        }
     }
 
     #[test]
@@ -1294,6 +1322,7 @@ mod tests {
             arguments: json!({}),
             thought_signature: None,
             namespace: None,
+            arguments_error: None,
         }];
         let out = convert_google_messages(&[a], "", &m);
         assert_eq!(out.len(), 2);
@@ -1329,6 +1358,10 @@ mod tests {
         assert!(uses_google_thinking_level("gemini-3-pro-preview"));
         assert!(uses_google_thinking_level("gemini-3.1-flash"));
         assert!(uses_google_thinking_level("gemini-3.8-flash"));
+        // Gemini 4 及以后（pi #10890）：不再走 thinkingBudget
+        assert!(uses_google_thinking_level("gemini-4-argon"));
+        assert!(uses_google_thinking_level("gemini-4.5-pro"));
+        assert!(uses_google_thinking_level("gemini-10-pro"));
         assert!(uses_google_thinking_level("gemini-flash-latest"));
         assert!(uses_google_thinking_level("gemini-flash-lite-latest"));
         assert!(uses_google_thinking_level("gemma-4-31b-it"));

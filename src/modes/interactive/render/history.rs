@@ -494,6 +494,7 @@ mod tests {
             arguments: serde_json::json!({ "path": "a.rs" }),
             thought_signature: None,
             namespace: None,
+            arguments_error: None,
         });
         // 工具块：粗体工具名 + 参数（对齐 ToolExecutionComponent fallback）
         let lines = message_lines_for_test(&msg, 60, &theme, true);
@@ -515,6 +516,7 @@ mod tests {
             arguments: serde_json::json!({ "cmd": "ls" }),
             thought_signature: None,
             namespace: None,
+            arguments_error: None,
         }];
         app.messages.push(asst);
         let mut res = AgentMessage::user_text("output");
@@ -825,6 +827,7 @@ mod tests {
                 arguments: serde_json::json!({ "command": "echo hi" }),
                 thought_signature: None,
                 namespace: None,
+                arguments_error: None,
             },
         ];
         app.messages.push(m);
@@ -897,6 +900,7 @@ mod tests {
                 arguments: serde_json::json!({ "command": "echo hi" }),
                 thought_signature: None,
                 namespace: None,
+                arguments_error: None,
             },
         ];
         app.messages.push(m);

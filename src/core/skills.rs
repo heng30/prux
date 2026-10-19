@@ -6,7 +6,10 @@ use crate::{
         display::normalize_newlines,
         ignore::{IgnoreMatcher, IgnoreRule, glob_match, ig_ignores},
         mime::strip_bom,
-        paths::{EntryKind, entry_kind, relative_posix, resolve_home, shorten_home, to_posix},
+        paths::{
+            EntryKind, entry_kind, expand_tilde, relative_posix, resolve_home, shorten_home,
+            to_posix,
+        },
     },
 };
 use std::{
@@ -414,27 +417,31 @@ fn parse_filter(filter: &[String]) -> Vec<(FilterKind, String)> {
     let mut out = Vec::new();
     for p in filter {
         if let Some(rest) = p.strip_prefix('-') {
-            out.push((
-                FilterKind::ForceExclude,
-                rest.trim_start_matches('/').to_string(),
-            ));
+            out.push((FilterKind::ForceExclude, normalize_filter_pattern(rest)));
         } else if let Some(rest) = p.strip_prefix('+') {
-            out.push((
-                FilterKind::ForceInclude,
-                rest.trim_start_matches('/').to_string(),
-            ));
+            out.push((FilterKind::ForceInclude, normalize_filter_pattern(rest)));
         } else if let Some(rest) = p.strip_prefix('!') {
-            out.push((
-                FilterKind::Exclude,
-                rest.trim_start_matches('/').to_string(),
-            ));
+            out.push((FilterKind::Exclude, normalize_filter_pattern(rest)));
         }
     }
     out
 }
 
+/// 过滤条目的路径归一：先展开 `~` / `~/…`（否则 `!~/skills/pdf` 永远匹配不到），
+/// 未发生展开时才维持原有的「去前导斜杠」行为。
+fn normalize_filter_pattern(raw: &str) -> String {
+    let expanded = to_posix(&expand_tilde(PathBuf::from(raw)));
+    if expanded == raw {
+        raw.trim_start_matches('/').to_string()
+    } else {
+        expanded
+    }
+}
+
 /// 匹配目标对齐 pi matchesAnyPattern/matchesAnyExactPattern 对 SKILL.md 的特判：
-/// 相对路径、文件全路径、文件名、父目录相对路径、父目录名（技能目录名）
+/// 相对路径、文件全路径、文件名、父目录相对路径、父目录绝对路径、父目录名（技能目录名）
+///
+/// 绝对父目录是给展开后的 `~` 模式用的：`!~/skills/pdf` 展开成绝对路径后只能靠它命中。
 fn filter_matches_skill(skill: &Skill, root: &Path, pattern: &str, exact: bool) -> bool {
     let rel = relative_posix(root, &skill.path);
     let full = to_posix(&skill.path);
@@ -444,6 +451,7 @@ fn filter_matches_skill(skill: &Skill, root: &Path, pattern: &str, exact: bool) 
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
     let parent_rel = relative_posix(root, &skill.base_dir);
+    let parent_abs = to_posix(&skill.base_dir);
     let parent_name = skill
         .base_dir
         .file_name()
@@ -452,10 +460,21 @@ fn filter_matches_skill(skill: &Skill, root: &Path, pattern: &str, exact: bool) 
 
     // 末项是 frontmatter 的技能名：面板按名字写 `-name` 时，
     // 必须能命中「目录名与技能名不一致」的技能（如目录 foo、name: bar）。
-    let candidates = [rel, full, name, parent_rel, parent_name, skill.name.clone()];
+    let candidates = [
+        rel,
+        full,
+        name,
+        parent_rel,
+        parent_abs,
+        parent_name,
+        skill.name.clone(),
+    ];
     if exact {
-        let normalized = pattern.trim_matches('/').to_string();
-        candidates.iter().any(|c| c == &normalized)
+        // 两侧都去前导斜杠后比较，于是 `/abs/path` 与展开后的绝对 `~/path` 两种写法都能命中。
+        let normalized = pattern.trim_matches('/');
+        candidates
+            .iter()
+            .any(|c| c.as_str() == normalized || c.trim_start_matches('/') == normalized)
     } else {
         candidates.iter().any(|c| glob_match(pattern, c))
     }
@@ -1029,6 +1048,31 @@ mod tests {
             load(&["-foo".to_string()]).is_empty(),
             "目录名仍然可用（向后兼容）"
         );
+    }
+
+    /// `~/…` 过滤条目必须先展开才生效，否则 `!~/skills/pdf` 永远匹配不到（pi #10765）。
+    #[test]
+    fn filter_expands_tilde_in_paths() {
+        let home = tempfile::tempdir().unwrap();
+        let _hg = crate::test_support::HomeGuard::set(home.path());
+        let extra = home.path().join("extra").join("skills");
+        for name in ["keep", "glob-excluded", "exact-excluded"] {
+            write(
+                &extra.join(name).join("SKILL.md"),
+                &format!("---\nname: {name}\ndescription: {name}\n---\nb"),
+            );
+        }
+        let skills = load_skills_from_dir(&extra, false, "test");
+        let filter = parse_filter(&[
+            "!~/extra/skills/glob-*".to_string(),
+            "-~/extra/skills/exact-excluded".to_string(),
+        ]);
+        let enabled: Vec<String> = skills
+            .iter()
+            .filter(|s| skill_enabled(s, &extra, &filter))
+            .map(|s| s.name.clone())
+            .collect();
+        assert_eq!(enabled, vec!["keep"]);
     }
 
     #[test]

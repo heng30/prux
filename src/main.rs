@@ -24,7 +24,7 @@ use prux::{
         doc_sync::ensure_docs,
         export_html::export_session,
         model_resolver::{find_model, provider_explicitly_configured, resolve_provider_model},
-        model_scope::{self, ScopedModel},
+        model_scope::{self, AvailableModel, ScopedModel},
         prompt_templates::load_prompt_templates,
         session_manager::{
             ContinueRecentResult, OpenSessionResult, Session, SessionRepairPlan,
@@ -456,6 +456,7 @@ async fn main() {
     agent.model_is_fallback = model_unconfigured;
     agent.set_settings_default_tools(settings_default_tools);
     agent.set_default_tool_modifiers(default_tool_modifiers);
+    agent.restore_session_tools();
 
     // @文件 → text/image；stdin + fileText + 第一条 CLI 消息合成 initialMessage
     let (file_text, file_images) =
@@ -603,12 +604,12 @@ fn resolve_startup_scope(parsed: &Args, settings: &Settings) -> Vec<ScopedModel>
         return Vec::new();
     }
 
-    let available: Vec<model_scope::AvailableModel> = core::auth::list_configured_providers()
+    let available: Vec<AvailableModel> = core::auth::list_configured_providers()
         .iter()
         .flat_map(|p| {
             core::model_resolver::list_models(p)
                 .into_iter()
-                .map(|(id, name)| model_scope::AvailableModel {
+                .map(|(id, name)| AvailableModel {
                     provider: p.clone(),
                     id,
                     name,
@@ -625,6 +626,12 @@ fn resolve_startup_scope(parsed: &Args, settings: &Settings) -> Vec<ScopedModel>
             model_scope::ScopeDiagnostic::InvalidThinkingLevel { pattern } => {
                 eprintln!(
                     "Warning: Invalid thinking level in pattern \"{pattern}\". Using default instead."
+                );
+            }
+            model_scope::ScopeDiagnostic::Ambiguous { pattern, providers } => {
+                eprintln!(
+                    "Warning: Model \"{pattern}\" is offered by multiple providers ({}); adding one per provider. Use \"<provider>/{pattern}\" to pick one.",
+                    providers.join(", ")
                 );
             }
         }

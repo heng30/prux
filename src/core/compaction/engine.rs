@@ -186,6 +186,7 @@ mod tests {
             arguments: serde_json::json!({ "path": "big.txt" }),
             thought_signature: None,
             namespace: None,
+            arguments_error: None,
         }];
         m
     }

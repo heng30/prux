@@ -1166,6 +1166,54 @@ fn collect_all_of_type(provider: &str, kind: Option<ModelType>) -> Vec<CatalogMo
         .collect()
 }
 
+/// 目录里提供该模型（按 id 或显示名，大小写不敏感）的 provider 列表。
+fn providers_offering_model(model_name: &str) -> Vec<String> {
+    let lower = model_name.to_lowercase();
+    SUPPORTED_PROVIDERS
+        .iter()
+        .filter(|p| {
+            list_models(p)
+                .into_iter()
+                .any(|(id, name)| id.to_lowercase() == lower || name.to_lowercase() == lower)
+        })
+        .map(|p| p.to_string())
+        .collect()
+}
+
+/// 裸模型名在多个 provider 命中时挑一个：优先有凭据者，仍不唯一则报歧义。
+///
+/// 返回 `None` 表示目录里根本没这个模型（调用方走默认兜底），避免未知模型名硬失败。
+fn pick_provider_for_bare_model(
+    model_name: &str,
+    candidates: &[String],
+    configured: &[String],
+) -> Result<Option<String>> {
+    if candidates.is_empty() {
+        return Ok(None);
+    }
+
+    let credentialed: Vec<&String> = candidates
+        .iter()
+        .filter(|p| configured.iter().any(|c| c == *p))
+        .collect();
+    let pool: Vec<&String> = if credentialed.is_empty() {
+        candidates.iter().collect()
+    } else {
+        credentialed
+    };
+
+    match pool.len() {
+        1 => Ok(Some(pool[0].clone())),
+        _ => Err(Error::msg(format!(
+            "Model \"{model_name}\" is offered by multiple providers ({}); pass --provider or use \"<provider>/{model_name}\".",
+            pool.iter()
+                .map(|p| p.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))),
+    }
+}
+
 /// 从 CLI flag / 环境变量 / settings 决定 provider 与 model
 pub fn resolve_provider_model(
     provider_flag: Option<&str>,
@@ -1202,13 +1250,27 @@ pub fn resolve_provider_model(
             }
         }
         (None, Some(mp)) => Ok((mp, m_model, m_thinking)),
-        // 无任何配置：回退默认 provider 的默认模型。使 TUI 正常启动并在无凭据时提示 /login
-        (None, None) => match default_model_for(SUPPORTED_PROVIDERS[0]) {
-            Some((p, m)) => Ok((p, m, None)),
-            None => Err(Error::msg(
-                "no provider and model configured. set PRUX_PROVIDER/PRUX_MODEL or use --provider/--model.",
-            )),
-        },
+        // 裸模型名（没带 provider 前缀、也没给 provider）：跨 provider 解析。
+        // 多个 provider 都提供时优先有凭据的那个，仍不唯一就报歧义。
+        (None, None) => {
+            if !m_model.is_empty() {
+                let candidates = providers_offering_model(&m_model);
+                let configured = auth::list_configured_providers();
+                if let Some(provider) =
+                    pick_provider_for_bare_model(&m_model, &candidates, &configured)?
+                {
+                    return Ok((provider, m_model, m_thinking));
+                }
+            }
+
+            // 无任何配置：回退默认 provider 的默认模型。使 TUI 正常启动并在无凭据时提示 /login
+            match default_model_for(SUPPORTED_PROVIDERS[0]) {
+                Some((p, m)) => Ok((p, m, None)),
+                None => Err(Error::msg(
+                    "no provider and model configured. set PRUX_PROVIDER/PRUX_MODEL or use --provider/--model.",
+                )),
+            }
+        }
     }
 }
 
@@ -1348,6 +1410,46 @@ mod tests {
     use super::*;
     use crate::core::settings_manager::agent_dir;
     use serde_json::json;
+
+    /// 裸模型名的 provider 选择：优先有凭据者，多解报歧义，未知模型名走兜底（pi #10160）。
+    #[test]
+    fn bare_model_provider_pick_prefers_credentials_and_reports_ambiguity() {
+        let both = || vec!["openrouter".to_string(), "opencode".to_string()];
+
+        // 都没有凭据 → 歧义，错误里列出全部候选
+        let err = pick_provider_for_bare_model("gpt-6", &both(), &[])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("multiple providers"), "{err}");
+        assert!(err.contains("openrouter, opencode"), "{err}");
+
+        // 只有一个有凭据 → 选它
+        assert_eq!(
+            pick_provider_for_bare_model("gpt-6", &both(), &["opencode".to_string()]).unwrap(),
+            Some("opencode".to_string())
+        );
+
+        // 多个有凭据 → 仍歧义
+        let err = pick_provider_for_bare_model("gpt-6", &both(), &both())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("multiple providers"), "{err}");
+
+        // 目录里没这个模型 → None（调用方走默认兜底，不硬失败）
+        assert_eq!(
+            pick_provider_for_bare_model("nope", &[], &[]).unwrap(),
+            None
+        );
+    }
+
+    /// 目录里确实存在被多个 provider 共有的模型 id——歧义分支的现实来源。
+    #[test]
+    fn catalog_has_models_offered_by_multiple_providers() {
+        let _ad = crate::test_support::AgentDirGuard::temp();
+        let providers = providers_offering_model("claude-sonnet-4-5");
+        assert!(providers.len() > 1, "{providers:?}");
+        assert!(providers.iter().any(|p| p == "anthropic"), "{providers:?}");
+    }
 
     #[test]
     fn detect_compat_matches_pi_detection() {

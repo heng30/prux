@@ -202,11 +202,19 @@ fn parse_base(s: &str) -> Option<KeyBase> {
 }
 
 /// 解析键 id 字符串（"ctrl+shift+p"、"escape"、"shift+2"…）。
+///
+/// 末尾的 `+` 是**字面 `+` 键**而不是分隔符：`+` → `Char('+')`，`ctrl++` → `ctrl` + `Char('+')`。
+/// 此前用 `split('+')` 取末段作 base，这两种写法都会得到空 base 而被静默忽略。
 /// 无效的键 id 返回 None（用户配置中的无效项被忽略）。
 pub fn parse_key_id(s: &str) -> Option<KeyId> {
-    let parts: Vec<&str> = s.split('+').collect();
-    let base_str = parts.last().copied()?;
-    let base = parse_base(base_str)?;
+    let s = s.trim();
+    let (modifiers, base) = match s.rsplit_once('+') {
+        // 末尾是 `+`：把连续 `+` 归并成一个字面 `+`，余下才是修饰符
+        Some((rest, "")) => (rest.trim_end_matches('+'), parse_base("+")?),
+        Some((rest, last)) => (rest, parse_base(last)?),
+        None => ("", parse_base(s)?),
+    };
+    let parts: Vec<&str> = modifiers.split('+').collect();
     Some(KeyId {
         base,
         ctrl: parts.contains(&"ctrl"),
@@ -912,7 +920,17 @@ mod tests {
         assert_eq!(id("ctrl+-").base, KeyBase::Char('-'));
         assert!(id("ctrl+-").ctrl);
 
+        // 字面 `+` 键（pi #9880）：末尾 `+` 不是分隔符
+        assert_eq!(id("+").base, KeyBase::Char('+'));
+        assert!(!id("+").ctrl);
+        assert_eq!(id("ctrl++").base, KeyBase::Char('+'));
+        assert!(id("ctrl++").ctrl);
+        assert_eq!(id("ctrl+shift++").base, KeyBase::Char('+'));
+        assert!(id("ctrl+shift++").ctrl && id("ctrl+shift++").shift);
+
         assert!(parse_key_id("bogus-key").is_none());
+        assert!(parse_key_id("").is_none());
+        assert!(parse_key_id("+").is_some());
         assert!(parse_key_id("super+k").unwrap().super_);
     }
 

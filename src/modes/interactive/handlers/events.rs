@@ -1304,6 +1304,7 @@ mod tests {
             arguments: serde_json::json!({ "command": "ls" }),
             thought_signature: None,
             namespace: None,
+            arguments_error: None,
         }];
         app.messages.push(ai);
         let _ = app.render_history_lines(60);

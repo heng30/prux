@@ -1719,6 +1719,7 @@ mod tests {
                 arguments: serde_json::json!({}),
                 thought_signature: None,
                 namespace: None,
+                arguments_error: None,
             },
         ];
         let mut msgs = vec![assistant];

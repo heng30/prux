@@ -763,11 +763,9 @@ mod tests {
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async {
                 let mut model = classifier_model("http://127.0.0.1:1");
-                assert!(
-                    !model.input.iter().any(|mode| mode == "image"),
-                    "目录里的 typesafe 分类器应当是纯文本模型: {:?}",
-                    model.input
-                );
+                // 要验证的是「模型不接受图片时在发请求前就拦住」，与目录当前的输入能力无关：
+                // 目录里的 typesafe 分类器声明随 pi 目录同步变化（已声明支持图片），故显式固定为纯文本。
+                model.input = vec!["text".to_string()];
                 let mut with_images = context();
                 with_images.images = Some(vec![ImageContent::Image {
                     data: "AAAA".into(),

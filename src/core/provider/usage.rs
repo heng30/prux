@@ -1,7 +1,7 @@
 //! 共享的用量结构解析与成本计算
 
 use super::{Cost, Usage};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 /// 两份用量逐项相加（对均为 `None` 的可选字段保持 `None`）：
 /// 用于把嵌套/分类器开销并入调用方结果，或合并同一账本内的多笔开销。
@@ -102,31 +102,6 @@ pub fn apply_service_tier_cost(usage: &mut Usage, model_id: &str, service_tier: 
     usage.cost.cache_write *= multiplier;
     usage.cost.total =
         usage.cost.input + usage.cost.output + usage.cost.cache_read + usage.cost.cache_write;
-}
-
-/// 流式 JSON 解析：尝试完整解析，失败则尝试部分解析
-pub(crate) fn parse_streaming_json(s: &str) -> Value {
-    if s.trim().is_empty() {
-        return json!({});
-    }
-    if let Ok(v) = serde_json::from_str::<Value>(s) {
-        return v;
-    }
-    // 部分解析：找到最大前缀的平衡括号
-    partial_parse(s).unwrap_or(json!({}))
-}
-
-/// 从后往前逐步截断，返回最长的可完整解析 JSON 前缀；没有任何前缀能解析时为 `None`。
-fn partial_parse(s: &str) -> Option<Value> {
-    // 尝试递增截断找到可解析前缀
-    let chars: Vec<char> = s.chars().collect();
-    for cut in (1..=chars.len()).rev() {
-        let candidate: String = chars[..cut].iter().collect();
-        if let Ok(v) = serde_json::from_str::<Value>(&candidate) {
-            return Some(v);
-        }
-    }
-    None
 }
 
 /// 从 cost 对象取指定费率字段；字段缺失或不是数值时按 0.0 计。

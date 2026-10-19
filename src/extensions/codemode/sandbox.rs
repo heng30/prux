@@ -1138,6 +1138,28 @@ mod tests {
         );
     }
 
+    /// 纯粹 await 的循环（不调工具）也要被截止时间打断，与同步死循环同款（pi 1.2.0 codemode）。
+    #[tokio::test]
+    async fn awaiting_loop_is_interrupted_by_the_deadline() {
+        let host = Arc::new(FakeHost {
+            seen: Mutex::new(Vec::new()),
+        });
+        let request = SandboxRequest {
+            code: "while (true) { await null; }".to_string(),
+            tools: Vec::new(),
+            globals: Vec::new(),
+            store: BTreeMap::new(),
+            timeout_ms: Some(20),
+            cancel: Arc::new(AtomicBool::new(false)),
+        };
+        // 加一层墙钟护栏：中断处理器若没在 promise 排水时生效，测试会失败而不是挂住
+        let out = tokio::time::timeout(std::time::Duration::from_secs(20), run(request, host))
+            .await
+            .expect("sandbox 未在截止时间后停下（中断处理器未覆盖 await 循环）");
+        assert!(!out.ok, "{out:?}");
+        assert!(matches!(out.error_kind, ErrorKind::Timeout), "{out:?}");
+    }
+
     /// 取消标志已置位 → `Aborted`。
     #[tokio::test]
     async fn cancel_flag_aborts() {

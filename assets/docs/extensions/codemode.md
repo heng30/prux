@@ -24,7 +24,7 @@ return b;
 
 | 全局 | 作用 |
 |------|------|
-| `tools.<name>(args)` | 调一个工具，返回它的结果（声明了 `outputSchema` 的工具返回结构化结果，否则返回文本）；失败/被拒/参数非法时抛出带工具错误文本的 `Error` |
+| `tools.<name>(args)` | 调一个工具，返回它的结果（声明了 `outputSchema` 的工具返回结构化结果，否则返回文本）；失败/被拒/参数非法时抛出带工具错误文本的 `Error`；**声明了 `outputSchema` 的工具失败时也返回它的结构化结果**（在字段里看错误），只有没有 schema 的才抛 `Error` |
 | `tools["<原名>"](args)` | 工具名归一后的标识符（`my-tool` → `my_tool`）之外，原名也能用 |
 | `ALL_TOOLS` | `{ name, description }` 列表（`description` 是完整声明样例） |
 | `await searchTools(query, { limit, namespace })` | 按 BM25 检索可调工具（默认 8 条），返回 `ALL_TOOLS` 同形条目 |
@@ -129,7 +129,8 @@ declare const models: {
 
 ## 首行选项
 
-脚本首行可以（也只有首行可以）写一行选项：
+脚本首行可以（**也只有首行可以**）写一行选项；选项行写在其它位置时整次调用会在脚本运行前报错
+（否则 `timeout_ms` 会被静默忽略，脚本在没有截止时间的情况下跑）：
 
 ```
 // @options: {"max_output_tokens": 1000, "timeout_ms": 60000}

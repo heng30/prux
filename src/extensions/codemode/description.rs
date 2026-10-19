@@ -64,7 +64,7 @@ fn intro_section() -> String {
 /// `{docs}` 由 [`intro_section`] 替换为文档绝对路径。
 const INTRO: &str = r#"Run JavaScript code to orchestrate/compose tool calls
 - Runs as the body of an async function in a fresh QuickJS sandbox: top-level `await`/`return` work; no Node, filesystem, network or timers; 256 MB heap.
-- `tools.<name>(args)` calls a nested tool (object in, object or string out) and rejects with an Error carrying its error text on failure, denial or bad arguments. Calls are real and have side effects.
+- `tools.<name>(args)` calls a nested tool and rejects with its error text on failure, denial or bad arguments; a tool that declares an output schema resolves with its value even on failure. Calls are real and have side effects.
 - `text(value)` / `console.log(...)` append output, `image(<base64 data URI>)` appends an image and saves it to a temp file (the result names its path), top-level `return value` appends like `text()`, `exit()` ends it successfully. With several text items each starts with a `==> text N/M <==` line, and `console` lines follow the other output in one `<console_output>` block.
 - `store(key, value)` / `load(key)` keep JSON values across scripts; `ALL_TOOLS` lists nested tools; `await searchTools(query, { limit, namespace })`, `await describeTool(name)`, `await describeNamespace(name)` find tools and declarations.
 - Optional first line: `// @options: {"max_output_tokens": 1000, "timeout_ms": 60000}` (output token budget, hard deadline). Docs and examples: {docs}"#;

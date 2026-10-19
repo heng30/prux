@@ -9,8 +9,9 @@ use super::{
         flush_pending_system_messages, instruction_role, sanitize_surrogates,
         supports_mid_convo_system_messages, truncate_for_error,
     },
+    json_args::parse_tool_call_arguments,
     provider_extra_headers, track_stream_bytes,
-    usage::{compute_cost, parse_streaming_json},
+    usage::compute_cost,
 };
 use crate::{
     core::{
@@ -176,16 +177,25 @@ fn convert_assistant_message(
     // openai SDK 默认 content 为 null；deepseek 需要 content
     assistant_msg.insert("content".into(), Value::Null);
 
-    let non_empty_thinking: Vec<String> = msg
-        .content
-        .iter()
-        .filter_map(|b| match b {
-            ContentBlock::Thinking { thinking, .. } if !thinking.trim().is_empty() => {
-                Some(thinking.clone())
-            }
-            _ => None,
-        })
-        .collect();
+    // 其它模型（或其它 provider/api）产生的 thinking 不重放：
+    // 签名的 reasoning 只对造它的模型有效，当文本发过去会让新模型把旧推理当成自己的回答。
+    let is_same_model = msg.model.as_deref() == Some(model.model_id.as_str())
+        && msg.provider.as_deref() == Some(model.provider.as_str())
+        && msg.api.as_deref() == Some(model.api.as_str());
+
+    let non_empty_thinking: Vec<String> = if is_same_model {
+        msg.content
+            .iter()
+            .filter_map(|b| match b {
+                ContentBlock::Thinking { thinking, .. } if !thinking.trim().is_empty() => {
+                    Some(thinking.clone())
+                }
+                _ => None,
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
 
     if !non_empty_thinking.is_empty() {
         if !assistant_text.is_empty() {
@@ -1127,10 +1137,14 @@ impl StreamState {
         Ok(())
     }
 
-    /// 把 delta 分发给三类内容（文本 / 思考 / tool call）
+    /// 把 delta 分发给三类内容（思考 / 文本 / tool call）。
+    ///
+    /// 思考必须先于文本处理：内容块下标按首次出现顺序分配，代理（如 LiteLLM）
+    /// 把 reasoning 与 content 放在同一个 chunk 时，文本先处理会拿到更小的下标，
+    /// 渲染出来就是「答案在前、思考在后」。
     fn handle_delta(&mut self, delta: &Value, on_event: &mut Option<&mut PartialTranslator<'_>>) {
-        self.handle_content_delta(delta, on_event);
         self.handle_reasoning_delta(delta, on_event);
+        self.handle_content_delta(delta, on_event);
         self.handle_tool_call_delta(delta, on_event);
     }
 
@@ -1413,14 +1427,19 @@ impl StreamState {
                 .clone()
                 .unwrap_or_else(|| format!("call_{}", tc.index));
             let name = tc.name.clone().unwrap_or_default();
-            let arguments: Value = parse_streaming_json(&tc.arguments);
+
+            // 定稿：严格解析（不再退回部分前缀），非法 JSON 记下原文交给校验阶段
+            let (arguments, arguments_error) =
+                parse_tool_call_arguments(Some(tc.arguments.as_str()));
             content_blocks.push(ContentBlock::ToolCall {
                 id: id.clone(),
                 name: name.clone(),
                 arguments: arguments.clone(),
                 thought_signature: None,
                 namespace: None,
+                arguments_error,
             });
+
             if let Some(f) = on_event.as_mut()
                 && let Some(ci) = self.toolcall_indices.get(&tc.index)
             {
@@ -1664,6 +1683,7 @@ mod tests {
             arguments: json!({}),
             thought_signature: None,
             namespace: None,
+            arguments_error: None,
         }];
         let out = convert_messages(&[a], "", &m);
         assert_eq!(out[0]["role"], "assistant");
@@ -1688,6 +1708,7 @@ mod tests {
                 arguments: json!({}),
                 thought_signature: None,
                 namespace: None,
+                arguments_error: None,
             },
             ContentBlock::ToolCall {
                 id: "call_B".into(),
@@ -1695,6 +1716,7 @@ mod tests {
                 arguments: json!({}),
                 thought_signature: None,
                 namespace: None,
+                arguments_error: None,
             },
         ];
         let mut tr = AgentMessage::user_text("");
@@ -1748,6 +1770,7 @@ mod tests {
             arguments: json!({}),
             thought_signature: None,
             namespace: None,
+            arguments_error: None,
         }];
         let mk = |text: &str| {
             let mut tr = AgentMessage::user_text("");
@@ -1777,6 +1800,7 @@ mod tests {
                 arguments: json!({}),
                 thought_signature: None,
                 namespace: None,
+                arguments_error: None,
             })
             .collect();
         a
@@ -2408,6 +2432,31 @@ mod tests {
         assert_eq!(without[0]["function"]["name"], "codemode");
     }
 
+    /// 同一 chunk 同时带 reasoning 与 content 时，思考块下标必须小于文本块（pi #10926）。
+    #[test]
+    fn reasoning_precedes_content_when_one_chunk_carries_both() {
+        let m = model(false, None);
+        let mut st = StreamState::new();
+        let mut on_event = None;
+
+        st.handle_delta(
+            &json!({"content": "answer", "reasoning_content": "thinking"}),
+            &mut on_event,
+        );
+        let res = st.finish(&m, &mut None).unwrap();
+        let roles: Vec<&str> = res
+            .message
+            .content
+            .iter()
+            .map(|b| match b {
+                ContentBlock::Thinking { .. } => "thinking",
+                ContentBlock::Text { .. } => "text",
+                _ => "other",
+            })
+            .collect();
+        assert_eq!(roles, vec!["thinking", "text"], "{roles:?}");
+    }
+
     /// grammar 调用的裸源码（累积的 `custom.input`）被包成 `{"<prop>":"…"}` 的 JSON 参数。
     #[test]
     fn grammar_custom_input_is_wrapped_into_json_arguments() {
@@ -2516,6 +2565,7 @@ mod tests {
             arguments: json!({ "code": "text(1)" }),
             thought_signature: None,
             namespace: None,
+            arguments_error: None,
         }];
 
         // 不支持 grammar 的模型（不在目录里 → false）：必须是 function 形状
@@ -2561,6 +2611,7 @@ mod tests {
             arguments: json!({}),
             thought_signature: None,
             namespace: None,
+            arguments_error: None,
         }];
         a
     }

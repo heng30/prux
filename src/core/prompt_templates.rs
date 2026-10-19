@@ -140,10 +140,14 @@ fn strip_yaml_quotes(s: &str) -> String {
 }
 
 /// bash 风格参数切分（支持单双引号）
+///
+/// 空引号（`""` / `''`）会产生一个空串参数，不能丢弃：
+/// 否则后续位置参数整体前移，`${N:-default}` 的默认值会落错位置。
 pub fn parse_command_args(args_string: &str) -> Vec<String> {
     let mut args = Vec::new();
     let mut current = String::new();
     let mut quote: Option<char> = None;
+    let mut started = false;
     for c in args_string.chars() {
         if let Some(q) = quote {
             if c == q {
@@ -153,15 +157,18 @@ pub fn parse_command_args(args_string: &str) -> Vec<String> {
             }
         } else if c == '"' || c == '\'' {
             quote = Some(c);
+            started = true;
         } else if c.is_whitespace() {
-            if !current.is_empty() {
+            if started {
                 args.push(std::mem::take(&mut current));
+                started = false;
             }
         } else {
             current.push(c);
+            started = true;
         }
     }
-    if !current.is_empty() {
+    if started {
         args.push(current);
     }
     args
@@ -433,6 +440,19 @@ mod tests {
         assert_eq!(
             parse_command_args("one \"two words\" 'three'"),
             vec!["one", "two words", "three"]
+        );
+    }
+
+    /// 空引号必须保留为空串参数，否则后续位置参数前移（pi #10867）。
+    #[test]
+    fn keeps_empty_quoted_arguments() {
+        assert_eq!(parse_command_args("a \"\" b"), vec!["a", "", "b"]);
+        assert_eq!(parse_command_args("''"), vec![""]);
+        assert_eq!(parse_command_args("a ''"), vec!["a", ""]);
+        // 空串参数使 $2 落回默认值，同时 $3 仍取到 "c"（不再整体前移）
+        assert_eq!(
+            substitute_args("$1 ${2:-fallback} $3", &parse_command_args("a \"\" c")),
+            "a fallback c"
         );
     }
 

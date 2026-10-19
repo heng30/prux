@@ -3113,6 +3113,7 @@ mod tests {
                 arguments: serde_json::json!({}),
                 thought_signature: None,
                 namespace: None,
+                arguments_error: None,
             })
             .collect();
         let mut m = AgentMessage::user_text("");

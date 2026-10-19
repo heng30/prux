@@ -103,7 +103,7 @@ fn serialize_conversation_formats_roles() {
 }
 
 #[test]
-fn serialize_conversation_includes_thinking_and_tool_calls() {
+fn serialize_conversation_drops_thinking_but_keeps_tool_calls() {
     let mut assistant = msg("assistant", "body");
     assistant.content.push(ContentBlock::Thinking {
         thinking: "deep thinking".into(),
@@ -116,9 +116,12 @@ fn serialize_conversation_includes_thinking_and_tool_calls() {
         arguments: serde_json::json!({ "path": "a.rs" }),
         thought_signature: None,
         namespace: None,
+        arguments_error: None,
     });
     let text = serialize_conversation(&[assistant]);
-    assert!(text.contains("[Assistant thinking]: deep thinking"));
+    // 压缩/分支摘要/bug report 的序列化不含 thinking（pi 1.2.0）
+    assert!(!text.contains("deep thinking"));
+    assert!(!text.contains("[Assistant thinking]"));
     assert!(text.contains("read(path=\"a.rs\")"));
 }
 
@@ -141,6 +144,7 @@ fn file_ops_tracking() {
         arguments: serde_json::json!({ "path": "a.rs" }),
         thought_signature: None,
         namespace: None,
+        arguments_error: None,
     });
     assistant.content.push(ContentBlock::ToolCall {
         id: "2".into(),
@@ -148,6 +152,7 @@ fn file_ops_tracking() {
         arguments: serde_json::json!({ "path": "b.rs" }),
         thought_signature: None,
         namespace: None,
+        arguments_error: None,
     });
     assistant.content.push(ContentBlock::ToolCall {
         id: "3".into(),
@@ -155,6 +160,7 @@ fn file_ops_tracking() {
         arguments: serde_json::json!({ "path": "b.rs" }),
         thought_signature: None,
         namespace: None,
+        arguments_error: None,
     });
     extract_file_ops_from_message(&assistant, &mut ops);
     assert!(ops.read.contains("a.rs"));
