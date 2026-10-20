@@ -24,11 +24,11 @@ pub mod goal;
 pub mod hang_detect;
 pub mod jet;
 pub mod loop_detect;
+pub mod markit;
 pub mod mcp;
 pub mod memory;
 pub mod notify;
 pub mod open;
-pub mod pdf;
 pub mod plan_mode;
 pub mod proxy;
 pub mod recap_btw;
@@ -91,8 +91,8 @@ pub const PRIORITY_RECAP: u32 = 62;
 pub const PRIORITY_OPEN: u32 = 61;
 /// downloader 外部依赖下载扩展的注册优先级。
 pub const PRIORITY_DOWNLOADER: u32 = 60;
-/// pdf PDF 文本层读取扩展的注册优先级。
-pub const PRIORITY_PDF: u32 = 59;
+/// markit 文档读取（PDF / Office / EPUB → Markdown）扩展的注册优先级。
+pub const PRIORITY_MARKIT: u32 = 59;
 /// cache-watch prompt cache 冷/未命中提示扩展的注册优先级。
 pub const PRIORITY_CACHE_WATCH: u32 = 58;
 /// session-search 跨会话检索扩展的注册优先级。

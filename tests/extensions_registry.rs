@@ -60,7 +60,7 @@ fn register_all_collects_and_sorts_slices() {
         "update-check",
         "cache-watch",
         "open",
-        "pdf",
+        "markit",
         "session-search",
         "usage",
         "memory",
@@ -148,8 +148,8 @@ fn register_all_collects_and_sorts_slices() {
         "open 应默认不启用（会在用户机器上拉起外部程序）"
     );
     assert!(
-        !is_extension_enabled("pdf"),
-        "pdf 应默认不启用（Dev / Creator 工具）"
+        !is_extension_enabled("markit"),
+        "markit 应默认不启用（Dev / Creator 工具）"
     );
     assert!(
         !is_extension_enabled("cache-watch"),

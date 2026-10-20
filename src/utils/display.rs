@@ -231,6 +231,18 @@ pub fn format_thousands(n: u64) -> String {
     out
 }
 
+/// 数值格式化：整数值的浮点去掉 `.0`（`3` 而不是 `3.0`），其余用 `f64` 的默认表示。
+///
+/// 用于展示表格/统计类数据（如电子表格单元格）：`3.0` → `3`，`3.5` → `3.5`。
+/// 非有限值与绝对值不小于 1e15 的浮点不做整数化，避免溢出 `i64` 后变成一个假整数。
+pub fn format_float(value: f64) -> String {
+    if value.is_finite() && value.fract() == 0.0 && value.abs() < 1e15 {
+        format!("{}", value as i64)
+    } else {
+        format!("{value}")
+    }
+}
+
 /// 成本格式化：保留 6 位小数后去掉尾随 0（`0.029497` / `0.1` / `0`）。
 pub fn format_cost(cost: f64) -> String {
     let s = format!("{cost:.6}");
@@ -397,6 +409,15 @@ mod tests {
         assert_eq!(format_cost_usd(1.5), "$1.50");
         assert_eq!(format_cost_usd(0.0000012), "$0.0000012");
         assert_eq!(format_cost_usd(0.00000012), "$1.2e-7");
+    }
+
+    #[test]
+    fn format_float_drops_trailing_zero_only_for_integers() {
+        assert_eq!(format_float(3.0), "3");
+        assert_eq!(format_float(-2.0), "-2");
+        assert_eq!(format_float(3.5), "3.5");
+        assert_eq!(format_float(1e20), "100000000000000000000");
+        assert_eq!(format_float(f64::NAN), "NaN");
     }
 
     #[test]

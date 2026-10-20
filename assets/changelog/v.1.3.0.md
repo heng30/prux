@@ -40,6 +40,14 @@ This release aligns prux with upstream pi 1.3.0.
   percentage and reset countdown. Providers that expose no quota endpoint are named in the last line.
   Reports are cached for 120 seconds; `--offline` skips the requests entirely. Off by default.
 
+- **The `markit` extension reads documents as Markdown**: the `read_doc` tool (deferred, so it
+  first has to be found through `tool_search`) takes one `path` and dispatches on the extension —
+  `.pdf` through its text layer, `.docx` into headings / lists / tables, `.xlsx` / `.xls` / `.xlsb` /
+  `.xlsm` / `.ods` into one Markdown table per sheet, `.pptx` into one section per slide, and
+  `.epub` into chapters in spine order. Files above 32 MiB are refused before parsing, output is
+  truncated like `read` (2000 lines / 50KB), and a document with no text layer says so instead of
+  returning nothing. It replaces the PDF-only `read_pdf` tool. Off by default.
+
 - **`memory` keeps durable notes across sessions**: enabling the `memory` extension adds a
   `memory` tool (`remember` / `recall` / `search` / `list` / `forget` / `tag` / `link` /
   `related`) and injects a relevance-selected block of remembered notes before each request. Recall is
@@ -137,6 +145,13 @@ This release aligns prux with upstream pi 1.3.0.
   OpenRouter 额度、Kimi 与 Z.AI Coding Plan 窗口）以及 DeepSeek / Moonshot 的余额。
   每行是 24 格用量条 + 百分比 + 重置倒计时；没有配额端点的 provider 由末行点名。
   报告缓存 120 秒，`--offline` 不发请求。默认不启用。
+
+- **新增 `markit` 文档读取扩展（取代只读 PDF 的 `pdf` 扩展）**：`read_doc` 工具（延迟工具，
+  需先用 `tool_search` 载入）只吃一个 `path`，按扩展名分派——`.pdf` 抽文本层，`.docx` 还原
+  标题 / 列表 / 表格，`.xlsx` / `.xls` / `.xlsb` / `.xlsm` / `.ods` 每个工作表一段 Markdown 表格，
+  `.pptx` 每张幻灯片一节，`.epub` 按 spine 顺序拼接各章。超过 32 MiB 的文件在解析前拒绝，
+  输出按 `read` 的口径截断（2000 行 / 50KB）；没有文本层的文档明确说明而不是返回空。
+  默认不启用。
 
 - **新增 `memory` 跨会话记忆**：开启 `memory` 扩展后提供 `memory` 工具
   （`remember` / `recall` / `search` / `list` / `forget` / `tag` / `link` / `related`），

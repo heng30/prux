@@ -58,7 +58,7 @@ prux 都已有，对照见 §2。oh-my-pi 真正多出来的是三类东西：
 |---|---|---|---|
 | **Tier1** | 结构化检索 | §3.1 `ast-grep`（`ast_grep` + `ast_edit`） | 🟡 候选（推荐先做） |
 | **Tier1** | 生态互通 | §3.2 `agent-import`（八种外部 agent 配置导入） | 🟡 候选（推荐先做） |
-| **Tier1** | 文档读取 | §3.3 `markit`（文档 → Markdown，并把 `pdf` 扩展并入） | 🟡 候选（推荐先做） |
+| **Tier1** | 文档读取 | §3.3 `markit`（文档 → Markdown，并把 `pdf` 扩展并入） | ✅ 已落地（v1.3.0） |
 | **Tier1** | 上下文手术 | §3.4 `shake`（手动丢弃重内容） | 🟡 候选（推荐先做） |
 | **Tier1** | 交互 | §3.5 `ask`（结构化提问工具） | 🟡 候选（需先验证回传通道） |
 | **Tier1** | 技能沉淀 | §3.6 `manage_skill`（写 SKILL.md，并入 `skills` 扩展） | 🟡 候选 |
@@ -303,7 +303,22 @@ hook 面见 `src/core/extensions/hooks.rs`（`ExtensionHook` 13 项）。摘要�
   参考实现（用 MarkItDown / pandoc 之类外部命令）是一条退路，但会引入外部二进制依赖
   （prux 的 `downloader` 扩展能装 `fd`/`rg`，再加一个「按需下载 pandoc」是可行但要谨慎的口子）。
 
-**落地记录**：（待落地）
+**落地记录**（v1.3.0，已落地）：`src/extensions/markit.rs` + `markit/{docx,pptx,xlsx,epub,pdf,ooxml}.rs`，
+替换掉原来的 `pdf` 扩展（`read_pdf` → `read_doc`，扩展名 `pdf` → `markit`，`PRIORITY_PDF` → `PRIORITY_MARKIT`）。
+
+- **依赖**：`calamine` 0.37（`dates`，复用已有的 `chrono`）、`zip` 9.0（`deflate`，calamine 也用它）、
+  `quick-xml` 0.42（calamine 已带 0.42，这里是直接依赖，未新增版本）。
+- **格式**：`.pdf`（文本层） / `.docx`（`word/document.xml` → 标题 / 列表 / 表格） /
+  `.xlsx` / `.xls` / `.xlsb` / `.xlsm` / `.ods`（calamine，每表一段 Markdown 表格） /
+  `.pptx`（`ppt/slides/slideN.xml`，按数字排序） / `.epub`（OPF spine → `html2text`）。
+- **未按上游做的部分**：没有「converter 注册表 + `accepts()` 探测」这套抽象（按扩展名直接分派），
+  没有 docx 的 HTML 中转与内嵌图片抽取（`imageDir`），没有 `pandoc` / 外部二进制的退路，
+  也没有冷门语言的按需下载那类口子。
+- **现状缺口**：docx 只认 Word 默认样式名（`Title` / `Heading1`…）作标题，自定义样式不进层级；
+  pptx 不读演讲者备注；`html2text` 对 epub 的表格输出是文本网格而非 Markdown 管道表。
+  单表 200 行 × 32 列封顶。
+- **过程记录**：quick-xml 0.42 把实体引用拆成了独立的 `GeneralRef` 事件，且 `Attribute::unescape_value`
+  已改名 `normalized_value(XmlVersion)`——照 0.36 时代的写法搬会静默丢 `&amp;` 或编不过。
 
 ### 3.4 `shake`：手动丢弃重内容
 

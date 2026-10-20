@@ -68,7 +68,7 @@ core::extensions::register_banner_extension(extensions::banner::Banner::new());
 | `mcp` | 扩展 | Model Context Protocol 客户端：用单个 `mcp` 工具代理已配置服务器的工具/资源/prompt（`status`/`list`/`search`/`describe`/`call`/`resources`/`read_resource`/`prompts`/`get_prompt`），懒连接 + 空闲断开 + 元数据缓存 + OAuth 2.1 登录；`/mcp` 做状态/诊断/OAuth，`prux mcp` 子命令做配置增删改查。**默认不启用**，需在 `/extension` 面板开启。详见 [extensions/mcp.md](extensions/mcp.md) |
 | `browser` | 扩展 | 真实浏览器自动化（CDP）：单个 `browser` 工具共 16 个动作——`status`/`list_tabs`/`new_tab`/`select_tab`/`open`/`snapshot`/`get_content`/`click`/`type`/`select`/`press`/`scroll`/`wait`/`eval`/`screenshot`/`upload`。工具是**延迟工具**：模型先用 `tool_search` 载入才能调（见下文）。`snapshot` 给可交互元素分配 `e1`/`e2`… 引用，其余动作优先用引用定位（比 CSS 选择器稳）。CDP 端点写在 `agent_dir()/extensions/browser.json`（默认 `127.0.0.1:9222`，**只允许回环主机**）；那个端口上没人监听时，会按 `browsers` 列表的顺序自动启动一个浏览器（已经在跑的候选会被跳过）。连上后 `/dock` 面板里多一行浏览器状态。**默认不启用**（`Dev`/`Creator` 模式）。详见下文 |
 | `open` | 扩展 | 用系统默认程序打开文件或 URL：`open` 工具（参数 `path`）。`http`/`https`/`file` URL 原样透传，本地路径按工作目录展开且必须存在；只把用户引到内容面前，**不把内容读回上下文**。**默认不启用**（`Dev` / `Creator` 模式） |
-| `pdf` | 扩展 | 抽取 PDF 的**文本层**：`read_pdf` 工具（参数 `path`）。超过 32 MiB 的文件在解析前拒绝，抽出的文本按 `read` 的口径截断（2000 行 / 50KB）；扫描件（图片型 PDF）没有文本层时明确提示，解析失败报错而不是崩。**默认不启用**（`Dev` / `Creator` 模式） |
+| `markit` | 扩展 | 把文档读成 Markdown：`read_doc` 工具（**延迟工具**，模型先用 `tool_search` 载入；参数 `path`）按扩展名分派——`.pdf` 抽文本层，`.docx` 还原标题 / 列表 / 表格，`.xlsx` / `.xls` / `.xlsb` / `.xlsm` / `.ods` 每个工作表一段 Markdown 表格，`.pptx` 每张幻灯片一节，`.epub` 按 spine 顺序拼接各章。超过 32 MiB 的文件在解析前拒绝，输出按 `read` 的口径截断（2000 行 / 50KB）。**默认不启用**（`Dev` / `Creator` 模式） |
 | `session-search` | 扩展 | 跨会话检索：`session_search` 工具（**延迟工具**，模型先用 `tool_search` 载入）。扫描 `agent_dir()/sessions` 下最新的 200 份会话文件，按关键词返回**按会话分组**的片段；默认隐藏当前会话、工具调用与结果、以及 `<system-reminder>` 注入消息，每个会话默认只出 1 条。**默认不启用**（`Dev` / `Creator` 模式） |
 | `memory` | 扩展 | 跨会话记忆：`memory` 工具（`remember` / `recall` / `search` / `list` / `forget` / `tag` / `link` / `related`），外加每轮请求前按当前输入做**词法**（BM25）召回，把命中条目拼成一段稳定文本注入本次请求（不进会话历史、不改系统提示）。记忆图分两份落盘：`agent_dir()/extensions/memory/global.json`（跨项目）与 `agent_dir()/extensions/memory/projects/<project-key>.json`（按工作目录）；每 12 次 `turn_end` 用**一次**独立的一次性请求把最近对话抽成结构化条目。设置面板可调召回条数、抽取间隔与注入字符预算；`--offline` 跳过抽取。**默认不启用**（`Dev` / `Creator` 模式） |
 | `usage` | 扩展 | provider 配额用量面板：`/usage` 逐个**已连接** provider 显示配额 / 限额用量与重置时间——Claude 订阅的 5 小时 / 7 天 / 模型周窗口（`/api/oauth/usage`）、ChatGPT 的 5 小时 / 周与按模型窗口（`backend-api/wham/usage`）、GitHub Copilot 的各功能已用/上限、OpenRouter 的额度与今日/本周/本月花费、Kimi for Coding 的窗口、Z.AI Coding Plan 的 5 小时/周/MCP 月窗口，以及 DeepSeek / Moonshot 的余额。面板每行画 24 格用量条 + 百分比 + 重置倒计时，没有窗口的 provider 只列余额/键状态；其余已配置但**没有配额端点**的 provider 由末行点名。报告缓存 120 秒，`--offline` / `PRUX_OFFLINE` 不发请求。**默认不启用**（`Dev` / `Creator` 模式） |
@@ -92,9 +92,25 @@ TTL 取目录 `promptCache.{short,long}`（按 `PRUX_CACHE_RETENTION` 选档）�
 
 给模型一个 `open` 工具：把文件或 URL 交给系统默认程序（Linux `xdg-open` / macOS `open` / Windows `cmd /C start`）在**用户看得见**的窗口里打开。参数只有 `path`：`http` / `https` / `file` URL 原样透传，其它按工作目录展开成绝对路径并要求文件存在（不存在直接报错）。工具只负责把用户引到内容面前，**不把内容读回上下文**——要内容请用 `read` / `fetch_content`。
 
-### pdf
+### markit
 
-`read_pdf` 工具抽取 PDF 的**文本层**（不渲染版面、不识别图片）。超过 32 MiB 的文件在解析前拒绝；抽出的文本按 `read` 的口径截断（2000 行 / 50KB）。扫描件（图片型 PDF）没有文本层，此时返回明确的提示而不是空内容；解析失败返回错误而不是崩——解析器对畸形文件可能 panic，扩展用 `catch_unwind` 兜住，注意 release 构建是 `panic = "abort"`，该兜底只在 debug / 测试构建下生效。
+`read_doc` 把文档读成 **Markdown 文本**（不渲染版面、不做 OCR），参数只有 `path`：
+
+| 扩展名 | 产出 |
+|---|---|
+| `.pdf` | 文本层纯文本；扫描件（图片型 PDF）没有文本层，会明确提示而不是返回空 |
+| `.docx` | 标题（`Title` / `Heading1`…`Heading9` 样式 → `#` 级标题）、列表项、表格 → Markdown 表格 |
+| `.xlsx` / `.xls` / `.xlsb` / `.xlsm` / `.ods` | 每个工作表一节 `## Sheet: <名>` + Markdown 表格，首行作表头；公式读的是缓存值 |
+| `.pptx` | 每张幻灯片一节 `## Slide N: <标题>`，正文按缩进级别变成列表项；演讲者备注不读 |
+| `.epub` | 按 OPF spine 顺序逐章转正文（HTML → Markdown），链接、列表、代码块都会保留 |
+
+口径：
+
+- 单文件上限 32 MiB，超过在解析前就拒绝；输出按 `read` 的口径截断（2000 行 / 50KB），超出时给出截断说明。
+- 单张表格最多 200 行 × 32 列（表格首行当表头），单张工作表最多 200 行 × 32 列，超出部分只留一行省略说明。
+- 没有可提取文本时（扫描件、空文档）返回明确提示，不会静默给空内容。
+- 图表、图片、页眉页脚、批注、演讲者备注都不读。
+- 解析器对畸形文件可能崩，扩展会把它变成一条错误而不是让进程退出——注意 release 构建是 `panic = "abort"`，该兜底只在 debug / 测试构建下生效。
 
 ### session-search
 
