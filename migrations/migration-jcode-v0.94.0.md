@@ -210,8 +210,11 @@ self-dev、浏览器 bridge 的常驻进程）扩展层够不到；其余都能�
 >   `provider::simple_completion`），回复按 JSON 数组解析（容忍代码围栏与前后说明文字），
 >   同分类同正文视为强化、否则新增。`--offline` 跳过。
 > - **工具**：`memory`（`remember` / `recall` / `search` / `list` / `forget` / `tag` / `link` /
->   `related`），声明为**延迟工具**（`ToolExposure::Deferred`，前置 `tool_search`）：
->   它的 `snippet` / `prompt_guidelines` 在激活前不进系统提示词，省下常驻额度。
+>   `related`），声明为**直接工具**（`ToolExposure::Direct`）。
+>   曾声明 `Deferred` + 前置 `tool_search`，后因 `remember` / `forget` 是 push 型动因而改回直接：
+>   延迟后 `snippet` / `prompt_guidelines` 在激活前不进系统提示，而驱动模型主动写记忆的正是那条
+>   guideline，空记忆冷启动时召回块也不出现，模型手里没有任何信号；省下的四百余字符比召回
+>   注入块（默认上限 8000 字符）小一个数量级。
 >   相比本档原先的清单补了 `supersedes`（`remember` 时取代旧条目，走
 >   `superseded_by`）与 `tag` 的 `-name` 删除语法；`forget` 是真删（对齐 jcode），
 >   `supersede` 才是保留追溯的失效。
@@ -235,7 +238,8 @@ self-dev、浏览器 bridge 的常驻进程）扩展层够不到；其余都能�
 > 抽取回复解析（代码围栏 / 字符串里的方括号 / 别名分类 / 去重 / 条数上限）、
 > cadence 推进、工具八个动作、项目/全局隔离与缺 cwd 报错、`/memory` 各子命令）。
 > 声明 `fork_project()` 指向 jcode 0.94.0（来源版本取自本档）。
-> 默认不启用、`modes() == [Dev, Creator]`。
+> 默认不启用、`modes() == [Dev, Creator]`；工具当时声明为 `Deferred` + 前置 `tool_search`，
+> 该决定已被后续改动推翻（改为 `ToolExposure::Direct`，去掉 `prerequisite_tools()`）。
 
 ### 3.2 跨会话检索（`session-search`）
 

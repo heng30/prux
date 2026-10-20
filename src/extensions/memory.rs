@@ -42,7 +42,7 @@ use crate::{
         tools::{ToolError, ToolResult},
     },
     extensions::{
-        EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_MEMORY, command_arg, tool_search,
+        EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_MEMORY, command_arg,
         util::{push_context, session_id_of, split_model},
     },
     modes::interactive::{
@@ -217,11 +217,6 @@ impl Extension for Memory {
         vec![ExtensionMode::Dev, ExtensionMode::Creator]
     }
 
-    /// 前置工具：`memory` 是延迟工具，模型得先用 `tool_search` 才能发现它。
-    fn prerequisite_tools(&self) -> Vec<String> {
-        vec![tool_search::TOOL_NAME.to_string()]
-    }
-
     /// 提供 `memory` 工具。
     fn tools(&self) -> Vec<ExtensionTool> {
         vec![memory_tool()]
@@ -387,12 +382,14 @@ impl Extension for Memory {
 
 /// 构造 `memory` 工具定义。
 ///
-/// 声明为**延迟工具**（[`ToolExposure::Deferred`]）：它不进模型的可见工具表，必须先用
-/// `tool_search` 检索激活，因此它的 `snippet` 与 `prompt_guidelines` 在激活前**不进系统
-/// 提示词**——召回的注入块本身已经承担了「让模型想起有记忆」的角色，工具描述没必要每轮都占额度。
+/// 声明为**直接工具**（[`ToolExposure::Direct`]）：`remember` / `forget` 是 push 型动作，
+/// 靠的是模型每轮都看得见的那条 guideline（「用户说出持久偏好时调 `remember`」），
+/// 延迟到 `tool_search` 激活就会把这条驱动指令一起藏起来——空记忆冷启动时注入块也不会出现，
+/// 模型手里没有任何「可以写记忆」的信号，`forget` 更是无从发现。
+/// 它省下的 snippet + guidelines 只有四百余字符，比召回注入块小一个数量级，不值得。
 fn memory_tool() -> ExtensionTool {
     ExtensionTool {
-        exposure: ToolExposure::Deferred,
+        exposure: ToolExposure::Direct,
         namespace: None,
         annotations: ToolAnnotations::default(),
         output_schema: None,
@@ -1896,13 +1893,12 @@ mod tests {
         assert_eq!(ext.tools()[0].name, TOOL_MEMORY);
         assert_eq!(
             ext.tools()[0].exposure,
-            ToolExposure::Deferred,
-            "memory 工具必须延迟暴露：否则 snippet/guidelines 每轮都占系统提示词"
+            ToolExposure::Direct,
+            "memory 工具必须直接暴露：延迟后 snippet/guidelines 不进系统提示，remember 失去驱动"
         );
-        assert_eq!(
-            ext.prerequisite_tools(),
-            vec![tool_search::TOOL_NAME.to_string()],
-            "延迟工具需要声明 tool_search 前置"
+        assert!(
+            ext.prerequisite_tools().is_empty(),
+            "直接工具不依赖 tool_search，前置声明会误报 requires"
         );
         let cmds = ext.commands();
         assert_eq!(cmds.len(), 1);

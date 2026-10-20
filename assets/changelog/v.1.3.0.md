@@ -41,8 +41,8 @@ This release aligns prux with upstream pi 1.3.0.
   Reports are cached for 120 seconds; `--offline` skips the requests entirely. Off by default.
 
 - **`memory` keeps durable notes across sessions**: enabling the `memory` extension adds a
-  deferred `memory` tool (`remember` / `recall` / `search` / `list` / `forget` / `tag` / `link` /
-  `related`, loaded with `tool_search`) and injects a relevance-selected block of remembered notes before each request. Recall is
+  `memory` tool (`remember` / `recall` / `search` / `list` / `forget` / `tag` / `link` /
+  `related`) and injects a relevance-selected block of remembered notes before each request. Recall is
   lexical (BM25), memories live in `agent_dir()/extensions/memory/` split into a global file and
   one per working directory, and every 12 turns a single one-shot request extracts new entries
   from the conversation. `--offline` skips extraction. Off by default.
@@ -138,9 +138,8 @@ This release aligns prux with upstream pi 1.3.0.
   每行是 24 格用量条 + 百分比 + 重置倒计时；没有配额端点的 provider 由末行点名。
   报告缓存 120 秒，`--offline` 不发请求。默认不启用。
 
-- **新增 `memory` 跨会话记忆**：开启 `memory` 扩展后提供延迟 `memory` 工具
-  （`remember` / `recall` / `search` / `list` / `forget` / `tag` / `link` / `related`，
-  先用 `tool_search` 载入），
+- **新增 `memory` 跨会话记忆**：开启 `memory` 扩展后提供 `memory` 工具
+  （`remember` / `recall` / `search` / `list` / `forget` / `tag` / `link` / `related`），
   并在每次请求前按当前输入注入一段按相关度挑选的记忆。召回是词法的（BM25），
   记忆落盘在 `agent_dir()/extensions/memory/`（全局一份 + 每个工作目录一份），
   每 12 轮用一次独立请求从对话里抽取新条目；`--offline` 跳过抽取。默认不启用。
