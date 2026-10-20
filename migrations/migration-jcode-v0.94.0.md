@@ -37,8 +37,8 @@ jcode 与 prux 的重叠面与 kiss 类似：**自动化与 provider 那一半�
 本地 OpenAI 兼容网关、终端图形协议、mermaid 渲染），对照见 §2。
 
 按 §头部「判断口径」逐项过筛后，jcode 多出来、**且能作为独立扩展**的功能共 **10 项**（§3）：
-其中 6 项已落地（`browser`、`pdf`、`open`、`cache-watch`、`session-search`、`usage`）、
-3 项（`agent-grep`、`panel`、`bg`）明确不做、余下 1 项（`memory`）待落地。
+其中 7 项已落地（`browser`、`pdf`、`open`、`cache-watch`、`session-search`、`usage`、`memory`）、
+3 项（`agent-grep`、`panel`、`bg`）明确不做。
 **其余全部明确不做**（§4）：包括 3 项被筛掉的「辅助项 / 机制」、2 项属 core 的策略与机制，
 以及 11 项扩展层够不到的能力。
 
@@ -46,7 +46,7 @@ jcode 与 prux 的重叠面与 kiss 类似：**自动化与 provider 那一半�
 
 | 类别 | 项 | 状态 |
 |---|---|---|
-| 可作为扩展 | §3.1 记忆系统 `memory` | 📋 待落地（词法召回，见 §4.15） |
+| 可作为扩展 | §3.1 记忆系统 `memory` | ✅ 已落地（2026-10-19，词法召回，见 §4.15） |
 | 可作为扩展 | §3.2 跨会话检索 `session-search` | ✅ 已落地（2026-10-11） |
 | 不做 | §3.3 结构感知检索 `agent-grep` | 🚫 明确不做（2026-10-19） |
 | 可作为扩展 | §3.4 provider 配额用量 `usage` | ✅ 已落地（2026-10-19，翻案） |
@@ -190,6 +190,52 @@ self-dev、浏览器 bridge 的常驻进程）扩展层够不到；其余都能�
 | 验证 | 图读写往返、去重/强化、BM25 召回排序、注入块的稳定性（同一召回两次产生相同文本）、cadence（K 轮触发一次抽取）、`memory` 工具各动作、预算截断；`AgentDirGuard::temp()` 隔离目录 |
 | 工作量 | **大**（jcode 相关代码数千行；prux 首版可只做「抽取 + 词法召回 + 工具」三件套） |
 | 默认状态 | 默认不启用（`Dev` / `Creator`） |
+
+> **落地记录（2026-10-19）**：落点 `src/extensions/memory.rs` +
+> `src/extensions/memory/{graph,store,config,recall,extract}.rs`。
+> 按本档建议只做**词法**召回（无 embedding，§4.15），并保留「抽取 + 召回 + 工具」三件套。
+>
+> - **存储**：`agent_dir()/extensions/memory/global.json`（跨项目）与
+>   `.../projects/<project-key>.json`（按工作目录；键复用 `extensions::util::project_key`，
+>   与会话目录同名）。JSON 图沿用 jcode 的 v2 形状（`graph_version` / `memories` / `tags` /
+>   `clusters` / `edges` / `reverse_edges` / `metadata`），但**去掉 embedding 字段**、
+>   `clusters` 恒空（prux 不做聚类）；单份存储上限 1000 条，超出按打分淘汰。
+> - **召回**：`ContextWithSystem` 钩子，用**当前用户消息**做 BM25（词元来自
+>   `utils::text::terms`，中日韩按二字组合展开），命中条目按分类拼块追加到本次请求。
+>   块内容确定性（分数 → 更新时间 → id 排序），且按「查询文本」缓存，一轮之内只算一次——
+>   注入一变就会打掉 prompt cache。无命中的查询不注入任何东西。
+> - **抽取**：`Boundary` 钩子的 `turn_end` 推进 cadence（默认每 12 次），
+>   `agent_before_settle` 用 `contextMessages` 拼摘录、起一次独立的一次性请求
+>   （`auth::ensure_oauth_valid` → `model_resolver::configured_model` →
+>   `provider::simple_completion`），回复按 JSON 数组解析（容忍代码围栏与前后说明文字），
+>   同分类同正文视为强化、否则新增。`--offline` 跳过。
+> - **工具**：`memory`（`remember` / `recall` / `search` / `list` / `forget` / `tag` / `link` /
+>   `related`），声明为**延迟工具**（`ToolExposure::Deferred`，前置 `tool_search`）：
+>   它的 `snippet` / `prompt_guidelines` 在激活前不进系统提示词，省下常驻额度。
+>   相比本档原先的清单补了 `supersedes`（`remember` 时取代旧条目，走
+>   `superseded_by`）与 `tag` 的 `-name` 删除语法；`forget` 是真删（对齐 jcode），
+>   `supersede` 才是保留追溯的失效。
+> - **配置**：`agent_dir()/extensions/memory.json` 的 `recallLimit` / `extractInterval` /
+>   `injectBudgetChars`（`0` 分别表示关闭自动召回 / 自动抽取 / 注入），`/memory settings` 面板循环切换。
+> - **命令**：`/memory status|list|search <q>|forget <id>|settings`。
+>
+> **与本节原计划的差异**：
+> - 原计划写「`TransformContext`（或 `ContextWithSystem`）」——选了后者：它结果原样发送、
+>   不改写 `agent.messages`，所以注入不会进会话历史、也不会被后续压缩当成真实对话
+>   （与 `tasks` 的提醒注入同一取舍）；
+> - 原计划的「会话结束时抽取」没有独立钩子可用，落到整轮结算（`agent_before_settle`），
+>   与周期性抽取共用同一条路径；
+> - 原计划让 `periodic extraction` 每 K **轮**触发：实现按 `turn_end` 计数（多轮 run 与
+>   单轮 run 一视同仁），间隔由设置项控制；
+> - 显式 `recall` / `search` 会给返回条目累加访问次数并落盘（`access_count`/置信度回升），
+>   **自动注入不写盘**——那条路径在每次请求前跑，不能带 I/O。
+>
+> 验证：`cargo test --lib extensions::memory`（58 个用例：图读写往返与容量淘汰、标签/边/取代、
+> 时间衰减与访问加成、BM25 排序与 CJK bigram、注入块的确定性与预算截断、
+> 抽取回复解析（代码围栏 / 字符串里的方括号 / 别名分类 / 去重 / 条数上限）、
+> cadence 推进、工具八个动作、项目/全局隔离与缺 cwd 报错、`/memory` 各子命令）。
+> 声明 `fork_project()` 指向 jcode 0.94.0（来源版本取自本档）。
+> 默认不启用、`modes() == [Dev, Creator]`。
 
 ### 3.2 跨会话检索（`session-search`）
 
@@ -679,7 +725,7 @@ prux 的 `doctor` 扩展只做不带凭据的 `HEAD` 可达性探测。
 
 ### 6.2 落地前需要确认的决策点
 
-1. **§3.1 `memory` 的召回范围**：只做词法（本档建议），还是要先补 embedding API 面（§4.15 已判不做）？
+1. ~~**§3.1 `memory` 的召回范围**~~：已定——只做**词法**（BM25），不补 embedding API 面（2026-10-19，见 §3.1 落地记录）。
 2. ~~**§3.3 `agent-grep` 的结构提取**~~：已定——**不做**（2026-10-19，见 §3.3 决定）。
 3. ~~**§3.5 `panel` 的终端降级形态**~~：已定——**不做**（2026-10-19，见 §3.5 决定）。
 4. ~~**§3.4 `usage` 的数据源**~~：已定——只做**配额端点**，不做本地台账（2026-10-19，见 §3.4 落地记录）。

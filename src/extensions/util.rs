@@ -137,6 +137,20 @@ pub fn numeric_id(id: &str) -> f64 {
     id.parse::<f64>().unwrap_or(f64::NAN)
 }
 
+/// `provider/model_id` → `(provider, model_id)`。
+///
+/// 只按第一个 `/` 切分，所以 `openrouter/vendor/model` 的模型侧保留剩余斜杠；
+/// 任一侧为空（无斜杠或以 `/` 开头）时返回 `None`。
+pub fn split_model(raw: &str) -> Option<(String, String)> {
+    let (provider, model) = raw.split_once('/')?;
+    let provider = provider.trim();
+    let model = model.trim();
+    if provider.is_empty() || model.is_empty() {
+        return None;
+    }
+    Some((provider.to_string(), model.to_string()))
+}
+
 /// 目标文本压成单行（空白折叠为一个空格）并按字符数截断，超出时以 `…` 收尾。
 pub fn truncate_objective(objective: &str, max: usize) -> String {
     let single = objective.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -516,5 +530,19 @@ mod tests {
         assert_eq!(tighter_u32(0, 50), 50);
         assert_eq!(tighter_u32(50, 0), 50);
         assert_eq!(tighter_u32(0, 0), 0);
+    }
+
+    #[test]
+    fn split_model_handles_provider_and_slashed_ids() {
+        assert_eq!(
+            split_model("anthropic/claude-x"),
+            Some(("anthropic".to_string(), "claude-x".to_string()))
+        );
+        assert_eq!(
+            split_model("openrouter/vendor/model"),
+            Some(("openrouter".to_string(), "vendor/model".to_string()))
+        );
+        assert_eq!(split_model("no-slash"), None);
+        assert_eq!(split_model("/model"), None);
     }
 }

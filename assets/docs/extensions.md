@@ -70,6 +70,7 @@ core::extensions::register_banner_extension(extensions::banner::Banner::new());
 | `open` | 扩展 | 用系统默认程序打开文件或 URL：`open` 工具（参数 `path`）。`http`/`https`/`file` URL 原样透传，本地路径按工作目录展开且必须存在；只把用户引到内容面前，**不把内容读回上下文**。**默认不启用**（`Dev` / `Creator` 模式） |
 | `pdf` | 扩展 | 抽取 PDF 的**文本层**：`read_pdf` 工具（参数 `path`）。超过 32 MiB 的文件在解析前拒绝，抽出的文本按 `read` 的口径截断（2000 行 / 50KB）；扫描件（图片型 PDF）没有文本层时明确提示，解析失败报错而不是崩。**默认不启用**（`Dev` / `Creator` 模式） |
 | `session-search` | 扩展 | 跨会话检索：`session_search` 工具（**延迟工具**，模型先用 `tool_search` 载入）。扫描 `agent_dir()/sessions` 下最新的 200 份会话文件，按关键词返回**按会话分组**的片段；默认隐藏当前会话、工具调用与结果、以及 `<system-reminder>` 注入消息，每个会话默认只出 1 条。**默认不启用**（`Dev` / `Creator` 模式） |
+| `memory` | 扩展 | 跨会话记忆：`memory` 工具（**延迟工具**，模型先用 `tool_search` 载入；`remember` / `recall` / `search` / `list` / `forget` / `tag` / `link` / `related`），外加每轮请求前按当前输入做**词法**（BM25）召回，把命中条目拼成一段稳定文本注入本次请求（不进会话历史、不改系统提示）。记忆图分两份落盘：`agent_dir()/extensions/memory/global.json`（跨项目）与 `agent_dir()/extensions/memory/projects/<project-key>.json`（按工作目录）；每 12 次 `turn_end` 用**一次**独立的一次性请求把最近对话抽成结构化条目。设置面板可调召回条数、抽取间隔与注入字符预算；`--offline` 跳过抽取。**默认不启用**（`Dev` / `Creator` 模式） |
 | `usage` | 扩展 | provider 配额用量面板：`/usage` 逐个**已连接** provider 显示配额 / 限额用量与重置时间——Claude 订阅的 5 小时 / 7 天 / 模型周窗口（`/api/oauth/usage`）、ChatGPT 的 5 小时 / 周与按模型窗口（`backend-api/wham/usage`）、GitHub Copilot 的各功能已用/上限、OpenRouter 的额度与今日/本周/本月花费、Kimi for Coding 的窗口、Z.AI Coding Plan 的 5 小时/周/MCP 月窗口，以及 DeepSeek / Moonshot 的余额。面板每行画 24 格用量条 + 百分比 + 重置倒计时，没有窗口的 provider 只列余额/键状态；其余已配置但**没有配额端点**的 provider 由末行点名。报告缓存 120 秒，`--offline` / `PRUX_OFFLINE` 不发请求。**默认不启用**（`Dev` / `Creator` 模式） |
 | `jet` | 扩展 | 虚拟模型路由器：注册虚拟模型 `jet/auto`，**用强模型规划、用便宜模型实现**——本轮第一次成功的 `edit`/`write` 之后同轮切到实现模型并留在那里，因此每个会话最多切换一次模型、最多吃一次 prompt-cache miss。配置在 `agent_dir()/extensions/jet.json`（**没有默认值**：路由目标不完整或解析不到就不注册进 `/model`），`/jet set` 配分类器、`/jet router` 增量配路由目标（三档可各用不同 provider）、`/jet reset` 清空。**默认不启用**（`Dev`/`Creator` 模式可用）。详见下文与 [virtual-models.md](virtual-models.md) |
 | `tasks` | 扩展 | 任务跟踪与协调：7 个模型可见工具（`TaskCreate` / `TaskList` / `TaskGet` / `TaskUpdate` / `TaskOutput` / `TaskStop` / `TaskExecute`）、常驻任务 widget、`/tasks` 命令与系统提醒注入，`TaskExecute` 经 RPC 联动 `subagent` 扩展。**默认不启用**（`Dev`/`Creator` 模式可用） |
@@ -120,6 +121,63 @@ TTL 取目录 `promptCache.{short,long}`（按 `PRUX_CACHE_RETENTION` 选档）�
 **范围**：只搜 `agent_dir()/sessions` 下**本机已存的 prux 会话**，按文件修改时间取最新一批；不读别的工具的会话文件，也不联网。打不开或需要修复的会话文件直接跳过（检索不是修复工具），所以一份坏文件不会让整次检索失败。超长会话有扫描上限（单条消息 5 万字符、单份会话 400 万字符），超出部分不参与检索。
 
 **当前会话的判定**：优先用启动与会话切换时记下的会话文件路径；扩展是在会话中途被启用时没有这份记录，退回「当前工作目录的会话目录里最新那份」这一近似。
+
+### memory
+
+`memory` 让 agent 记住「跨会话仍然成立的事」，分三件事：
+
+- **抽取**：每 `extractInterval` 次 `turn_end`（默认 12）之后，在整轮结算时用**一次**独立的一次性
+  请求把最近 24 条 / 12000 字以内的对话摘录抽成结构化条目（事实 / 偏好 / 实体 / 纠正），写进记忆图；
+- **召回**：每次请求前按当前用户消息做**词法** BM25 召回（没有向量检索），把命中条目拼成一段文本
+  追加进本次请求的上下文；
+- **工具**：`memory` 工具让模型自己读写，用户也可以显式要求「记住这件事」或「忘掉它」。它是
+  **延迟工具**（与 [session-search](#session-search) 同款）：不进模型的可见工具表，需先用
+  `tool_search` 载入，因此它的工具描述与 guidelines 在激活前不占系统提示词。
+
+召回是**纯词法**的：查询按非字母数字切成词元、去停用词，中日韩文字按**相邻二字组合**（bigram）展开，
+所以中文写一个词或一整句都能命中。注入块的内容是**确定性**的（同样的图 + 同样的查询必得同样的文本），
+且一轮之内只算一次——注入变了就会把 prompt cache 打掉。
+
+| 动作 | 参数 | 说明 |
+|------|------|------|
+| `remember` | `content`、`category`、`tags`、`scope`、`supersedes` | 写一条记忆。同分类同正文视为「已经知道」，只做强化不重复写入；`supersedes` 传旧条目 id 表示取代它（旧条目留在盘上但不再被召回） |
+| `recall` | `query`、`scope`、`limit` | 有 `query` 时 BM25 取前 `limit` 条（默认 10）；无 `query` 时给「最近/最重要」的条目 |
+| `search` | `query`、`scope`、`limit` | 列出命中任意查询词的条目（默认 100），按相关度排序 |
+| `list` | `scope`、`category`、`tags`、`limit` | 按更新时间倒序列出条目 |
+| `forget` | `id` | 删除一条记忆（先找项目存储，再找全局） |
+| `tag` | `id`、`tags` | 加标签；`tags` 里以 `-` 开头的项表示**去掉**该标签（如 `-tooling`） |
+| `link` | `from_id`、`to_id`、`weight` | 在两条记忆之间建关联（必须同属一份存储） |
+| `related` | `id`、`depth` | 从一条记忆出发按标签/关联边遍历（默认 2 跳、上限 5） |
+
+`remember` 默认写**项目**作用域；`scope: "global"` 写跨项目的那一份。`recall` / `search` / `list`
+默认 `all`（两份合并读）。
+
+**存储**（都在本机，不含网络）：
+
+- `agent_dir()/extensions/memory/global.json`：全局记忆；
+- `agent_dir()/extensions/memory/projects/<project-key>.json`：按工作目录分的项目记忆，键与会话目录同名
+  （如 `--Users-me-work-repo--`），所以一个仓库的记忆文件与它的会话目录一眼能对上。
+
+图格式是 JSON（`graph_version` / `memories` / `tags` / `edges` / `reverse_edges` / `metadata`），
+条目带分类、标签、可信度、置信度（随时间衰减，被用到时回升）与取代关系。单份存储上限 1000 条，
+超出时按打分淘汰最旧、最少被用到的条目。
+
+**边界与代价**：
+
+- 记忆**落盘在 `agent_dir()` 下**，按仓库划分；换工作目录就是另一份项目记忆；
+- 只有抽取那一步会把对话摘录发给当前模型（每 N 轮一次），召回本身不发请求；
+- `--offline` / `PRUX_OFFLINE` 跳过抽取，召回与工具照常可用；
+- `/memory` 查看状态（条数、标签/边数、当前设置、最近一次抽取结果）、列条目、检索、按 id 删除，
+  `/memory settings` 打开设置面板；
+- 项目作用域没有工作目录时会**报错**而不是悄悄写进全局。
+
+设置键（`agent_dir()/extensions/memory.json`）：
+
+| 键 | 含义 | 缺省 | `0` 的语义 |
+|----|------|------|-----------|
+| `recallLimit` | 每轮注入的记忆条数上限 | 5 | 关闭自动召回 |
+| `extractInterval` | 每多少次 `turn_end` 触发一次抽取 | 12 | 关闭自动抽取 |
+| `injectBudgetChars` | 注入块的字符预算 | 8000 | 关闭注入 |
 
 ### usage
 
@@ -785,7 +843,7 @@ banner 扩展**互斥**：注册/面板切换时启用一个会自动禁用其�
 ## settings 与启用状态
 
 - **`disabledExtensions`**：settings.json 中禁用的扩展名数组。注册时据此恢复初始状态（对默认启用的扩展 = 关闭）；/extension 面板切换后写回**全局**。项目 `.prux/settings.json` 里的同名字段与全局取并集（只在本项目禁用某内置扩展；未受信任的项目不生效）。
-- **`enabledExtensions`**：settings.json 中显式启用的扩展名数组，仅对声明 [`default_enabled() == false`] 的默认可选扩展（`plan-mode`、`goal`、`web-access`、`proxy`、`doc-helper`、`subagent`、`loop-detect`、`hang-detect`、`notify`、`rewind`、`codemode`、`mcp`、`browser`、`jet`、`tasks`、`debug`、`cache-usage`、`doctor`、`btw`、`recap`、`open`、`pdf`、`cache-watch`、`session-search`、`usage`）有意义。这些扩展注册后默认禁用，必须在此列出（或经 `/extension` 面板开启）才参与钩子/工具/命令分发；关闭时从列表移除（回到默认态）。项目层同样与全局取并集（项目可自行开启默认关闭的扩展）；两层冲突时禁用优先（与 `disabledExtensions` 的并集语义一致）。
+- **`enabledExtensions`**：settings.json 中显式启用的扩展名数组，仅对声明 [`default_enabled() == false`] 的默认可选扩展（`plan-mode`、`goal`、`web-access`、`proxy`、`doc-helper`、`subagent`、`loop-detect`、`hang-detect`、`notify`、`rewind`、`codemode`、`mcp`、`browser`、`jet`、`tasks`、`debug`、`cache-usage`、`doctor`、`btw`、`recap`、`open`、`pdf`、`cache-watch`、`session-search`、`usage`、`memory`）有意义。这些扩展注册后默认禁用，必须在此列出（或经 `/extension` 面板开启）才参与钩子/工具/命令分发；关闭时从列表移除（回到默认态）。项目层同样与全局取并集（项目可自行开启默认关闭的扩展）；两层冲突时禁用优先（与 `disabledExtensions` 的并集语义一致）。
 - **`extensionMode`**：`"minimal"`、`"dev"`、`"creator"`、`"all"`（默认，兜底全集）。`All` 是兜底模式，所有扩展隐式属于它；扩展声明的模式（如 `Minimal`）表示“该级别及以上可用”，列出多个（如 `[Dev, Creator]`）则覆盖两个并排模式。是运行时过滤层，不触碰各扩展 enabled 状态；切回全部模式即恢复原状。
 
 settings 相关键见 [settings.md](settings.md)。修改 settings 后重启生效；`/reload` 会重新接线扩展并重建工具列表与系统提示，但无法加载新编译的扩展代码。

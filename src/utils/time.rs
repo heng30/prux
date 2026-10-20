@@ -203,6 +203,14 @@ pub fn rfc3339_days_ago(days: i64) -> String {
     format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
 }
 
+/// RFC3339 时间戳 → `YYYY-MM-DD`（供列表展示；无法解析时原样返回）。
+pub fn short_date(stamp: &str) -> String {
+    match stamp.split_once('T') {
+        Some((date, _)) => date.to_string(),
+        None => stamp.to_string(),
+    }
+}
+
 /// 解析 UTC ISO 时间戳（YYYY-MM-DDTHH:MM:SS.mmmZ）为自 Unix epoch 起的毫秒。
 pub fn parse_iso_ms(ts: &str) -> Option<u64> {
     // 2026-08-14T10:17:52.957Z
