@@ -218,6 +218,32 @@ pub fn format_rate(bytes_per_s: f64) -> String {
     format!("{}/s", format_bytes(bytes_per_s.max(0.0).round() as u64))
 }
 
+/// token 数量的紧凑展示：<1000 原样，否则 `1.2K` / `3.4M`（1 位小数）。
+pub fn format_tokens(value: u64) -> String {
+    format_tokens_precise::<1>(value)
+}
+
+/// 指定小数位数的 token 格式化（[`format_tokens`] 默认 1 位小数）。
+/// 函数 const 泛型不能带默认值，故通过该函数显式指定。
+pub fn format_tokens_precise<const PRECISION: u8>(value: u64) -> String {
+    if value >= 1_000_000 {
+        format!(
+            "{:.p$}M",
+            value as f64 / 1_000_000.0,
+            p = PRECISION as usize
+        )
+    } else if value >= 1_000 {
+        format!("{:.p$}K", value as f64 / 1_000.0, p = PRECISION as usize)
+    } else {
+        value.to_string()
+    }
+}
+
+/// 英文复数后缀：`n == 1` 时为空串。
+pub fn plural(n: usize) -> &'static str {
+    if n == 1 { "" } else { "s" }
+}
+
 /// 千分位格式化（如：14,985）
 pub fn format_thousands(n: u64) -> String {
     let s = n.to_string();

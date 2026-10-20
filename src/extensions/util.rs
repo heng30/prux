@@ -20,6 +20,8 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+pub use crate::utils::display::format_tokens;
+
 /// 动画 tick 间隔（毫秒）：spinner 每 120ms 走一帧
 pub const SPINNER_TICK_MS: u64 = 120;
 
@@ -108,27 +110,6 @@ pub fn next_id() -> String {
         b.copy_from_slice(&(n as u32).to_be_bytes());
     }
     b.iter().map(|x| format!("{x:02x}")).collect()
-}
-
-/// token 数量的紧凑展示：<1000 原样，否则 `1.2K` / `3.4M`（1 位小数）。
-pub fn format_tokens(value: u64) -> String {
-    format_tokens_precise::<1>(value)
-}
-
-/// 指定小数位数的 token 格式化（`format_tokens` 默认 1 位小数）。
-/// 函数 const 泛型不能带默认值，故通过该函数显式指定。
-pub fn format_tokens_precise<const PRECISION: u8>(value: u64) -> String {
-    if value >= 1_000_000 {
-        format!(
-            "{:.p$}M",
-            value as f64 / 1_000_000.0,
-            p = PRECISION as usize
-        )
-    } else if value >= 1_000 {
-        format!("{:.p$}K", value as f64 / 1_000.0, p = PRECISION as usize)
-    } else {
-        value.to_string()
-    }
 }
 
 /// 把（通常形如 `1`、`12` 的）id 解析成数字用于排序；无法解析时返回 [`f64::NAN`]，

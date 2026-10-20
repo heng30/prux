@@ -48,6 +48,14 @@ This release aligns prux with upstream pi 1.3.0.
   truncated like `read` (2000 lines / 50KB), and a document with no text layer says so instead of
   returning nothing. It replaces the PDF-only `read_pdf` tool. Off by default.
 
+- **The `shake` extension drops heavy content on demand**: `/shake [elide|images|thinking]`
+  queues a one-shot mark that is applied before the next request. `elide` (the default) replaces
+  tool result text and oversized fenced / XML blocks with short placeholders while leaving the most
+  recent ~4000 tokens alone, `images` strips image blocks, and `thinking` drops thinking blocks
+  (the last assistant message keeps its own). Only the model context changes — session files, `/tree`
+  and the transcript are untouched — and the chat area reports how many pieces were dropped and how
+  many tokens were freed. Off by default.
+
 - **`memory` keeps durable notes across sessions**: enabling the `memory` extension adds a
   `memory` tool (`remember` / `recall` / `search` / `list` / `forget` / `tag` / `link` /
   `related`) and injects a relevance-selected block of remembered notes before each request. Recall is
@@ -151,6 +159,12 @@ This release aligns prux with upstream pi 1.3.0.
   标题 / 列表 / 表格，`.xlsx` / `.xls` / `.xlsb` / `.xlsm` / `.ods` 每个工作表一段 Markdown 表格，
   `.pptx` 每张幻灯片一节，`.epub` 按 spine 顺序拼接各章。超过 32 MiB 的文件在解析前拒绝，
   输出按 `read` 的口径截断（2000 行 / 50KB）；没有文本层的文档明确说明而不是返回空。
+  默认不启用。
+
+- **新增 `shake` 手动丢弃重内容扩展**：`/shake [elide|images|thinking]` 只排一个**一次性标记**，
+  在下一轮请求前生效。`elide`（默认）把工具结果正文与超大的围栏代码块 / XML 块换成短占位符，
+  末尾约 4000 token 保持不动；`images` 丢掉图片块；`thinking` 丢掉思考块（最后一条 assistant 的保留）。
+  只改模型上下文，不动会话文件，`/tree` 与聊天区历史照旧；实际丢掉的条数与释放的 token 会在聊天区回报。
   默认不启用。
 
 - **新增 `memory` 跨会话记忆**：开启 `memory` 扩展后提供 `memory` 工具

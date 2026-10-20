@@ -59,7 +59,7 @@ prux 都已有，对照见 §2。oh-my-pi 真正多出来的是三类东西：
 | **Tier1** | 结构化检索 | §3.1 `ast-grep`（`ast_grep` + `ast_edit`） | 🟡 候选（推荐先做） |
 | **Tier1** | 生态互通 | §3.2 `agent-import`（八种外部 agent 配置导入） | 🟡 候选（推荐先做） |
 | **Tier1** | 文档读取 | §3.3 `markit`（文档 → Markdown，并把 `pdf` 扩展并入） | ✅ 已落地（v1.3.0） |
-| **Tier1** | 上下文手术 | §3.4 `shake`（手动丢弃重内容） | 🟡 候选（推荐先做） |
+| **Tier1** | 上下文手术 | §3.4 `shake`（手动丢弃重内容） | ✅ 已落地（v1.3.0） |
 | **Tier1** | 交互 | §3.5 `ask`（结构化提问工具） | 🟡 候选（需先验证回传通道） |
 | **Tier1** | 技能沉淀 | §3.6 `manage_skill`（写 SKILL.md，并入 `skills` 扩展） | 🟡 候选 |
 | **Tier2** | 上下文手术 | §3.7 `handoff`（交接文档 + 就地压缩） | 🟡 候选 |
@@ -331,7 +331,7 @@ hook 面见 `src/core/extensions/hooks.rs`（`ExtensionHook` 13 项）。摘要�
 thinking 块；丢完重建聊天区并报告各项条数（`Nothing to shake.` 表示无事可做）。
 
 **prux 落点**
-- 新扩展 `src/extensions/shake.rs`：`/shake [elide|images|thinking] [all]` 只是个**开关/一次性标记**，
+- 新扩展 `src/extensions/shake.rs`：`/shake [elide|images|thinking]` 只是个**开关/一次性标记**，
   真正的丢弃放在 `transform_context` hook 里（该 hook 的签名是 `&mut Vec<AgentMessage>`，
   可以自由改写消息列表；丢弃是**请求侧投影**，不改会话文件，因此历史与 `/tree` 都不受影响）；
 - 与既有能力的关系：prux 的 `Boundary` 投影草稿（`with_omit` / `with_content_replace`）走的是
@@ -345,7 +345,27 @@ thinking 块；丢完重建聊天区并报告各项条数（`Nothing to shake.` 
   要给出诚实的「无事可做」。另外 `transform_context` 每次请求都跑，标记必须是**一次性**的，
   否则会一直丢。
 
-**落地记录**：（待落地）
+**落地记录**（v1.3.0，已落地）：`src/extensions/shake.rs`（优先级 `PRIORITY_SHAKE = 70`）。
+
+- **命令**：`/shake [elide|images|thinking]`，默认 `elide`；命令只落一个一次性标记并回一句
+  「已排队」，之后再无动作——真正丢弃发生在下一次请求前的 `transform_context`。
+- **省电门控**：`hooks()` 只在有排队模式时声明 `TransformContext`，空闲时框架直接跳过本扩展。
+- **`elide`**：工具结果正文换成 `[tool result elided by /shake: <tool> output dropped]`
+  （保留图片等非文本块，`tool_call_id` 不动，配对不会断）；文本块里的围栏代码块与顶层
+  XML 元素（只认小写标签名）超过 400 token 时换成一行占位说明。末尾约 4000 token **不动**
+  （`protect_boundary` 按 `estimate_tokens` 从后往前累加），避免抖掉当前正在用的结果。
+- **`images`**：移除全部图片块；消息因此变空时补一行 `[image removed by /shake]`
+  （空消息/空工具结果会被上游拒，这里不赌）。
+- **`thinking`**：移除 assistant 思考块，但**保留最后一条 assistant**——开着 thinking 的
+  Anthropic 要求当前轮 `tool_use` 重放带上思考块，抖掉它会换来 400。
+- **回执**：统计在 `transform_context` 里现算（工具结果 / 块 / 图片 / 思考条数 + 释放的 token），
+  经 `Notify` 进聊天区，因此报的是**实际**丢弃量；无事可做时分别是
+  `Nothing to shake.` / `No images found in this session.` / `No thinking blocks found in this session.`。
+  执行后清空排队状态（一次性），禁用扩展与切会话也会清空。
+- **与上游的差异**：没有 artifact 暂存与恢复链接（prux 无 `artifact://`），也没有上游那套
+  「重建聊天区 + clearScrollback」——历史与 `/tree` 保持原样，只有模型上下文变轻。
+- **一个已知边界**：`transform_context` 拿到的是**已按压缩裁剪过**的消息列表，所以压缩过很多的
+  会话可丢的东西本来就少，回执会如实说「无事可做」。
 
 ### 3.5 `ask`：结构化提问工具
 

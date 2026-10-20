@@ -34,6 +34,7 @@ pub mod proxy;
 pub mod recap_btw;
 pub mod rewind;
 pub mod session_search;
+pub mod shake;
 pub mod skills;
 pub mod subagent;
 pub mod tasks;
@@ -71,6 +72,8 @@ pub const PRIORITY_HANG_DETECT: u32 = 73;
 pub const PRIORITY_PROXY: u32 = 72;
 /// rewind 回退上一次用户输入扩展的注册优先级。
 pub const PRIORITY_REWIND: u32 = 71;
+/// shake 手动丢弃重内容扩展的注册优先级。
+pub const PRIORITY_SHAKE: u32 = 70;
 /// web-access 联网搜索与抓取扩展的注册优先级。
 pub const PRIORITY_WEB_ACCESS: u32 = 70;
 /// mcp MCP 客户端扩展的注册优先级。
