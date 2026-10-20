@@ -61,6 +61,7 @@ fn register_all_collects_and_sorts_slices() {
         "cache-watch",
         "open",
         "markit",
+        "lsp",
         "shake",
         "session-search",
         "usage",
@@ -74,8 +75,8 @@ fn register_all_collects_and_sorts_slices() {
 
     prux::extensions::register_all();
 
-    // 分布式切片确实汇聚：32 个工具扩展 + 3 个底栏扩展
-    assert_eq!(extension_count(), 32, "普通扩展应被切片收集");
+    // 分布式切片确实汇聚：33 个工具扩展 + 3 个底栏扩展
+    assert_eq!(extension_count(), 33, "普通扩展应被切片收集");
     assert_eq!(footer_extension_count(), 3, "footer 扩展应全被切片收集");
 
     // plan-mode / goal / subagent / tasks / web-access / proxy / doc-helper / notify 是声明 default_enabled() == false 的默认可选扩展：
@@ -151,6 +152,10 @@ fn register_all_collects_and_sorts_slices() {
     assert!(
         !is_extension_enabled("markit"),
         "markit 应默认不启用（Dev / Creator 工具）"
+    );
+    assert!(
+        !is_extension_enabled("lsp"),
+        "lsp 应默认不启用（依赖本机装好的语言服务器）"
     );
     assert!(
         !is_extension_enabled("cache-watch"),

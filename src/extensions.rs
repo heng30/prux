@@ -24,6 +24,7 @@ pub mod goal;
 pub mod hang_detect;
 pub mod jet;
 pub mod loop_detect;
+pub mod lsp;
 pub mod markit;
 pub mod mcp;
 pub mod memory;
@@ -82,6 +83,8 @@ pub const PRIORITY_MCP: u32 = 69;
 pub const PRIORITY_BROWSER: u32 = 68;
 /// cache-usage prompt cache 命中率统计扩展的注册优先级。
 pub const PRIORITY_CACHE_USAGE: u32 = 66;
+/// lsp 语言服务器查询（定义 / 引用 / 符号 / 诊断）扩展的注册优先级。
+pub const PRIORITY_LSP: u32 = 67;
 /// skills 扩展技能管理（`/skills` 面板）扩展的注册优先级。
 pub const PRIORITY_SKILLS: u32 = 65;
 /// doctor provider 可达性诊断扩展的注册优先级。

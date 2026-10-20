@@ -48,6 +48,14 @@ This release aligns prux with upstream pi 1.3.0.
   truncated like `read` (2000 lines / 50KB), and a document with no text layer says so instead of
   returning nothing. It replaces the PDF-only `read_pdf` tool. Off by default.
 
+- **The `lsp` extension asks a language server for facts grep cannot give**: one `lsp` tool with
+  `operation` = `diagnostics` / `definition` / `references` / `symbols`. Servers are discovered on
+  `PATH` from the file extension (rust-analyzer, clangd, typescript-language-server, pyright,
+  gopls, jdtls, ruby-lsp, lua-language-server, csharp-ls, intelephense), and each
+  command + workspace root pair stays resident until the extension is disabled. Positions are
+  1-based and counted in characters; the file is synced to the server before each query, so
+  diagnostics cover edits that are on disk but not yet compiled. Off by default.
+
 - **The `shake` extension drops heavy content on demand**: `/shake [elide|images|thinking]`
   queues a one-shot mark that is applied before the next request. `elide` (the default) replaces
   tool result text and oversized fenced / XML blocks with short placeholders while leaving the most
@@ -160,6 +168,13 @@ This release aligns prux with upstream pi 1.3.0.
   `.pptx` 每张幻灯片一节，`.epub` 按 spine 顺序拼接各章。超过 32 MiB 的文件在解析前拒绝，
   输出按 `read` 的口径截断（2000 行 / 50KB）；没有文本层的文档明确说明而不是返回空。
   默认不启用。
+
+- **新增 `lsp` 语言服务器查询扩展**：`lsp` 工具按 `operation` 查 `diagnostics` / `definition` /
+  `references` / `symbols`。服务器按文件扩展名在 `$PATH` 里找（rust-analyzer、clangd、
+  typescript-language-server、pyright、gopls、jdtls、ruby-lsp、lua-language-server、
+  csharp-ls、intelephense），每个「命令 + 工作区根」组合常驻复用，关闭扩展时一并退出。
+  行列参数是 1-based、按字符计；每次查询前把磁盘上的当前内容同步给服务器，
+  因此诊断能覆盖已写入但还没编译的改动。默认不启用。
 
 - **新增 `shake` 手动丢弃重内容扩展**：`/shake [elide|images|thinking]` 只排一个**一次性标记**，
   在下一轮请求前生效。`elide`（默认）把工具结果正文与超大的围栏代码块 / XML 块换成短占位符，

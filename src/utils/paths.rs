@@ -359,6 +359,21 @@ pub fn normalize_dir(dir: &Path) -> PathBuf {
     std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf())
 }
 
+/// 在 `$PATH` 中查找可执行文件，返回完整路径；`PATH` 未设置或各目录都不命中时返回 `None`。
+///
+/// Windows 上自动补 `.exe` 后缀。不检查可执行位，只要求是已存在的文件。
+pub fn find_in_path(name: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    let exe = if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_string()
+    };
+    std::env::split_paths(&path)
+        .map(|dir| dir.join(&exe))
+        .find(|candidate| candidate.is_file())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

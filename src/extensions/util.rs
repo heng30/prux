@@ -15,6 +15,8 @@ use crate::{
 };
 use serde_json::Value;
 use std::{
+    collections::hash_map::DefaultHasher,
+    hash::{Hash, Hasher},
     path::{Path, PathBuf, absolute},
     sync::atomic::{AtomicU64, Ordering},
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -409,6 +411,13 @@ pub fn tighter_u32(a: u32, b: u32) -> u32 {
         (0, other) | (other, 0) => other,
         (a, b) => a.min(b),
     }
+}
+
+/// 内容哈希：只看「与上次同步是否一致」，不要求密码学强度。
+pub fn content_hash(text: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    text.hash(&mut hasher);
+    hasher.finish()
 }
 
 #[cfg(test)]

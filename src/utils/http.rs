@@ -1,6 +1,9 @@
 use super::proxy::proxy_from_env;
 use reqwest::{Client, Proxy, header::HeaderMap, redirect::Policy};
-use std::time::Duration;
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 use url::Url;
 
 /// 流式响应读取时相邻两个分块之间允许的最大间隔。
@@ -160,6 +163,18 @@ pub fn with_query(base: &str, params: &[(&str, &str)]) -> String {
         }
         Err(_) => base.to_string(),
     }
+}
+
+/// 绝对路径 → `file://` URI；无法转换时返回空串（调用方会因此报错）。
+pub fn path_to_uri(path: &Path) -> String {
+    Url::from_file_path(path)
+        .map(|url| url.to_string())
+        .unwrap_or_default()
+}
+
+/// `file://` URI → 本地路径；非 `file` scheme 或畸形 URI 返回 `None`。
+pub fn uri_to_path(uri: &str) -> Option<PathBuf> {
+    Url::parse(uri).ok()?.to_file_path().ok()
 }
 
 /// HTTP 错误摘要：`HTTP {status}: {body 前 300 字符}`。

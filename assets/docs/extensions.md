@@ -70,6 +70,7 @@ core::extensions::register_banner_extension(extensions::banner::Banner::new());
 | `browser` | 扩展 | 真实浏览器自动化（CDP）：单个 `browser` 工具共 16 个动作——`status`/`list_tabs`/`new_tab`/`select_tab`/`open`/`snapshot`/`get_content`/`click`/`type`/`select`/`press`/`scroll`/`wait`/`eval`/`screenshot`/`upload`。工具是**延迟工具**：模型先用 `tool_search` 载入才能调（见下文）。`snapshot` 给可交互元素分配 `e1`/`e2`… 引用，其余动作优先用引用定位（比 CSS 选择器稳）。CDP 端点写在 `agent_dir()/extensions/browser.json`（默认 `127.0.0.1:9222`，**只允许回环主机**）；那个端口上没人监听时，会按 `browsers` 列表的顺序自动启动一个浏览器（已经在跑的候选会被跳过）。连上后 `/dock` 面板里多一行浏览器状态。**默认不启用**（`Dev`/`Creator` 模式）。详见下文 |
 | `open` | 扩展 | 用系统默认程序打开文件或 URL：`open` 工具（参数 `path`）。`http`/`https`/`file` URL 原样透传，本地路径按工作目录展开且必须存在；只把用户引到内容面前，**不把内容读回上下文**。**默认不启用**（`Dev` / `Creator` 模式） |
 | `markit` | 扩展 | 把文档读成 Markdown：`read_doc` 工具（**延迟工具**，模型先用 `tool_search` 载入；参数 `path`）按扩展名分派——`.pdf` 抽文本层，`.docx` 还原标题 / 列表 / 表格，`.xlsx` / `.xls` / `.xlsb` / `.xlsm` / `.ods` 每个工作表一段 Markdown 表格，`.pptx` 每张幻灯片一节，`.epub` 按 spine 顺序拼接各章。超过 32 MiB 的文件在解析前拒绝，输出按 `read` 的口径截断（2000 行 / 50KB）。**默认不启用**（`Dev` / `Creator` 模式） |
+| `lsp` | 扩展 | 向语言服务器按需查询：`lsp` 工具按 `operation` 分派——`diagnostics` 拿该文件的编译 / 类型诊断，`definition` / `references` 按行列找定义与引用，`symbols` 用 `path` 出文件符号大纲或用 `query` 搜整个工作区。服务器按文件扩展名在 `$PATH` 里找（rust-analyzer、clangd、typescript-language-server、pyright、gopls、jdtls、ruby-lsp、lua-language-server、csharp-ls、intelephense），进程按「命令 + 工作区根」常驻复用，关闭扩展时一并退出。行列参数是 **1-based、按字符计**；查询前会把磁盘上的当前内容同步给服务器，因此诊断能覆盖已写入但还没编译的修改。**默认不启用**（`Dev` / `Creator` 模式）。详见下文 |
 | `session-search` | 扩展 | 跨会话检索：`session_search` 工具（**延迟工具**，模型先用 `tool_search` 载入）。扫描 `agent_dir()/sessions` 下最新的 200 份会话文件，按关键词返回**按会话分组**的片段；默认隐藏当前会话、工具调用与结果、以及 `<system-reminder>` 注入消息，每个会话默认只出 1 条。**默认不启用**（`Dev` / `Creator` 模式） |
 | `memory` | 扩展 | 跨会话记忆：`memory` 工具（`remember` / `recall` / `search` / `list` / `forget` / `tag` / `link` / `related`），外加每轮请求前按当前输入做**词法**（BM25）召回，把命中条目拼成一段稳定文本注入本次请求（不进会话历史、不改系统提示）。记忆图分两份落盘：`agent_dir()/extensions/memory/global.json`（跨项目）与 `agent_dir()/extensions/memory/projects/<project-key>.json`（按工作目录）；每 12 次 `turn_end` 用**一次**独立的一次性请求把最近对话抽成结构化条目。设置面板可调召回条数、抽取间隔与注入字符预算；`--offline` 跳过抽取。**默认不启用**（`Dev` / `Creator` 模式） |
 | `usage` | 扩展 | provider 配额用量面板：`/usage` 逐个**已连接** provider 显示配额 / 限额用量与重置时间——Claude 订阅的 5 小时 / 7 天 / 模型周窗口（`/api/oauth/usage`）、ChatGPT 的 5 小时 / 周与按模型窗口（`backend-api/wham/usage`）、GitHub Copilot 的各功能已用/上限、OpenRouter 的额度与今日/本周/本月花费、Kimi for Coding 的窗口、Z.AI Coding Plan 的 5 小时/周/MCP 月窗口，以及 DeepSeek / Moonshot 的余额。面板每行画 24 格用量条 + 百分比 + 重置倒计时，没有窗口的 provider 只列余额/键状态；其余已配置但**没有配额端点**的 provider 由末行点名。报告缓存 120 秒，`--offline` / `PRUX_OFFLINE` 不发请求。**默认不启用**（`Dev` / `Creator` 模式） |
@@ -112,6 +113,32 @@ TTL 取目录 `promptCache.{short,long}`（按 `PRUX_CACHE_RETENTION` 选档）�
 - 没有可提取文本时（扫描件、空文档）返回明确提示，不会静默给空内容。
 - 图表、图片、页眉页脚、批注、演讲者备注都不读。
 - 解析器对畸形文件可能崩，扩展会把它变成一条错误而不是让进程退出——注意 release 构建是 `panic = "abort"`，该兜底只在 debug / 测试构建下生效。
+
+### lsp
+
+`lsp` 把「问语言服务器」做成一个工具，四种查询：
+
+| `operation` | 必填参数 | 返回 |
+|---|---|---|
+| `diagnostics` | `path` | 该文件的诊断列表（`行:列 error/warning: 消息 (code) [来源]`）；没有时说 `no diagnostics.` |
+| `definition` | `path` + `line` + `character` | 定义位置（`路径:行:列`）；支持 `LocationLink` 回退 |
+| `references` | `path` + `line` + `character` | 全部引用位置（含声明） |
+| `symbols` | `path` 或 `query` | 有 `path` 时出文件符号大纲（按嵌套缩进）；有 `query` 时搜整个工作区 |
+
+参数口径：
+
+- `line` / `character` 都是 **1-based**，`character` 按**字符**计（不是字节、不是 UTF-16 单元）——非 ASCII 行不会错位。
+- `path` 按工作目录展开；文件不存在、超过 5 MiB、或扩展名对应不到服务器时直接报错。
+- `query` 只用于 `symbols`，需要工作目录能识别出项目类型（找不到项目根时传一个 `path`）。
+
+服务器与生命周期：
+
+- 服务器按文件扩展名在 `$PATH` 里找：`.rs`→`rust-analyzer`，`.c`/`.h`→`clangd`，`.cpp` 系→`clangd`，`.ts`/`.tsx`/`.js`/`.jsx`→`typescript-language-server --stdio`，`.py`→`pyright-langserver --stdio`，`.go`→`gopls`，`.java`→`jdtls`，`.rb`→`ruby-lsp`，`.lua`→`lua-language-server`，`.cs`→`csharp-ls`，`.php`→`intelephense --stdio`。
+- 工作区根从文件所在目录向上找项目标记（`Cargo.toml`、`package.json`、`go.mod`、`pyproject.toml` 等），一个进程服务一个「命令 + 工作区根」组合，后续查询复用。
+- 找不到服务器时报错并给出安装命令（例如 `rustup component add rust-analyzer`）；服务器 stderr 落在 `agent_dir()/logs/lsp-<命令>.log`。
+- 关闭扩展时杀掉常驻进程；prux 退出时管道关闭，服务器自行退出。
+
+首次查询可能变慢：服务器要索引整个项目。请求超时是 45 秒，诊断等待是 20 秒；超时会明确提示「可能仍在索引，稍后重试」，而不是返回空结果。诊断要求文件先在服务器里打开（扩展会发 `didOpen` / `didChange`），所以它看到的是**磁盘上的当前内容**——你写完但没编译的改动也算。
 
 ### session-search
 

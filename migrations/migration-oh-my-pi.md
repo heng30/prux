@@ -48,29 +48,32 @@ prux 都已有，对照见 §2。oh-my-pi 真正多出来的是三类东西：
 
 按判断口径逐项过筛后，能作为独立扩展的共 **15 项**（§3），其中第一梯队 6 项、
 第二梯队 6 项、第三梯队（仅记录、暂不落地）3 项；**其余全部明确不做**（§4）。
-按「性价比 × 与 prux 缺口的相关性」排序，最该先做的是
-**`ast-grep`（结构化搜索/改写）**、**`agent-import`（八种外部配置导入）**、
-**`markit`（docx/pptx/xlsx/epub → Markdown）**、**`shake`（上下文减重）**。
+
+**第三轮定案**：`generate_image`（§3.8）、`manage_skill`（§3.6）、`magic-keywords`（§3.11）
+判不做；`cleanse`（§3.10）暂缓不排期。理由见各节「落地记录」。
+**第四轮定案**：`lsp`（§3.15）已落地——`diagnostics` / `definition` / `references` / `symbols`
+四个 op，零新依赖，服务器常驻复用。§3 现剩 **4 项待做**（`advisor` / `cleanse` 暂缓 /
+`github` / `python`），均为「仅记录」或「暂缓」，暂无推荐排期项。
 
 ### 路线图
 
 | Tier | 主题 | 项 | 状态 |
 |---|---|---|---|
-| **Tier1** | 结构化检索 | §3.1 `ast-grep`（`ast_grep` + `ast_edit`） | 🟡 候选（推荐先做） |
-| **Tier1** | 生态互通 | §3.2 `agent-import`（八种外部 agent 配置导入） | 🟡 候选（推荐先做） |
+| 不做 | 结构化检索 | §3.1 `ast-grep`（`ast_grep` + `ast_edit`） | 🚫 判不做（引 tree-sitter 生态） |
+| 不做 | 生态互通 | §3.2 `agent-import`（八种外部 agent 配置导入） | 🚫 判不做（一次性迁移工具） |
 | **Tier1** | 文档读取 | §3.3 `markit`（文档 → Markdown，并把 `pdf` 扩展并入） | ✅ 已落地（v1.3.0） |
 | **Tier1** | 上下文手术 | §3.4 `shake`（手动丢弃重内容） | ✅ 已落地（v1.3.0） |
-| **Tier1** | 交互 | §3.5 `ask`（结构化提问工具） | 🟡 候选（需先验证回传通道） |
-| **Tier1** | 技能沉淀 | §3.6 `manage_skill`（写 SKILL.md，并入 `skills` 扩展） | 🟡 候选 |
-| **Tier2** | 上下文手术 | §3.7 `handoff`（交接文档 + 就地压缩） | 🟡 候选 |
-| **Tier2** | 多模态 | §3.8 `generate_image`（图像生成工具） | 🟡 候选 |
-| **Tier2** | 协作 | §3.9 `advisor`（第二模型旁观每轮） | 🟡 候选（中等成本） |
-| **Tier2** | 质量 | §3.10 `cleanse`（检查器驱动的批量修复） | 🟡 候选（依赖 `subagent`） |
-| **Tier2** | 提示词 | §3.11 `magic-keywords`（`ultrathink` / `orchestrate` / `workflowz`） | 🟡 候选（`ultrathink` 需 core 配合） |
-| **Tier2** | 会话模式 | §3.12 `loop`（同一提示词反复重投直到闸门放行） | 🟡 候选（便宜：纯 `Boundary`） |
+| 不做 | 交互 | §3.5 `ask`（结构化提问工具） | 🚫 判不做（通道未验证，且易滥用） |
+| 不做 | 技能沉淀 | §3.6 `manage_skill`（写 SKILL.md，并入 `skills` 扩展） | 🚫 判不做（`write` 已能做） |
+| 不做 | 上下文手术 | §3.7 `handoff`（交接文档 + 就地压缩） | 🚫 判不做（与 `/compact` 重叠） |
+| 不做 | 多模态 | §3.8 `generate_image`（图像生成工具） | 🚫 判不做（不在编码闭环上） |
+| **Tier3** | 协作 | §3.9 `advisor`（第二模型旁观每轮） | 🟡 候选（注入毁 cache 前缀） |
+| 暂缓 | 质量 | §3.10 `cleanse`（检查器驱动的批量修复） | ⏸ 暂缓（不排期） |
+| 不做 | 提示词 | §3.11 `magic-keywords`（`ultrathink` / `orchestrate` / `workflowz`） | 🚫 判不做（提示词糖） |
+| 不做 | 会话模式 | §3.12 `loop`（同一提示词反复重投直到闸门放行） | 🚫 判不做（与 `goal` 重叠、默认烧钱） |
 | **Tier3** | 联网 | §3.13 `github`（gh CLI 封装） | 🟡 仅记录 |
 | **Tier3** | 运行环境 | §3.14 `python`（持久 Python cell，并入 `codemode`） | 🟡 仅记录 |
-| **Tier3** | 代码智能 | §3.15 `lsp`（只读查询半套） | 🟡 仅记录（工作量大） |
+| **Tier1** | 代码智能 | §3.15 `lsp`（只读查询半套） | ✅ 已落地 |
 | 不做 | §4.1–§4.16 | 16 组 | 🚫 明确不做 |
 
 ---
@@ -181,7 +184,7 @@ hook 面见 `src/core/extensions/hooks.rs`（`ExtensionHook` 13 项）。摘要�
 
 ---
 
-## 三、能够作为扩展的功能（15 项）
+## 三、能够作为扩展的功能（原 15 项候选，现 4 项待做）
 
 每节格式固定：**上游实现 → 机制 → prux 落点 → 工作量 / 风险 → 落地记录（落地后回填）**。
 
@@ -228,7 +231,19 @@ hook 面见 `src/core/extensions/hooks.rs`（`ExtensionHook` 13 项）。摘要�
 - 中等偏大（一次引入 tree-sitter 生态）。风险点：语法 crate 的体积与编译时间、
   冷门语言是否要做按需下载（建议**不做**，直接砍到内置语法集，缺失语言明确报错）。
 
-**落地记录**：（待落地）
+**落地记录**（🚫 判不做）：**不实现。** 三条理由：
+
+1. **依赖面是断崖式扩张**：prux 目前零 tree-sitter 依赖，做这一项要同时引 `ast-grep-core` +
+   一组 `tree-sitter-*` 语法 crate，编译时间与 `Cargo.lock` 体积一次性上涨，而收益集中在
+   「跨文件批量重构」这一个场景；
+2. **`ast_edit` 的核心机制在 prux 复现不了**：上游的「预览」是写进虚拟路径的暂存队列、
+   由 `write` 回放，prux 的 `write` 只吃真实路径，只能退化成「两次调用 + 扩展自持暂存表"，
+   比上游更容易出现 `stalePreview` 式的错应用；
+3. **多数场景 `grep` + `edit` 已够**：`grep` 出候选行、`read` 看上下文、`edit` 改，
+   多花两三次调用即可完成；真正需要「结构等价」的场景（多语言统一模式）占比低。
+
+留下的备选：若将来确实有跨语言批量改写的需求，先在 `grep` 上加强而不是引 tree-sitter
+（例如支持按缩进/括号匹配的多行块），成本低一个数量级。
 
 ### 3.2 `agent-import`：八种外部 agent 配置导入
 
@@ -273,7 +288,20 @@ hook 面见 `src/core/extensions/hooks.rs`（`ExtensionHook` 13 项）。摘要�
   （「命中这些 glob 才生效」）在 prux 没有对应层，需要扩展自建匹配并在 hook 里按当前
   待处理文件判定；建议先做「无条件注入」版本，条件注入列为后续切片。
 
-**落地记录**：（待落地）
+**落地记录**（🚫 判不做）：**不实现。** 三条理由：
+
+1. **它是迁移工具，不是日常功能**：用户换过来跑一次就结束，之后读的是 prux 自己的
+   `SKILL.md` / `prompts`；持续价值接近零，却要维护八种外部格式的解析器
+   （上游这八份加起来 3000+ 行）；
+2. **条件注入做了也是错的**：`.cursor/rules` 的 `globs` 与 Copilot 的 `applyTo` 是
+   「命中文件才生效」，prux 没有按待处理文件判定规则的层；只做无条件注入会把所有规则
+   糊进每次请求，比不导入更糟；
+3. **手工迁移成本可接受**：外部规则文件本来就是 Markdown，用户把内容粘进
+   `AGENTS.md` / `.prux/skills/<name>/SKILL.md` 是一次性几分钟的事，模型自己也能代劳
+   （「把这些 `.cursor/rules` 内容整理成技能」）。
+
+留下的备选：不做八种解析器，只在文档里给一段「如何手工迁移」的说明（放
+`assets/docs/`），零代码成本。
 
 ### 3.3 `markit`：文档 → Markdown（并把 `pdf` 扩展并进来）
 
@@ -396,7 +424,16 @@ thinking 块；丢完重建聊天区并报告各项条数（`Nothing to shake.` 
   的主循环里 `maybe_handle_extension_ui` 每帧调用，看起来成立，但没有现成扩展走这条路径，
   值得先写一个最小验证（一个工具发 Select、await、断言能拿到回传）。
 
-**落地记录**：（待落地）
+**落地记录**（🚫 判不做）：**不实现。** 三条理由：
+
+1. **通道本身没验证，而验证成本不在这一项里**：要让它成立得先确认「工具执行期间
+   TUI 取 UI 请求并回传」这条路径，若不通，本项退化成一个单向通知工具，价值立刻归零；
+   为一个未验证的通道引一个新工具，性价比不成立；
+2. **它会诱导模型把该自己判断的事推给用户**：结构化提问在 omp 里是「可选增强」，
+   但一旦成为常驻工具，模型倾向于「问一句更安全」，反而降低自主性；prux 现有的
+   `request_ui` 面板 + follow-up prompt 已经能在必要时让用户选；
+3. **多选 / 自由输入都要自己编码**：`Select` 只有单选回传串，多选得靠扩展自绘 overlay，
+   这部分成本被上游的成熟 UI 掩盖了。
 
 ### 3.6 `manage_skill`：会话内沉淀技能（并入 `skills` 扩展）
 
@@ -424,7 +461,13 @@ thinking 块；丢完重建聊天区并报告各项条数（`Nothing to shake.` 
 - 小。风险点：技能数量与质量需要护栏（上限 64KB 同款 + 名字校验 + 让位规则），
   否则模型会沉淀出几十个低质技能污染候选列表。
 
-**落地记录**：（待落地）
+**落地记录**（🚫 判不做）：**不实现。** 两条理由：
+
+1. **专门工具不如「直接用 `write`」**：技能就是一个 `SKILL.md` 文件，模型用内置 `write`
+   写到 `.prux/skills/<name>/SKILL.md` 就能完成；为此造一个 `create/update/delete` 三动工具
+   （加名字校验、64KB 上限、受管目录、让位规则）只是把四个约束重复了一遍；
+2. **自动沉淀的技能质量不可控**：prux 的技能列表直接进系统提示候选，沉淀几十个低质技能
+   会污染上下文；而它的收益（「下次能复用」）在多数会话里并不实际到达。
 
 ### 3.7 `handoff`：交接文档 + 就地压缩
 
@@ -450,7 +493,15 @@ session id / 文件 / cache key 都不变，近端历史保留，远端被文档
 - 小。风险点：交接文档的质量完全取决于模型，prux 需要给出固定的文档骨架
   （目标 / 已完成 / 未完成 / 关键文件 / 下一步），否则压缩后信息损失不可控。
 
-**落地记录**：（待落地）
+**落地记录**（🚫 判不做）：**不实现。** 两条理由：
+
+1. **和 `/compact` 是同一件事的两种触发方式**：prux 的压缩管线本来就能通过
+   `custom_summarize` 定制摘要提示词；把「交接文档骨架」换成压缩提示词即可得到绝大部分收益，
+   不需要一个新的落库路径；
+2. **`recap` 已经覆盖「只看小结不动上下文」**：用户真实需求往往是「先看看小结再决定」，
+   这一步 `recap` 已经做了；`handoff` 的「立刻替换上下文」是更激进且不可逆的操作。
+
+留下的备选：在 `assets/docs/` 里给一份推荐的压缩提示词模板（含交接骨架），零代码。
 
 ### 3.8 `generate_image`：图像生成工具
 
@@ -483,7 +534,14 @@ OpenAI 兼容的 `/images/generations` 与 `/images/edits`（后者 OpenAI 端�
   带 image 输出的条目）；建议第一版只支持「当前 provider 的 OpenAI 兼容图像端点」，
   不引 omp 那套 `image` 角色链。
 
-**落地记录**：（待落地）
+**落地记录**（🚫 判不做）：**不实现。** 三条理由：
+
+1. **它不在编码闭环上**：出图是内容生成，不是「读代码 / 改代码 / 验证」的一环；
+   prux 的定位是编码 agent，为此常驻一个图像工具会占工具位且在多数会话里从未被调用；
+2. **基础设施已有，但入口不在扩展**：`codemode` 的 `models.generateImages` 已经能吃这条能力，
+   用户真要出图时开 `codemode` 即可，不必再造一个常驻壳；
+3. **模型与凭据面未就绪**：模型目录里带 image 输出的条目本就稀少，多数用户没配，
+   做出来是一个「装上了但用不了」的工具。
 
 ### 3.9 `advisor`：第二模型旁观每轮
 
@@ -538,7 +596,9 @@ OpenAI 兼容的 `/images/generations` 与 `/images/edits`（后者 OpenAI 端�
   建议第一版砍到「用户显式给出命令」而不是自动发现，例如 `/cleanse cargo clippy`，
   自动发现列为后续切片。
 
-**落地记录**：（待落地）
+**落地记录**（⏸ 暂缓，不排期）：依赖 `subagent` + `tasks` 同时开启，且 checker 发现与诊断
+解析强工程相关（每种 lint 的输出格式都要单独解析）。**当前不排期**，等 `lsp` 落地后
+（诊断已能统一获取）再重新评估——那时 `cleanse` 的输入来源会变成 LSP 诊断，成本会低很多。
 
 ### 3.11 `magic-keywords`：`ultrathink` / `orchestrate` / `workflowz`
 
@@ -572,7 +632,15 @@ OpenAI 兼容的 `/images/generations` 与 `/images/edits`（后者 OpenAI 端�
 - 小（不含 `ultrathink` 的 core 改动）。风险点：**注入 = 改用户消息**，
   要确保可见词不被动过（否则用户看到的与发出去的文本不一致），且注入内容不打乱 cache 前缀的稳定性。
 
-**落地记录**：（待落地）
+**落地记录**（🚫 判不做）：**不实现。** 三条理由：
+
+1. **它本质是提示词糖**：`orchestrate` / `workflowz` 的效果用户写一句
+   「用并行子代理分别做，每阶段验证」就能得到；`ultrathink` 在 prux 只能做提示词层面
+   （无按轮改 thinking 档的接口），与「仔细想想」没有差别；
+2. **注入 = 改用户消息**，要维护一套「排除围栏代码块 / 行内 code / HTML 注释」的匹配规则，
+   并保证可见词不动、cache 前缀稳定——为一个转向词付这份维护成本不划算；
+3. **误触发风险真实存在**：`grep ultrathink`、讨论提示词工程时会误命中，而误触发的代价是
+   一整轮额外的子代理扇出。
 
 ### 3.12 `loop`：同一提示词反复重投（直到闸门放行）
 
@@ -599,7 +667,15 @@ OpenAI 兼容的 `/images/generations` 与 `/images/edits`（后者 OpenAI 端�
   `RestartRun` 是同类先例）。风险点：无限循环保护——次数 / 时长上限**必须有默认值**，
   且闸门命令要有超时，否则 `/loop` 会变成一个停不下来的烧钱开关。
 
-**落地记录**：（待落地）
+**落地记录**（🚫 判不做）：**不实现。** 三条理由：
+
+1. **与 `goal` 的边界模糊且更危险**：`goal` 至少由模型判断「目标是否达成」，`loop` 是
+   无条件重投，唯一刹车是用户给的次数/退出码；一个默认值没设对就是持续烧 token 的开关，
+   而这个仓的定位是「人盯着用」的 TUI，不是无人值守的 runner；
+2. **「再试一次」本来就是一句话**：用户可以直接说「再跑一遍，直到 clippy 干净」，模型自带
+   工具就能循环；宿主层重投带来的确定性收益，抵不上它引入的失控面；
+3. **闸门命令等于一条无审批的 shell 通路**：`--until '<cmd>'` 每次轮末执行任意命令，
+   在扩展层绕过工具审批与 `--exclude-tools` 的语义。
 
 ### 3.13 `github`：gh CLI 封装（仅记录）
 
@@ -640,7 +716,7 @@ JS 侧不必重做（QuickJS 已够），Python 侧才是增量。
 
 **落地记录**：（待落地）
 
-### 3.15 `lsp`：只读查询半套（仅记录）
+### 3.15 `lsp`：只读查询半套
 
 **上游实现**：`src/lsp/`（9947 行）：`tool.ts`（1575）、`client.ts`（1941）、`config.ts`（538）；
 `src/lsp/defaults.json` 预置 rust-analyzer / clangd / typescript-language-server 等；
@@ -653,20 +729,59 @@ code action / 原始请求。**关键**：omp 的 LSP 与 `edit` / `write` 深�
 
 **prux 落点**：新扩展 `src/extensions/lsp.rs`，只做**按需询问**：
 `diagnostics` / `definition` / `references` / `symbols` / `hover` / `rename`（重命名只算「计算」，
-真正改文件仍由 `edit` 执行）。扩展内自己实现 LSP 客户端（`tokio::process` + 行分隔 JSON-RPC），
-不需要 core 改动。「写后自动回灌诊断」**不做**（属 core 与工具管线的耦合）。
+真正改文件仍由 `edit` 执行）。「写后自动回灌诊断」**不做**（属 core 与工具管线的耦合）。
+
+- **传输层**：LSP base protocol 是 `Content-Length: <n>` 头 + 空行 + JSON body 的帧，
+  **不是行分隔**；别照抄本仓 MCP 的 stdio 传输（那个是 newline-delimited）。两条路径：
+  1. `lsp-types`（纯类型，0.97，4 千万下载）+ 自写帧编解码与 `id` 配对，约 150 行；
+  2. `async-lsp` 的 client 侧（tower 栈，0.2.4，185 万下载）。
+  本档倾向 1：prux 已用 tokio，自写传输不引整条 tower 依赖链；且诊断是**推送通知**
+  （`textDocument/publishDiagnostics`）而非请求-响应，自己缓冲匹配更直接。
+- **真正的成本不在传输层**：`initialize` 握手与能力协商、`didOpen` / `didChange` 文档同步
+  （文件没在服务器里打开过就不会有诊断）、服务器发现与重启、诊断的 URI/版本匹配。
 
 **工作量 / 风险**：大（客户端 + 服务器发现 + 语言映射 + 生命周期管理）。
-**仅记录**：这是本档里价值最高但也最贵的一项；如果要做，建议**先只做 `diagnostics`**
-（收益最直接：写完代码立刻知道编译错），其余 op 后续再加。
+**本档判断**：这是剩余候选里价值最高、也最贵的一项。落地时做了 `diagnostics` /
+`definition` / `references` / `symbols` 四个 op（后三者共用一个光标位置，边际成本很低），
+`hover` 与 `rename` 仍未做。
 
-**落地记录**：（待落地）
+**落地记录**（已落地）：`src/extensions/lsp.rs` + `lsp/{protocol,servers}.rs`，优先级
+`PRIORITY_LSP = 67`。
+
+- **零新依赖**：没有引 `lsp-types`。帧编解码、`initialize` 参数、四种响应（`Location` /
+  `LocationLink` / `DocumentSymbol` / `SymbolInformation`）的解析都是手写的 JSON 处理，
+  比引一套 union 类型再拆封更短，也不动 `Cargo.lock`。
+- **传输层**：`BufReader::read_line` 读 header 直到空行，取 `Content-Length` 后 `read_exact`；
+  写侧拼 `Content-Length: <n>\r\n\r\n` + body。header 行超过 8 KiB 直接放弃连接。
+- **反向请求**：`workspace/configuration` 按 `items.len()` 回 `null` 数组，
+  `client/registerCapability` / `window/workDoneProgress/create` 回 `null`——不回会让
+  rust-analyzer 卡在握手。
+- **进程生命周期**：按「命令 + 工作区根」常驻（进程级 `Mutex<HashMap>`），
+  `on_enabled_changed(false)` 清空缓存并 kill；prux 退出时管道关闭，服务器自行退出。
+  stderr 落 `agent_dir()/logs/lsp-<命令>.log`。
+- **文档同步**：首次 `didOpen`，之后内容哈希变化才 `didChange`（全量），没变化不发消息，
+  避免每次查询都触发重新分析。诊断按 `received >= didOpen 时刻` + `version`（服务器给了才比）
+  取第一条推送，超时 20s 明确提示「可能仍在索引」。
+- **位置换算**：模型侧 1-based、按字符计 → LSP 侧 0-based UTF-16 列，两个方向都有换算
+  （诊断输出再转回字符列），非 ASCII 行不会错位。
+- **服务器发现**：`servers::SERVERS` 内置 14 条语言条目（11 类语言，TS/JS 各带 react 变体），
+  `$PATH` 探测；工作区根向上找
+  项目标记（含 `*.csproj` 这种扩展名标记）。找不到时给安装命令而不是静默跳过。
+- **未做**：`hover` / `rename` / `code action`、「写后自动回灌诊断」（属工具管线耦合）、
+  按语言服务器的 `capabilities` 动态裁剪。`symbols` 不带 `path` 时用 `cwd` 向上探测项目根，
+  多语言混排的工作区只取表里第一个命中的语言。
+- **验证**：`tests/lsp_e2e.rs`（`#[ignore]`）在临时 crate 上真跑 `rust-analyzer`，
+  覆盖 symbols / diagnostics / definition 三条路径；帧解析与非 ASCII 列换算是普通单测。
 
 ---
 
 ## 四、明确不实现（**均不做**）
 
 排序：先「机制/策略」，再「已有扩展的辅助项」，再「扩展层够不到」。
+
+> §3 内就地判不做的 8 项（`ast-grep` / `agent-import` / `ask` / `manage_skill` / `handoff` /
+> `generate_image` / `magic-keywords` / `loop`）理由见各节「落地记录」，不重复列入本节；
+> `cleanse` 暂缓，同样不列入。
 
 ### 4.1 TTSR：流中打断并重驱动（time-traveling stream rules）
 
@@ -931,20 +1046,9 @@ code action / 原始请求。**关键**：omp 的 LSP 与 `edit` / `write` 深�
 
 ### 6.2 落地前需要确认的决策点
 
-1. **`ast_grep` 的语法集**：内置哪些？是否接受「冷门语言报错」而不是按需下载 wasm？
-   （本档建议：只内置 ~20 种主流语言，其余明确报错；避免联网下载编译期资源。）
-2. **`agent-import` 的信任与开关**：读取用户项目里的 `.cursor` / `.github` / `.vscode` 是否
-   一律要求项目信任？逐来源 opt-in 的键名与默认值？（本档建议：要求信任 + 默认全关。）
-3. **`agent-import` 的物化策略**：是「每次启动把外部格式同步成 SKILL.md / prompt 模板」（幂等、会写盘），
-   还是「只在内存里并入本次请求的上下文」（不写盘、但技能面板看不到）？
-   （本档倾向：**前者用于 skills / prompts，后者用于 rules / context**。）
-4. **`ask` 的可行性验证**：工具执行期间伪造一次 Select 回传，确认能 await 到答案（§3.5）。
-   若不通，本项降级为「模型只能靠 `request_ui` 单向通知」。
-5. **`ultrathink` 是否值得为它动 core**：加一个「单轮 thinking 档」的扩展动作（§3.11）。
-6. **`cleanse` 的 checker 来源**：自动发现 vs 用户显式给命令。（本档建议先做后者。）
-7. **`advisor` 的注入策略**：只注入 `blocker` 档（省 cache），还是三档都注入（更吵但更主动）？
+1. **`advisor` 的注入策略**：只注入 `blocker` 档（省 cache），还是三档都注入（更吵但更主动）？
    需要一个 `nit` / `concern` / `blocker` 的枚举（用 `strum` 做字符串互转）。
-8. **是否给 `ExtensionHook` 补变体**：本档在核对中发现 omp 有几个 prux 缺的 hook 点，
+2. **是否给 `ExtensionHook` 补变体**：本档在核对中发现 omp 有几个 prux 缺的 hook 点，
    如果将来有功能需要它们，应当**补 hook 而不是绕路**：
    `before_provider_request`（改载荷）、`before_subagent_spawn`（子代理模型路由 / 阻断）、
    `assistant_message`（改写落库文本）、`session_before_{switch,branch,tree}`、
