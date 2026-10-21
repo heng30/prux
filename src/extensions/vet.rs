@@ -494,7 +494,9 @@ mod tests {
         let names: Vec<&str> = command::SUBCOMMANDS.iter().map(|s| s.name).collect();
         assert_eq!(
             names,
-            vec!["run", "status", "detect", "add", "remove", "reset"]
+            vec![
+                "settings", "run", "status", "detect", "add", "remove", "reset"
+            ]
         );
     }
 

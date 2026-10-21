@@ -17,6 +17,10 @@ use config::{Check, Scope};
 /// `/vet` 子命令（顺序 = 输入框候选顺序，与 [`handle`] 的 match 分支一一对应）。
 pub(super) const SUBCOMMANDS: &[SubcommandDef] = &[
     SubcommandDef {
+        name: "settings",
+        description: "Open the vet settings panel (same as `/vet` with no arguments)",
+    },
+    SubcommandDef {
         name: "run",
         description: "Run every configured check now and print the result",
     },
@@ -51,7 +55,7 @@ pub(super) fn handle(st: &mut App, raw: &str) -> bool {
     };
 
     match sub {
-        "" => toggle_settings(st),
+        "" | "settings" => toggle_settings(st),
         "run" => run_now(st),
         "status" => status(st),
         "detect" => detect(st, rest),
@@ -65,14 +69,16 @@ pub(super) fn handle(st: &mut App, raw: &str) -> bool {
             );
         }
         other => st.push_msg(
-            format!("vet: unknown subcommand `{other}` (run|status|detect|add|remove|reset)"),
+            format!(
+                "vet: unknown subcommand `{other}` (settings|run|status|detect|add|remove|reset)"
+            ),
             MsgLevel::Warning,
         ),
     }
     false
 }
 
-/// `/vet`：打开（或关闭）本扩展的设置面板。
+/// `/vet` / `/vet settings`：打开（或关闭）本扩展的设置面板。
 fn toggle_settings(st: &mut App) {
     if st.ext_settings.is_open_for(EXT) {
         st.ext_settings.close();
@@ -389,7 +395,9 @@ mod tests {
         let names: Vec<&str> = SUBCOMMANDS.iter().map(|s| s.name).collect();
         assert_eq!(
             names,
-            vec!["run", "status", "detect", "add", "remove", "reset"]
+            vec![
+                "settings", "run", "status", "detect", "add", "remove", "reset"
+            ]
         );
     }
 }

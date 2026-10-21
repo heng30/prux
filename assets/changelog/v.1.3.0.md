@@ -107,7 +107,7 @@ This release aligns prux with upstream pi 1.3.0.
   repo cannot make `prux` execute commands. `requireEdits` (default on) skips turns that changed no
   files, `optional` checks report without blocking, a per-check `timeoutSecs` kills runaway
   processes, and output is truncated to its tail (4000 chars per check, 12000 per report).
-  `/vet run|status|detect|add|remove|reset` manage it, `/vet detect [--write]` recognizes Cargo,
+  `/vet settings|run|status|detect|add|remove|reset` manage it, `/vet detect [--write]` recognizes Cargo,
   npm/pnpm/yarn/bun, make/just, pytest/ruff, Go and Deno projects, and the settings panel switches
   `autoRun` / `maxIterations` / `timeout` / `announce` / `requireEdits`. Off by default. See
   `docs/extensions/vet.md`.
@@ -257,7 +257,7 @@ This release aligns prux with upstream pi 1.3.0.
   （键级覆盖、`checks` 整体替换）；未受信项目的配置根本不读，一个陌生仓库没法让 `prux` 执行命令。
   `requireEdits`（缺省开）跳过没改过文件的回合，`optional` 检查只报告不阻止收工，单条检查的
   `timeoutSecs` 会连同子进程一起杀掉超时的检查，输出只保留尾部（单条 4000 字符、整份报告
-  12000 字符）。`/vet run|status|detect|add|remove|reset` 管理配置，`/vet detect [--write]`
+  12000 字符）。`/vet settings|run|status|detect|add|remove|reset` 管理配置，`/vet detect [--write]`
   识别 Cargo、npm/pnpm/yarn/bun、make/just、pytest/ruff、Go、Deno 项目，设置面板可调
   `autoRun` / `maxIterations` / `timeout` / `announce` / `requireEdits`。默认不启用。
   详见 `docs/extensions/vet.md`。
