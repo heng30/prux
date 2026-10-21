@@ -3,7 +3,7 @@
 //! 命令都是**只读或只改本扩展自身状态**的，因此声明 `busy_safe`——流式输出期间也能用
 //! （典型场景：agent 正被一条 `ask` 拦住，用户当场放行后让它重试）。
 
-use super::{clear_grants, config, list_grants, review, session_cwd, set_grant};
+use super::{EXT, clear_grants, config, list_grants, review, session_cwd, set_grant};
 use crate::{
     extensions::command_arg,
     modes::interactive::app::{App, MsgLevel},
@@ -13,6 +13,9 @@ use crate::{
 const DEFAULT_LOG_LINES: usize = 10;
 
 /// `/permissions` 命令入口。
+///
+/// 返回值恒为 `false`（不退出 TUI）：斜杠命令的 `true` 是「立刻结束 TUI」的信号，
+/// 本命令族只是打印/改自身状态，绝不能返回它。
 pub(super) fn handle(st: &mut App, raw: &str) -> bool {
     let arg = command_arg(raw).trim();
     let (sub, rest) = match arg.split_once(char::is_whitespace) {
@@ -22,6 +25,7 @@ pub(super) fn handle(st: &mut App, raw: &str) -> bool {
 
     match sub {
         "" | "show" => show(st),
+        "settings" => settings(st),
         "allow" => grant(st, rest, true),
         "drop" => grant(st, rest, false),
         "allowlist" => list(st),
@@ -35,11 +39,23 @@ pub(super) fn handle(st: &mut App, raw: &str) -> bool {
             );
         }
         other => st.push_msg(
-            format!("permissions: unknown subcommand `{other}` (show|allow|drop|allowlist|init|log|reset)"),
+            format!("permissions: unknown subcommand `{other}` (show|settings|allow|drop|allowlist|init|log|reset)"),
             MsgLevel::Warning,
         ),
     }
-    true
+    false
+}
+
+/// `/permissions settings`：打开本扩展的设置面板（再执行一次关闭）。
+///
+/// 面板内容来自 [`Extension::settings`]，只有 `reviewLog` / `yoloMode` 两个开关；
+/// 策略表是任意 pattern 字符串，面板的离散选项表达不了，仍走配置文件或 `allow` / `drop`。
+fn settings(st: &mut App) {
+    if st.ext_settings.is_open_for(EXT) {
+        st.ext_settings.close();
+    } else {
+        st.ext_settings.open(EXT);
+    }
 }
 
 /// 打印生效策略：来源文件、通用兜底、各表面、会话放行与告警。

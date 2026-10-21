@@ -90,6 +90,10 @@ const SUBCOMMANDS: &[SubcommandDef] = &[
         description: "Print the effective policy, its sources and session grants",
     },
     SubcommandDef {
+        name: "settings",
+        description: "Open this extension's settings panel (reviewLog / yoloMode)",
+    },
+    SubcommandDef {
         name: "allow",
         description: "Grant a pattern for this session: /permissions allow <surface> <pattern>",
     },
@@ -388,22 +392,29 @@ async fn settle_action(tool: &str, settings: &Settings, outcome: &Outcome) -> (A
     }
 }
 
-/// 确认面板的一行标题：说清「哪个工具、按哪条规则、值是什么」。
+/// 确认面板的一行标题：先说要执行什么，再说按哪条规则。
 ///
-/// 面板标题只有一行，过长的值在这里截断——完整值在聊天区的拦截消息（若最终拒绝）里。
+/// 面板标题只占一行，被宽度截断时先丢尾部——所以命令（用户真正要判断的东西）放前面，
+/// 规则说明与嵌套语境放后面。命令里的换行压成空格，保证标题确实是单行。
 fn ask_title(tool: &str, outcome: &Outcome) -> String {
     let d = &outcome.decision;
-    let mut title = format!("{tool} needs approval — {} `{}`", d.surface, d.pattern);
-    if !outcome.value.is_empty() {
-        title.push_str(&format!(
-            " · {}",
-            truncate_chars(
-                &outcome.value,
-                MAX_MESSAGE_VALUE_CHARS,
-                Some(DEF_ELLIPSIS),
-                true
-            )
-        ));
+    let value = truncate_chars(
+        &outcome.value,
+        MAX_MESSAGE_VALUE_CHARS,
+        Some(DEF_ELLIPSIS),
+        true,
+    )
+    .replace(['\n', '\r'], " ");
+
+    let what = if value.is_empty() {
+        tool.to_string()
+    } else {
+        format!("{tool}: {value}")
+    };
+
+    let mut title = format!("{what} — {} `{}`", d.surface, d.pattern);
+    if !outcome.note.is_empty() {
+        title.push_str(&format!(" ({})", outcome.note));
     }
     title
 }
@@ -703,6 +714,24 @@ mod tests {
     }
 
     #[test]
+    fn subcommand_candidates_cover_the_handler() {
+        let names: Vec<&str> = SUBCOMMANDS.iter().map(|s| s.name).collect();
+        assert_eq!(
+            names,
+            vec![
+                "show",
+                "settings",
+                "allow",
+                "drop",
+                "allowlist",
+                "init",
+                "log",
+                "reset"
+            ]
+        );
+    }
+
+    #[test]
     fn denies_dotenv_through_file_tool() {
         let policy = policy_with(json!({
             "permission": {"*": "allow", "path": {"*": "allow", "*.env": "deny"}}
@@ -885,5 +914,23 @@ mod tests {
         assert_eq!(outcome.decision.action, Action::Ask);
         let msg = denial_message("bash", &outcome, false, false);
         assert!(msg.contains("/permissions allow bash \"sudo *\""), "{msg}");
+    }
+
+    #[test]
+    fn ask_title_leads_with_the_command_on_one_line() {
+        let policy = policy_with(json!({
+            "permission": {"*": "allow", "bash": {"*": "allow", "rm -rf *": "ask"}}
+        }));
+        let outcome = evaluate(
+            &policy,
+            "bash",
+            &json!({"command": "rm -rf build\nrm -rf dist"}),
+            Path::new("/work/p"),
+        );
+        let title = ask_title("bash", &outcome);
+        // 命令在前（被截断时先丢规则说明），且换行已压成空格
+        assert!(title.starts_with("bash: rm -rf build"), "{title}");
+        assert!(!title.contains('\n'), "标题必须是单行: {title:?}");
+        assert!(title.contains("rm -rf *"), "带上命中的规则: {title}");
     }
 }

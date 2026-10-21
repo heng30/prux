@@ -110,7 +110,8 @@
 
 ## `ask` 意味着什么
 
-命中 `ask` 时会弹一个确认面板，三个选项：
+命中 `ask` 时会弹一个确认面板：顶行是标题（哪个工具、要执行什么），下面三个选项，
+操作提示在底部。
 
 | 选项 | 效果 |
 |---|---|
@@ -174,6 +175,7 @@ heredoc：`<<'EOF'`（分隔符带引号）的 body 是纯文本，不判；`<<E
 | 命令 | 作用 |
 |---|---|
 | `/permissions`、`/permissions show` | 打印生效策略：来源文件、四层规则、会话放行、告警 |
+| `/permissions settings` | 打开本扩展的设置面板（再执行一次关闭），见[设置面板](#设置面板) |
 | `/permissions allow <surface> <pattern>` | 会话级放行，`surface` 为 `path` / `external_directory` / `bash` / 工具名，也可以是 `*` |
 | `/permissions drop <surface> <pattern>` | 撤销一条会话放行 |
 | `/permissions allowlist` | 列出会话放行 |
@@ -185,7 +187,7 @@ heredoc：`<<'EOF'`（分隔符带引号）的 body 是纯文本，不判；`<<E
 
 ## 设置面板
 
-`/extension` 面板里选中 `permissions` 后有两个开关，改动立即写回全局配置：
+`/permissions settings`（或 `/extension` 面板里选中 `permissions`）打开设置面板，改动立即写回全局配置：
 
 | 开关 | 含义 |
 |---|---|

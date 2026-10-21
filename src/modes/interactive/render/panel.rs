@@ -234,7 +234,7 @@ fn generic_lines(
 
     let hint = panel_hint(layer);
 
-    // 操作提示：login 面板放底部，其他面板保持顶部
+    // 操作提示：login 面板放底部，其他面板保持顶部；扩展自定义面板（提问/菜单）也放底部
     let hint_at_bottom = matches!(
         layer.kind,
         PanelKind::LoginAuthType
@@ -242,6 +242,7 @@ fn generic_lines(
             | PanelKind::LoginProvider
             | PanelKind::LogoutProvider
             | PanelKind::ExtensionDetail
+            | PanelKind::Custom(_)
     );
 
     // 无搜索输入行的面板：认证方式 / 扩展详情 / 会话修复 / 僵尸 op 提示 / 确认框 / 自定选择
@@ -250,6 +251,16 @@ fn generic_lines(
 
     let mut lines: Vec<Line<'static>> = Vec::new();
     lines.push(Line::from(""));
+
+    // 扩展自定义面板顶部先给一行标题（问的是哪件事 / 要执行哪个命令）：
+    // 只有选项列表看不出命题，而操作提示已移到底部。超宽则截断——完整内容由扩展
+    // 自己放进选项或聊天区，面板标题保持单行。
+    if matches!(layer.kind, PanelKind::Custom(_)) && !layer.title.trim().is_empty() {
+        let (title, _) = truncate_display(&layer.title, width.saturating_sub(2));
+        lines.push(Line::from(Span::styled(format!(" {title}"), accent)));
+        lines.push(Line::from(""));
+    }
+
     if !hint_at_bottom {
         for l in hint_wrapped_lines(&hint, width) {
             lines.push(Line::from(Span::styled(l, warning)));
@@ -2456,8 +2467,8 @@ mod tests {
         assert_eq!(chunks.join(" "), long, "折行不丢字: {chunks:?}");
         assert_eq!(
             panel_height(&app, w) as usize,
-            7 + chunks.len(),
-            "高度 = 提示1+空1+列表(短项1+长项 {} 行)+上下分割线2+上下留白2",
+            9 + chunks.len(),
+            "高度 = 标题1+空1+列表(短项1+长项 {} 行)+空1+提示1+上下分割线2+上下留白2",
             chunks.len()
         );
 
@@ -2519,8 +2530,8 @@ mod tests {
         assert!(ra > 1 && rb > 1, "两条都应折行: {ra}/{rb}");
         assert_eq!(
             panel_height(&app, w) as usize,
-            7 + ra + rb,
-            "高度含条目间空行"
+            9 + ra + rb,
+            "高度含标题与条目间空行"
         );
 
         let out = render_panel_text(&app, w);
@@ -2615,7 +2626,7 @@ mod tests {
             .open(PanelKind::Custom(8), "Pick".to_string(), items);
         assert_eq!(
             panel_height(&app, 80) as usize,
-            7 + MAX_PANEL_LINES,
+            9 + MAX_PANEL_LINES,
             "10 行列表 + 页码"
         );
     }
@@ -2647,8 +2658,7 @@ mod tests {
             "选中首项: {out:?}"
         );
         assert!(out[1].contains("Stay in plan mode"));
-        assert!(out[2].contains("Refine the plan"));
-        // hint 文案（render_panel_selector 顶层渲染路径）
+        assert!(out[2].contains("Refine the plan")); // hint 文案（render_panel_selector 顶层渲染路径）
         let h = panel_height(&app, 80);
         use ratatui::backend::TestBackend;
         let backend = TestBackend::new(80, h);
@@ -2660,24 +2670,44 @@ mod tests {
             })
             .unwrap();
         let buf = terminal.backend().buffer();
-        let mut found_hint = false;
-        for y in 0..h {
-            let row: String = (0..80u16)
-                .map(|x| {
-                    buf.cell((x, y))
-                        .map(|c| c.symbol().to_string())
-                        .unwrap_or_default()
-                })
-                .collect();
-            if row.contains("enter select") {
-                found_hint = true;
-            }
-        }
-        assert!(found_hint, "Custom 面板提示行缺失");
+        let rows: Vec<String> = (0..h)
+            .map(|y| {
+                (0..80u16)
+                    .map(|x| {
+                        buf.cell((x, y))
+                            .map(|c| c.symbol().to_string())
+                            .unwrap_or_default()
+                    })
+                    .collect()
+            })
+            .collect();
+        // 命题在顶部：只有选项列表时看不出在问什么
+        assert!(
+            rows.iter().any(|r| r.contains("Plan mode - what next?")),
+            "Custom 面板应显示标题: {rows:?}"
+        );
+        // 操作提示在底部：最后一个非空内容行是键位提示，不能排在标题之下、列表之上
+        let hint_row = rows
+            .iter()
+            .rposition(|r| r.contains("enter select"))
+            .expect("Custom 面板提示行缺失");
+        let title_row = rows
+            .iter()
+            .position(|r| r.contains("Plan mode - what next?"))
+            .expect("标题行");
+        assert!(title_row < hint_row, "标题在上、提示在下: {rows:?}");
+        let last_item_row = rows
+            .iter()
+            .rposition(|r| r.contains("Refine the plan"))
+            .expect("末项");
+        assert!(
+            hint_row > last_item_row,
+            "提示应在选项列表之后（底部）: {rows:?}"
+        );
 
         // Custom 面板无输入框（输入框无用——Enter 确认的是选中项而非输入文本）：
         // 面板高度不含搜索行，渲染不得出现 `> ` 过滤行，光标也不得定位到输入行
-        assert_eq!(h, 9, "无搜索行高度: {}", h);
+        assert_eq!(h, 11, "标题+空行+3 项+空行+提示: {h}");
         for y in 0..h {
             let row: String = (0..80u16)
                 .map(|x| {

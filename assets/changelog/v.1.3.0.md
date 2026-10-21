@@ -94,6 +94,7 @@ This release aligns prux with upstream pi 1.3.0.
   commands the parser could not finish are refused as `ask`. Config lives in
   `agent_dir()/extensions/permissions/config.json`, plus a project config that is only loaded when the
   project is trusted. Decisions go to a review log under `agent_dir()/extensions/permissions/logs/`.
+  `/permissions settings` opens the extension settings panel (`permissionReviewLog` / `yoloMode`).
   Off by default. See `docs/extensions/permissions.md`.
 
 ### Changed
@@ -231,8 +232,8 @@ This release aligns prux with upstream pi 1.3.0.
   与重定向目标；看不透的包装（`bash -c`、`eval`、`sudo`、`xargs`、`find -exec`、解释器 `-c`）
   与没能解析完的命令一律按 `ask` 拦下。配置在 `agent_dir()/extensions/permissions/config.json`，
   另有项目配置（仅在项目受信任时加载）；判定结果写进
-  `agent_dir()/extensions/permissions/logs/` 下的 review log。默认不启用。
-  详见 `docs/extensions/permissions.md`。
+  `agent_dir()/extensions/permissions/logs/` 下的 review log。`/permissions settings` 打开扩展设置面板
+  （`permissionReviewLog` / `yoloMode`）。默认不启用。详见 `docs/extensions/permissions.md`。
 
 ### 变更
 
