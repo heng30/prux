@@ -7,6 +7,7 @@ use crate::{
     },
     utils::{
         output_files,
+        process::kill_process_tree,
         truncate::{
             self, DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, TruncatedBy, head_bytes, tail_bytes,
         },
@@ -175,38 +176,12 @@ fn bash_procs_registry() -> &'static StdMutex<HashMap<String, (i32, Arc<AtomicBo
     BASH_PROCS.get_or_init(|| StdMutex::new(HashMap::new()))
 }
 
-/// 强杀进程树：Unix 用 killpg（子进程以 process_group(0) 起，整组同杀）；
-/// Windows 无进程组，用 taskkill /T 连同子进程一起终止。
-fn kill_process_tree(pid: i32) {
-    #[cfg(unix)]
-    {
-        _ = nix::sys::signal::killpg(
-            nix::unistd::Pid::from_raw(pid),
-            nix::sys::signal::Signal::SIGKILL,
-        );
-    }
-
-    #[cfg(windows)]
-    {
-        _ = std::process::Command::new("taskkill")
-            .args(["/F", "/T", "/PID", &pid.to_string()])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status();
-    }
-
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = pid;
-    }
-}
-
 /// 中止指定 id 的运行中 bash 进程（abort_bash）。返回是否找到并中止。
 pub fn abort_bash(id: &str) -> bool {
     match bash_procs_registry().lock().unwrap().remove(id) {
         Some((pid, flag)) => {
             flag.store(true, Ordering::SeqCst);
-            kill_process_tree(pid);
+            kill_process_tree(pid as u32);
             true
         }
         None => false,
@@ -223,7 +198,7 @@ pub fn abort_all_bash() -> usize {
     let count = entries.len();
     for (pid, flag) in entries {
         flag.store(true, Ordering::SeqCst);
-        kill_process_tree(pid);
+        kill_process_tree(pid as u32);
     }
     count
 }
@@ -444,7 +419,7 @@ pub async fn execute_bash_with_env(
                 Ok(s) => s.ok(),
                 Err(_) => {
                     timed_out = true;
-                    kill_process_tree(pid);
+                    kill_process_tree(pid as u32);
                     _ = child.wait().await;
                     None
                 }
@@ -455,7 +430,7 @@ pub async fn execute_bash_with_env(
 
     let cancelled = cancel_flag.load(Ordering::SeqCst);
     if cancelled {
-        kill_process_tree(pid);
+        kill_process_tree(pid as u32);
         _ = child.wait().await;
     }
     if let Some(id) = id {

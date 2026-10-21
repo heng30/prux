@@ -281,6 +281,18 @@ pub fn tail_bytes(s: &str, max_bytes: usize) -> &str {
     &s[start..]
 }
 
+/// 从字符串结尾保留至多 `max_chars` 个字符（按字符切，UTF-8 边界安全）。
+///
+/// 与 [`tail_bytes`] 的区别是计数单位：那个按字节（用于控制上下文体积），这里按字符
+/// （用于「最后 2000 个字」这类人眼可数的预算）。未超限时原样返回。
+pub fn tail_chars(text: &str, max_chars: usize) -> String {
+    let count = text.chars().count();
+    if count <= max_chars {
+        return text.to_string();
+    }
+    text.chars().skip(count - max_chars).collect()
+}
+
 /// 按**字符**数截断到至多 `max_chars` 个字符（不按显示宽度，也不标 "[truncated]"）。
 ///
 /// `postfix` 为 `Some(p)` 时，只有真正发生截断才在结果尾部追加 `p`；`p` **不占用**
@@ -320,6 +332,14 @@ pub fn truncate_chars_within(s: &str, max_chars: usize, postfix: &str) -> String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tail_chars_keeps_the_last_characters() {
+        assert_eq!(tail_chars("abcdef", 3), "def");
+        assert_eq!(tail_chars("abc", 10), "abc");
+        // 按字符切，不切坏 UTF-8 码位
+        assert_eq!(tail_chars("中文内容", 2), "内容");
+    }
 
     #[test]
     fn truncate_chars_respects_utf8_boundaries() {

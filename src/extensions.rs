@@ -43,6 +43,7 @@ pub mod tasks;
 pub mod tool_search;
 pub mod update_check;
 pub mod usage;
+pub mod vet;
 pub mod web_access;
 
 pub use plan_mode::PlanMode;
@@ -78,6 +79,8 @@ pub const PRIORITY_PROXY: u32 = 72;
 pub const PRIORITY_REWIND: u32 = 71;
 /// shake 手动丢弃重内容扩展的注册优先级。
 pub const PRIORITY_SHAKE: u32 = 70;
+/// vet 收工前项目检查闭环扩展的注册优先级。
+pub const PRIORITY_VET: u32 = 76;
 /// web-access 联网搜索与抓取扩展的注册优先级。
 pub const PRIORITY_WEB_ACCESS: u32 = 70;
 /// mcp MCP 客户端扩展的注册优先级。

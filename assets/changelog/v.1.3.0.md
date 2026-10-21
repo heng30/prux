@@ -96,6 +96,21 @@ This release aligns prux with upstream pi 1.3.0.
   project is trusted. Decisions go to a review log under `agent_dir()/extensions/permissions/logs/`.
   `/permissions settings` opens the extension settings panel (`permissionReviewLog` / `yoloMode`).
   Off by default. See `docs/extensions/permissions.md`.
+- **`vet` closes the loop on "is it really done?"**: enabling the `vet` extension runs the
+  project's own checks (test / lint / typecheck) right before the main agent settles. A blocking
+  failure is injected as a user message — check names, commands, exit codes and the tail of each
+  output — and the turn resumes so the agent keeps fixing until everything passes. Three conditions
+  end the loop: `maxIterations` resume attempts (`0` = report only), an identical failure
+  fingerprint (same check, same output), or a new user prompt. Checks come from
+  `agent_dir()/extensions/vet.json` plus a trusted project's `.prux/extensions/vet.json` (keys
+  override, `checks` replaces wholesale); an untrusted project's config is never read, so a cloned
+  repo cannot make `prux` execute commands. `requireEdits` (default on) skips turns that changed no
+  files, `optional` checks report without blocking, a per-check `timeoutSecs` kills runaway
+  processes, and output is truncated to its tail (4000 chars per check, 12000 per report).
+  `/vet run|status|detect|add|remove|reset` manage it, `/vet detect [--write]` recognizes Cargo,
+  npm/pnpm/yarn/bun, make/just, pytest/ruff, Go and Deno projects, and the settings panel switches
+  `autoRun` / `maxIterations` / `timeout` / `announce` / `requireEdits`. Off by default. See
+  `docs/extensions/vet.md`.
 
 ### Changed
 
@@ -234,6 +249,18 @@ This release aligns prux with upstream pi 1.3.0.
   另有项目配置（仅在项目受信任时加载）；判定结果写进
   `agent_dir()/extensions/permissions/logs/` 下的 review log。`/permissions settings` 打开扩展设置面板
   （`permissionReviewLog` / `yoloMode`）。默认不启用。详见 `docs/extensions/permissions.md`。
+- **`vet` 给「改完了」补上「检查过了」**：开启 `vet` 扩展后，主 agent 结算前会跑项目自己的检查
+  （测试 / lint / 类型检查）。有阻塞失败时，把检查名、命令、退出码与输出尾部作为一条 user 消息
+  注入上下文并续跑，让 agent 一直修到全绿。三种情况收手：用满 `maxIterations` 次
+  （`0` = 只检查只报告）、失败指纹与上次相同（同一条检查同一种输出）、用户提交了新输入。
+  检查来自 `agent_dir()/extensions/vet.json` 与受信项目的 `.prux/extensions/vet.json`
+  （键级覆盖、`checks` 整体替换）；未受信项目的配置根本不读，一个陌生仓库没法让 `prux` 执行命令。
+  `requireEdits`（缺省开）跳过没改过文件的回合，`optional` 检查只报告不阻止收工，单条检查的
+  `timeoutSecs` 会连同子进程一起杀掉超时的检查，输出只保留尾部（单条 4000 字符、整份报告
+  12000 字符）。`/vet run|status|detect|add|remove|reset` 管理配置，`/vet detect [--write]`
+  识别 Cargo、npm/pnpm/yarn/bun、make/just、pytest/ruff、Go、Deno 项目，设置面板可调
+  `autoRun` / `maxIterations` / `timeout` / `announce` / `requireEdits`。默认不启用。
+  详见 `docs/extensions/vet.md`。
 
 ### 变更
 

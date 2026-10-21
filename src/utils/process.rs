@@ -1,0 +1,183 @@
+//! 进程辅助：执行外部命令时的平台差异、输出收集与回收。
+//!
+//! 四件事：
+//! - [`shell_command`]：按平台构造「执行一条命令字符串」的 shell 调用；
+//! - [`drain_tail`]：持续读空管道而只保留尾部（限量，且不会因为管道写满把子进程卡死）；
+//! - [`kill_process_tree`]：连同子进程一起强杀（Unix 进程组 / Windows `taskkill /T`）；
+//! - [`blocking`]：在异步上下文里安全地做同步阻塞工作。
+//!
+//! 这些是「跑一条用户配置的命令」所需的最小公共面：内置 `bash` 工具（异步流式）与
+//! 需要同步等待结果的扩展（如 `vet`）共用同一套进程回收语义，避免各写一份。
+
+use std::{io::Read, process::Command};
+
+/// 按平台构造执行一条命令字符串的 shell 调用。
+///
+/// Unix 用 `sh -c`，Windows 用 `cmd /C`——两者都是该平台上必然存在的解释器。
+/// 刻意不复用内置 `bash` 工具的 shell 选择（`shellPath` / `/bin/bash` 兜底）：那是给
+/// **模型**执行命令用的，这里的命令来自用户配置，只需要「能跑起来」的最小保证。
+pub fn shell_command(command: &str) -> Command {
+    #[cfg(windows)]
+    {
+        let mut cmd = Command::new("cmd");
+        cmd.args(["/C", command]);
+        cmd
+    }
+
+    #[cfg(not(windows))]
+    {
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", command]);
+        cmd
+    }
+}
+
+/// 持续读空管道，只保留尾部 `limit` 字节。返回 `(文本, 是否丢弃过前缀)`。
+///
+/// 必须持续读到 EOF：只要不读，子进程写满管道就会阻塞，表现为「命令卡住」而不是
+/// 「输出太多被截断」。因此这里的取舍是**读全部、留尾部**，超过 `2 * limit` 时滚动
+/// 丢弃前缀（摊还 O(n)，不必每读一次就搬动整个缓冲）。
+pub fn drain_tail(mut reader: impl Read, limit: usize) -> (String, bool) {
+    let mut buf: Vec<u8> = Vec::new();
+    let mut chunk = [0u8; 8192];
+    let mut truncated = false;
+
+    loop {
+        match reader.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => {
+                buf.extend_from_slice(&chunk[..n]);
+                if buf.len() > limit * 2 {
+                    let drop = buf.len() - limit;
+                    buf.drain(..drop);
+                    truncated = true;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+
+    if buf.len() > limit {
+        let drop = buf.len() - limit;
+        buf.drain(..drop);
+        truncated = true;
+    }
+
+    let text = String::from_utf8_lossy(&buf).to_string();
+    (text, truncated)
+}
+
+/// 强杀进程树：Unix 用 `killpg`（子进程需以 `process_group(0)` 起），
+/// Windows 用 `taskkill /F /T` 连同子进程一起终止，其它平台只杀直接子进程。
+///
+/// 调用方仍应同时 `Child::kill()`：本函数按 pid 定位进程组，若子进程已经退出、
+/// pid 被复用，单靠它可能落空。
+pub fn kill_process_tree(pid: u32) {
+    #[cfg(unix)]
+    {
+        _ = nix::sys::signal::killpg(
+            nix::unistd::Pid::from_raw(pid as i32),
+            nix::sys::signal::Signal::SIGKILL,
+        );
+    }
+
+    #[cfg(windows)]
+    {
+        _ = Command::new("taskkill")
+            .args(["/F", "/T", "/PID", &pid.to_string()])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = pid;
+    }
+}
+
+/// 在当前运行时里安全地执行阻塞工作。
+///
+/// 同步接口（如扩展的边界钩子）里等一个分钟级的子进程时，必须让出 tokio 的 worker：
+/// 多线程运行时走 `block_in_place`（运行时另起线程接管调度），单线程运行时直接执行
+/// （那里没有别的任务需要调度），不在运行时内（普通线程 / 单元测试）同样直接执行。
+pub fn blocking<T>(f: impl FnOnce() -> T) -> T {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+            tokio::task::block_in_place(f)
+        }
+        _ => f(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn drain_tail_keeps_everything_below_the_limit() {
+        let (text, truncated) = drain_tail(Cursor::new(b"hello".to_vec()), 64);
+        assert_eq!(text, "hello");
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn drain_tail_keeps_only_the_tail_and_flags_it() {
+        let input = "x".repeat(1000);
+        let (text, truncated) = drain_tail(Cursor::new(input.into_bytes()), 100);
+        assert!(truncated);
+        assert_eq!(text.chars().count(), 100);
+    }
+
+    #[test]
+    fn drain_tail_rolls_over_multiple_rounds_of_output() {
+        // 远大于 2*limit：验证滚动丢弃（而不是只裁一次）
+        let (text, truncated) = drain_tail(Cursor::new(vec![b'a'; 100_000]), 128);
+        assert!(truncated);
+        assert_eq!(text.len(), 128);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn shell_command_runs_the_command_string() {
+        let output = shell_command("echo shell-ok").output().unwrap();
+        assert!(output.status.success());
+        assert!(String::from_utf8_lossy(&output.stdout).contains("shell-ok"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn kill_process_tree_terminates_a_group_quickly() {
+        use std::{
+            os::unix::process::CommandExt as _,
+            process::Stdio,
+            time::{Duration, Instant},
+        };
+
+        let mut cmd = shell_command("sleep 30 & wait");
+        cmd.stdout(Stdio::null()).stderr(Stdio::null());
+        cmd.process_group(0);
+        let mut child = cmd.spawn().unwrap();
+
+        let pid = child.id();
+        let started = Instant::now();
+        kill_process_tree(pid);
+        _ = child.kill();
+        _ = child.wait();
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "进程组应被强杀，而不是等满 30s"
+        );
+    }
+
+    #[test]
+    fn blocking_runs_without_a_runtime() {
+        assert_eq!(blocking(|| 41 + 1), 42);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn blocking_runs_inside_a_multi_thread_runtime() {
+        assert_eq!(blocking(|| 6 * 7), 42);
+    }
+}
