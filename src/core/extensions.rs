@@ -85,8 +85,9 @@ pub use tools::{
     ToolLoadoutChanges, unavailable_tool_exec,
 };
 pub use ui::{
-    ExtensionUiRequest, RichSpan, SelectOption, UiNotifyLevel, next_ui_id, render_custom_message,
-    request_show_dock, request_ui, submit_ui_choice, take_pending_ui,
+    ExtensionUiRequest, RichSpan, SelectOption, UiNotifyLevel, ask_pending, ask_prompt, next_ui_id,
+    render_custom_message, request_show_dock, request_ui, set_ui_ready, submit_ui_choice,
+    take_pending_ui, ui_ready,
 };
 
 /// 扩展声明的 MCP 服务器条目：`(服务器名, 与 `mcp.json` 的 `mcpServers[name]` 同形的 JSON)`。
@@ -882,6 +883,38 @@ pub trait Extension: Send + Sync {
                 args: None,
             }),
         }
+    }
+
+    /// 工具调用前拦截钩子（**异步**版，仅当 `hooks()` 声明了
+    /// [`ExtensionHook::BeforeToolCallAsync`] 时被调用）。
+    ///
+    /// 与 [`Self::before_tool_call_ext`] 的区别只有一个，但很关键：这里**可以 await**。
+    /// 需要用户当场作答的门控（典型是权限确认面板）在这里发起
+    /// [`ask_prompt`](super::ask_prompt) 并等待结果，判定期间让出执行权——不占线程，
+    /// 回合被 abort 时 future 被 drop 即等于取消。
+    ///
+    /// 参数都是 owned：`'static` future 需要它们活得比 `&self` 长。因此框架**只**为
+    /// 声明了 [`ExtensionHook::BeforeToolCallAsync`] 的扩展构造这些副本；声明
+    /// [`ExtensionHook::BeforeToolCall`] 的扩展仍走同步路径，没有额外 clone。
+    ///
+    /// 默认实现桥接 [`Self::before_tool_call_ext`]（声明了异步 hook 却没覆写本方法时，
+    /// 行为与同步版一致）。声明异步 hook 后不会再收到同步版的调用。
+    fn before_tool_call_async(
+        &self,
+        name: String,
+        args: Value,
+        assistant_message: Option<AgentMessage>,
+        context: Vec<AgentMessage>,
+        all_args: Value,
+    ) -> BoxFuture<'static, std::result::Result<BeforeToolCallOutcome, ToolError>> {
+        let outcome = self.before_tool_call_ext(
+            &name,
+            &args,
+            assistant_message.as_ref(),
+            &context,
+            &all_args,
+        );
+        Box::pin(async move { outcome })
     }
 
     /// 工具调用后处理钩子（增强接口）。

@@ -512,6 +512,12 @@ pub struct App {
     pub file_scan_cancel: Option<Arc<AtomicBool>>,
     /// 模态选择面板
     pub panel: Panel,
+    /// 上一帧仍开着的扩展提问面板 id（`PanelKind::Custom`）。
+    ///
+    /// 事件循环每帧与 [`Panel::active_ask_id`] 对账：这个值变了且旧的那条还在等，
+    /// 说明提问面板被关掉或替换了，需要给旧 id 回传一次取消——`Panel::close` 不会
+    /// 通知扩展，没有这道对账，`ask_prompt` 的等待者只能等超时。
+    pub active_ask_id: Option<u64>,
     /// 待用户确认的会话修复请求（损坏检测后面板确认，None=无）
     pub pending_session_repair: Option<SessionRepairRequest>,
     /// 待用户确认的"未完成 operation"请求（僵尸 op 检测后面板确认，None=无）
@@ -914,6 +920,7 @@ impl App {
             last_suggestion_version: 0,
             file_scan_cancel: None,
             panel: Panel::new(),
+            active_ask_id: None,
             system_messages: Vec::new(),
             retry_ui: None,
             retry_failed_ts: None,

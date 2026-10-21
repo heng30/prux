@@ -193,9 +193,20 @@ pub fn epoch_ms_to_local_rfc3339(ms: u64) -> String {
 ///
 /// 以当前时间为基准往前推 `days * 86400` 秒；`days` 为负值时得到未来时间。
 pub fn rfc3339_days_ago(days: i64) -> String {
-    let target = (now_secs() as i64) - days * 86_400;
-    let days_since_epoch = target.div_euclid(86_400);
-    let seconds_of_day = target.rem_euclid(86_400);
+    rfc3339_secs_utc((now_secs() as i64) - days * 86_400)
+}
+
+/// 当前 UTC 时间的秒级 RFC3339 字符串（`YYYY-MM-DDTHH:MM:SSZ`）。
+pub fn now_rfc3339_secs() -> String {
+    rfc3339_secs_utc(now_secs() as i64)
+}
+
+/// Unix 秒数 → 秒级 RFC3339 UTC 字符串（`YYYY-MM-DDTHH:MM:SSZ`）。
+///
+/// 负数秒（epoch 之前）按欧几里得除法取整，日期与时区固定为 UTC。
+pub fn rfc3339_secs_utc(secs: i64) -> String {
+    let days_since_epoch = secs.div_euclid(86_400);
+    let seconds_of_day = secs.rem_euclid(86_400);
     let (year, month, day) = civil_from_days(days_since_epoch);
     let hour = seconds_of_day / 3_600;
     let minute = (seconds_of_day % 3_600) / 60;
@@ -317,6 +328,13 @@ pub fn format_elapsed(seconds: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rfc3339_secs_utc_formats_known_instants() {
+        assert_eq!(rfc3339_secs_utc(0), "1970-01-01T00:00:00Z");
+        assert_eq!(rfc3339_secs_utc(1_700_000_000), "2023-11-14T22:13:20Z");
+        assert_eq!(rfc3339_secs_utc(-1), "1969-12-31T23:59:59Z");
+    }
 
     /// 紧凑标签的形状是上游契约（`workflow/progress.ts`），别顺手改成带小数。
     #[test]

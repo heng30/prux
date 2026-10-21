@@ -71,6 +71,31 @@ This release aligns prux with upstream pi 1.3.0.
   one per working directory, and every 12 turns a single one-shot request extracts new entries
   from the conversation. `--offline` skips extraction. Off by default.
 
+- **Extensions can wait for the user mid-call**: a new `BeforeToolCallAsync` hook lets an extension
+  gate a tool call and `await` the answer instead of having to decide synchronously. The matching
+  `ask_prompt(title, options, timeout)` queues the usual select panel and waits for the pick — it
+  holds no thread, is cancelled by dropping the future (Esc abort), and returns `None` when there is
+  no interactive loop. A replaced panel resolves the waiting side with `None` (the event loop
+  reconciles `PanelKind::Custom(id)` every frame), `ask_pending()` lets a caller avoid stealing
+  another prompt's panel, and `submit_ui_choice` no longer fires a follow-up prompt when it answers a
+  waiter.
+- **`/permissions` gates what the agent may do**: enabling the `permissions` extension adds a
+  deterministic gate in front of every tool call. Policy is layered — `path` (cross-cutting file
+  patterns), `external_directory` (CWD boundary), per-tool patterns and `bash` command patterns —
+  and composes most-restrictive-wins (`deny` > `ask` > `allow`), with last-match-wins inside each
+  pattern map. Values are `allow` / `ask` / `deny` or `{action, reason}`; `path` and
+  `external_directory` have directional variants (`*_read` / `*_write`). Hitting `ask` opens a
+  confirmation panel (`Approve once` / `Approve for this session` / `Deny`); a panel that gets no
+  answer (Esc, ten-minute timeout, non-interactive run, or another prompt already waiting) fails
+  closed, `/permissions allow <surface> <pattern>` is the non-interactive escape hatch, and a session
+  grant never overrides a `deny`. Bash commands are split into statements and each one is evaluated,
+  including commands inside `$(…)` / backticks / subshells, paths after a literal `cd`, and redirect
+  targets; opaque wrappers (`bash -c`, `eval`, `sudo`, `xargs`, `find -exec`, interpreter `-c`) and
+  commands the parser could not finish are refused as `ask`. Config lives in
+  `agent_dir()/extensions/permissions/config.json`, plus a project config that is only loaded when the
+  project is trusted. Decisions go to a review log under `agent_dir()/extensions/permissions/logs/`.
+  Off by default. See `docs/extensions/permissions.md`.
+
 ### Changed
 
 - **`read` shows its line range as `:start-end`** in the transcript and in HTML exports, the same
@@ -187,6 +212,27 @@ This release aligns prux with upstream pi 1.3.0.
   并在每次请求前按当前输入注入一段按相关度挑选的记忆。召回是词法的（BM25），
   记忆落盘在 `agent_dir()/extensions/memory/`（全局一份 + 每个工作目录一份），
   每 12 轮用一次独立请求从对话里抽取新条目；`--offline` 跳过抽取。默认不启用。
+
+- **扩展可以在工具调用中途等用户作答**：新增 `BeforeToolCallAsync` 钩子，扩展可以一边门控工具调用
+  一边 `await` 用户的选择，而不必同步地当场下结论。配套的 `ask_prompt(title, options, timeout)`
+  复用同一个选择面板并等待作答——不占线程，回合被 abort（future 被 drop）即取消，没有交互事件循环
+  时返回 `None`。面板被替换时等待方会收到 `None`（事件循环每帧对账 `PanelKind::Custom(id)`）；
+  `ask_pending()` 让调用方避开「顶掉别人的面板」；`submit_ui_choice` 在答复等待者时不再触发
+  follow-up prompt。
+- **`/permissions` 给模型的每次工具调用加一道确定性门控**：开启 `permissions` 扩展后，工具调用
+  在执行前先过策略。策略分四层——`path`（横切文件模式）、`external_directory`（工作目录边界）、
+  按工具的模式与 `bash` 命令模式——组合规则是 most-restrictive-wins（`deny` > `ask` > `allow`），
+  单张模式表内是 last-match-wins。值可以是 `allow` / `ask` / `deny`，或带理由的
+  `{action, reason}`；`path` 与 `external_directory` 还有方向变体（`*_read` / `*_write`）。
+  命中 `ask` 会弹确认面板（`Approve once` / `Approve for this session` / `Deny`）；拿不到答复
+  （按 Esc、10 分钟超时、非交互运行、或已有别的确认在等）一律按拒绝处理，
+  `/permissions allow <surface> <pattern>` 是非交互场景的兜底，且会话放行**不会**覆盖 `deny`。
+  bash 命令按语句切分逐条判定，包括 `$(…)` / 反引号 / 子 shell 里的命令、字面 `cd` 之后的路径
+  与重定向目标；看不透的包装（`bash -c`、`eval`、`sudo`、`xargs`、`find -exec`、解释器 `-c`）
+  与没能解析完的命令一律按 `ask` 拦下。配置在 `agent_dir()/extensions/permissions/config.json`，
+  另有项目配置（仅在项目受信任时加载）；判定结果写进
+  `agent_dir()/extensions/permissions/logs/` 下的 review log。默认不启用。
+  详见 `docs/extensions/permissions.md`。
 
 ### 变更
 

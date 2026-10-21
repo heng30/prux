@@ -46,14 +46,18 @@ prux 都已有，对照见 §2。oh-my-pi 真正多出来的是三类东西：
 2. **对上下文做手术**（TTSR 流中打断、`/shake` 手动减重、`/handoff` 就地压缩）； 
 3. **Rust 侧的重型基建**（进程内 shell + 71 个 coreutils、gix/jj、ast-grep、隔离层）。
 
-按判断口径逐项过筛后，能作为独立扩展的共 **15 项**（§3），其中第一梯队 6 项、
-第二梯队 6 项、第三梯队（仅记录、暂不落地）3 项；**其余全部明确不做**（§4）。
+按判断口径逐项过筛后，能作为独立扩展的共 **15 项**（§3）；**其余全部明确不做**（§4）。
+15 项已全部定案，见下方六轮定案；已落地的 3 项（第一梯队）是既成事实，其余 12 项不再评估。
 
 **第三轮定案**：`generate_image`（§3.8）、`manage_skill`（§3.6）、`magic-keywords`（§3.11）
-判不做；`cleanse`（§3.10）暂缓不排期。理由见各节「落地记录」。
+判不做。理由见各节「落地记录」。
 **第四轮定案**：`lsp`（§3.15）已落地——`diagnostics` / `definition` / `references` / `symbols`
-四个 op，零新依赖，服务器常驻复用。§3 现剩 **4 项待做**（`advisor` / `cleanse` 暂缓 /
-`github` / `python`），均为「仅记录」或「暂缓」，暂无推荐排期项。
+四个 op，零新依赖，服务器常驻复用。
+**第五轮定案**：`advisor`（§3.9）、`github`（§3.13）、`python`（§3.14）判不做。
+**第六轮定案（冻结）**：`cleanse`（§3.10）暂缓改为判不做。本档至此**全部定案、不再评估**：
+15 项候选里 3 项已落地（`markit` / `shake` / `lsp`）、12 项判不做，零待做项、零暂缓项。
+DAP 调试器（§4.8）维持「不做」；后续若有人想动其中任何一项，另开一份迁移记录，
+在本档上打补丁不再开启新的讨论轮次。
 
 ### 路线图
 
@@ -67,12 +71,12 @@ prux 都已有，对照见 §2。oh-my-pi 真正多出来的是三类东西：
 | 不做 | 技能沉淀 | §3.6 `manage_skill`（写 SKILL.md，并入 `skills` 扩展） | 🚫 判不做（`write` 已能做） |
 | 不做 | 上下文手术 | §3.7 `handoff`（交接文档 + 就地压缩） | 🚫 判不做（与 `/compact` 重叠） |
 | 不做 | 多模态 | §3.8 `generate_image`（图像生成工具） | 🚫 判不做（不在编码闭环上） |
-| **Tier3** | 协作 | §3.9 `advisor`（第二模型旁观每轮） | 🟡 候选（注入毁 cache 前缀） |
-| 暂缓 | 质量 | §3.10 `cleanse`（检查器驱动的批量修复） | ⏸ 暂缓（不排期） |
+| 不做 | 协作 | §3.9 `advisor`（第二模型旁观每轮） | 🚫 判不做（注入毁 cache 前缀） |
+| 不做 | 质量 | §3.10 `cleanse`（检查器驱动的批量修复） | 🚫 判不做（编排等于 `tasks` + `lsp` 诊断） |
 | 不做 | 提示词 | §3.11 `magic-keywords`（`ultrathink` / `orchestrate` / `workflowz`） | 🚫 判不做（提示词糖） |
 | 不做 | 会话模式 | §3.12 `loop`（同一提示词反复重投直到闸门放行） | 🚫 判不做（与 `goal` 重叠、默认烧钱） |
-| **Tier3** | 联网 | §3.13 `github`（gh CLI 封装） | 🟡 仅记录 |
-| **Tier3** | 运行环境 | §3.14 `python`（持久 Python cell，并入 `codemode`） | 🟡 仅记录 |
+| 不做 | 联网 | §3.13 `github`（gh CLI 封装） | 🚫 判不做（`bash` 跑 `gh` 已够） |
+| 不做 | 运行环境 | §3.14 `python`（持久 Python cell，并入 `codemode`） | 🚫 判不做（价值仅限数据分析场景） |
 | **Tier1** | 代码智能 | §3.15 `lsp`（只读查询半套） | ✅ 已落地 |
 | 不做 | §4.1–§4.16 | 16 组 | 🚫 明确不做 |
 
@@ -126,7 +130,7 @@ web_search write memory_edit retain recall reflect learn manage_skill
 | `plan-mode` / `goal` / `proxy` / `usage` / `jet` / `loop-detect` / `hang-detect` / `notify` | `goal` / 本地网关 / `/usage` / `prewalk`(§4.16) / 循环与假死看门狗（另有 `AbortRun` / `RestartRun` UI 原语） |
 
 prux **完全没有**的：`ast_grep`、`ast_edit`、`ask`、`debug`(DAP)、`ida`、`eval`、
-`github`、`lsp`、`security_scan`、`wait`、`context_notes` / `new_context`、`glob`(冗余)。
+`github`、`security_scan`、`wait`、`context_notes` / `new_context`、`glob`(冗余)。
 本档的 §3 就是这条清单过筛后的结果（不在 §3 的，都能在 §4 找到否决理由）。
 
 ### 1.3 prux 扩展系统的能力边界（判断可行性的依据）
@@ -184,7 +188,7 @@ hook 面见 `src/core/extensions/hooks.rs`（`ExtensionHook` 13 项）。摘要�
 
 ---
 
-## 三、能够作为扩展的功能（原 15 项候选，现 4 项待做）
+## 三、能够作为扩展的功能（原 15 项候选，现已全部定案）
 
 每节格式固定：**上游实现 → 机制 → prux 落点 → 工作量 / 风险 → 落地记录（落地后回填）**。
 
@@ -569,7 +573,13 @@ OpenAI 兼容的 `/images/generations` 与 `/images/edits`（后者 OpenAI 端�
   每轮注入 = 每轮 cache miss；omp 有 `emission-guard` 做配额正是为此，prux 侧要等效实现
   （建议只在 `blocker` 档注入，`nit` / `concern` 进 dock 面板而不是进上下文）。
 
-**落地记录**：（待落地）
+**落地记录**（🚫 判不做）：**不实现。** 三条理由：
+1. 注入内容会改写主会话 prompt 前缀，每轮注入 = 每轮 cache miss，与 prux 靠前缀缓存压成本的
+   做法直接冲突——这是净负收益，不是工程风险；
+2. 退化成「只进 dock 面板、不进上下文」后，它不再是 reviewer，只是一份旁路日志，
+   用户自己看子代理输出更直接；
+3. 上游近 4000 行里大半是 `emission-guard`（去重 / 配额 / 废话过滤），说明它的可用性
+   全靠压制噪声，而不是功能本身撑起来的。
 
 ### 3.10 `cleanse`：检查器驱动的批量修复
 
@@ -596,9 +606,13 @@ OpenAI 兼容的 `/images/generations` 与 `/images/edits`（后者 OpenAI 端�
   建议第一版砍到「用户显式给出命令」而不是自动发现，例如 `/cleanse cargo clippy`，
   自动发现列为后续切片。
 
-**落地记录**（⏸ 暂缓，不排期）：依赖 `subagent` + `tasks` 同时开启，且 checker 发现与诊断
-解析强工程相关（每种 lint 的输出格式都要单独解析）。**当前不排期**，等 `lsp` 落地后
-（诊断已能统一获取）再重新评估——那时 `cleanse` 的输入来源会变成 LSP 诊断，成本会低很多。
+**落地记录**（🚫 判不做，第六轮定案）：**不实现。** 三条理由：
+1. 它不是一个独立功能，而是 `subagent` + `tasks` 的组合应用，**依赖两个扩展同时开启**；
+2. 编排层没有不可替代的增量：诊断可由 `lsp` 的 `diagnostics` 统一获取，分组与派发就是
+   若干个 `TaskCreate` + `TaskExecute`，模型自己就能编排；
+3. 唯一剩下的增量是 checker **自动发现**，而它强工程相关（每种 lint 的输出格式都要单独解析），
+   成本高且不通用——而一旦砍成「用户显式给命令」，它又退化成一句 `/cleanse cargo clippy`，
+   用户直接让模型跑 `cargo clippy` 即可。
 
 ### 3.11 `magic-keywords`：`ultrathink` / `orchestrate` / `workflowz`
 
@@ -677,7 +691,7 @@ OpenAI 兼容的 `/images/generations` 与 `/images/edits`（后者 OpenAI 端�
 3. **闸门命令等于一条无审批的 shell 通路**：`--until '<cmd>'` 每次轮末执行任意命令，
    在扩展层绕过工具审批与 `--exclude-tools` 的语义。
 
-### 3.13 `github`：gh CLI 封装（仅记录）
+### 3.13 `github`：gh CLI 封装
 
 **上游实现**：`src/tools/gh.ts`（293 行）+ `gh-view` / `gh-search` / `gh-pr-checkout` /
 `gh-run-watch` / `github-cache`（合计 4461 行）；文档 `docs/tools/github.md`；
@@ -691,12 +705,17 @@ OpenAI 兼容的 `/images/generations` 与 `/images/edits`（后者 OpenAI 端�
 缓存可省（prux 无 SQLite 依赖，第一版不加）。
 
 **工作量 / 风险**：小偏中。风险点：`gh` 不存在时要给明确安装提示
-（prux 的 `tools_manager::install_hint` 已有同款文案模式）。**仅记录**：价值取决于用户是否常用 `gh`，
-且「让模型直接调 `bash` 跑 `gh`」本来就可行，本项的收益是**稳定的参数 schema 与输出裁剪**。
+（prux 的 `tools_manager::install_hint` 已有同款文案模式）。**判不做**：价值取决于用户是否常用 `gh`，
+且「让模型直接调 `bash` 跑 `gh`」本来就可行，本项的收益只是**稳定的参数 schema 与输出裁剪**。
 
-**落地记录**：（待落地）
+**落地记录**（🚫 判不做）：**不实现。** 三条理由：
+1. 模型直接 `bash` 跑 `gh` 已能完成全部动作，封装只换来固定参数 schema 与输出裁剪，
+   收益不足以支撑一个新扩展；
+2. 价值强绑「用户是否常用 `gh`」，而 prux 不对此做假设；
+3. 上游 4461 行里相当一部分是 SQLite 缓存与内部 scheme 接入（后者本身已在 §4.5 否决），
+   砍掉后剩下就是一层薄 wrapper。
 
-### 3.14 `python`：持久 Python cell（仅记录，并入 `codemode`）
+### 3.14 `python`：持久 Python cell（并入 `codemode`）
 
 **上游实现**：`src/tools/eval.ts`（1071 行）+ `src/eval/`（14948 行，JS 与 Python 两套 kernel）；
 文档 `docs/tools/eval.md`、`docs/python-repl.md`。
@@ -712,9 +731,13 @@ JS 侧不必重做（QuickJS 已够），Python 侧才是增量。
 
 **工作量 / 风险**：中等偏大。风险点：Python 解释器是否存在于目标机器（Windows 上尤其不确定）、
 进程泄漏与超时、以及 cell 里回调工具需要一条 `ScriptHost` 式的桥。
-**仅记录**：性价比取决于用户是否真有数据分析场景。
+**判不做**：性价比只在数据分析场景成立。
 
-**落地记录**：（待落地）
+**落地记录**（🚫 判不做）：**不实现。** 三条理由：
+1. 唯一的真实增量是「跨调用持久化」，而持久 cell 的价值集中在数据分析场景，不在编码闭环上；
+2. 需要三样新造的东西：目标机的 CPython（Windows 上普遍不确定）、常驻进程的生命周期管理
+   （泄漏 / 超时 / 会话结束回收）、以及让 cell 回调工具的 `ScriptHost` 式桥；
+3. `codemode` 的 QuickJS 已覆盖脚本编排需求，再挂一套 Python 运行期等于长期维护两个沙箱。
 
 ### 3.15 `lsp`：只读查询半套
 
@@ -779,9 +802,9 @@ code action / 原始请求。**关键**：omp 的 LSP 与 `edit` / `write` 深�
 
 排序：先「机制/策略」，再「已有扩展的辅助项」，再「扩展层够不到」。
 
-> §3 内就地判不做的 8 项（`ast-grep` / `agent-import` / `ask` / `manage_skill` / `handoff` /
-> `generate_image` / `magic-keywords` / `loop`）理由见各节「落地记录」，不重复列入本节；
-> `cleanse` 暂缓，同样不列入。
+> §3 内就地判不做的 12 项（`ast-grep` / `agent-import` / `ask` / `manage_skill` / `handoff` /
+> `generate_image` / `advisor` / `cleanse` / `magic-keywords` / `loop` / `github` / `python`）
+> 理由见各节「落地记录」，不重复列入本节。
 
 ### 4.1 TTSR：流中打断并重驱动（time-traveling stream rules）
 
@@ -885,7 +908,9 @@ code action / 原始请求。**关键**：omp 的 LSP 与 `edit` / `write` 深�
   （`src/dap/defaults.json`：`gdb -i dap` / `lldb-dap` / `codelldb` / `debugpy`，stdio 或 socket）。
 - 判「不做」的**理由不是「做不到」而是「不该先做」**：扩展理论上能 spawn adapter 并说 DAP，
   但它是 4000 行量级的子系统、平台相关、且要配套的 UI（栈帧 / 变量 / 断点面板）。
-  与 §3.15 的 LSP 相比，DAP 的日常收益低得多，而成本同级。放在 §3.15 之后作为「若有需求再说」。
+  与 §3.15 的 LSP 相比，DAP 的日常收益低得多，而成本同级。另有一处硬冲突：prux 已有 `/debug`
+  扩展（查 prux 自身的 agent 状态 / provider 流 / 系统提示词，`src/extensions/debug.rs`），
+  同名工具会与它抢位置。**维持不做**；若真有需求，按 §3 格式另开一份迁移记录。
 
 ### 4.9 桌面控制（`computer`）
 
@@ -983,6 +1008,8 @@ code action / 原始请求。**关键**：omp 的 LSP 与 `edit` / `write` 深�
 
 ## 五、落地后的收尾检查（**通用清单**）
 
+> 本档已冻结（零待做项），本节留作后续另开迁移记录时的参考。
+
 每落地一项后逐条过：
 
 1. **声明位置**：新扩展 = `src/extensions.rs` 加 `pub mod x` + 模块内 `#[linkme::distributed_slice]`
@@ -1045,6 +1072,9 @@ code action / 原始请求。**关键**：omp 的 LSP 与 `edit` / `write` 深�
 - **`pi-diff` 零依赖、可以直接抄**——但「能抄」不等于「该抄」（见 §4.12）。
 
 ### 6.2 落地前需要确认的决策点
+
+> 本档已冻结（零待做项），本节仅作为「将来另开记录时已知的坑」保留；`advisor` 已判不做，
+> 第 1 条不再适用。
 
 1. **`advisor` 的注入策略**：只注入 `blocker` 档（省 cache），还是三档都注入（更吵但更主动）？
    需要一个 `nit` / `concern` / `blocker` 的枚举（用 `strum` 做字符串互转）。

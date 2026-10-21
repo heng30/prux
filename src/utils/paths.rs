@@ -63,12 +63,30 @@ pub fn expand_tilde(path: PathBuf) -> PathBuf {
     path
 }
 
-/// 把字符串开头的 `~/` 展开为 `$HOME`；其它形式（含裸 `~`）原样返回。
+/// 把字符串**开头**的 `~`、`~/`、`$HOME`、`${HOME}` 展开为家目录。
+///
+/// 只认前缀：`~user/x`、`/a/$HOME/b` 这类写法原样返回（中段的 `$HOME` 是 shell 语义，
+/// 由真正的 shell 解释）。家目录未知（空）时也原样返回。
+/// 家目录取自 [`home_dir`]，因此测试接缝（`HomeGuard`）对它生效。
 pub fn expand_home(s: &str) -> String {
-    if let Some(rest) = s.strip_prefix("~/")
-        && let Some(home) = std::env::var_os("HOME")
-    {
-        return Path::new(&home).join(rest).to_string_lossy().to_string();
+    let home = home_dir();
+    let home = home.to_string_lossy();
+    if home.is_empty() {
+        return s.to_string();
+    }
+    for prefix in ["$HOME", "${HOME}"] {
+        if let Some(rest) = s.strip_prefix(prefix) {
+            return format!("{home}{rest}");
+        }
+    }
+    if s == "~" {
+        return home.to_string();
+    }
+    if let Some(rest) = s.strip_prefix("~/") {
+        return Path::new(home.as_ref())
+            .join(rest)
+            .to_string_lossy()
+            .to_string();
     }
     s.to_string()
 }
@@ -192,6 +210,57 @@ pub fn cwd() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
+/// 纯词法归一化（折叠 `.` / `..`，不碰文件系统，不解析符号链接）。
+///
+/// 已到根时 `..` 停在根（`/..` == `/`）。
+pub fn lexical_normalize(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for comp in path.components() {
+        match comp {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !out.pop() {
+                    out.push(Component::RootDir);
+                }
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// 把相对路径按 `base` 归一化成绝对路径（纯词法，不碰文件系统）。
+///
+/// `base` 本身是相对路径时按原样拼接，再由 [`lexical_normalize`] 折叠 `..` / `.`。
+/// 不解析符号链接——需要真实路径时另外用 [`canonicalize`]。
+pub fn absolutize(path: &str, base: &Path) -> PathBuf {
+    let raw = Path::new(path);
+    let joined = if raw.is_absolute() {
+        raw.to_path_buf()
+    } else {
+        base.join(raw)
+    };
+    lexical_normalize(&joined)
+}
+
+/// 路径是否落在 `cwd` 之外。
+///
+/// 两侧都先做词法归一化；`cwd` 为空时一律视为外部（调用方走保守分支）。
+/// 相等（就在工作目录上）不算外部。
+pub fn is_outside(path: &Path, cwd: &Path) -> bool {
+    let joined = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        cwd.join(path)
+    };
+    let abs = lexical_normalize(&joined);
+    let base = lexical_normalize(cwd);
+    if base.as_os_str().is_empty() {
+        return true;
+    }
+    !(abs == base || abs.starts_with(&base))
+}
+
 /// 规范化 cwd（绝对路径、折叠 . 和 ..；不做 fs realpath）
 pub fn normalize_cwd(path: &Path) -> String {
     if let Ok(real) = std::fs::canonicalize(path) {
@@ -204,19 +273,7 @@ pub fn normalize_cwd(path: &Path) -> String {
             .map(|cwd| cwd.join(path))
             .unwrap_or_else(|_| path.to_path_buf())
     };
-    let mut out = PathBuf::new();
-    for component in absolute.components() {
-        match component {
-            Component::RootDir => out.push(component.as_os_str()),
-            Component::CurDir => {}
-            Component::ParentDir => {
-                out.pop();
-            }
-            Component::Normal(part) => out.push(part),
-            Component::Prefix(prefix) => out.push(prefix.as_os_str()),
-        }
-    }
-    out.to_string_lossy().to_string()
+    lexical_normalize(&absolute).to_string_lossy().to_string()
 }
 
 /// 剥掉 Windows 规范化路径的 verbatim 前缀（`\\?\` 与 `\\?\UNC\`）。
@@ -377,6 +434,52 @@ pub fn find_in_path(name: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn expand_home_handles_shell_prefixes_only() {
+        let home = PathBuf::from("/home/me");
+        let _guard = crate::test_support::HomeGuard::set(home.clone());
+
+        assert_eq!(expand_home("~/work"), "/home/me/work");
+        assert_eq!(expand_home("~"), "/home/me");
+        assert_eq!(expand_home("$HOME/work"), "/home/me/work");
+        assert_eq!(expand_home("${HOME}/work"), "/home/me/work");
+        // 只认前缀：`~user` 与中段的 `$HOME` 交给 shell，原样返回。
+        assert_eq!(expand_home("~user/work"), "~user/work");
+        assert_eq!(expand_home("/a/$HOME/b"), "/a/$HOME/b");
+        assert_eq!(expand_home("work"), "work");
+    }
+
+    #[test]
+    fn lexical_normalize_folds_dot_and_dotdot() {
+        assert_eq!(
+            lexical_normalize(Path::new("/work/proj/./a/../b")),
+            PathBuf::from("/work/proj/b")
+        );
+        assert_eq!(lexical_normalize(Path::new("/..")), PathBuf::from("/"));
+    }
+
+    #[test]
+    fn absolutize_folds_dotdot() {
+        let cwd = Path::new("/work/proj");
+        assert_eq!(
+            absolutize("src/a.rs", cwd),
+            PathBuf::from("/work/proj/src/a.rs")
+        );
+        assert_eq!(absolutize("../x", cwd), PathBuf::from("/work/x"));
+        assert_eq!(absolutize("/a/../b", cwd), PathBuf::from("/b"));
+        assert_eq!(absolutize("/..", cwd), PathBuf::from("/"));
+    }
+
+    #[test]
+    fn outside_detection() {
+        let cwd = Path::new("/work/proj");
+        assert!(!is_outside(Path::new("/work/proj/src/a.rs"), cwd));
+        assert!(is_outside(Path::new("/work/other/a.rs"), cwd));
+        assert!(is_outside(Path::new("../sibling"), cwd));
+        assert!(!is_outside(Path::new("/work/proj"), cwd));
+        assert!(is_outside(Path::new("/any"), Path::new("")));
+    }
 
     /// 非 Windows 平台不得动 `HOME`：那里 HOME 就是约定的 home 来源，
     /// 重写成 `dirs::home_dir()` 会把用户显式设的（如 MSYS 的 `/c/Users/x`）改成别的。

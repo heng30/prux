@@ -60,6 +60,7 @@ fn register_all_collects_and_sorts_slices() {
         "update-check",
         "cache-watch",
         "open",
+        "permissions",
         "markit",
         "lsp",
         "shake",
@@ -75,8 +76,8 @@ fn register_all_collects_and_sorts_slices() {
 
     prux::extensions::register_all();
 
-    // 分布式切片确实汇聚：33 个工具扩展 + 3 个底栏扩展
-    assert_eq!(extension_count(), 33, "普通扩展应被切片收集");
+    // 分布式切片确实汇聚：34 个工具扩展 + 3 个底栏扩展
+    assert_eq!(extension_count(), 34, "普通扩展应被切片收集");
     assert_eq!(footer_extension_count(), 3, "footer 扩展应全被切片收集");
 
     // plan-mode / goal / subagent / tasks / web-access / proxy / doc-helper / notify 是声明 default_enabled() == false 的默认可选扩展：
@@ -172,6 +173,10 @@ fn register_all_collects_and_sorts_slices() {
     assert!(
         !is_extension_enabled("memory"),
         "memory 应默认不启用（会注入提示词并花额外模型请求）"
+    );
+    assert!(
+        !is_extension_enabled("permissions"),
+        "permissions 应默认不启用（门控会改变模型能做什么，属于显式选择）"
     );
     assert!(
         !is_extension_enabled("shake"),

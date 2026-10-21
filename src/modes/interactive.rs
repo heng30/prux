@@ -143,11 +143,14 @@ impl std::error::Error for EventLoopError {}
 /// 注册全局 UI 任务发送端（主循环启动时调用）。
 pub fn set_event_loop_tx(tx: UnboundedSender<UiTask>) {
     *UI_TASK_TX.lock().unwrap() = Some(tx);
+    // 有事件循环 = 扩展的提问（ask_prompt）能等到人作答，其余场合一律立即放弃。
+    core::extensions::set_ui_ready(true);
 }
 
 /// 清理全局 UI 任务发送端（主循环退出时调用）。
 pub fn clear_event_loop_tx() {
     *UI_TASK_TX.lock().unwrap() = None;
+    core::extensions::set_ui_ready(false);
 }
 
 /// 把 `func` 投递到 TUI 主循环任务队列；主循环空闲间隙（select 分支）执行。
@@ -337,6 +340,9 @@ pub async fn run_interactive(
 
         // 扩展 UI 请求：选择面板 / 通知（Select 结果经 on_ui_choice 回传扩展）
         maybe_handle_extension_ui(&shared);
+        // 提问面板被别处替换（用户在 ask 等待期间开了 /model 之类）时补一次取消回传，
+        // 否则 ask_prompt 的等待者会一直挂着，直到超时。
+        reconcile_ask_panel(&shared);
 
         // 会话修复请求（启动路径 stage 的损坏会话）：首帧弹确认面板
         maybe_handle_session_repair(&shared);
@@ -1071,6 +1077,19 @@ async fn poll_oauth(shared: &Rc<RefCell<App>>) {
     let oauth_done = oauth_flow::poll(&mut shared.borrow_mut()).await;
     if oauth_done {
         shared.borrow_mut().dirty = true;
+    }
+}
+
+/// 提问面板的对账：当前面板不再是某个提问 id 时，给那个 id 回传一次取消。
+///
+/// `Panel::close` 只清状态、不回调扩展，而用户可能在 `ask_prompt` 等待期间打开别的面板
+/// （`/model`、`/extension` …），那一帧起提问面板就消失了。这里每帧比一次
+/// 「上一帧的提问 id」与「这一帧面板持有的提问 id」，消失即回传 `None`。
+fn reconcile_ask_panel(shared: &Rc<RefCell<App>>) {
+    let current = shared.borrow().panel.active_ask_id();
+    let previous = std::mem::replace(&mut shared.borrow_mut().active_ask_id, current);
+    if let Some(stale) = previous.filter(|id| Some(*id) != current) {
+        _ = core::extensions::submit_ui_choice(stale, None);
     }
 }
 

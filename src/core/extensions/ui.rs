@@ -4,14 +4,32 @@
 //! TUI 事件循环每轮取一个（[`take_pending_ui`]）处理：Select → 打开通用自定义面板；
 //! Notify → 聊天区系统消息。面板 Enter/Esc 结果经 [`Extension::on_ui_choice`] 回传（按请求 id 分发），
 //! 返回 `Some(text)` 即触发下一轮 prompt。核心只提供队列与 id 分配，不感知具体扩展。
+//!
+//! # 需要「等用户作答」的扩展：用 [`ask_prompt`]
+//!
+//! `request_ui` 是发完即忘；只有 [`Extension::on_ui_choice`] 回调，没有「等一下再继续」。
+//! 工具前门控那类必须当场拿到答案的扩展，用 [`ask_prompt`]：它入队同一个 Select 面板，
+//! 然后 await 结果（可选择超时）。await 期间**不占线程**，future 被 drop（回合被 abort）
+//! 即等于取消；没有 TUI 事件循环（非交互模式）时立即返回 `None`，调用方据此走 fail-closed 分支。
 
 use crate::core::provider::AgentMessage;
 use serde_json::Value;
 use std::{
-    collections::VecDeque,
-    sync::atomic::{AtomicU64, Ordering},
-    sync::{Mutex, OnceLock},
+    collections::{HashMap, VecDeque},
+    sync::{
+        Mutex, MutexGuard, OnceLock,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
+    time::Duration,
 };
+use tokio::sync::oneshot::Sender;
+
+/// 事件循环是否就绪（TUI 在监听扩展 UI 请求）。
+///
+/// 由 TUI 主循环在装/拆事件队列时置位。为 `false` 表示没有可交互的面板——
+/// 非交互运行、测试、以及启动早期的窗口期都属于这一类，
+/// 此时 [`ask_prompt`] 立刻返回 `None` 而不是傻等。
+static UI_READY: AtomicBool = AtomicBool::new(false);
 
 /// 通知级别（TUI 映射到自身 MsgLevel）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -210,9 +228,101 @@ pub fn render_custom_message(custom_type: &str, data: &Value) -> Option<Vec<Rich
     None
 }
 
+/// 设置事件循环就绪状态（TUI 主循环调用）。
+pub fn set_ui_ready(ready: bool) {
+    UI_READY.store(ready, Ordering::Relaxed);
+}
+
+/// 事件循环是否就绪（可供 [`ask_prompt`] 之外需要判断「有没有人看面板」的调用方使用）。
+pub fn ui_ready() -> bool {
+    UI_READY.load(Ordering::Relaxed)
+}
+
+/// 取等待表的锁；持锁线程 panic 过（中毒）时取回内部数据继续用。
+///
+/// 这里绝不能因为中毒就放弃：等待表一旦失效，所有扩展提问都会静默返回 `None`，
+/// 表现为「门控突然全部拒绝」，排查起来毫无线索。
+fn waiters_guard() -> MutexGuard<'static, HashMap<u64, Sender<Option<String>>>> {
+    waiters().lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// 是否已经有提问在等用户作答。
+///
+/// 面板一次只展示一个：别处再发提问会把当前那个顶掉（被顶掉的一方收到取消）。
+/// 需要「一次只问一个」的调用方先查这个，自己决定是排队还是立刻放弃。
+pub fn ask_pending() -> bool {
+    !waiters_guard().is_empty()
+}
+
+/// 正在等待某个提问结果的唤醒通道：请求 id → oneshot 发送端。
+fn waiters() -> &'static Mutex<HashMap<u64, Sender<Option<String>>>> {
+    /// 提问等待表：id → oneshot 发送端（[`ask_prompt`] 插入，[`submit_ui_choice`] 取走）。
+    static W: OnceLock<Mutex<HashMap<u64, Sender<Option<String>>>>> = OnceLock::new();
+    W.get_or_init(Default::default)
+}
+
+/// [`ask_prompt`] 的等待表条目守卫：无论正常返回、超时还是 future 被 drop，都要注销。
+///
+/// future 被 drop（回合 abort / 面板被替换）时不会执行 `ask_prompt` 的收尾代码，
+/// 只能靠 Drop 清掉槽位；否则等待表会一直挂着那个 id。
+struct WaiterGuard(u64);
+
+impl Drop for WaiterGuard {
+    /// 从等待表里注销本条 id（发送端已失效时忽略）。
+    fn drop(&mut self) {
+        waiters_guard().remove(&self.0);
+    }
+}
+
+/// 向用户提问并等待作答（异步版 Select 面板）。
+///
+/// 入队一条与 [`ExtensionUiRequest::Select`] 同形的请求，然后 await 用户的选择：
+///
+/// - 返回 `Some(text)`：用户选中的选项文本（与 [`SelectOption::text`] 相同）；
+/// - 返回 `None`：用户按 Esc 取消、面板被别处替换、`timeout` 到期，
+///   或者**没有 TUI 事件循环**（非交互模式）。
+///
+/// 调用方必须自己决定 `None` 的含义（门控类扩展应当按 fail-closed 处理）。
+/// 等待期间不持有任何其它锁，因此不会被 UI 线程的操作卡住；回合被 abort 时
+/// future 被 drop 即等价于取消（面板若还开着，用户按 Esc 即可关闭）。
+pub async fn ask_prompt(
+    title: impl Into<String>,
+    options: Vec<SelectOption>,
+    timeout: Option<Duration>,
+) -> Option<String> {
+    if !ui_ready() || options.is_empty() {
+        return None;
+    }
+
+    let id = next_ui_id();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    waiters_guard().insert(id, tx);
+    let _guard = WaiterGuard(id);
+
+    request_ui(ExtensionUiRequest::Select {
+        id,
+        title: title.into(),
+        options,
+    });
+
+    // 发送端被丢弃只发生在异常路径（正常取消走 submit_ui_choice(id, None)）。
+    let wait = async { rx.await.unwrap_or_default() };
+    match timeout {
+        Some(limit) => tokio::time::timeout(limit, wait).await.ok().flatten(),
+        None => wait.await,
+    }
+}
+
 /// 面板 Enter/Esc 结果按 id 回传：遍历已启用扩展调用 [`Extension::on_ui_choice`]，
 /// 返回第一个 `Some(text)` 作为 follow-up prompt（无则 None）。
 pub fn submit_ui_choice(id: u64, choice: Option<String>) -> Option<String> {
+    // 提问通道优先：命中就唤醒 ask_prompt 的等待者，且不触发 follow-up prompt
+    // （发起方自己会接着往下走，再塞一条用户消息就是重复）。
+    if let Some(tx) = waiters_guard().remove(&id) {
+        _ = tx.send(choice);
+        return None;
+    }
+
     for ext in super::registered() {
         if let Some(text) = ext.on_ui_choice(id, choice.clone()) {
             return Some(text);
@@ -257,5 +367,115 @@ mod tests {
             take_pending_ui(),
             Some(ExtensionUiRequest::ShowDock)
         ));
+    }
+
+    /// 跑一个 async 测试体（用独立 runtime，避免与其它测试共享全局 runtime）。
+    fn block_on<F: std::future::Future>(fut: F) -> F::Output {
+        tokio::runtime::Runtime::new()
+            .expect("runtime")
+            .block_on(fut)
+    }
+
+    /// 取走队列里第一条 Select 请求的 id（丢弃其它请求）。
+    ///
+    /// 用真实 sleep 轮询而不是 `yield_now`：spawn 出去的任务跑在 runtime 的 worker
+    /// 线程上，空转让出的时间不足以让它把请求入队。
+    async fn take_select_id() -> u64 {
+        for _ in 0..200 {
+            if let Some(req) = take_pending_ui() {
+                if let ExtensionUiRequest::Select { id, .. } = req {
+                    return id;
+                }
+                continue;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        panic!("no Select request was queued");
+    }
+
+    /// `ask_prompt` 的结果由 `submit_ui_choice` 送达，并且不触发 follow-up prompt。
+    #[test]
+    fn ask_prompt_resolves_through_submit() {
+        let _g = crate::test_support::AUTH_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        while take_pending_ui().is_some() {}
+        set_ui_ready(true);
+
+        let answer = block_on(async {
+            let waiter = tokio::spawn(async {
+                ask_prompt(
+                    "title",
+                    vec![SelectOption::new("a"), SelectOption::new("b")],
+                    Some(Duration::from_secs(5)),
+                )
+                .await
+            });
+            let id = take_select_id().await;
+            assert!(ask_pending(), "等待表应已登记");
+            // 命中提问通道时返回 None：发起方自己接着走，不该再塞一条用户消息。
+            assert_eq!(submit_ui_choice(id, Some("b".to_string())), None);
+            waiter.await.expect("waiter task")
+        });
+
+        assert_eq!(answer.as_deref(), Some("b"));
+        assert!(!ask_pending(), "答复送达后等待表应清空");
+        set_ui_ready(false);
+    }
+
+    /// 取消（Esc）就是 `submit_ui_choice(id, None)`。
+    #[test]
+    fn ask_prompt_cancel_returns_none() {
+        let _g = crate::test_support::AUTH_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        while take_pending_ui().is_some() {}
+        set_ui_ready(true);
+
+        let answer = block_on(async {
+            let waiter = tokio::spawn(async {
+                ask_prompt("title", vec![SelectOption::new("a")], None).await
+            });
+            let id = take_select_id().await;
+            submit_ui_choice(id, None);
+            waiter.await.expect("waiter task")
+        });
+
+        assert_eq!(answer, None);
+        set_ui_ready(false);
+    }
+
+    /// 没有 TUI 事件循环时立即返回 None（调用方据此走 fail-closed）。
+    #[test]
+    fn ask_prompt_without_ui_returns_immediately() {
+        let _g = crate::test_support::AUTH_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        set_ui_ready(false);
+        let answer = block_on(ask_prompt(
+            "title",
+            vec![SelectOption::new("a")],
+            Some(Duration::from_secs(5)),
+        ));
+        assert_eq!(answer, None);
+    }
+
+    /// 超时按未作答处理，并清掉等待表条目。
+    #[test]
+    fn ask_prompt_times_out() {
+        let _g = crate::test_support::AUTH_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        while take_pending_ui().is_some() {}
+        set_ui_ready(true);
+
+        let answer = block_on(ask_prompt(
+            "title",
+            vec![SelectOption::new("a")],
+            Some(Duration::from_millis(10)),
+        ));
+        assert_eq!(answer, None);
+        assert!(!ask_pending(), "超时后等待表应清空");
+        set_ui_ready(false);
     }
 }

@@ -28,6 +28,7 @@ prux
 - [子代理（Sub-agents）](extensions/subagent.md) - `subagent` 扩展：子代理运行环境与隔离、agent 类型与 frontmatter 键、`SubagentWorkflow` 编排、设置键及其关系、界面与定时任务。
 - [codemode](extensions/codemode.md) - `codemode` 扩展：在 QuickJS 沙箱里用一段 JavaScript 编排工具调用、脚本 API、首行选项与限制。
 - [MCP](extensions/mcp.md) - `mcp` 扩展：接入外部 MCP 服务器的配置发现与字段、`mcp` 工具、各种 `mcp.json` 配置例子、生命周期与缓存、OAuth 2.1、命令。
+- [权限门控（Permissions）](extensions/permissions.md) - `permissions` 扩展：四层策略（路径 / 工作目录边界 / 工具 / bash 命令）、模式匹配与优先级、`ask` 的 fail-closed 语义与会话放行、review log。
 - [技能（Skills）](skills.md) - Agent Skills，按需复用的能力（`/skill:name`）。
 - [提示模板（Prompt templates）](prompt-templates.md) - 由斜杠命令展开的可复用提示。
 - [主题（Themes）](themes.md) - 内置与自定义终端主题（`/theme`）。

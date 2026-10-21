@@ -30,6 +30,7 @@ pub mod mcp;
 pub mod memory;
 pub mod notify;
 pub mod open;
+pub mod permissions;
 pub mod plan_mode;
 pub mod proxy;
 pub mod recap_btw;
@@ -59,6 +60,8 @@ pub const PRIORITY_EXTRA_THEMES: u32 = 100;
 pub const PRIORITY_GOAL: u32 = 90;
 /// plan-mode 只读探索模式扩展的注册优先级。
 pub const PRIORITY_PLAN_MODE: u32 = 85;
+/// permissions 工具权限门控扩展的注册优先级。
+pub const PRIORITY_PERMISSIONS: u32 = 84;
 /// tasks 结构化任务跟踪扩展的注册优先级。
 pub const PRIORITY_TASKS: u32 = 80;
 /// subagent 子代理扩展的注册优先级。

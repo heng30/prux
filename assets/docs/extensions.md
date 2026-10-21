@@ -55,6 +55,7 @@ core::extensions::register_banner_extension(extensions::banner::Banner::new());
 | `btw` | 扩展 | 只读旁问：`/btw <问题>` 打开 `BTW` 面板（占据输入区、主页输入框隐藏），面板自带一行 `btw>` 输入框、打开即聚焦，可直接回车连续追问（Esc / 空回车关闭），**不进会话、不改上下文**——送给模型的只有最近 4 条 / 4000 字以内的摘录、此前的旁问轮次加一段只读系统提示（一次性请求，不带工具、不写会话；答案晚到时若面板已关或换了问题就丢弃）。**默认不启用**（`Dev` / `Creator` 模式） |
 | `recap` | 扩展 | 一行会话小结：`/recap` 把最近 12 条 / 12000 字摘录交给一次独立的一次性请求，结果规整到 ≤120 字（去前缀/引号后硬截断）作为**系统消息**推到聊天区。**不进会话、不改上下文**；没有后台任务/开关/落盘，只在显式执行时花一次模型请求。**默认不启用**（`Dev` / `Creator` 模式） |
 | `doc-helper` | 扩展 | 精简系统提示词：启用后从默认系统提示词移除整段 prux 文档描述（README/docs/examples 指针 + 主题映射），改用 `/help <question>` 按需提问——把**同一段**文档描述当作一条普通 user 消息投出（不动系统提示词，保护缓存命中率）；无参 `/help` 只列出文档主题。**默认不启用**，需在 `/extension` 面板开启 |
+| `permissions` | 扩展 | 工具调用的集中式权限门控：四层策略（`path` 横切路径 / `external_directory` 工作目录边界 / 按工具 / `bash` 命令模式）按 **most-restrictive-wins** 组合，值为 `allow` / `ask` / `deny` 或 `{action, reason}`，一张 pattern 表内 last-match-wins。策略在 `agent_dir()/extensions/permissions/config.json`（项目配置 `<cwd>/.prux/extensions/permissions/config.json` 仅在项目受信任时加载）。命中 `ask` 时弹确认面板（`Approve once` / `Approve for this session` / `Deny`），走的是扩展**等待式提问** `ask_prompt`（异步工具前钩子）；面板拿不到答复（Esc / 超时 / 非交互运行 / 已有别的确认在等）一律按拒绝处理，`/permissions allow <surface> <pattern>` 作为非交互兜底，且放行**不会**覆盖 `deny`。bash 命令按语句切分逐条判定（含 `$(…)` / 反引号 / 子 shell 里的命令、字面 `cd` 之后的路径、重定向目标），`bash -c` / `eval` / `sudo` / `xargs` / `find -exec` / 解释器 `-c` 这类看不透的包装一律按 `ask` 处理。`/permissions show\|allow\|drop\|allowlist\|init\|log\|reset`。**默认不启用**（`Dev`/`Creator` 模式可用）。详见 [extensions/permissions.md](extensions/permissions.md) |
 | `plan-mode` | 扩展 | 只读探索模式：禁用 `edit`/`write`、`bash`/`powershell` 白名单、`Plan:` 编号步骤 + `[DONE:n]` 进度跟踪（`/plan [text]`、`/todos`、`Alt+P`、`--plan`）。**默认不启用**，需在 `/extension` 面板开启 |
 | `goal` | 扩展 | 持久化自主目标：`/goal [--tokens 50k] <objective>` 设置长期目标，agent 持续工作直到完成/暂停/清除/预算耗尽。裸 `/goal` 开关停靠面板，`/goal pause\|resume\|clear` 换挡；提供 `create_goal`/`get_goal`/`update_goal` 工具。**默认不启用**，需在 `/extension` 面板开启 |
 | `subagent` | 扩展 | 子代理：`Agent` / `get_subagent_result` / `steer_subagent` 工具，外加确定性编排器 `SubagentWorkflow` 与 `/agents` 命令。**默认不启用**，需在 `/extension` 面板开启。详见 [extensions/subagent.md](extensions/subagent.md) |
@@ -693,6 +694,7 @@ core::extensions::register_extension(Echo);
 | `prepare_loadout()` | 按当前工具集改写**模型看到的工具声明**（如把可调工具声明内联进自己的 description，或在 `only` 模式下摘掉声明） |
 | `transform_context()` | LLM 调用前修改上下文 |
 | `before_tool_call()` / `before_tool_call_ext()` | 工具调用前拦截（可 block/改写参数/terminate） |
+| `before_tool_call_async()` | 工具调用前拦截的**异步**版（可 `await` 用户作答，见下方「等待式提问」） |
 | `after_tool_call()` / `after_tool_call_ext()` | 工具调用后处理（可改写文本/替换 content/details/isError/usage） |
 | `on_agent_event()` | 接收 agent 内核事件（`agent_start` / `turn_end` / `agent_end` / `tool_execution_*` / 自定义事件） |
 | `on_enabled_changed()` | 启用状态变化回调（注册时、/extension 面板切换后） |
@@ -720,11 +722,12 @@ core::extensions::register_extension(Echo);
 
 ## 事件钩子（ExtensionHook）
 
-`hooks()` 声明后，对应 trait 方法才被分发调用（共 13 个钩子）：
+`hooks()` 声明后，对应 trait 方法才被分发调用（共 14 个钩子）：
 
 - **`TransformContext`** — LLM 调用前修改消息（`transform_context`）
 - **`ContextWithSystem`** — `TransformContext` 之后、每次 LLM 调用前拿到含 system 的完整 transcript（`transform_context_with_system`）
 - **`BeforeToolCall`** / **`AfterToolCall`** — 工具调用前拦截 / 后处理（`*_ext` 增强版）
+- **`BeforeToolCallAsync`** — 工具调用前拦截的**异步**版（`before_tool_call_async`）：可以在钩子里 `await` 用户作答（等待式提问），因此判定期间会让出执行权。声明它之后不再收到同步版 `BeforeToolCall`；未声明的扩展不会被构造 owned 参数（无额外开销）
 - **`AgentEvent`** — agent 内核事件流入（`on_agent_event`，高频面）
 - **`Dock`** — 停靠面板内容采集（`dock_lines`，TUI 每帧采集）
 - **`Overlay`** — 覆盖层内容与按键（`overlay_view` / `on_overlay_event`，每帧采集）
@@ -887,7 +890,7 @@ banner 扩展**互斥**：注册/面板切换时启用一个会自动禁用其�
 ## settings 与启用状态
 
 - **`disabledExtensions`**：settings.json 中禁用的扩展名数组。注册时据此恢复初始状态（对默认启用的扩展 = 关闭）；/extension 面板切换后写回**全局**。项目 `.prux/settings.json` 里的同名字段与全局取并集（只在本项目禁用某内置扩展；未受信任的项目不生效）。
-- **`enabledExtensions`**：settings.json 中显式启用的扩展名数组，仅对声明 [`default_enabled() == false`] 的默认可选扩展（`plan-mode`、`goal`、`web-access`、`proxy`、`doc-helper`、`subagent`、`loop-detect`、`hang-detect`、`notify`、`rewind`、`codemode`、`mcp`、`browser`、`jet`、`tasks`、`debug`、`cache-usage`、`doctor`、`btw`、`recap`、`open`、`pdf`、`cache-watch`、`session-search`、`usage`、`memory`）有意义。这些扩展注册后默认禁用，必须在此列出（或经 `/extension` 面板开启）才参与钩子/工具/命令分发；关闭时从列表移除（回到默认态）。项目层同样与全局取并集（项目可自行开启默认关闭的扩展）；两层冲突时禁用优先（与 `disabledExtensions` 的并集语义一致）。
+- **`enabledExtensions`**：settings.json 中显式启用的扩展名数组，仅对声明 [`default_enabled() == false`] 的默认可选扩展（`plan-mode`、`goal`、`web-access`、`proxy`、`doc-helper`、`subagent`、`loop-detect`、`hang-detect`、`notify`、`rewind`、`codemode`、`mcp`、`browser`、`jet`、`tasks`、`debug`、`cache-usage`、`doctor`、`btw`、`recap`、`open`、`pdf`、`cache-watch`、`session-search`、`usage`、`memory`、`permissions`）有意义。这些扩展注册后默认禁用，必须在此列出（或经 `/extension` 面板开启）才参与钩子/工具/命令分发；关闭时从列表移除（回到默认态）。项目层同样与全局取并集（项目可自行开启默认关闭的扩展）；两层冲突时禁用优先（与 `disabledExtensions` 的并集语义一致）。
 - **`extensionMode`**：`"minimal"`、`"dev"`、`"creator"`、`"all"`（默认，兜底全集）。`All` 是兜底模式，所有扩展隐式属于它；扩展声明的模式（如 `Minimal`）表示“该级别及以上可用”，列出多个（如 `[Dev, Creator]`）则覆盖两个并排模式。是运行时过滤层，不触碰各扩展 enabled 状态；切回全部模式即恢复原状。
 
 settings 相关键见 [settings.md](settings.md)。修改 settings 后重启生效；`/reload` 会重新接线扩展并重建工具列表与系统提示，但无法加载新编译的扩展代码。
@@ -908,6 +911,28 @@ settings 相关键见 [settings.md](settings.md)。修改 settings 后重启生�
 - **`ShowDock`**：请求显示停靠面板（状态栏上方）。幂等入口 [`request_show_dock()`]：队列里已有 `ShowDock` 时不重复入队（一次 fan-out 派发几十个 agent 时，避免把后续完成通知挤到几十轮之后）
 - **`RebuildTools`**：扩展工具可见性变化后重建工具列表（下一轮生效）
 - **`PersistSessionEntry`**：向当前会话追加自定义条目（扩展持久化，完成后回执 `extension:entry_persisted`）
+
+### 等待式提问（`ask_prompt`）
+
+`request_ui` 是发完即忘，只有 `on_ui_choice` 回调——拿不到「等一下再继续」。需要当场拿到答案的扩展
+（典型是工具前门控确认）用 `ask_prompt(title, options, timeout)`：
+
+```rust
+let choice = ask_prompt("overwrite build/?", vec![SelectOption::new("Yes")], Some(Duration::from_secs(600))).await;
+```
+
+它入队同一个 `Select` 面板，然后 await 结果：`Some(text)` 是用户选中的选项文本，`None` 表示按 Esc 取消、
+超时、面板被别的面板替换，或者**没有 TUI 事件循环**（非交互模式 / 启动早期）。等待期间不占线程，
+回合被 abort 时 future 被 drop 即等于取消——调用方必须自己对 `None` 做决定（门控类扩展应按拒绝处理）。
+
+配套约束：
+
+- 面板一次只展示一个。用 `ask_pending()` 判断是否已有提问在等，别把别人的面板顶掉；
+  真发生替换时，被替换的一方会收到 `None`（事件循环每帧对账 `PanelKind::Custom(id)`）。
+- `ui_ready()` 表示有没有人在看面板；为 `false` 时 `ask_prompt` 立即返回 `None`，不会傻等。
+- `submit_ui_choice` 命中等待者时**不**触发 follow-up prompt（发起方自己接着走）。
+
+`permissions` 扩展的确认面板就是这条路径：命中 `ask` 时弹「Approve once / Approve for this session / Deny」。
 
 `plan-mode` 用它弹出「执行计划 / 停留 / 精炼」选择面板并显示完成通知；`loop-detect` 只用一个 `AbortRun` 终止检测到循环的 run；`hang-detect` 用 `RestartRun` 中止假死回合并带上排队消息重开；`goal` 用 `Select` 确认替换目标、`Continuation` 自主续跑、`PersistSessionEntry` 持久化目标状态。
 

@@ -36,6 +36,10 @@ const DOCS: &[(&str, &str)] = &[
         embedded!("docs/extensions/codemode.md"),
     ),
     ("extensions/mcp.md", embedded!("docs/extensions/mcp.md")),
+    (
+        "extensions/permissions.md",
+        embedded!("docs/extensions/permissions.md"),
+    ),
     ("custom-provider.md", embedded!("docs/custom-provider.md")),
     ("sessions.md", embedded!("docs/sessions.md")),
     ("compaction.md", embedded!("docs/compaction.md")),

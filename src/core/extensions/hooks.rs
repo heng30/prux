@@ -11,6 +11,13 @@ pub enum ExtensionHook {
     TransformContext,
     /// 工具调用前拦截
     BeforeToolCall,
+    /// 工具调用前拦截（**异步**版，见 [`super::Extension::before_tool_call_async`]）。
+    ///
+    /// 声明本 hook 的扩展走异步门控：可以在钩子内部等待用户作答（如
+    /// [`super::ExtensionUiRequest`] 的确认面板），因此判定期间**会**让出执行权。
+    /// 声明它的扩展不会再收到 [`Self::BeforeToolCall`] 的调用；未声明者完全不受影响
+    /// （不会为它们构造 owned 参数）。
+    BeforeToolCallAsync,
     /// 工具调用后处理
     AfterToolCall,
     /// agent 内核事件流入（`on_agent_event`）。该面**高频**（流式 message_update 等），

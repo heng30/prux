@@ -2564,7 +2564,8 @@ impl Agent {
             assistant_msg,
             context,
             &self.rebuild_ctx.injected_tools,
-        );
+        )
+        .await;
 
         // phase 2：执行阶段（并行或顺序）。单工具 executionMode=sequential 覆盖整批（内置+扩展+注入工具都查）
         let sequential = self.tool_execution == ToolExecutionMode::Sequential
@@ -2626,7 +2627,7 @@ impl Agent {
     /// phase 1：解析 + prepareToolCall（查找 → prepareArguments → schema 校验 → beforeToolCall）。
     /// 每个 tool_call → `Prepared`；命中立即错误（工具不存在/校验失败/blocked/aborted）时
     /// 填充 immediate/immediate_terminate，执行阶段不再调用工具。
-    fn prepare_tool_calls(
+    async fn prepare_tool_calls(
         tool_calls: &[ContentBlock],
         assistant_msg: &AgentMessage,
         context: &[AgentMessage],
@@ -2677,32 +2678,51 @@ impl Agent {
 
                 if immediate.is_none() {
                     // BeforeToolCall 钩子（增强接口，支持 block/reason/terminate，入参含 assistantMessage/context）
+                    // 声明了 BeforeToolCallAsync 的扩展走异步路径：它可以在钩子里 await
+                    // 用户作答（权限确认面板），因此会在这里让出执行权。
                     for ext in core::extensions::registered() {
-                        if ext.hooks().contains(&ExtensionHook::BeforeToolCall) {
-                            match ext.before_tool_call_ext(
+                        let hooks = ext.hooks();
+                        let wants_async = hooks.contains(&ExtensionHook::BeforeToolCallAsync);
+                        if !wants_async && !hooks.contains(&ExtensionHook::BeforeToolCall) {
+                            continue;
+                        }
+
+                        let outcome = if wants_async {
+                            ext.before_tool_call_async(
+                                name.clone(),
+                                args.clone(),
+                                Some(assistant_msg.clone()),
+                                context.to_vec(),
+                                arguments.clone(),
+                            )
+                            .await
+                        } else {
+                            ext.before_tool_call_ext(
                                 &name,
                                 &args,
                                 Some(assistant_msg),
                                 context,
                                 &arguments,
-                            ) {
-                                Ok(out) => {
-                                    if out.block {
-                                        let reason = out.reason.unwrap_or_else(|| {
-                                            "Tool execution was blocked".to_string()
-                                        });
-                                        immediate = Some(reason);
-                                        immediate_terminate = out.terminate;
-                                        break;
-                                    }
-                                    if let Some(new_args) = out.args {
-                                        args = new_args;
-                                    }
-                                }
-                                Err(e) => {
-                                    immediate = Some(e.0);
+                            )
+                        };
+
+                        match outcome {
+                            Ok(out) => {
+                                if out.block {
+                                    let reason = out.reason.unwrap_or_else(|| {
+                                        "Tool execution was blocked".to_string()
+                                    });
+                                    immediate = Some(reason);
+                                    immediate_terminate = out.terminate;
                                     break;
                                 }
+                                if let Some(new_args) = out.args {
+                                    args = new_args;
+                                }
+                            }
+                            Err(e) => {
+                                immediate = Some(e.0);
+                                break;
                             }
                         }
                     }
@@ -6379,7 +6399,7 @@ mod tests {
             ),
         };
         let assistant = AgentMessage::user_text("");
-        let prepared = Agent::prepare_tool_calls(&[call], &assistant, &[], &[]);
+        let prepared = test_rt().block_on(Agent::prepare_tool_calls(&[call], &assistant, &[], &[]));
         assert_eq!(prepared.len(), 1);
         let err = prepared[0]
             .immediate

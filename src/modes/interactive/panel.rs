@@ -207,6 +207,17 @@ impl Panel {
         }
     }
 
+    /// 当前显示层若是一个提问面板（`PanelKind::Custom`），返回它的请求 id。
+    ///
+    /// 供事件循环对账用：一旦这个 id 变了（面板被关掉或换成别的面板），
+    /// 说明有扩展正在等的提问已经没人在看了，需要给它回传一次取消。
+    pub fn active_ask_id(&self) -> Option<u64> {
+        match self.top().map(|layer| layer.kind) {
+            Some(PanelKind::Custom(id)) => Some(id),
+            _ => None,
+        }
+    }
+
     /// 当前显示层的可变引用（栈顶）；面板未打开时为 `None`。
     pub fn top_mut(&mut self) -> Option<&mut PanelLayer> {
         if self.active {

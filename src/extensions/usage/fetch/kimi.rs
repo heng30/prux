@@ -75,7 +75,11 @@ pub(super) fn parse_kimi(json: &Value) -> Vec<QuotaWindow> {
     }
 
     if let Some(usages) = json.get("usages").and_then(Value::as_object) {
-        for (key, value) in usages {
+        // 显式按键名排序：窗口顺序不该取决于 JSON 对象的内部存储顺序
+        // （`serde_json` 的 `Map` 在不同 feature 下可能是 BTreeMap 或 IndexMap）。
+        let mut entries: Vec<(&String, &Value)> = usages.iter().collect();
+        entries.sort_by(|a, b| a.0.cmp(b.0));
+        for (key, value) in entries {
             let minutes = match key.as_str() {
                 "limit_5h" => Some(300.0),
                 "limit_7d" => Some(10080.0),
@@ -144,7 +148,7 @@ mod tests {
         });
         let windows = parse_kimi(&json);
         assert_eq!(windows.len(), 4);
-        // `limits[]` 按给定顺序，`usages` 映射按键名排序（limit_30d 在 limit_5h 前）
+        // `limits[]` 按给定顺序，`usages` 映射按 key 名显式排序（limit_30d 在 limit_5h 前）
         assert_eq!(windows[0].name, "5-hour");
         assert_eq!(windows[0].percent, 50.0);
         assert_eq!(windows[1].name, "Weekly");
