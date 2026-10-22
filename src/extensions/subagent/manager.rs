@@ -2018,6 +2018,12 @@ mod tests {
             assert_eq!(r3.alias.as_deref(), Some("probe-one"));
             assert_eq!(resolve_mention("probe-one").unwrap().id, d3.id);
 
+            // resume 只接受已收尾的目标：等后台 run 真正结束再往下走
+            tokio::time::timeout(Duration::from_secs(5), wait(&d1.id))
+                .await
+                .expect("后台 run 必须在超时前收尾")
+                .expect("记录不应消失");
+
             // resume 保留原 handle（不重新分配）
             with_state(|st| {
                 if let Some(r) = st.records.get_mut(&d1.id) {
