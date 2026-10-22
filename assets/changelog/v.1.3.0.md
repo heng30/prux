@@ -178,6 +178,13 @@ This release aligns prux with upstream pi 1.3.0.
 - **The `kimi-coding` login entry points at `https://api.kimi.com/coding/v1`**, matching the base
   URL the model catalog uses.
 - **`keybindings.json` ignores its `$schema` reference** instead of treating it as an action entry.
+- **`computer_launch` no longer writes the launched app's output into the TUI**: stdin is
+  `/dev/null`, stdout and stderr go to a log file in the temp directory (path in the result) and,
+  on Unix, the app gets its own process group, so a startup banner or a driver warning such as
+  Chromium's "`--ozone-platform=wayland` is not compatible with Vulkan" no longer smears over the
+  interface. On Linux the window is also found by process group now, so apps that hand their window
+  to a forked process (Brave, Chrome) are recognised instead of waiting out the timeout as if no
+  window had appeared. When the window does not appear, the result ends with the tail of that log.
 - **`settings.json` now carries a `$schema` reference** (`https://pi.dev/schemas/settings.schema.json`)
   for editor completion and validation, and the packaged themes point their `$schema` at
   `https://pi.dev/schemas/theme.schema.json`. prux never reads the key; a value you set yourself is kept.
@@ -327,6 +334,11 @@ This release aligns prux with upstream pi 1.3.0.
 - **codemode 能停下 await 循环**（`while (true) await null`），与同步死循环在同一批中断点生效。
 - **`kimi-coding` 的登录条目指向 `https://api.kimi.com/coding/v1`**，与模型目录用的 base URL 一致。
 - **`keybindings.json` 忽略 `$schema` 引用**，不再把它当成一个动作条目。
+- **`computer_launch` 启动的应用不再把输出写到界面上**：标准输入接 `/dev/null`，标准输出与错误写进
+  系统临时目录的日志（路径在回执里），Unix 上另起进程组，所以启动横幅或 Chromium 那类
+  “`--ozone-platform=wayland` 与 Vulkan 不兼容”的驱动告警不会再糊在 TUI 上；窗口没出现时，
+  回执末尾直接附上日志尾部。Linux 上还按进程组认回窗口，所以把窗口交给派生进程的应用
+  （Brave、Chrome）能被认出来，不再白等到超时、报成“没有窗口”。
 - **`settings.json` 会写入 `$schema` 引用**（`https://pi.dev/schemas/settings.schema.json`）供编辑器补全与校验，
   内置主题的 `$schema` 也指向 `https://pi.dev/schemas/theme.schema.json`。prux 自身不读取该键，
   你自己改过的值会保留。

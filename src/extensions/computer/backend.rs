@@ -20,8 +20,9 @@ use macos as imp;
 #[cfg(target_os = "windows")]
 use windows as imp;
 
-use crate::extensions::computer::state::Rect;
+use crate::{extensions::computer::state::Rect, utils::process::spawn_detached};
 use serde_json::{Value, json};
+use std::path::PathBuf;
 
 /// 一个显示器（或 Wayland 的一个 output）。
 #[derive(Debug, Clone)]
@@ -140,6 +141,17 @@ impl ShotFormat {
     }
 }
 
+/// 一次应用启动的结果。
+#[derive(Debug, Clone)]
+pub struct Launched {
+    /// 等到的窗口；等不到时为 `None`（进程可能还在启动，也可能已经失败退出）。
+    pub window: Option<Window>,
+    /// 子进程 pid（回执里给模型看，窗口没出现时可对照日志与进程表）。
+    pub pid: u32,
+    /// 子进程 stdout/stderr 落到的临时日志路径；建不出临时文件时为 `None`（输出被丢弃）。
+    pub log: Option<String>,
+}
+
 /// 一张截好的图。
 #[derive(Debug, Clone)]
 pub struct Shot {
@@ -229,9 +241,18 @@ pub fn cursor() -> Option<(i32, i32)> {
     imp::cursor()
 }
 
-/// 启动一个应用，等它出现窗口，返回那个窗口（等不到返回 `None`）。
-pub fn launch(target: &str, args: &[String], wait_ms: u64) -> Result<Option<Window>, String> {
+/// 启动一个应用并等它出现窗口（等不到时 `window` 为 `None`）。
+pub fn launch(target: &str, args: &[String], wait_ms: u64) -> Result<Launched, String> {
     imp::launch(target, args, wait_ms)
+}
+
+/// 拉起子进程并让它脱离 prux：输出进临时日志、Unix 上另起进程组（见 [`crate::utils::process::spawn_detached`]）。
+///
+/// 返回 `(pid, 日志路径)`；日志建不出来时输出被丢弃，路径为 `None`。
+/// 可执行文件起不来（不在 PATH 上、没有显示环境等）返回 `Err`。
+fn launch_process(target: &str, args: &[String]) -> Result<(u32, Option<PathBuf>), String> {
+    spawn_detached("computer-launch", target, args)
+        .map_err(|e| format!("could not start {target:?}: {e}"))
 }
 
 /// 对窗口执行一个窗口级动作（`close` / `minimize` / `maximize` / `restore`）。
@@ -326,12 +347,8 @@ mod imp {
     }
 
     /// 不能启动应用。
-    pub fn launch(
-        _target: &str,
-        _args: &[String],
-        _wait_ms: u64,
-    ) -> Result<Option<Window>, String> {
-        displays().map(|_| None)
+    pub fn launch(_target: &str, _args: &[String], _wait_ms: u64) -> Result<Launched, String> {
+        displays().map(|_| unreachable!())
     }
 
     /// 没有窗口动作。

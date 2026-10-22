@@ -16,7 +16,13 @@ use a11y::{A11yNode, A11yOptions, NodeId};
 use backend::{CaptureRequest, ShotFormat};
 use schema::UI_ACTIONS;
 use serde_json::Value;
-use std::time::Duration;
+use std::{
+    io::{Read, Seek, SeekFrom},
+    time::Duration,
+};
+
+/// 启动日志尾部最多保留的字符数（够看清 chromium 之类的启动告警，又不至于塞满上下文）。
+const LAUNCH_LOG_TAIL_CHARS: usize = 600;
 
 /// 把阻塞动作丢到阻塞线程池并统一错误类型。
 async fn blocking<T, F>(f: F) -> Result<T, ToolError>
@@ -513,16 +519,61 @@ pub async fn launch(args: &Value) -> Result<ToolResult, ToolError> {
         .clamp(0.5, 30.0)
         * 1000.0) as u64;
     let (t, a) = (target.clone(), arguments.clone());
-    let window = blocking(move || backend::launch(&t, &a, wait_ms)).await?;
-    match window {
-        Some(window) => Ok(ToolResult::text(format!(
-            "started {target:?}; window: {}",
+    let launched = blocking(move || backend::launch(&t, &a, wait_ms)).await?;
+    let log_note = match launched.log.as_deref() {
+        Some(path) => format!("log: {path}"),
+        None => "log: (could not be created, output was discarded)".to_string(),
+    };
+
+    let text = match launched.window {
+        Some(window) => format!(
+            "started {target:?} (pid {}); window: {}\n{log_note}",
+            launched.pid,
             window.render()
-        ))),
-        None => Ok(ToolResult::text(format!(
-            "started {target:?}, but no window appeared within {} s; it may still be starting (check computer_windows)",
-            wait_ms / 1000
-        ))),
+        ),
+        None => {
+            let mut text = format!(
+                "started {target:?} (pid {}), but no window appeared within {} s; it may still be starting (check computer_windows)\n{log_note}",
+                launched.pid,
+                wait_ms / 1000
+            );
+            if let Some(tail) = launch_log_tail(launched.log.as_deref()) {
+                text.push_str(&format!("\noutput so far:\n{tail}"));
+            }
+            text
+        }
+    };
+    Ok(ToolResult::text(text))
+}
+
+/// 读启动日志的尾部；`path` 为 `None`、文件读不出来或内容为空时返回 `None`。
+fn launch_log_tail(path: Option<&str>) -> Option<String> {
+    let mut file = std::fs::File::open(path?).ok()?;
+    let len = file.metadata().ok()?.len();
+
+    // 按 4 字节/字符预留，避免多字节字符被从中间切开后 `from_utf8_lossy` 又多丢一段。
+    let window = (LAUNCH_LOG_TAIL_CHARS * 4) as u64;
+    if len > window {
+        file.seek(SeekFrom::Start(len - window)).ok()?;
+    }
+
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).ok()?;
+    let text = String::from_utf8_lossy(&bytes);
+    let tail: String = text
+        .chars()
+        .rev()
+        .take(LAUNCH_LOG_TAIL_CHARS)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+
+    let tail = tail.trim();
+    if tail.is_empty() {
+        None
+    } else {
+        Some(tail.to_string())
     }
 }
 
@@ -948,5 +999,25 @@ pub async fn dispatch(name: &str, args: &Value) -> Result<ToolResult, ToolError>
         "computer_launch" => launch(args).await,
         "computer_stop" => stop(args).await,
         other => Err(ToolError(format!("computer: unknown tool {other:?}"))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 日志尾部回执：只取末段，空文件与缺失路径都当没有内容。
+    #[test]
+    fn launch_log_tail_keeps_the_end_only() {
+        let long = "x".repeat(LAUNCH_LOG_TAIL_CHARS * 2) + "the-reason";
+        let path =
+            output_files::write_output_file("computer-test", ".log", long.as_bytes()).unwrap();
+        let tail = launch_log_tail(Some(&path.display().to_string())).unwrap();
+        assert!(tail.ends_with("the-reason"));
+        assert_eq!(tail.chars().count(), LAUNCH_LOG_TAIL_CHARS);
+
+        let empty = output_files::write_output_file("computer-test", ".log", b"").unwrap();
+        assert!(launch_log_tail(Some(&empty.display().to_string())).is_none());
+        assert!(launch_log_tail(None).is_none());
     }
 }

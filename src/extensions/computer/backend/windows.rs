@@ -3,7 +3,7 @@
 //! 截图与窗口枚举走两个平台共用的 `xcap_common`；这里只补 Windows 独有的
 //! 聚焦（`SetForegroundWindow`）、窗口动作（`ShowWindow` / `WM_CLOSE`）与指针位置（`GetCursorPos`）。
 
-use super::{CaptureRequest, Display, Shot, Window, xcap_common as common};
+use super::{CaptureRequest, Display, Launched, Shot, Window, xcap_common as common};
 use windows::Win32::{
     Foundation::{HWND, LPARAM, POINT, WPARAM},
     UI::WindowsAndMessaging::{
@@ -82,7 +82,7 @@ pub fn cursor() -> Option<(i32, i32)> {
     Some((point.x, point.y))
 }
 
-/// 启动应用。
-pub fn launch(target: &str, args: &[String], wait_ms: u64) -> Result<Option<Window>, String> {
+/// 启动应用（共用 `xcap_common` 的实现，输出进临时日志）。
+pub fn launch(target: &str, args: &[String], wait_ms: u64) -> Result<Launched, String> {
     common::launch(target, args, wait_ms)
 }

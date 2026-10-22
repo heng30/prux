@@ -73,6 +73,11 @@ git 历史以「同步 pi-vX.Y.Z」为节奏推进，与上游保持行为/文�
   导致跨测试竞态、锁重入死锁、跨进程踩同一目录。同步测试用 `AgentDirGuard::temp()` / `HomeGuard`；
   有 `spawn` 的异步测试用 `pin_test_agent_dir`（叶级锁串行，无嵌套）；网络/服务器测试套 `run_with_timeout`。
   **回调体内禁止再取任何锁**。
+- **外部命令的输出必须有去处，绝不能继承终端**：prux 是 TUI 程序，子进程的 stdout/stderr 直接写终端
+  就会把横幅、驱动告警糊在界面上（`computer_launch` 起的 Brave 曾把 chromium 的 ozone/Vulkan 报错
+  刷在内联输入框上）。要读输出就走管道（`run_stdout` / `output()` / `Stdio::piped()`），不读就接
+  `Stdio::null()`；启动**长命应用**用 `utils::process::spawn_detached`（输出落临时日志、Unix 上自成进程组）。
+  唯一例外是外部编辑器这类**本来就要接管终端**的交互程序，调用方必须先退出 alt screen / raw mode 再接回来。
 - **`assets/` 是编译期内嵌的唯一真源**：`doc_sync` 会把内嵌文档**覆盖式**同步到 `agent_dir()/docs`（清单内文件被外部修改会被覆写，
   清单外用户文件保留）。所以改文档要改 `assets/docs/**`，改 `agent_dir()/docs` 里的副本无效。
 - **changelog 与版本绑定**：`assets/changelog/v.<Cargo.toml version>.md` 缺失会**直接编译失败**（`include_str!` 编译期路径）。

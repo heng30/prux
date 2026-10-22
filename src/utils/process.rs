@@ -1,18 +1,25 @@
 //! 进程辅助：执行外部命令时的平台差异、输出收集与回收。
 //!
-//! 六件事：
+//! 七件事：
 //! - [`shell_command`]：按平台构造「执行一条命令字符串」的 shell 调用；
 //! - [`run_stdout`]：跑一条现成的命令并取 stdout，失败时把 stderr 带进错误；
 //! - [`drain_tail`]：持续读空管道而只保留尾部（限量，且不会因为管道写满把子进程卡死）；
+//! - [`spawn_detached`]：拉起一个**不占用终端**的长命子进程（GUI 应用等），输出落临时日志；
 //! - [`kill_process_tree`]：连同子进程一起强杀（Unix 进程组 / Windows `taskkill /T`）；
 //! - [`blocking`]：在同步接口里安全地等一个阻塞动作；
 //! - [`spawn_blocking`]：`async fn` 里把阻塞动作丢到阻塞线程池。
 //!
 //! 这些是「跑一条用户配置的命令」所需的最小公共面：内置 `bash` 工具（异步流式）与
 //! 需要同步等待结果的扩展（如 `vet`）共用同一套进程回收语义，避免各写一份。
+//!
+//! **所有外部命令的输出都必须有去处**：要被读就走 `run_stdout` / `output()`（管道），
+//! 不读就接 `null` 或走 [`spawn_detached`] 落日志。让子进程继承终端的 stdout/stderr
+//! 会把它的横幅与告警直接覆盖到 TUI 上（`computer_launch` 起的浏览器就这么糊过一次屏）。
 
+use crate::utils::output_files::create_output_file_stream;
 use std::{
     io::Read,
+    path::PathBuf,
     process::{Command, Stdio},
 };
 
@@ -139,6 +146,65 @@ pub fn blocking<T>(f: impl FnOnce() -> T) -> T {
     }
 }
 
+/// 拉起一个**不占用终端**的子进程：stdin 接 null、stdout/stderr 写进临时日志、Unix 上另起进程组。
+///
+/// 给「启动一个长命应用」（GUI 程序、桌面集成）用。在 TUI 里继承终端是不行的：启动横幅、
+/// 驱动告警（如 chromium 的 `--ozone-platform=wayland is not compatible with Vulkan`）
+/// 会直接糊在界面上。子进程不随 prux 的 `Ctrl-C` / 退出一起消失，由后台线程回收。
+///
+/// `prefix` 只参与日志文件名（如 `computer-launch`），扩展名固定 `.log`。
+/// 返回 `(pid, 日志路径)`；日志建不出来时输出被丢弃，路径为 `None`（不因此让启动失败）。
+/// 只有进程起不来（可执行文件不在 PATH 上等）才返回 `Err`。
+pub fn spawn_detached(
+    prefix: &str,
+    program: &str,
+    args: &[String],
+) -> std::io::Result<(u32, Option<PathBuf>)> {
+    let log = create_output_file_stream(prefix, ".log").ok();
+
+    let mut cmd = Command::new(program);
+    cmd.args(args).stdin(Stdio::null());
+    let log_path = match log {
+        Some((file, path)) => match file.try_clone() {
+            Ok(stderr) => {
+                cmd.stdout(Stdio::from(file)).stderr(Stdio::from(stderr));
+                Some(path)
+            }
+            Err(_) => {
+                cmd.stdout(Stdio::null()).stderr(Stdio::null());
+                None
+            }
+        },
+        None => {
+            cmd.stdout(Stdio::null()).stderr(Stdio::null());
+            None
+        }
+    };
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        /// 不继承控制台。
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        /// 新建进程组，`Ctrl-C` 不会广播给它。
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+    }
+
+    let mut child = cmd.spawn()?;
+    let pid = child.id();
+    std::thread::spawn(move || {
+        _ = child.wait();
+    });
+    Ok((pid, log_path))
+}
+
 /// 在 `async fn` 里把阻塞动作丢到 tokio 阻塞线程池并等它结束。
 ///
 /// 与同步版 [`blocking`] 的分工：本函数给「有 `await` 可以交还控制权」的调用方（截图、
@@ -156,7 +222,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Cursor;
+    use std::{io::Cursor, time::Duration};
 
     #[test]
     fn drain_tail_keeps_everything_below_the_limit() {
@@ -227,6 +293,42 @@ mod tests {
         let err = run_stdout(shell_command("echo boom >&2; exit 3"), "boom").unwrap_err();
         assert!(err.contains("boom failed"), "{err}");
         assert!(err.contains("boom"), "{err}");
+    }
+
+    /// 子进程的输出进临时日志，不回显到调用方的终端上。
+    #[cfg(unix)]
+    #[test]
+    fn spawned_output_lands_in_the_log() {
+        let args = vec!["-c".to_string(), "echo mark-from-child >&2".to_string()];
+        let (pid, log) = spawn_detached("prux-test-launch", "sh", &args).unwrap();
+        assert!(pid > 0);
+        let path = log.expect("launch log path");
+
+        for _ in 0..100 {
+            let text = std::fs::read_to_string(&path).unwrap_or_default();
+            if text.contains("mark-from-child") {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        panic!(
+            "child stderr never reached {:?}: {:?}",
+            path,
+            std::fs::read_to_string(&path)
+        );
+    }
+
+    /// Unix 上子进程自成进程组：`Ctrl-C` 不会连它一起带走，调用方可按进程组认回派生进程。
+    #[cfg(unix)]
+    #[test]
+    fn spawned_child_gets_its_own_process_group() {
+        use nix::unistd::Pid;
+        let args = vec!["-c".to_string(), "sleep 1".to_string()];
+        let (pid, _log) = spawn_detached("prux-test-launch", "sh", &args).unwrap();
+        assert_eq!(
+            nix::unistd::getpgid(Some(Pid::from_raw(pid as i32))),
+            Ok(Pid::from_raw(pid as i32))
+        );
     }
 
     #[test]

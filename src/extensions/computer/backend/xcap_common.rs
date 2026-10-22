@@ -3,9 +3,12 @@
 //! 与 Linux 的差别只在"窗口枚举"和"聚焦/窗口动作"要各自的系统 API（见 `windows.rs` /
 //! `macos.rs`），截图本身在这里统一。
 
-use super::{CaptureRequest, CaptureTarget, Display, Shot, ShotFormat, Window};
+use super::{
+    CaptureRequest, CaptureTarget, Display, Launched, Shot, ShotFormat, Window, launch_process,
+};
 use crate::extensions::computer::state::Rect;
 use image::RgbaImage;
+
 use std::time::{Duration, Instant};
 
 /// 列出显示器。
@@ -205,26 +208,27 @@ fn finish(
     })
 }
 
-/// 启动应用并轮询它的窗口。
-pub fn launch(target: &str, args: &[String], wait_ms: u64) -> Result<Option<Window>, String> {
-    let child = std::process::Command::new(target)
-        .args(args)
-        .stdin(std::process::Stdio::null())
-        .spawn()
-        .map_err(|e| format!("could not start {target:?}: {e}"))?;
-    let pid = child.id();
+/// 启动应用并轮询它的窗口；输出进临时日志，不落在终端上。
+pub fn launch(target: &str, args: &[String], wait_ms: u64) -> Result<Launched, String> {
+    let (pid, log) = launch_process(target, args)?;
     let deadline = Instant::now() + Duration::from_millis(wait_ms.max(250));
 
-    loop {
+    let window = loop {
         std::thread::sleep(Duration::from_millis(100));
         if let Ok(list) = windows()
             && let Some(window) = list.into_iter().find(|w| w.pid == pid)
         {
-            return Ok(Some(window));
+            break Some(window);
         }
 
-        if std::time::Instant::now() >= deadline {
-            return Ok(None);
+        if Instant::now() >= deadline {
+            break None;
         }
-    }
+    };
+
+    Ok(Launched {
+        window,
+        pid,
+        log: log.map(|path| path.display().to_string()),
+    })
 }

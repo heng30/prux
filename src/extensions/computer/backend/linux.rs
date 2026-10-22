@@ -7,7 +7,7 @@
 //! - 输入：`enigo` 的 Wayland 后端（`zwp_virtual_keyboard_v1` + `zwlr_virtual_pointer_v1`）。
 //! - 指针位置：Wayland 没有这个协议，`cursor()` 返回 `None`。
 
-use super::{CaptureRequest, CaptureTarget, Display, Shot, ShotFormat, Window};
+use super::{CaptureRequest, CaptureTarget, Display, Launched, Shot, ShotFormat, Window};
 use crate::{
     extensions::computer::state::Rect,
     utils::{paths::find_in_path, process::run_stdout},
@@ -460,29 +460,42 @@ fn monitor_matches(monitor: &xcap::Monitor, rect: &Rect) -> bool {
         && monitor.height().ok() == Some(rect.height)
 }
 
-/// 启动应用并等待窗口出现。
-pub fn launch(target: &str, args: &[String], wait_ms: u64) -> Result<Option<Window>, String> {
+/// 读一个进程的进程组 id（`/proc/<pid>/stat` 里 `comm` 之后的第 3 个字段）。
+///
+/// `computer_launch` 把子进程放进它自己的进程组，所以进程组是「同一个应用」的可靠标识：
+/// Chromium 这类应用会把窗口交给派生出来的进程（`brave` 启动时 pid 496662，窗口属于 496689），
+/// 只按 pid 比对永远等不到窗口。读不进程（已退出、pid 不存在）时返回 `None`。
+fn process_group(pid: u32) -> Option<u32> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let rest = stat.get(stat.rfind(')')? + 1..)?;
+    rest.split_whitespace().nth(2)?.parse().ok()
+}
+
+/// 启动应用并等待窗口出现；输出进临时日志，不落在终端上。
+pub fn launch(target: &str, args: &[String], wait_ms: u64) -> Result<Launched, String> {
     if target.trim().is_empty() {
         return Err("target is required".to_string());
     }
-    let mut cmd = Command::new(target);
-    cmd.args(args);
-    cmd.stdin(Stdio::null());
-    let child = cmd
-        .spawn()
-        .map_err(|e| format!("could not start {target:?}: {e}"))?;
-    let pid = child.id();
+    let (pid, log) = super::launch_process(target, args)?;
     let deadline = Instant::now() + Duration::from_millis(wait_ms.max(200));
-    loop {
+    let window = loop {
         sleep(Duration::from_millis(150));
         let list = windows().unwrap_or_default();
-        if let Some(w) = list.iter().find(|w| w.pid == pid) {
-            return Ok(Some(w.clone()));
+        if let Some(w) = list
+            .iter()
+            .find(|w| w.pid == pid || process_group(w.pid) == Some(pid))
+        {
+            break Some(w.clone());
         }
         if Instant::now() >= deadline {
-            return Ok(None);
+            break None;
         }
-    }
+    };
+    Ok(Launched {
+        window,
+        pid,
+        log: log.map(|path| path.display().to_string()),
+    })
 }
 
 /// 窗口级动作。
@@ -513,5 +526,17 @@ pub fn window_action(id: u64, action: &str) -> Result<String, String> {
             "window {id} cannot be minimized: Wayland compositors decide visibility, and sway has no minimized state (hide it behind another window or close it)"
         )),
         other => Err(format!("unknown window action {other:?}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 能读到自己的进程组；不存在的 pid 返回 `None` 而不是 panic。
+    #[test]
+    fn process_group_reads_proc_stat() {
+        assert!(process_group(std::process::id()).is_some());
+        assert_eq!(process_group(u32::MAX), None);
     }
 }

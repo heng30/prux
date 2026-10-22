@@ -6,7 +6,7 @@
 //!
 //! 坐标单位与 `xcap` 一致：`CGDisplayBounds` 的逻辑点（全局桌面坐标，主显示器左上为原点，y 向下）。
 
-use super::{CaptureRequest, Display, Shot, Window, xcap_common as common};
+use super::{CaptureRequest, Display, Launched, Shot, Window, xcap_common as common};
 use crate::extensions::computer::input;
 use core_graphics::{
     event::CGEvent,
@@ -43,17 +43,22 @@ pub fn focus_window(id: u64) -> Result<(), String> {
         ));
     }
 
-    let status = Command::new("open")
+    // `open` 的 stdout/stderr 必须收进管道：继承终端就会把它的输出/告警盖到 TUI 上。
+    let output = Command::new("open")
         .args(["-a", &window.app])
-        .status()
+        .stdin(std::process::Stdio::null())
+        .output()
         .map_err(|e| format!("could not run open -a {:?}: {e}", window.app))?;
 
-    if status.success() {
+    if output.status.success() {
         Ok(())
     } else {
+        let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
         Err(format!(
-            "open -a {:?} failed with {status}; macOS may need the Accessibility permission",
-            window.app
+            "open -a {:?} failed ({}): {}; macOS may need the Accessibility permission",
+            window.app,
+            output.status,
+            if err.is_empty() { "no stderr" } else { &err }
         ))
     }
 }
@@ -88,7 +93,7 @@ pub fn cursor() -> Option<(i32, i32)> {
     Some((point.x as i32, point.y as i32))
 }
 
-/// 启动应用。
-pub fn launch(target: &str, args: &[String], wait_ms: u64) -> Result<Option<Window>, String> {
+/// 启动应用（共用 `xcap_common` 的实现，输出进临时日志）。
+pub fn launch(target: &str, args: &[String], wait_ms: u64) -> Result<Launched, String> {
     common::launch(target, args, wait_ms)
 }

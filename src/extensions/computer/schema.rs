@@ -404,7 +404,7 @@ fn paste() -> ExtensionTool {
 fn launch() -> ExtensionTool {
     ExtensionTool::simple(
         "computer_launch",
-        "Start an application and return the window it opened, so the next call can act on it. `target` is an executable path or a name on PATH.",
+        "Start an application and return the window it opened, so the next call can act on it. `target` is an executable path or a name on PATH. The app's own stdout/stderr go to a log file named in the result (never to the terminal); when no window appears, the result ends with that log's tail, which usually says why it failed.",
         json!({
             "type": "object",
             "required": ["target"],
