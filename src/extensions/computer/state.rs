@@ -1,7 +1,7 @@
-//! `computer` 扩展的运行时状态：开关、截图帧注册表与仍按住的输入。
+//! `computer` 扩展的运行时状态：截图帧注册表与仍按住的输入。
 //!
-//! 状态全部是**进程内**的：开关在重启后回到关闭（与「把鼠标键盘交给模型」这件事的风险相称），
-//! 帧与按住记录也没有跨进程意义。所有入口都在锁内只做读写，不回调注册表（锁序：注册表 → 扩展状态）。
+//! 状态全部是**进程内**的，没有跨进程意义。所有入口都在锁内只做读写，不回调注册表
+//! （锁序：注册表 → 扩展状态）。
 
 use std::{
     collections::VecDeque,
@@ -99,8 +99,6 @@ pub struct DragAnchor {
 /// 扩展的进程内状态。
 #[derive(Debug, Default)]
 pub struct State {
-    /// 「电脑操作」是否已开启（`/computer on`）。
-    pub enabled: bool,
     /// 帧注册表，最旧的在前面。
     pub frames: VecDeque<Frame>,
     /// 帧序号（只增不减，避免 id 复用）。
@@ -134,21 +132,15 @@ pub fn now_ms() -> u128 {
         .unwrap_or(0)
 }
 
-/// 「电脑操作」是否开启。
-pub fn enabled() -> bool {
-    lock().enabled
-}
-
-/// 设置「电脑操作」开关；关闭时清掉帧、拖拽句柄与按住记录（不留跨开合的引用）。
-pub fn set_enabled(on: bool) {
+/// 清掉一次使用留下的痕迹：帧、拖拽句柄与按住记录（序号保留，避免 id 复用）。
+///
+/// 在扩展被禁用时调用：帧和拖拽锚点在能力关闭后不再有意义，留着只会让模型误用旧图。
+pub fn reset() {
     let mut st = lock();
-    st.enabled = on;
-    if !on {
-        st.frames.clear();
-        st.drag_anchor = None;
-        st.held_keys.clear();
-        st.held_buttons.clear();
-    }
+    st.frames.clear();
+    st.drag_anchor = None;
+    st.held_keys.clear();
+    st.held_buttons.clear();
 }
 
 /// 登记一张新截图并返回它的帧 id。

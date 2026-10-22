@@ -3,7 +3,7 @@
 //! 描述里刻意写清能力边界（Wayland 没有全局窗口枚举、窗口截图受遮挡影响、无障碍取决于应用），
 //! 因为模型读到的是这些字，而不是平台的错误消息。
 
-use crate::core::extensions::{ExtensionTool, ToolAnnotations};
+use crate::core::extensions::{ExtensionTool, ToolAnnotations, ToolExposure};
 use serde_json::{Value, json};
 
 /// `computer_actions` 接受的单步动作名（与执行侧共用同一份列表）。
@@ -64,6 +64,10 @@ pub const UI_ACTIONS: &[&str] = &[
 pub const READ_ONLY_UI_ACTIONS: &[&str] = &["get_value", "get_text", "locate_text", "get_caret"];
 
 /// 构造全部工具定义。
+///
+/// 14 个工具**统一**声明为 [`ToolExposure::Deferred`]：描述与参数 schema 平时不进模型上下文，
+/// 由 `tool_search` 检索命中后才在下一轮进入工具表。这一族必须**一起出现、一起消失**——
+/// 只放出其中一部分会让模型按半套能力规划动作（例如能截图却拿不到点击）。
 pub fn tools() -> Vec<ExtensionTool> {
     vec![
         screenshot(),
@@ -81,6 +85,9 @@ pub fn tools() -> Vec<ExtensionTool> {
         launch(),
         stop(),
     ]
+    .into_iter()
+    .map(|tool| tool.with_exposure(ToolExposure::Deferred))
+    .collect()
 }
 
 /// 共享的 `from_frame` 参数说明。
@@ -416,15 +423,14 @@ fn launch() -> ExtensionTool {
 fn stop() -> ExtensionTool {
     ExtensionTool::simple(
         "computer_stop",
-        "Release any mouse button or key this session is still holding down, and optionally turn the capability off. Use it when a gesture was interrupted — a drag that never got its release leaves the desktop holding a button the user cannot shake off.",
+        "Release any mouse button or key this session is still holding down. Use it when a gesture was interrupted — a drag that never got its release leaves the desktop holding a button the user cannot shake off.",
         json!({
             "type": "object",
             "properties": {
-                "release_input": { "type": "boolean", "description": "Release anything still held down (default true)." },
-                "disable_capability": { "type": "boolean", "description": "Also turn computer control off (it must be re-enabled with /computer on)." }
+                "release_input": { "type": "boolean", "description": "Release anything still held down (default true)." }
             }
         }),
-        "Release held keys/buttons, or turn computer control off.",
+        "Release held keys/buttons.",
     )
     .with_annotations(ToolAnnotations { read_only: true, destructive: false, idempotent: true })
 }
@@ -441,6 +447,19 @@ mod tests {
         let names: HashSet<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert_eq!(names.len(), 14);
         assert!(names.iter().all(|name| name.starts_with("computer_")));
+    }
+
+    /// 整族工具必须同为延迟工具：一半可见一半不可见会让模型按半套能力规划动作。
+    #[test]
+    fn every_tool_is_deferred() {
+        for tool in tools() {
+            assert_eq!(
+                tool.exposure,
+                ToolExposure::Deferred,
+                "{} 必须声明为延迟工具",
+                tool.name
+            );
+        }
     }
 
     #[test]

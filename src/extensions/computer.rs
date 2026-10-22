@@ -2,9 +2,14 @@
 //!
 //! 设计要点：
 //!
-//! - **默认关闭**，用 `/computer on` 打开、`/computer off` 关掉；关闭时这一族工具的 schema
-//!   不从上下文中发出（`filter_extension_tools` 返回空），开启后下一轮才出现在工具表里。
-//!   开关只在进程内有效：重启回到关闭。
+//! - **默认不启用**，在 `/extension` 面板里打开本扩展就是授权（持久化），没有第二个运行时开关；
+//!   扩展被禁用时立即释放仍按住的键与鼠标键，并清掉帧。
+//! - **14 个工具全部是延迟工具**（`ToolExposure::Deferred`，见 `schema::tools`）：描述与参数 schema
+//!   平时不进上下文，模型先经 `tool_search` 检索到 `computer_*`，**下一轮**才拿到完整声明。
+//!   授权门仍在：未启用的扩展根本不在 `registered()` 里，工具名解析不到（“Tool not found”）。
+//!   因此本扩展隐式依赖 `tool-search` 扩展：本扩展没声明 `modes()`（仅 `All` 模式可用），
+//!   `tool-search` 声明 `[Dev, Creator]`，二者交集目前恰好是 `All`。若哪天给本扩展加上
+//!   `modes()`，要么一并放宽 `tool-search`，否则工具会变成“永远搜不到”。
 //! - **平台后端**在 `backend/`（截图/窗口/输入/启动），**无障碍通道**在 `a11y/`
 //!   （Linux 用 AT-SPI2，Windows 用 UI Automation，macOS 用 AXUIElement）。
 //! - 每次截图登记一个**帧**（`frame`）：模型可以按图内像素给坐标，由这里投影回屏幕坐标；
@@ -23,7 +28,8 @@ pub mod state;
 use crate::{
     core::{
         extensions::{
-            Extension, ExtensionCommand, ExtensionTool, ForkProjectInfo, SubcommandDef, ToolExecCtx,
+            Extension, ExtensionCommand, ExtensionTool, ForkProjectInfo, ToolExecCtx,
+            is_deferred_tool_activated,
         },
         tools::{ToolError, ToolResult},
     },
@@ -73,32 +79,20 @@ impl Extension for Computer {
         })
     }
 
-    /// 默认关闭：把鼠标键盘交给模型需要用户显式打开。
+    /// 默认关闭：把鼠标键盘交给模型需要用户显式打开（在 `/extension` 面板里启用即授权）。
     fn default_enabled(&self) -> bool {
         false
     }
 
-    /// 提供 `/computer` 命令。
+    /// 提供 `/computer` 命令（只读诊断）。
     fn commands(&self) -> Vec<ExtensionCommand> {
         vec![ExtensionCommand {
             name: CMD.to_string(),
-            description: "Turn desktop control on/off, or show its status: /computer on|off|status"
-                .to_string(),
+            description:
+                "Show the desktop-control backend, displays and which computer_* tools are loaded"
+                    .to_string(),
             busy_safe: true,
-            subcommands: vec![
-                SubcommandDef {
-                    name: "on",
-                    description: "Enable computer control for this process",
-                },
-                SubcommandDef {
-                    name: "off",
-                    description: "Release held input and disable computer control",
-                },
-                SubcommandDef {
-                    name: "status",
-                    description: "Show whether computer control is on and which backend is in use",
-                },
-            ],
+            subcommands: Vec::new(),
         }]
     }
 
@@ -107,20 +101,15 @@ impl Extension for Computer {
         register_slash_command(EXT, CMD, command_computer);
     }
 
-    /// 提供 14 个 `computer_*` 工具。
+    /// 提供 14 个 `computer_*` 工具（全部声明为延迟工具，见 [`schema::tools`]）。
     fn tools(&self) -> Vec<ExtensionTool> {
         schema::tools()
     }
 
-    /// 关闭时这一族工具不进上下文（省 schema token，也让模型看不到不可用的能力）。
-    fn filter_extension_tools(&self, tools: Vec<ExtensionTool>) -> Vec<ExtensionTool> {
-        if state::enabled() { tools } else { Vec::new() }
-    }
-
-    /// 扩展被整体禁用时一并关掉能力并释放按住输入。
+    /// 扩展被禁用时释放仍按住的输入并清掉帧（真正的安全收尾）。
     fn on_enabled_changed(&self, enabled: bool) {
         if !enabled {
-            state::set_enabled(false);
+            state::reset();
             let _ = input::release_all();
         }
     }
@@ -140,12 +129,6 @@ impl Extension for Computer {
                     "computer control is not available to subagents: a delegated agent's scope is fixed when it starts and cannot be widened from inside. Hand this step back to the parent agent.".to_string(),
                 ));
             }
-            if !state::enabled() {
-                return Err(ToolError(
-                    "computer control is off: run /computer on first (it is off by default, and this is a real mouse and keyboard)"
-                        .to_string(),
-                ));
-            }
             if !backend_available() {
                 return Err(ToolError(format!(
                     "computer control has no usable backend here ({}); on Linux this needs a Wayland session, a screenshot tool (grim) or xcap, and `swaymsg` for window enumeration",
@@ -163,72 +146,29 @@ fn backend_available() -> bool {
     *AVAILABLE.get_or_init(backend::available)
 }
 
-/// `/computer` 命令实现。
+/// `/computer` 命令实现：只读诊断，没有开关。
 fn command_computer(st: &mut App, raw: &str) -> bool {
-    let arg = crate::extensions::command_arg(raw)
-        .trim()
-        .to_ascii_lowercase();
-    match arg.as_str() {
-        "" | "status" => {
-            st.push_msg(status_text(), MsgLevel::Info);
-        }
-        "on" => {
-            if !backend_available() {
-                st.push_msg(
-                    format!(
-                        "computer control cannot be enabled here: {}",
-                        backend::describe()
-                    ),
-                    MsgLevel::Warning,
-                );
-                return false;
-            }
-            state::set_enabled(true);
-            crate::core::extensions::request_ui(
-                crate::core::extensions::ExtensionUiRequest::RebuildTools,
-            );
-            st.push_msg(
-                format!("computer control on ({})", backend::describe()),
-                MsgLevel::Success,
-            );
-        }
-        "off" => {
-            let released = input::release_all().unwrap_or_default();
-            state::set_enabled(false);
-            crate::core::extensions::request_ui(
-                crate::core::extensions::ExtensionUiRequest::RebuildTools,
-            );
-            st.push_msg(
-                if released.is_empty() {
-                    "computer control off".to_string()
-                } else {
-                    format!("computer control off; released: {}", released.join(", "))
-                },
-                MsgLevel::Success,
-            );
-        }
-        other => {
-            st.push_msg(
-                format!("usage: /computer on|off|status (got {other:?})"),
-                MsgLevel::Warning,
-            );
-        }
+    let arg = crate::extensions::command_arg(raw).trim();
+    match arg.to_ascii_lowercase().as_str() {
+        "" | "status" => st.push_msg(status_text(), MsgLevel::Info),
+        other => st.push_msg(
+            format!("usage: /computer (got {other:?})"),
+            MsgLevel::Warning,
+        ),
     }
     false
 }
 
 /// 状态文本（命令与诊断共用）。
+///
+/// 工具是否已进入工具表看的是延迟激活集（`tool_search` 命中后才算“已载入”），
+/// 这是唯一需要模型/用户知道的“现在能不能直接调”的事实。
 fn status_text() -> String {
-    let enabled = state::enabled();
     let mut lines = vec![format!(
-        "computer control: {}",
-        if enabled { "on" } else { "off" }
-    )];
-    lines.push(format!(
         "backend: {} (available: {})",
         backend::describe(),
         backend_available()
-    ));
+    )];
     if let Ok(displays) = backend::displays() {
         lines.push(format!(
             "displays: {}",
@@ -243,11 +183,25 @@ fn status_text() -> String {
             "unavailable"
         }
     ));
-    lines.push(if enabled {
-        "tools: computer_* are visible; /computer off releases held input and hides them"
-            .to_string()
+
+    let tools = schema::tools();
+    let loaded: Vec<&str> = tools
+        .iter()
+        .map(|t| t.name.as_str())
+        .filter(|name| is_deferred_tool_activated(name))
+        .collect();
+    lines.push(if loaded.is_empty() {
+        format!(
+            "tools: 0/{} loaded; they are deferred tools, the model loads them with tool_search",
+            tools.len()
+        )
     } else {
-        "run /computer on to expose the computer_* tools".to_string()
+        format!(
+            "tools: {}/{} loaded: {}",
+            loaded.len(),
+            tools.len(),
+            loaded.join(", ")
+        )
     });
     lines.join("\n")
 }

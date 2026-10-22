@@ -534,23 +534,16 @@ pub async fn launch(args: &Value) -> Result<ToolResult, ToolError> {
 /// `computer_stop`。
 pub async fn stop(args: &Value) -> Result<ToolResult, ToolError> {
     let release = opt_bool(args, "release_input").unwrap_or(true);
-    let disable = opt_bool(args, "disable_capability").unwrap_or(false);
     let released = if release {
         blocking(input::release_all).await.unwrap_or_default()
     } else {
         Vec::new()
     };
-    if disable {
-        state::set_enabled(false);
-    }
-    let mut text = if released.is_empty() {
+    let text = if released.is_empty() {
         "nothing was held down".to_string()
     } else {
         format!("released: {}", released.join(", "))
     };
-    if disable {
-        text.push_str("; computer control is now off (use /computer on to re-enable)");
-    }
     Ok(ToolResult::text(text))
 }
 
