@@ -3,7 +3,8 @@
 //! 与 Linux 的差别只在"窗口枚举"和"聚焦/窗口动作"要各自的系统 API（见 `windows.rs` /
 //! `macos.rs`），截图本身在这里统一。
 
-use super::{CaptureRequest, CaptureTarget, Display, Shot, ShotFormat, Window, state::Rect};
+use super::{CaptureRequest, CaptureTarget, Display, Shot, ShotFormat, Window};
+use crate::extensions::computer::state::Rect;
 use image::RgbaImage;
 
 /// 列出显示器。

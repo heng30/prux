@@ -58,7 +58,10 @@ fn parse_key(name: &str) -> Result<Key, String> {
         "space" => Key::Space,
         "backspace" => Key::Backspace,
         "delete" | "del" => Key::Delete,
+        #[cfg(not(target_os = "macos"))]
         "insert" => Key::Insert,
+        #[cfg(target_os = "macos")]
+        "insert" => return Err(missing_on_macos("insert")),
         "home" => Key::Home,
         "end" => Key::End,
         "pageup" | "page_up" | "pgup" => Key::PageUp,
@@ -68,7 +71,10 @@ fn parse_key(name: &str) -> Result<Key, String> {
         "left" | "left_arrow" | "leftarrow" => Key::LeftArrow,
         "right" | "right_arrow" | "rightarrow" => Key::RightArrow,
         "capslock" | "caps_lock" => Key::CapsLock,
+        #[cfg(not(target_os = "macos"))]
         "printscreen" | "print_screen" => Key::PrintScr,
+        #[cfg(target_os = "macos")]
+        "printscreen" | "print_screen" => return Err(missing_on_macos("print screen")),
         other => {
             if let Some(num) = other.strip_prefix('f')
                 && let Ok(n) = num.parse::<u8>()
@@ -97,6 +103,12 @@ fn parse_key(name: &str) -> Result<Key, String> {
         }
     };
     Ok(key)
+}
+
+/// macOS 的键盘接口没有这些键（`enigo` 在该平台上不提供对应变体）时的报错文案。
+#[cfg(target_os = "macos")]
+fn missing_on_macos(name: &str) -> String {
+    format!("macOS has no {name} key; use a different key or computer_text to insert text")
 }
 
 /// 把 `ctrl+shift+t` 拆成修饰键列表与主键。

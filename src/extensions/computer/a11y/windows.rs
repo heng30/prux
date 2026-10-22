@@ -24,7 +24,7 @@ use windows::{
             UIA_SelectionItemPatternId, UIA_TextPatternId, UIA_TogglePatternId, UIA_ValuePatternId,
         },
     },
-    core::{BSTR, HSTRING, Interface},
+    core::{BSTR, Interface},
 };
 
 /// 无障碍通道是否可用（Windows 上只要有桌面会话就能建 UIA 客户端）。
@@ -319,7 +319,7 @@ fn element_for(target: &NodeId) -> Result<IUIAutomationElement, String> {
     let role = role_of(&element);
     if name != target.name || role != target.role {
         return Err(format!(
-            "[STALE_REF] the element at {} is now {role} {name:?}, not {0} {1:?}; read the tree again",
+            "[STALE_REF] the element at {} is now {role} {name:?}, not {} {:?}; read the tree again",
             target.path, target.role, target.name
         ));
     }
@@ -387,19 +387,25 @@ pub async fn set_text(target: &NodeId, text: &str) -> Result<(), String> {
     unsafe {
         element
             .GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
-            .and_then(|pattern| pattern.SetValue(&HSTRING::from(text)))
+            .and_then(|pattern| pattern.SetValue(&BSTR::from(text)))
             .map_err(|e| format!("{} does not accept text: {e}", target.name))
     }
 }
 
 /// 读控件值。
 pub async fn read_value(target: &NodeId) -> Result<String, String> {
-    let element = element_for(target)?;
-    unsafe {
-        match element.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId) {
-            Ok(pattern) => Ok(bstr(pattern.CurrentValue())),
-            Err(_) => read_text(target).await,
+    let value = {
+        let element = element_for(target)?;
+        unsafe {
+            element
+                .GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
+                .ok()
+                .map(|pattern| bstr(pattern.CurrentValue()))
         }
+    };
+    match value {
+        Some(value) => Ok(value),
+        None => read_text(target).await,
     }
 }
 

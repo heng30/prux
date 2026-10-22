@@ -18,8 +18,9 @@ jobs:
       - run: ls ${{ github.workspace }}
       - run: sudo apt update
       # libxkbcommon: enigo 的 wayland 后端（虚拟键盘 keymap）；libwayland: wayland-client；
-      # libpipewire + libxcb: xcap 在 Linux 上的依赖。
-      - run: sudo apt install fd-find ripgrep libxkbcommon-dev libwayland-dev libpipewire-0.3-dev libxcb1-dev libxcb-randr0-dev
+      # libpipewire + libxcb: xcap 在 Linux 上的依赖；
+      # libegl1-mesa-dev: 提供 egl.pc，供 xcap → libwayshot-xcap → khronos-egl 的 build script 探测。
+      - run: sudo apt install -y fd-find ripgrep libxkbcommon-dev libwayland-dev libpipewire-0.3-dev libxcb1-dev libxcb-randr0-dev libegl1-mesa-dev
 
       - run: echo "start install Rust..."
       - name: Install Rust

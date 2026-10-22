@@ -6,12 +6,9 @@
 use super::{CaptureRequest, Display, Shot, Window, xcap_common as common};
 use windows::Win32::{
     Foundation::{HWND, LPARAM, POINT, WPARAM},
-    UI::{
-        Input::KeyboardAndMouse::GetCursorPos,
-        WindowsAndMessaging::{
-            PostMessageW, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SetForegroundWindow, ShowWindow,
-            WM_CLOSE,
-        },
+    UI::WindowsAndMessaging::{
+        GetCursorPos, PostMessageW, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SetForegroundWindow,
+        ShowWindow, WM_CLOSE,
     },
 };
 
@@ -53,7 +50,7 @@ pub fn window_action(id: u64, action: &str) -> Result<String, String> {
     let hwnd = HWND(id as usize as *mut core::ffi::c_void);
     match action {
         "close" => unsafe {
-            PostMessageW(hwnd, WM_CLOSE, WPARAM(0), LPARAM(0))
+            PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0))
                 .map_err(|e| format!("closing window {id} failed: {e}"))?;
             Ok(format!("asked window {id} to close"))
         },
