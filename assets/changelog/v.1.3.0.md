@@ -133,6 +133,8 @@ This release aligns prux with upstream pi 1.3.0.
   text, so the new model no longer treats another model's reasoning as part of its own reply.
 - **codemode's tool description** now states that a tool declaring an output schema resolves with
   its value even when the call fails, instead of claiming every failure rejects.
+- **`tool_search` loads up to 15 matches by default** (was 8), enough to pick up a whole deferred
+  family in one call.
 
 ### Fixed
 
@@ -290,6 +292,7 @@ This release aligns prux with upstream pi 1.3.0.
   而不是当普通文本发出去，新模型不会再把他人的推理当成自己回答的一部分。
 - **codemode 的工具描述**改为说明「声明了 output schema 的工具失败时返回自己的值」，
   不再声称所有失败都抛错。
+- **`tool_search` 单次默认最多激活 15 个工具**（原为 8），足以一次载入一整族延迟工具。
 
 ### 修复
 

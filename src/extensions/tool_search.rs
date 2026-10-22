@@ -21,8 +21,9 @@ use std::{collections::HashMap, sync::Arc};
 pub const EXTENSION_NAME: &str = "tool-search";
 /// 本扩展暴露的工具名（模型通过它检索延迟工具）
 pub const TOOL_NAME: &str = "tool_search";
-/// 单次最多返回 / 激活的工具数
-pub const DEFAULT_LIMIT: usize = 8;
+/// 单次最多返回 / 激活的工具数；足以一次拿完一族工具（如 14 个 `computer_*`），
+/// 免得模型为了拿全而反复检索。
+pub const DEFAULT_LIMIT: usize = 15;
 /// （名称, 得分）按分数降序
 pub type ToolMatch = (String, f64);
 
