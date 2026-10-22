@@ -257,7 +257,7 @@ mod tests {
     #[test]
     fn frames_are_kept_and_evicted() {
         for _ in 0..(FRAME_KEEP + 3) {
-            register_frame((0, 0), (10, 10), (10, 10), None);
+            let _ = register_frame((0, 0), (10, 10), (10, 10), None);
         }
         let st = lock();
         assert_eq!(st.frames.len(), FRAME_KEEP);
