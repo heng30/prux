@@ -6,8 +6,7 @@
 
 use crate::extensions::computer::state;
 use enigo::{Axis, Button, Coordinate, Direction, Enigo, Key, Keyboard, Mouse, Settings};
-use std::thread::sleep;
-use std::time::Duration;
+use std::{thread::sleep, time::Duration};
 
 /// 文本输入的字符间停顿：太快时应用会丢字符。
 const TYPE_DELAY_MS: u64 = 8;
@@ -121,6 +120,7 @@ fn parse_chord(chord: &str) -> Result<(Vec<Key>, Key), String> {
     if parts.is_empty() {
         return Err("keys is empty".to_string());
     }
+
     let mut modifiers = Vec::new();
     for part in &parts[..parts.len() - 1] {
         let key = parse_key(part)?;
@@ -131,6 +131,7 @@ fn parse_chord(chord: &str) -> Result<(Vec<Key>, Key), String> {
         }
         modifiers.push(key);
     }
+
     let main = parse_key(parts[parts.len() - 1])?;
     Ok((modifiers, main))
 }
@@ -234,13 +235,14 @@ pub fn drag(
         }
         sleep(Duration::from_millis(DRAG_STEP_MS));
     }
+
     // 释放永远要执行：拖拽中途失败时按住的键也必须放开，否则桌面会卡住一个按钮。
-    let _ = enigo.button(button, Direction::Release);
+    _ = enigo.button(button, Direction::Release);
     state::lock()
         .held_buttons
         .retain(|b| b != &format!("{button:?}").to_lowercase());
     for key in held.iter().rev() {
-        let _ = enigo.key(*key, Direction::Release);
+        _ = enigo.key(*key, Direction::Release);
     }
     match failure {
         Some(err) => Err(err),
@@ -256,6 +258,7 @@ pub fn scroll(vertical: i32, horizontal: i32) -> Result<(), String> {
             .scroll((f64::from(vertical) * WHEEL_NOTCH) as i32, Axis::Vertical)
             .map_err(|e| format!("vertical scroll failed: {e}"))?;
     }
+
     if horizontal != 0 {
         enigo
             .scroll(
@@ -290,16 +293,19 @@ pub fn press_chord(chord: &str, repeat: u32, hold_seconds: f64) -> Result<(), St
                 .key(*key, Direction::Press)
                 .map_err(|e| format!("holding a modifier failed: {e}"))?;
         }
+
         enigo
             .key(main, Direction::Press)
             .map_err(|e| format!("pressing {chord:?} failed: {e}"))?;
         sleep(Duration::from_secs_f64(hold_seconds.min(10.0)));
-        let _ = enigo.key(main, Direction::Release);
+
+        _ = enigo.key(main, Direction::Release);
         for key in modifiers.iter().rev() {
-            let _ = enigo.key(*key, Direction::Release);
+            _ = enigo.key(*key, Direction::Release);
         }
         return Ok(());
     }
+
     for _ in 0..repeat.clamp(1, 100) {
         for key in &modifiers {
             enigo
@@ -326,6 +332,7 @@ pub fn release_all() -> Result<Vec<String>, String> {
     if keys.is_empty() && buttons.is_empty() {
         return Ok(Vec::new());
     }
+
     let mut enigo = connect()?;
     let mut released = Vec::new();
     for name in &buttons {
@@ -334,12 +341,14 @@ pub fn release_all() -> Result<Vec<String>, String> {
             released.push(format!("mouse:{name}"));
         }
     }
+
     for name in &keys {
         if let Ok(key) = parse_key(name.trim_matches('"')) {
             let _ = enigo.key(key, Direction::Release);
             released.push(format!("key:{name}"));
         }
     }
+
     let mut st = state::lock();
     st.held_keys.clear();
     st.held_buttons.clear();

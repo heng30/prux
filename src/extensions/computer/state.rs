@@ -3,17 +3,17 @@
 //! 状态全部是**进程内**的，没有跨进程意义。所有入口都在锁内只做读写，不回调注册表
 //! （锁序：注册表 → 扩展状态）。
 
+use crate::utils::time::now_ms;
 use std::{
     collections::VecDeque,
     sync::{Mutex, MutexGuard, OnceLock},
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 /// 帧注册表保留的上限：只够回溯最近几次观察，多了就是无用的内存。
 pub const FRAME_KEEP: usize = 32;
 
-/// 拖拽锚点的有效期：接着上一笔画画只在一个手势之内有意义。
-pub const DRAG_ANCHOR_TTL_MS: u128 = 60_000;
+/// 拖拽锚点的有效期（unix 毫秒）：接着上一笔画画只在一个手势之内有意义。
+pub const DRAG_ANCHOR_TTL_MS: u64 = 60_000;
 
 /// 屏幕矩形（虚拟桌面像素，左上角 + 尺寸）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,7 +63,7 @@ pub struct Frame {
     /// 截图时该窗口的矩形，用于发现"图拍完之后窗口动了"。
     pub window_rect: Option<Rect>,
     /// 登记时刻（unix 毫秒），用于诊断与过期判断。
-    pub created_ms: u128,
+    pub created_ms: u64,
 }
 
 impl Frame {
@@ -93,7 +93,7 @@ pub struct DragAnchor {
     /// 结束点（屏幕像素）。
     pub end: (i32, i32),
     /// 记录时刻（unix 毫秒）。
-    pub at_ms: u128,
+    pub at_ms: u64,
 }
 
 /// 扩展的进程内状态。
@@ -124,14 +124,6 @@ pub fn lock() -> MutexGuard<'static, State> {
     state().lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// 当前时间（unix 毫秒）；时钟异常时返回 0，调用方只用于比较新鲜度。
-pub fn now_ms() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0)
-}
-
 /// 清掉一次使用留下的痕迹：帧、拖拽句柄与按住记录（序号保留，避免 id 复用）。
 ///
 /// 在扩展被禁用时调用：帧和拖拽锚点在能力关闭后不再有意义，留着只会让模型误用旧图。
@@ -158,11 +150,13 @@ pub fn register_frame(
         Some((id, rect)) => (Some(id), Some(rect)),
         None => (None, None),
     };
+
     let scale = if screen.0 == 0 || screen.1 == 0 {
         1.0
     } else {
         image.0 as f64 / screen.0 as f64
     };
+
     st.frames.push_back(Frame {
         id: id.clone(),
         origin,

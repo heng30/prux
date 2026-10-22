@@ -8,10 +8,12 @@
 //! - 指针位置：Wayland 没有这个协议，`cursor()` 返回 `None`。
 
 use super::{CaptureRequest, CaptureTarget, Display, Shot, ShotFormat, Window};
-use crate::extensions::computer::state::Rect;
+use crate::{
+    extensions::computer::state::Rect,
+    utils::{paths::find_in_path, process::run_stdout},
+};
 use serde_json::Value;
 use std::{
-    io::Write,
     process::{Command, Stdio},
     thread::sleep,
     time::{Duration, Instant},
@@ -44,39 +46,12 @@ pub fn describe() -> String {
 
 /// `grim` 是否在 PATH 上。
 fn has_grim() -> bool {
-    which("grim").is_some()
+    find_in_path("grim").is_some()
 }
 
 /// `swaymsg` 是否在 PATH 上。
 fn has_swaymsg() -> bool {
-    which("swaymsg").is_some()
-}
-
-/// 在 PATH 里找一个可执行文件（只做存在性判断，不启动它）。
-fn which(program: &str) -> Option<std::path::PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
-        .map(|dir| dir.join(program))
-        .find(|p| p.is_file())
-}
-
-/// 跑一条命令并取它的 stdout；失败时把 stderr 带进错误。
-fn run_stdout(mut cmd: Command, what: &str) -> Result<Vec<u8>, String> {
-    let output = cmd
-        .stdin(Stdio::null())
-        .stderr(Stdio::piped())
-        .stdout(Stdio::piped())
-        .output()
-        .map_err(|e| format!("{what}: {e}"))?;
-    if !output.status.success() {
-        let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(format!(
-            "{what} failed ({}): {}",
-            output.status,
-            if err.is_empty() { "no stderr" } else { &err }
-        ));
-    }
-    Ok(output.stdout)
+    find_in_path("swaymsg").is_some()
 }
 
 /// 调 `swaymsg -t <kind> -r` 并把 JSON 解析出来。
@@ -92,6 +67,7 @@ pub fn displays() -> Result<Vec<Display>, String> {
     if !has_swaymsg() {
         return Err(SWAY_HINT.to_string());
     }
+
     let tree = sway_json("get_outputs")?;
     let mut out = Vec::new();
     for item in tree.as_array().into_iter().flatten() {
@@ -100,6 +76,7 @@ pub fn displays() -> Result<Vec<Display>, String> {
         if !active || !dpms {
             continue;
         }
+
         let rect = item.get("rect").unwrap_or(&Value::Null);
         let name = item
             .get("name")
@@ -119,9 +96,11 @@ pub fn displays() -> Result<Vec<Display>, String> {
                 .unwrap_or(false),
         });
     }
+
     if out.is_empty() {
         return Err("sway reported no active output".to_string());
     }
+
     if !out.iter().any(|d| d.primary) {
         out[0].primary = true;
     }
@@ -176,6 +155,7 @@ fn collect_nodes(node: &Value, out: &mut Vec<Window>) {
             });
         }
     }
+
     for key in ["nodes", "floating_nodes"] {
         for child in node
             .get(key)
@@ -193,6 +173,7 @@ pub fn windows() -> Result<Vec<Window>, String> {
     if !has_swaymsg() {
         return Err(SWAY_HINT.to_string());
     }
+
     let tree = sway_json("get_tree")?;
     let mut out = Vec::new();
     collect_nodes(&tree, &mut out);
@@ -204,6 +185,7 @@ pub fn focus_window(id: u64) -> Result<(), String> {
     if !has_swaymsg() {
         return Err(SWAY_HINT.to_string());
     }
+
     let mut cmd = Command::new("swaymsg");
     cmd.args(["-q", &format!("[con_id={id}] focus")]);
     run_stdout(cmd, &format!("swaymsg focus {id}")).map(|_| ())
@@ -501,13 +483,6 @@ pub fn launch(target: &str, args: &[String], wait_ms: u64) -> Result<Option<Wind
             return Ok(None);
         }
     }
-}
-
-/// 让未使用的导入不触发告警：`std::io::Write` 供将来的 stdin 注入使用。
-#[allow(dead_code)]
-fn _keep_imports() {
-    let mut buf = Vec::new();
-    let _ = buf.write(b"");
 }
 
 /// 窗口级动作。

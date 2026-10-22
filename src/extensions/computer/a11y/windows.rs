@@ -36,7 +36,7 @@ pub fn available() -> bool {
 fn uia() -> Result<IUIAutomation, String> {
     unsafe {
         // 线程可能已经初始化过 COM（同一线程池线程被复用时）：`RPC_E_CHANGED_MODE` 不是错误。
-        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
         CoCreateInstance::<_, IUIAutomation>(&CUIAutomation, None, CLSCTX_INPROC_SERVER)
             .map_err(|e| format!("could not create the UI Automation client: {e}"))
     }
@@ -450,21 +450,4 @@ pub async fn caret_offset(_target: &NodeId) -> Option<i32> {
 pub async fn node_rect(target: &NodeId) -> Option<Rect> {
     let element = element_for(target).ok()?;
     rect_of(&element)
-}
-
-/// 让未使用的方法不触发告警：`ScrollItemPattern` 由 `patterns_of` 探测，动作里不单独暴露。
-#[allow(dead_code)]
-fn _scroll_into_view(element: &IUIAutomationElement) -> windows::core::Result<()> {
-    unsafe {
-        element
-            .GetCurrentPatternAs::<IUIAutomationScrollItemPattern>(UIA_ScrollItemPatternId)?
-            .ScrollIntoView()
-    }
-}
-
-/// 让未使用的 trait 导入不触发告警。
-#[allow(dead_code)]
-fn _interface_marker() {
-    fn assert_interface<T: Interface>() {}
-    assert_interface::<IUIAutomationElement>();
 }

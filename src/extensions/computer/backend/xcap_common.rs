@@ -6,6 +6,7 @@
 use super::{CaptureRequest, CaptureTarget, Display, Shot, ShotFormat, Window};
 use crate::extensions::computer::state::Rect;
 use image::RgbaImage;
+use std::time::{Duration, Instant};
 
 /// 列出显示器。
 pub fn displays() -> Result<Vec<Display>, String> {
@@ -25,6 +26,7 @@ pub fn displays() -> Result<Vec<Display>, String> {
             primary: monitor.is_primary().unwrap_or(false),
         });
     }
+
     if out.is_empty() {
         return Err(
             "xcap reported no monitor; on macOS this usually means the Screen Recording permission is missing"
@@ -42,11 +44,13 @@ pub fn windows() -> Result<Vec<Window>, String> {
         if window.is_minimized().unwrap_or(false) {
             continue;
         }
+
         let width = window.width().unwrap_or(0);
         let height = window.height().unwrap_or(0);
         if width == 0 || height == 0 {
             continue;
         }
+
         out.push(Window {
             id: u64::from(window.id().unwrap_or(0)),
             title: window.title().unwrap_or_default(),
@@ -163,11 +167,13 @@ fn finish(
         ((image.width() as f64) * scale).round().max(1.0) as u32,
         ((image.height() as f64) * scale).round().max(1.0) as u32,
     );
+
     let scaled = if (width, height) == (image.width(), image.height()) {
         image
     } else {
         image::imageops::resize(&image, width, height, image::imageops::FilterType::Triangle)
     };
+
     let mut bytes = Vec::new();
     match req.format {
         ShotFormat::Png => {
@@ -207,14 +213,16 @@ pub fn launch(target: &str, args: &[String], wait_ms: u64) -> Result<Option<Wind
         .spawn()
         .map_err(|e| format!("could not start {target:?}: {e}"))?;
     let pid = child.id();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(wait_ms.max(200));
+    let deadline = Instant::now() + Duration::from_millis(wait_ms.max(250));
+
     loop {
-        std::thread::sleep(std::time::Duration::from_millis(150));
-        if let Ok(list) = windows() {
-            if let Some(window) = list.into_iter().find(|w| w.pid == pid) {
-                return Ok(Some(window));
-            }
+        std::thread::sleep(Duration::from_millis(100));
+        if let Ok(list) = windows()
+            && let Some(window) = list.into_iter().find(|w| w.pid == pid)
+        {
+            return Ok(Some(window));
         }
+
         if std::time::Instant::now() >= deadline {
             return Ok(None);
         }

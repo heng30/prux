@@ -44,6 +44,11 @@ type CFRef = *const c_void;
 
 #[link(name = "CoreFoundation", kind = "framework")]
 unsafe extern "C" {
+    /// `kCFBooleanTrue`。
+    static kCFBooleanTrue: CFRef;
+    /// `kCFBooleanFalse`。
+    static kCFBooleanFalse: CFRef;
+
     /// 释放一个 CF 对象。
     fn CFRelease(cf: CFRef);
     /// 增加一个 CF 对象的引用计数。
@@ -70,10 +75,6 @@ unsafe extern "C" {
     fn CFStringCreateWithCString(alloc: CFRef, text: *const c_char, encoding: u32) -> CFRef;
     /// 布尔值。
     fn CFBooleanGetValue(value: CFRef) -> bool;
-    /// `kCFBooleanTrue`。
-    static kCFBooleanTrue: CFRef;
-    /// `kCFBooleanFalse`。
-    static kCFBooleanFalse: CFRef;
 }
 
 #[link(name = "ApplicationServices", kind = "framework")]
@@ -316,6 +317,7 @@ impl Walk<'_> {
         if self.visited >= self.options.max_visited || self.nodes.len() >= self.options.max_nodes {
             return;
         }
+
         self.visited += 1;
         let name = name_of(element);
         let role = role_of(element);
@@ -326,6 +328,7 @@ impl Walk<'_> {
         } else {
             Vec::new()
         };
+
         if !(self.options.skip_empty && name.is_empty() && actions.is_empty() && rect.is_none()) {
             let index = self.nodes.len();
             self.nodes.push(NodeId {
@@ -348,15 +351,18 @@ impl Walk<'_> {
                 has_children: false,
             });
         }
+
         if depth >= self.options.max_depth {
             return;
         }
+
         let list = children(element);
         if !list.is_empty()
             && let Some(node) = self.out.last_mut()
         {
             node.has_children = true;
         }
+
         for (position, child) in list.iter().enumerate() {
             if self.nodes.len() >= self.options.max_nodes {
                 break;
@@ -385,9 +391,11 @@ pub async fn read_tree(
             .find(|w| w.focused)
             .ok_or_else(|| "nothing is focused; pass a window id".to_string())?,
     };
+
     if target.pid == 0 {
         return Err(format!("window {} reports no process id", target.id));
     }
+
     let root = root_for(target.pid)?;
     let mut walk = Walk {
         options: &options,
@@ -396,6 +404,7 @@ pub async fn read_tree(
         out: Vec::new(),
     };
     walk.element(root.raw(), target.pid.to_string(), 0);
+
     if walk.out.is_empty() {
         return Err(format!(
             "window {} exposes no accessibility tree; grant Accessibility permission to prux and retry",
@@ -426,6 +435,7 @@ fn element_for(target: &NodeId) -> Result<Owned, String> {
             )
         })?;
     }
+
     let name = name_of(element.raw());
     let role = role_of(element.raw());
     if name != target.name || role != target.role {
@@ -456,6 +466,7 @@ fn set_bool(element: CFRef, name: &str, value: bool) -> Result<(), String> {
     } else {
         unsafe { kCFBooleanFalse }
     };
+
     let status = unsafe { AXUIElementSetAttributeValue(element, key.raw(), raw) };
     if status == 0 {
         Ok(())

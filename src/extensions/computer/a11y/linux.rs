@@ -80,7 +80,7 @@ async fn call<T>(
     method: &str,
 ) -> Result<T, String>
 where
-    T: for<'d> serde::Deserialize<'d> + zbus::zvariant::Type,
+    T: for<'d> serde::Deserialize<'d> + zbus::Type,
 {
     let reply = conn
         .call_method(Some(dest), path, Some(iface), method, &())
@@ -102,8 +102,8 @@ async fn call_with<B, T>(
     body: &B,
 ) -> Result<T, String>
 where
-    B: serde::Serialize + zbus::zvariant::DynamicType,
-    T: for<'d> serde::Deserialize<'d> + zbus::zvariant::Type,
+    B: serde::Serialize + zbus::DynamicType,
+    T: for<'d> serde::Deserialize<'d> + zbus::Type,
 {
     let reply = conn
         .call_method(Some(dest), path, Some(iface), method, body)
@@ -270,6 +270,7 @@ fn state_names(bits: &[u32]) -> Vec<String> {
             if word & (1 << bit) == 0 {
                 continue;
             }
+
             let index = word_index * 32 + bit as usize;
             if let Some(name) = NAMES.get(index) {
                 out.push((*name).to_string());
@@ -355,14 +356,17 @@ impl Walk<'_> {
         if depth >= self.options.max_depth {
             return;
         }
+
         let Ok(list) = children(conn, bus, path).await else {
             return;
         };
+
         if !list.is_empty()
             && let Some(node) = self.out.last_mut()
         {
             node.has_children = true;
         }
+
         for (child_bus, child_path) in list {
             if self.visited >= self.options.max_visited
                 || self.nodes.len() >= self.options.max_nodes
@@ -461,6 +465,7 @@ pub async fn do_action(target: &NodeId, index: u32) -> Result<(), String> {
         &(index,),
     )
     .await?;
+
     if ok {
         Ok(())
     } else {
@@ -483,9 +488,11 @@ pub async fn read_text(target: &NodeId) -> Result<String, String> {
     )
     .await
     .unwrap_or((0,));
+
     if count <= 0 {
         return Ok(String::new());
     }
+
     let (text,): (String,) = call_with(
         &conn,
         &target.bus,
@@ -510,6 +517,7 @@ pub async fn set_text(target: &NodeId, text: &str) -> Result<(), String> {
         &(text,),
     )
     .await;
+
     match result {
         Ok((true,)) => Ok(()),
         _ => {
@@ -545,6 +553,7 @@ pub async fn read_value(target: &NodeId) -> Result<String, String> {
         &(IFACE_VALUE, "CurrentValue"),
     )
     .await?;
+
     if let Ok(v) = f64::try_from(value) {
         return Ok(format!("{v}"));
     }
@@ -562,6 +571,7 @@ pub async fn grab_focus(target: &NodeId) -> Result<(), String> {
         "GrabFocus",
     )
     .await?;
+
     if ok {
         Ok(())
     } else {
@@ -581,6 +591,7 @@ pub async fn select_text(target: &NodeId, start: i32, end: i32) -> Result<(), St
         &(0i32, start, end),
     )
     .await?;
+
     if ok {
         Ok(())
     } else {
@@ -600,6 +611,7 @@ pub async fn select_child(target: &NodeId, index: i32) -> Result<(), String> {
         &(index,),
     )
     .await?;
+
     if ok {
         Ok(())
     } else {
@@ -643,6 +655,7 @@ pub async fn action_by_name(target: &NodeId, wanted: &str) -> Result<(), String>
         let name = name.to_ascii_lowercase();
         name == wanted.to_ascii_lowercase() || name.contains(&wanted.to_ascii_lowercase())
     });
+
     match position {
         Some(index) => do_action(target, index as u32).await,
         None => Err(format!(

@@ -2,7 +2,7 @@
 //!
 //! 设计要点：
 //!
-//! - **默认不启用**，在 `/extension` 面板里打开本扩展就是授权（持久化），没有第二个运行时开关；
+//! - **默认不启用**，在 `/extension` 面板里打开本扩展就是授权（持久化）；
 //!   扩展被禁用时立即释放仍按住的键与鼠标键，并清掉帧。
 //! - **14 个工具全部是延迟工具**（`ToolExposure::Deferred`，见 `schema::tools`）：描述与参数 schema
 //!   平时不进上下文，模型先经 `tool_search` 检索到 `computer_*`，**下一轮**才拿到完整声明。
@@ -25,6 +25,7 @@ pub mod ops;
 pub mod schema;
 pub mod state;
 
+use super::extensions::ExtensionMode;
 use crate::{
     core::{
         extensions::{
@@ -33,7 +34,9 @@ use crate::{
         },
         tools::{ToolError, ToolResult},
     },
-    extensions::{EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_COMPUTER},
+    extensions::{
+        EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_COMPUTER, command_arg, tool_search,
+    },
     modes::interactive::{
         app::{App, MsgLevel},
         handlers::register_slash_command,
@@ -75,13 +78,23 @@ impl Extension for Computer {
         Some(ForkProjectInfo {
             plugin_name: "dsh-computer-use".to_string(),
             plugin_version: "1.39.5".to_string(),
-            url: "https://github.com/LJL454".to_string(),
+            url: "https://github.com/LJL454/dsh-computer-use".to_string(),
         })
+    }
+
+    /// 仅在 Dev 及以上模式可用。
+    fn modes(&self) -> Vec<ExtensionMode> {
+        vec![ExtensionMode::Dev, ExtensionMode::Creator]
     }
 
     /// 默认关闭：把鼠标键盘交给模型需要用户显式打开（在 `/extension` 面板里启用即授权）。
     fn default_enabled(&self) -> bool {
         false
+    }
+
+    /// 前置工具：`read_doc` 是延迟工具，模型得先用 `tool_search` 才能发现它（`/extension` 详情页展示）。
+    fn prerequisite_tools(&self) -> Vec<String> {
+        vec![tool_search::TOOL_NAME.to_string()]
     }
 
     /// 提供 `/computer` 命令（只读诊断）。
@@ -110,7 +123,7 @@ impl Extension for Computer {
     fn on_enabled_changed(&self, enabled: bool) {
         if !enabled {
             state::reset();
-            let _ = input::release_all();
+            _ = input::release_all();
         }
     }
 
@@ -122,13 +135,14 @@ impl Extension for Computer {
         ctx: ToolExecCtx,
     ) -> BoxFuture<'static, Result<ToolResult, ToolError>> {
         Box::pin(async move {
-            // 子代理的权限范围在启动时就固定了，不能从会话内部放宽；一台真实的鼠标键盘
-            // 正是最不该经"派个子代理"绕过去的权限。
+            // 子代理的权限范围在启动时就固定了，不能从会话内部放宽；
+            // 一台真实的鼠标键盘正是最不该经"派个子代理"绕过去的权限。
             if ctx.depth > 0 || ctx.agent_id.is_some() {
                 return Err(ToolError(
                     "computer control is not available to subagents: a delegated agent's scope is fixed when it starts and cannot be widened from inside. Hand this step back to the parent agent.".to_string(),
                 ));
             }
+
             if !backend_available() {
                 return Err(ToolError(format!(
                     "computer control has no usable backend here ({}); on Linux this needs a Wayland session, a screenshot tool (grim) or xcap, and `swaymsg` for window enumeration",
@@ -148,7 +162,7 @@ fn backend_available() -> bool {
 
 /// `/computer` 命令实现：只读诊断，没有开关。
 fn command_computer(st: &mut App, raw: &str) -> bool {
-    let arg = crate::extensions::command_arg(raw).trim();
+    let arg = command_arg(raw).trim();
     match arg.to_ascii_lowercase().as_str() {
         "" | "status" => st.push_msg(status_text(), MsgLevel::Info),
         other => st.push_msg(
@@ -169,6 +183,7 @@ fn status_text() -> String {
         backend::describe(),
         backend_available()
     )];
+
     if let Ok(displays) = backend::displays() {
         lines.push(format!(
             "displays: {}",

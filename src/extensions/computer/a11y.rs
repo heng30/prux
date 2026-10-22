@@ -21,6 +21,9 @@ use windows as imp;
 use crate::extensions::computer::state::Rect;
 use std::sync::{Mutex, OnceLock};
 
+/// 快照保留的上限：ref 只在一个观察周期内有意义。
+const SNAPSHOT_KEEP: usize = 8;
+
 /// 无障碍节点的稳定身份：真正能重新找到它的坐标（平台各自解释）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NodeId {
@@ -98,9 +101,6 @@ pub struct A11ySnapshot {
     /// 每个序号对应的节点身份。
     pub nodes: Vec<NodeId>,
 }
-
-/// 快照保留的上限：ref 只在一个观察周期内有意义。
-const SNAPSHOT_KEEP: usize = 8;
 
 /// 最近几次读树的快照（ref 前缀 → 节点身份）。
 fn snapshots() -> &'static Mutex<Vec<A11ySnapshot>> {

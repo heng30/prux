@@ -52,7 +52,7 @@ webbrowser = { version = "1.0", default-features = false }
 tokio-util = { version = "0.7", default-features = false }
 html2text = { version = "0.17", default-features = false }
 async-trait = { version = "0.1", default-features = false }
-jsonschema = { version = "0.58", default-features = false }
+jsonschema = { version = "0.59", default-features = false }
 pdf-extract = { version = "0.12", default-features = false }
 tiktoken-rs = { version = "0.12", default-features = false }
 futures-util = { version = "0.3", default-features = false }
@@ -200,6 +200,7 @@ windows = { version = "0.62", default-features = false, features = [
 [target.'cfg(target_os = "macos")'.dependencies]
 xcap = { version = "0.9", default-features = false }
 enigo = { version = "0.6", default-features = false }
+core-graphics = { version = "0.25", features = ["highsierra"] }
 
 [target.'cfg(target_os = "windows")'.build-dependencies]
 embed-resource = { version = "3.0", default-features = false }

@@ -3,9 +3,15 @@
 //! macOS 的窗口激活需要 `NSRunningApplication` 或辅助功能授权；这里走 `open -a <app>`，
 //! 它对已经在运行的应用是"激活"而不是新开一个实例。窗口动作没有系统级 API 一一对应，
 //! 用该平台约定的快捷键（⌘W / ⌘M / ⌃⌘F）完成，并在回执里说清是哪一种。
+//!
+//! 坐标单位与 `xcap` 一致：`CGDisplayBounds` 的逻辑点（全局桌面坐标，主显示器左上为原点，y 向下）。
 
 use super::{CaptureRequest, Display, Shot, Window, xcap_common as common};
 use crate::extensions::computer::input;
+use core_graphics::{
+    event::CGEvent,
+    event_source::{CGEventSource, CGEventSourceStateID},
+};
 use std::process::Command;
 
 /// 后端是否可用（macOS 上总是可用；没有屏幕录制权限时截图会报错）。
@@ -36,10 +42,12 @@ pub fn focus_window(id: u64) -> Result<(), String> {
             "window {id} reports no application name to activate"
         ));
     }
+
     let status = Command::new("open")
         .args(["-a", &window.app])
         .status()
         .map_err(|e| format!("could not run open -a {:?}: {e}", window.app))?;
+
     if status.success() {
         Ok(())
     } else {
@@ -68,10 +76,16 @@ pub fn capture(req: &CaptureRequest) -> Result<Shot, String> {
     common::capture(req)
 }
 
-/// 指针位置：`enigo` 的 macOS 后端能读到，但这里保持与 Wayland 一致返回 `None`，
-/// 避免截图回执里出现两套"光标"含义。
+/// 指针位置（全局桌面坐标，单位与 `displays()` / `windows()` 相同：逻辑点）。
+///
+/// 读 `CGEvent` 的当前光标位置——它给出的就是 `CGDisplayBounds` 那套坐标系，所以与截图
+/// 回执的 `origin`、点击用的 `x/y` 同一单位，Retina 缩放不影响。
+/// 建不出事件源（无图形会话）时返回 `None`。
 pub fn cursor() -> Option<(i32, i32)> {
-    None
+    let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState).ok()?;
+    let event = CGEvent::new(source).ok()?;
+    let point = event.location();
+    Some((point.x as i32, point.y as i32))
 }
 
 /// 启动应用。

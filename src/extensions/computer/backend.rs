@@ -20,6 +20,7 @@ use macos as imp;
 #[cfg(target_os = "windows")]
 use windows as imp;
 
+use crate::extensions::computer::state::Rect;
 use serde_json::{Value, json};
 
 /// 一个显示器（或 Wayland 的一个 output）。
@@ -82,8 +83,8 @@ pub struct Window {
 
 impl Window {
     /// 窗口矩形。
-    pub fn rect(&self) -> crate::extensions::computer::state::Rect {
-        crate::extensions::computer::state::Rect {
+    pub fn rect(&self) -> Rect {
+        Rect {
             x: self.x,
             y: self.y,
             width: self.width,
@@ -164,7 +165,7 @@ pub enum CaptureTarget {
     /// 单个显示器（按名称）。
     Display(String),
     /// 屏幕上的一块绝对矩形。
-    Region(crate::extensions::computer::state::Rect),
+    Region(Rect),
     /// 一个窗口（按平台窗口标识）。
     Window(u64),
 }
@@ -244,6 +245,7 @@ pub fn find_window<'a>(list: &'a [Window], filter: &str) -> Vec<&'a Window> {
     if needle.is_empty() {
         return list.iter().collect();
     }
+
     list.iter()
         .filter(|w| {
             w.title.to_lowercase().contains(&needle) || w.app.to_lowercase().contains(&needle)

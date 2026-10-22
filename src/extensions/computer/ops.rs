@@ -6,13 +6,15 @@
 
 use crate::{
     core::tools::{ToolError, ToolResult, ToolResultAttachment},
-    extensions::computer::{a11y, backend, input, schema, state},
-    utils::{
-        clipboard,
-        image::{ImageResizeLimits, prepare_image},
-        output_files,
+    extensions::{
+        computer::{a11y, backend, input, schema, state},
+        util::{attachment, opt_bool, opt_f64, opt_i64, opt_str},
     },
+    utils::{clipboard, output_files, process},
 };
+use a11y::{A11yNode, A11yOptions, NodeId};
+use backend::{CaptureRequest, ShotFormat};
+use schema::UI_ACTIONS;
 use serde_json::Value;
 use std::time::Duration;
 
@@ -22,7 +24,7 @@ where
     F: FnOnce() -> Result<T, String> + Send + 'static,
     T: Send + 'static,
 {
-    tokio::task::spawn_blocking(f)
+    process::spawn_blocking(f)
         .await
         .map_err(|e| ToolError(format!("computer: worker task failed: {e}")))?
         .map_err(ToolError)
@@ -37,28 +39,6 @@ fn arg_i64(args: &Value, key: &str) -> Result<i64, ToolError> {
     })
 }
 
-/// 读一个可选整数参数。
-fn opt_i64(args: &Value, key: &str) -> Option<i64> {
-    args.get(key).and_then(Value::as_i64)
-}
-
-/// 读一个可选浮点参数。
-fn opt_f64(args: &Value, key: &str) -> Option<f64> {
-    args.get(key).and_then(Value::as_f64)
-}
-
-/// 读一个可选布尔参数。
-fn opt_bool(args: &Value, key: &str) -> Option<bool> {
-    args.get(key).and_then(Value::as_bool)
-}
-
-/// 读一个可选字符串参数（空串视作未给）。
-fn opt_str<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
-    args.get(key)
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
-}
-
 /// 读一个必填字符串参数。
 fn arg_str<'a>(args: &'a Value, key: &str) -> Result<&'a str, ToolError> {
     opt_str(args, key).ok_or_else(|| {
@@ -69,7 +49,7 @@ fn arg_str<'a>(args: &'a Value, key: &str) -> Result<&'a str, ToolError> {
 }
 
 /// 把图像字节落盘并生成 `file:` 行。
-fn save_image(bytes: &[u8], format: backend::ShotFormat) -> String {
+fn save_image(bytes: &[u8], format: ShotFormat) -> String {
     let ext = match format {
         backend::ShotFormat::Png => ".png",
         backend::ShotFormat::Jpeg => ".jpg",
@@ -78,18 +58,6 @@ fn save_image(bytes: &[u8], format: backend::ShotFormat) -> String {
         Ok(path) => path.display().to_string(),
         Err(error) => format!("(could not be saved: {error})"),
     }
-}
-
-/// 构造图片附件（超限时由 `prepare_image` 缩放）。
-fn attachment(bytes: &[u8], mime: &str) -> Option<ToolResultAttachment> {
-    prepare_image(bytes, mime, ImageResizeLimits::default(), true).map(|prepared| {
-        ToolResultAttachment {
-            data_base64: prepared.data_base64,
-            mime_type: prepared.mime_type,
-            original_size: prepared.original_size,
-            converted_from: prepared.converted_from,
-        }
-    })
 }
 
 /// 解析坐标：`from_frame` 时按帧投影，否则按屏幕像素。
@@ -110,6 +78,7 @@ async fn resolve_point(args: &Value, x_key: &str, y_key: &str) -> Result<(i32, i
             "[EXPIRED_FRAME] frame {frame_id:?} is not in this session (it may have been evicted); take a new screenshot and use the new frame id"
         ))
     })?;
+
     if let (Some(window_id), Some(recorded)) = (frame.window, frame.window_rect) {
         let current = blocking(move || backend::window(window_id)).await?;
         let now = current.rect();
@@ -117,6 +86,7 @@ async fn resolve_point(args: &Value, x_key: &str, y_key: &str) -> Result<(i32, i
             || (now.y - recorded.y).abs() > 4
             || now.width.abs_diff(recorded.width) > 4
             || now.height.abs_diff(recorded.height) > 4;
+
         if moved {
             return Err(ToolError(format!(
                 "[FRAME_STALE] window {window_id} moved or resized since frame {frame_id} was captured \
@@ -137,7 +107,7 @@ async fn resolve_point(args: &Value, x_key: &str, y_key: &str) -> Result<(i32, i
 
 /// 截图并落盘、登记帧，返回回执文本与附件。
 async fn capture_and_describe(
-    req: backend::CaptureRequest,
+    req: CaptureRequest,
 ) -> Result<(String, Option<ToolResultAttachment>), ToolError> {
     let scale = req.scale;
     let window_id = match &req.target {
@@ -164,6 +134,7 @@ async fn capture_and_describe(
     let windows = blocking(backend::windows).await.unwrap_or_default();
     let focused = windows.iter().find(|w| w.focused);
     let displays = blocking(backend::displays).await.unwrap_or_default();
+
     let mut text = String::from("<screen_capture>\n");
     text.push_str(&format!("frame: {frame}\n"));
     text.push_str(&format!("file: {path}\n"));
@@ -172,12 +143,13 @@ async fn capture_and_describe(
         shot.width,
         shot.height,
         match shot.format {
-            backend::ShotFormat::Png => "png",
-            backend::ShotFormat::Jpeg => "jpeg",
+            ShotFormat::Png => "png",
+            ShotFormat::Jpeg => "jpeg",
         },
         shot.origin.0,
         shot.origin.1
     ));
+
     if scale != 1.0 {
         text.push_str(&format!(
             "scale: image pixels are {scale}x the screen pixels of the captured region; to click something measured in this image, pass x,y with from_frame: \"{frame}\" (or divide by {scale})\n"
@@ -186,6 +158,7 @@ async fn capture_and_describe(
         text.push_str("scale: image pixels are screen pixels (1:1)\n");
     }
     text.push_str(&format!("capture: {}\n", shot.display));
+
     if let Some(window) = window_id
         && let Ok(info) = blocking(move || backend::window(window)).await
     {
@@ -194,17 +167,23 @@ async fn capture_and_describe(
             info.id, info.app, info.title
         ));
     }
+
     match backend::cursor() {
         Some((x, y)) => text.push_str(&format!("cursor: ({x}, {y})\n")),
-        None => text.push_str("cursor: unknown (Wayland does not expose the pointer position)\n"),
+        None => {
+            text.push_str("cursor: unknown (this backend cannot report the pointer position)\n")
+        }
     }
+
     if let Some(w) = focused {
         text.push_str(&format!("focused window: {}\n", w.render()));
     }
     text.push_str("displays:\n");
+
     for line in backend::render_displays(&displays).lines() {
         text.push_str(&format!("  {line}\n"));
     }
+
     text.push_str(&format!(
         "coordinates: every pixel coordinate in the computer_* tools is an absolute desktop pixel in this same unit. Pass from_frame: \"{frame}\" to give a position measured inside this image and let the projection be done for you.\n</screen_capture>"
     ));
@@ -250,21 +229,24 @@ pub async fn screenshot(args: &Value) -> Result<ToolResult, ToolError> {
             },
         },
     };
-    let req = backend::CaptureRequest {
+
+    let req = CaptureRequest {
         target,
         scale: opt_f64(args, "scale").unwrap_or(1.0).clamp(0.05, 4.0),
         format: opt_str(args, "format")
-            .and_then(backend::ShotFormat::parse)
-            .unwrap_or(backend::ShotFormat::Jpeg),
+            .and_then(ShotFormat::parse)
+            .unwrap_or(ShotFormat::Jpeg),
         jpeg_quality: 80,
         cursor: false,
     };
     let (text, attachment) = capture_and_describe(req.clone()).await?;
+
     if let Some(path) = opt_str(args, "save_path") {
         let shot = blocking(move || backend::capture(&req)).await?;
         std::fs::write(path, &shot.bytes)
             .map_err(|e| ToolError(format!("computer: could not write {path:?}: {e}")))?;
     }
+
     let mut out = ToolResult::text(text);
     if let Some(attachment) = attachment {
         out = out.with_attachment(attachment);
@@ -279,7 +261,9 @@ pub async fn click(args: &Value) -> Result<ToolResult, ToolError> {
     let clicks = opt_i64(args, "clicks").unwrap_or(1).clamp(1, 3) as u32;
     let modifiers = opt_str(args, "modifiers").unwrap_or("").to_string();
     let (bx, by, b, c, m) = (x, y, button.clone(), clicks, modifiers.clone());
+
     blocking(move || input::click(bx, by, &b, c, &m)).await?;
+
     Ok(ToolResult::text(format!(
         "clicked {button} x{clicks} at ({x}, {y}){}",
         if modifiers.is_empty() {
@@ -325,10 +309,12 @@ pub async fn drag(args: &Value) -> Result<ToolResult, ToolError> {
             (from, to, Vec::new())
         }
     };
+
     let (fx, fy) = from;
     let (tx, ty) = to;
     let (p, b, m) = (path.clone(), button.clone(), modifiers.clone());
     blocking(move || input::drag((fx, fy), (tx, ty), &p, &b, &m)).await?;
+
     let handle = state::remember_drag(to);
     Ok(ToolResult::text(format!(
         "dragged {button} from ({}, {}) to ({}, {}){}; handle: {handle}",
@@ -359,11 +345,14 @@ pub async fn scroll(args: &Value) -> Result<ToolResult, ToolError> {
             )));
         }
     };
+
     if opt_i64(args, "x").is_some() || opt_i64(args, "y").is_some() {
         let (x, y) = resolve_point(args, "x", "y").await?;
         blocking(move || input::move_to(x, y)).await?;
     }
+
     blocking(move || input::scroll(vertical, horizontal)).await?;
+
     Ok(ToolResult::text(format!(
         "scrolled {direction} {clicks} notch(es)"
     )))
@@ -418,8 +407,10 @@ pub async fn windows(args: &Value) -> Result<ToolResult, ToolError> {
         let info = blocking(move || backend::window(id)).await?;
         return Ok(ToolResult::text(format!("focused {}", info.render())));
     }
+
     let filter = opt_str(args, "filter").unwrap_or("").to_string();
     let list = blocking(backend::windows).await?;
+
     let matched = backend::find_window(&list, &filter);
     if matched.is_empty() {
         return Ok(ToolResult::text(format!(
@@ -428,6 +419,7 @@ pub async fn windows(args: &Value) -> Result<ToolResult, ToolError> {
             backend::render_windows(&list)
         )));
     }
+
     let mut text = format!("{} window(s):\n", matched.len());
     for window in matched {
         text.push_str(&window.render());
@@ -472,11 +464,13 @@ pub async fn paste(args: &Value) -> Result<ToolResult, ToolError> {
     let restore = opt_bool(args, "restore").unwrap_or(true);
     let require_restore = opt_bool(args, "require_restore").unwrap_or(false);
     let previous = clipboard::read_clipboard();
+
     if require_restore && restore && previous.is_none() {
         return Err(ToolError(
             "computer: the previous clipboard is not readable text, so it cannot be restored; pass require_restore: false to paste anyway".to_string(),
         ));
     }
+
     clipboard::write_clipboard(&text).map_err(ToolError)?;
     let typed = blocking(|| input::press_chord("ctrl+v", 1, 0.0)).await;
     let restore_status = if restore {
@@ -493,6 +487,7 @@ pub async fn paste(args: &Value) -> Result<ToolResult, ToolError> {
     } else {
         "kept (restore: false)".to_string()
     };
+
     typed?;
     Ok(ToolResult::text(format!(
         "pasted {} character(s); clipboard {restore_status}",
@@ -539,6 +534,7 @@ pub async fn stop(args: &Value) -> Result<ToolResult, ToolError> {
     } else {
         Vec::new()
     };
+
     let text = if released.is_empty() {
         "nothing was held down".to_string()
     } else {
@@ -548,8 +544,8 @@ pub async fn stop(args: &Value) -> Result<ToolResult, ToolError> {
 }
 
 /// 从参数里读无障碍选项。
-fn a11y_options(args: &Value) -> a11y::A11yOptions {
-    let mut options = a11y::A11yOptions::default();
+fn a11y_options(args: &Value) -> A11yOptions {
+    let mut options = A11yOptions::default();
     if let Some(depth) = opt_i64(args, "max_depth") {
         options.max_depth = depth.clamp(1, 10) as usize;
     }
@@ -571,11 +567,12 @@ fn a11y_options(args: &Value) -> a11y::A11yOptions {
 }
 
 /// 过滤树：保留匹配节点及其祖先（缩进因此仍然成立）。
-fn filter_nodes(nodes: &[a11y::A11yNode], needle: &str) -> Vec<a11y::A11yNode> {
+fn filter_nodes(nodes: &[A11yNode], needle: &str) -> Vec<A11yNode> {
     let needle = needle.to_lowercase();
     if needle.is_empty() {
         return nodes.to_vec();
     }
+
     // 先标记匹配项，再把它们的祖先一起留下。
     let mut keep = vec![false; nodes.len()];
     for (index, node) in nodes.iter().enumerate() {
@@ -596,6 +593,7 @@ fn filter_nodes(nodes: &[a11y::A11yNode], needle: &str) -> Vec<a11y::A11yNode> {
             }
         }
     }
+
     nodes
         .iter()
         .zip(keep)
@@ -623,8 +621,9 @@ pub async fn ui(args: &Value) -> Result<ToolResult, ToolError> {
         },
         a11y::render(&nodes, &prefix, compact)
     );
+
     if opt_bool(args, "screenshot") == Some(true) {
-        let req = backend::CaptureRequest {
+        let req = CaptureRequest {
             target: window.map_or(backend::CaptureTarget::All, backend::CaptureTarget::Window),
             scale: 1.0,
             format: backend::ShotFormat::Jpeg,
@@ -634,6 +633,7 @@ pub async fn ui(args: &Value) -> Result<ToolResult, ToolError> {
         let (shot_text, shot_attachment) = capture_and_describe(req).await?;
         text.push_str("\n\n");
         text.push_str(&shot_text);
+
         let mut out = ToolResult::text(text);
         if let Some(attachment) = shot_attachment {
             out = out.with_attachment(attachment);
@@ -644,7 +644,7 @@ pub async fn ui(args: &Value) -> Result<ToolResult, ToolError> {
 }
 
 /// 找节点的第一条可用动作（`invoke` 用）。
-async fn first_action(target: &a11y::NodeId) -> Result<(), String> {
+async fn first_action(target: &NodeId) -> Result<(), String> {
     for name in ["click", "press", "activate", "invoke", "toggle"] {
         match a11y::action_by_name(target, name).await {
             Ok(()) => return Ok(()),
@@ -655,12 +655,12 @@ async fn first_action(target: &a11y::NodeId) -> Result<(), String> {
 }
 
 /// 在树里按文本找一个节点（`click_text` / `locate_text`）。
-async fn find_node_by_text(window: Option<u64>, needle: &str) -> Result<a11y::NodeId, String> {
-    let options = a11y::A11yOptions {
+async fn find_node_by_text(window: Option<u64>, needle: &str) -> Result<NodeId, String> {
+    let options = A11yOptions {
         max_nodes: 800,
         max_visited: 20_000,
         patterns: false,
-        ..a11y::A11yOptions::default()
+        ..A11yOptions::default()
     };
     let (nodes, ids) = a11y::read_tree(window, options).await?;
     let lowered = needle.to_lowercase();
@@ -676,10 +676,10 @@ async fn find_node_by_text(window: Option<u64>, needle: &str) -> Result<a11y::No
 /// `computer_ui_action`。
 pub async fn ui_action(args: &Value) -> Result<ToolResult, ToolError> {
     let action = arg_str(args, "action")?.to_string();
-    if !schema::UI_ACTIONS.contains(&action.as_str()) {
+    if !UI_ACTIONS.contains(&action.as_str()) {
         return Err(ToolError(format!(
             "computer: unknown action {action:?}; one of: {}",
-            schema::UI_ACTIONS.join(", ")
+            UI_ACTIONS.join(", ")
         )));
     }
     let window = opt_i64(args, "window").map(|v| v as u64);
@@ -815,10 +815,7 @@ pub async fn ui_action(args: &Value) -> Result<ToolResult, ToolError> {
 }
 
 /// 要求给出 ref。
-fn require_ref<'a>(
-    target: &'a Option<a11y::NodeId>,
-    action: &str,
-) -> Result<&'a a11y::NodeId, ToolError> {
+fn require_ref<'a>(target: &'a Option<NodeId>, action: &str) -> Result<&'a NodeId, ToolError> {
     target.as_ref().ok_or_else(|| {
         ToolError(format!(
             "computer: action {action:?} needs `ref` (a [s1.4] marker from computer_ui)"
@@ -827,7 +824,7 @@ fn require_ref<'a>(
 }
 
 /// 节点的一句话描述。
-fn describe(node: &a11y::NodeId) -> String {
+fn describe(node: &NodeId) -> String {
     if node.name.is_empty() {
         format!("{} ({})", node.role, node.path)
     } else {
@@ -844,6 +841,7 @@ pub async fn batch(args: &Value) -> Result<ToolResult, ToolError> {
     if steps.is_empty() {
         return Err(ToolError("computer: `steps` is empty".to_string()));
     }
+
     let mut lines = Vec::new();
     for (index, step) in steps.iter().enumerate() {
         let action = step
@@ -858,14 +856,16 @@ pub async fn batch(args: &Value) -> Result<ToolResult, ToolError> {
         })?;
         lines.push(format!("{}. {action}: {result}", index + 1));
     }
+
     if opt_bool(args, "screenshot") == Some(true) {
-        let req = backend::CaptureRequest {
+        let req = CaptureRequest {
             target: backend::CaptureTarget::All,
             scale: opt_f64(args, "scale").unwrap_or(1.0).clamp(0.05, 4.0),
             format: backend::ShotFormat::Jpeg,
             jpeg_quality: 80,
             cursor: false,
         };
+
         let (text, attachment) = capture_and_describe(req).await?;
         let mut out = ToolResult::text(format!("{}\n\n{text}", lines.join("\n")));
         if let Some(attachment) = attachment {
@@ -914,7 +914,7 @@ async fn run_step(action: &str, step: &Value) -> Result<String, ToolError> {
                 .map_err(|e| ToolError(format!("{e} (looked for {needle:?})")))
         }
         other => {
-            if schema::UI_ACTIONS.contains(&other) {
+            if UI_ACTIONS.contains(&other) {
                 ui_action(step).await.map(|r| r.text)
             } else {
                 Err(ToolError(format!(

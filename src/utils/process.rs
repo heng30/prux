@@ -1,15 +1,20 @@
 //! 进程辅助：执行外部命令时的平台差异、输出收集与回收。
 //!
-//! 四件事：
+//! 六件事：
 //! - [`shell_command`]：按平台构造「执行一条命令字符串」的 shell 调用；
+//! - [`run_stdout`]：跑一条现成的命令并取 stdout，失败时把 stderr 带进错误；
 //! - [`drain_tail`]：持续读空管道而只保留尾部（限量，且不会因为管道写满把子进程卡死）；
 //! - [`kill_process_tree`]：连同子进程一起强杀（Unix 进程组 / Windows `taskkill /T`）；
-//! - [`blocking`]：在异步上下文里安全地做同步阻塞工作。
+//! - [`blocking`]：在同步接口里安全地等一个阻塞动作；
+//! - [`spawn_blocking`]：`async fn` 里把阻塞动作丢到阻塞线程池。
 //!
 //! 这些是「跑一条用户配置的命令」所需的最小公共面：内置 `bash` 工具（异步流式）与
 //! 需要同步等待结果的扩展（如 `vet`）共用同一套进程回收语义，避免各写一份。
 
-use std::{io::Read, process::Command};
+use std::{
+    io::Read,
+    process::{Command, Stdio},
+};
 
 /// 按平台构造执行一条命令字符串的 shell 调用。
 ///
@@ -67,6 +72,30 @@ pub fn drain_tail(mut reader: impl Read, limit: usize) -> (String, bool) {
     (text, truncated)
 }
 
+/// 跑一条命令并取它的 stdout；失败时把 stderr 带进错误。
+///
+/// `cmd` 的 stdin 强制接到 null、stdout/stderr 收成管道（调用方预先设好的重定向会被覆盖）。
+/// `what` 只用于拼错误前缀，写“在做什么”（如 `swaymsg -t get_tree`）而不是命令本身。
+/// 非零退出码返回错误，带状态码与 stderr 末段（stderr 为空时给一句可读说明）；
+/// 进程起不来（可执行文件不在 PATH 上等）也返回错误。
+pub fn run_stdout(mut cmd: Command, what: &str) -> Result<Vec<u8>, String> {
+    let output = cmd
+        .stdin(Stdio::null())
+        .stderr(Stdio::piped())
+        .stdout(Stdio::piped())
+        .output()
+        .map_err(|e| format!("{what}: {e}"))?;
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(format!(
+            "{what} failed ({}): {}",
+            output.status,
+            if err.is_empty() { "no stderr" } else { &err }
+        ));
+    }
+    Ok(output.stdout)
+}
+
 /// 强杀进程树：Unix 用 `killpg`（子进程需以 `process_group(0)` 起），
 /// Windows 用 `taskkill /F /T` 连同子进程一起终止，其它平台只杀直接子进程。
 ///
@@ -108,6 +137,20 @@ pub fn blocking<T>(f: impl FnOnce() -> T) -> T {
         }
         _ => f(),
     }
+}
+
+/// 在 `async fn` 里把阻塞动作丢到 tokio 阻塞线程池并等它结束。
+///
+/// 与同步版 [`blocking`] 的分工：本函数给「有 `await` 可以交还控制权」的调用方（截图、
+/// 输入注入、剪贴板命令等秒级动作），[`blocking`] 给「本来就在同步接口里」的调用方。
+/// 任务 panic 或被取消时把 [`tokio::task::JoinError`] 原样交回，文案由调用方决定——
+/// `utils` 不依赖 `core`，这里不能拼 `ToolError`。
+pub async fn spawn_blocking<T, F>(f: F) -> Result<T, tokio::task::JoinError>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(f).await
 }
 
 #[cfg(test)]
@@ -169,6 +212,21 @@ mod tests {
             started.elapsed() < Duration::from_secs(5),
             "进程组应被强杀，而不是等满 30s"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_stdout_returns_stdout_on_success() {
+        let out = run_stdout(shell_command("echo run-ok"), "echo").unwrap();
+        assert!(String::from_utf8_lossy(&out).contains("run-ok"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_stdout_reports_stderr_on_failure() {
+        let err = run_stdout(shell_command("echo boom >&2; exit 3"), "boom").unwrap_err();
+        assert!(err.contains("boom failed"), "{err}");
+        assert!(err.contains("boom"), "{err}");
     }
 
     #[test]

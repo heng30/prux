@@ -11,7 +11,7 @@ use super::{cdp::Cdp, config::Config, snapshot};
 use crate::{
     core::tools::{ToolError, ToolResult, ToolResultAttachment, resolve_tool_path},
     extensions::util::{
-        opt_str, opt_string_array, req_str, truncate_chars_with_postfix, value_text,
+        opt_string, opt_string_array, req_str, truncate_chars_with_postfix, value_text,
     },
     utils::{
         image::{ImageResizeLimits, prepare_image},
@@ -144,7 +144,7 @@ async fn list_tabs(cdp: &Cdp) -> Result<ToolResult, ToolError> {
 
 /// `new_tab`：新建标签页并切过去；给了 URL 就等它加载。
 async fn new_tab(cdp: &Cdp, args: &Value, cfg: &Config) -> Result<ToolResult, ToolError> {
-    let url = match opt_str(args, "url") {
+    let url = match opt_string(args, "url") {
         Some(url) => normalize_url(&url)?,
         None => "about:blank".to_string(),
     };
@@ -167,7 +167,7 @@ async fn select_tab(cdp: &Cdp, args: &Value) -> Result<ToolResult, ToolError> {
     let pages = cdp.pages().await.map_err(ToolError)?;
     let target = match (
         args.get("index").and_then(Value::as_u64),
-        opt_str(args, "targetId"),
+        opt_string(args, "targetId"),
     ) {
         (Some(index), _) => pages.get(index as usize).cloned().ok_or_else(|| {
             ToolError(format!(
@@ -239,7 +239,7 @@ async fn take_snapshot(cdp: &Cdp, args: &Value, cfg: &Config) -> Result<ToolResu
 
 /// `get_content`：页面可见文本（`text`）或整页 HTML（`html`）。
 async fn get_content(cdp: &Cdp, args: &Value, cfg: &Config) -> Result<ToolResult, ToolError> {
-    let format = opt_str(args, "format").unwrap_or_else(|| "text".to_string());
+    let format = opt_string(args, "format").unwrap_or_else(|| "text".to_string());
     let expression = match format.as_str() {
         "text" => snapshot::TEXT_JS,
         "html" => snapshot::HTML_JS,
@@ -366,7 +366,7 @@ async fn scroll(cdp: &Cdp, args: &Value) -> Result<ToolResult, ToolError> {
     } else {
         None
     };
-    let to = match opt_str(args, "to").as_deref() {
+    let to = match opt_string(args, "to").as_deref() {
         Some(value @ ("top" | "bottom")) => Some(value.to_string()),
         Some(other) => {
             return Err(ToolError(format!(
@@ -403,12 +403,12 @@ async fn wait(cdp: &Cdp, args: &Value, cfg: &Config) -> Result<ToolResult, ToolE
     let timeout = optional_usize(args, "timeout")?
         .map(|value| value.clamp(1, 600) as u64)
         .unwrap_or(cfg.timeout.as_secs());
-    let condition = if let Some(selector) = opt_str(args, "selector") {
+    let condition = if let Some(selector) = opt_string(args, "selector") {
         format!(
             "!!document.querySelector({})",
             snapshot::json_literal(&selector)
         )
-    } else if let Some(text) = opt_str(args, "text") {
+    } else if let Some(text) = opt_string(args, "text") {
         format!(
             "!!(document.body && (document.body.innerText || '').includes({}))",
             snapshot::json_literal(&text)
@@ -703,22 +703,22 @@ async fn element_rect(cdp: &Cdp, session: &str, element: &str) -> Result<Rect, T
 /// 元素定位表达式：`ref` 优先，其次 `selector`，都没有则报错。
 fn element_arg(args: &Value) -> Result<String, ToolError> {
     snapshot::element_expression(
-        opt_str(args, "ref").as_deref(),
-        opt_str(args, "selector").as_deref(),
+        opt_string(args, "ref").as_deref(),
+        opt_string(args, "selector").as_deref(),
     )
     .map_err(ToolError)
 }
 
 /// 参数里是否给了元素定位（`ref` 或 `selector`）。
 fn has_element_arg(args: &Value) -> bool {
-    opt_str(args, "ref").is_some() || opt_str(args, "selector").is_some()
+    opt_string(args, "ref").is_some() || opt_string(args, "selector").is_some()
 }
 
 /// 面向模型的目标描述（回显它给的定位方式）。
 fn target_description(args: &Value) -> String {
-    if let Some(reference) = opt_str(args, "ref") {
+    if let Some(reference) = opt_string(args, "ref") {
         format!("ref {reference}")
-    } else if let Some(selector) = opt_str(args, "selector") {
+    } else if let Some(selector) = opt_string(args, "selector") {
         format!("selector `{selector}`")
     } else {
         "the focused element".to_string()

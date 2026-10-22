@@ -4,11 +4,12 @@ use crate::{
             self, DockSpan, ExtensionSetting, ExtensionUiRequest, RichSpan, UiNotifyLevel,
         },
         provider::AgentMessage,
-        tools::ToolError,
+        tools::{ToolError, ToolResultAttachment},
     },
     modes::interactive::app::MsgLevel,
     utils::{
         glyphs::{DEF_ELLIPSIS, DEF_SPINNER, DEF_SPINNER_BRAILLE},
+        image::{ImageResizeLimits, prepare_image},
         time::now_ms,
         truncate::{self, truncate_chars_within},
     },
@@ -268,12 +269,36 @@ pub fn req_str(args: &Value, key: &str) -> Result<String, ToolError> {
 }
 
 /// 可选字符串参数（空串视为未提供）。
-pub fn opt_str(args: &Value, key: &str) -> Option<String> {
+pub fn opt_string(args: &Value, key: &str) -> Option<String> {
     args.get(key)
         .and_then(|v| v.as_str())
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
+}
+
+/// 借用的可选字符串参数：与 [`opt_string`] 的区别是**不 trim、不拷贝**，空串同样视作未提供。
+///
+/// 给「只是转手传给下一个函数、不保留」的参数用（如坐标/过滤串），免得为一次借用分配 `String`。
+pub fn opt_str<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
+    args.get(key)
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+}
+
+/// 可选整数参数；缺键或不是整数时为 `None`（浮点值不算整数）。
+pub fn opt_i64(args: &Value, key: &str) -> Option<i64> {
+    args.get(key).and_then(Value::as_i64)
+}
+
+/// 可选浮点参数；缺键或不是数字时为 `None`（整数值的 JSON 数字也会成功）。
+pub fn opt_f64(args: &Value, key: &str) -> Option<f64> {
+    args.get(key).and_then(Value::as_f64)
+}
+
+/// 可选布尔参数；缺键或不是布尔时为 `None`（`"true"` 这类字符串不算）。
+pub fn opt_bool(args: &Value, key: &str) -> Option<bool> {
+    args.get(key).and_then(Value::as_bool)
 }
 
 /// 从 `v` 的 `key` 取字符串；缺键 / 非字符串回落空串。
@@ -418,6 +443,18 @@ pub fn content_hash(text: &str) -> u64 {
     let mut hasher = DefaultHasher::new();
     text.hash(&mut hasher);
     hasher.finish()
+}
+
+/// 构造图片附件（超限时由 `prepare_image` 缩放）。
+pub fn attachment(bytes: &[u8], mime: &str) -> Option<ToolResultAttachment> {
+    prepare_image(bytes, mime, ImageResizeLimits::default(), true).map(|prepared| {
+        ToolResultAttachment {
+            data_base64: prepared.data_base64,
+            mime_type: prepared.mime_type,
+            original_size: prepared.original_size,
+            converted_from: prepared.converted_from,
+        }
+    })
 }
 
 #[cfg(test)]

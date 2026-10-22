@@ -33,7 +33,7 @@ mod worktree;
 pub(crate) mod autoresearch;
 pub(crate) mod workflow;
 
-use super::util::{choice_key, notify, notify_text, opt_str, req_str, type_arg_label};
+use super::util::{choice_key, notify, notify_text, opt_string, req_str, type_arg_label};
 use crate::{
     core::{
         extensions::{
@@ -1008,12 +1008,12 @@ impl AgentArgs {
             prompt,
             description,
             type_name,
-            name: opt_str(args, "name"),
-            model: opt_str(args, "model"),
-            thinking: opt_str(args, "thinking"),
-            resume: opt_str(args, "resume"),
-            schedule: opt_str(args, "schedule"),
-            isolation: opt_str(args, "isolation"),
+            name: opt_string(args, "name"),
+            model: opt_string(args, "model"),
+            thinking: opt_string(args, "thinking"),
+            resume: opt_string(args, "resume"),
+            schedule: opt_string(args, "schedule"),
+            isolation: opt_string(args, "isolation"),
             max_turns,
             background: args.get("run_in_background").and_then(|v| v.as_bool()),
             inherit_context: args.get("inherit_context").and_then(|v| v.as_bool()),
@@ -2371,7 +2371,7 @@ mod tests {
         assert!(req_str(&json!({}), "prompt").is_err());
         assert!(req_str(&json!({"prompt": "  "}), "prompt").is_err());
         assert_eq!(req_str(&json!({"prompt": " x "}), "prompt").unwrap(), "x");
-        assert_eq!(opt_str(&json!({"model": ""}), "model"), None);
+        assert_eq!(opt_string(&json!({"model": ""}), "model"), None);
     }
 
     #[test]

@@ -9,7 +9,7 @@ use crate::{
             store::TaskStore,
             types::{Metadata, TaskStatus, TaskStatusOrDeleted, TaskUpdateFields},
         },
-        util::{numeric_id, opt_str, opt_string_array, req_str},
+        util::{numeric_id, opt_string, opt_string_array, req_str},
     },
 };
 use serde_json::Value;
@@ -29,8 +29,8 @@ fn opt_metadata(args: &Value) -> Option<Metadata> {
 pub fn task_create(args: &Value, store: &mut TaskStore) -> Result<ToolResult, ToolError> {
     let subject = req_str(args, "subject")?;
     let description = req_str(args, "description")?;
-    let active_form = opt_str(args, "activeForm");
-    let agent_type = opt_str(args, "agentType");
+    let active_form = opt_string(args, "activeForm");
+    let agent_type = opt_string(args, "agentType");
 
     let mut meta = opt_metadata(args).unwrap_or_default();
     if let Some(agent_type) = agent_type {
@@ -142,7 +142,7 @@ pub fn task_get(args: &Value, store: &mut TaskStore) -> Result<ToolResult, ToolE
 pub fn task_update(args: &Value, store: &mut TaskStore) -> Result<ToolResult, ToolError> {
     let task_id = req_str(args, "taskId")?;
 
-    let status = match opt_str(args, "status") {
+    let status = match opt_string(args, "status") {
         Some(s) => Some(
             TaskStatusOrDeleted::parse(&s)
                 .ok_or_else(|| ToolError(format!("invalid status: {s}")))?,
@@ -152,10 +152,10 @@ pub fn task_update(args: &Value, store: &mut TaskStore) -> Result<ToolResult, To
 
     let fields = TaskUpdateFields {
         status,
-        subject: opt_str(args, "subject"),
-        description: opt_str(args, "description"),
-        active_form: opt_str(args, "activeForm"),
-        owner: opt_str(args, "owner"),
+        subject: opt_string(args, "subject"),
+        description: opt_string(args, "description"),
+        active_form: opt_string(args, "activeForm"),
+        owner: opt_string(args, "owner"),
         metadata: opt_metadata(args),
         add_blocks: opt_string_array(args, "addBlocks"),
         add_blocked_by: opt_string_array(args, "addBlockedBy"),
