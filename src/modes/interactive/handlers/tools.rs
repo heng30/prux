@@ -3,6 +3,7 @@
 use crate::{
     core::settings_manager,
     modes::interactive::app::{App, MsgLevel},
+    utils::stderr_log,
 };
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use std::{
@@ -80,15 +81,18 @@ fn edit_via_external_editor(text: &str) -> Option<String> {
         .or_else(|| std::env::var("EDITOR").ok().filter(|v| !v.is_empty()))
         .unwrap_or_else(|| "vi".to_string());
 
-    // 非零退出返回 failed（不读回）
-    let exit_ok = std::process::Command::new(&editor)
-        .arg(&path)
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
-    if !exit_ok {
-        eprintln!("external editor failed: {} {}", editor, path);
-    }
+    // 编辑器把提示与崩溃信息写 stderr，而 TUI 期间 stderr 已改道到日志
+    // （见 `utils::stderr_log`）：这里临时换回真实终端，否则这些信息用户看不到。
+    stderr_log::with_terminal_stderr(|| {
+        let ok = std::process::Command::new(&editor)
+            .arg(&path)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !ok {
+            eprintln!("external editor failed: {} {}", editor, path);
+        }
+    });
 
     // stripBom + 去尾部换行
     let new_text = std::fs::read_to_string(&path)

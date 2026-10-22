@@ -511,15 +511,3 @@ mod tests {
         assert!(parse_chord("a+ctrl").is_err());
     }
 }
-
-#[cfg(test)]
-mod tmp_probe {
-    use super::*;
-
-    #[test]
-    fn probe_key_injection_stderr() {
-        let mut e = connect().expect("enigo");
-        // 直接按键，观察是否有 C 库往 stderr 写东西
-        e.key(Key::Escape, enigo::Direction::Click).unwrap();
-    }
-}

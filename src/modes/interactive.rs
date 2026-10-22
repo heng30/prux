@@ -54,6 +54,7 @@ use crate::{
         panel::{PanelItem, PanelKind},
     },
     utils::{
+        stderr_log::StderrLog,
         terminal_caps::{in_tmux, tmux_show_global_value},
         terminal_colors::prime_terminal_colors,
         terminal_image,
@@ -215,6 +216,11 @@ pub async fn run_interactive(
         Err(e) if is_dead_terminal_error(&e) => return Ok(()),
         Err(e) => return Err(e),
     };
+
+    // stderr 改道：进程内的 C 库（libxkbcommon 解析 keymap 失败等）与漏网的子进程直接写
+    // fd 2 会撕碎备用屏。落 `<agent_dir>/logs/tui-stderr.log`，退出时随守卫恢复；
+    // 打不开就退回直写终端，不阻塞启动。
+    let _stderr_log = StderrLog::install(&tui_stderr_log_path()).ok();
 
     install_shutdown_signal_handlers();
 
@@ -378,6 +384,16 @@ pub async fn run_interactive(
 
     teardown_terminal(&mut terminal);
     Ok(())
+}
+
+/// TUI 期间的 stderr 落点：`<agent_dir>/logs/tui-stderr.log`。
+///
+/// 用来接住进程内 C 库（如 libxkbcommon）与漏网子进程写往 fd 2 的告警：
+/// 它们不能进备用屏，但也不该被直接丢掉。
+fn tui_stderr_log_path() -> PathBuf {
+    settings_manager::agent_dir()
+        .join("logs")
+        .join("tui-stderr.log")
 }
 
 /// OSC 7501：按当前 App 状态（当前面板 + 会话名 + 回合状态）重算程序状态，

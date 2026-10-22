@@ -348,6 +348,11 @@ This release aligns prux with upstream pi 1.3.0.
 - **`settings.json` 会写入 `$schema` 引用**（`https://pi.dev/schemas/settings.schema.json`）供编辑器补全与校验，
   内置主题的 `$schema` 也指向 `https://pi.dev/schemas/theme.schema.json`。prux 自身不读取该键，
   你自己改过的值会保留。
+- **TUI 期间进程的 stderr 改道到 `agent_dir()/logs/tui-stderr.log`**：`libxkbcommon` 这类
+  进程内 C 库不受子进程管道约束，解析合成器发来的 keymap 失败时直接往 stderr 打
+  `xkbcommon: ERROR: xkb_keymap_new_from_buffer: unsupported keymap format`，一次输入注入就能糊满整屏。
+  现在这些告警（含漏网的子进程输出）落日志文件、退出时恢复正常 stderr；日志超过 1 MiB 下次启动清空重写。
+  外部编辑器这类本来就要终端的程序仍能看到真实 stderr。
 - **`computer_*` 的输入注入改为复用同一条连接**：此前每次点击、按键、输入文本都重新建立 `enigo`
   连接，之后合成器开始拒绝新建连接，工具只会报 `could not open an input channel: no successful
   connection`。现在操作失败即丢弃这条连接，合成器重启后能自愈；错误文案也直接点明真因——

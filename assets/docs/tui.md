@@ -182,6 +182,9 @@ prux 用 [Program Status Protocol（OSC 7501）](https://www.superlogical.com/re
 
 ## 说明
 
+- 界面运行期间，进程的 stderr 改道到 `agent_dir()/logs/tui-stderr.log`：图形驱动、
+  `libxkbcommon` 这类底层库与漏网的子进程会把告警直接写 stderr，不接管就会糊在界面上。
+  排障时看这个文件（超过 1 MiB 下次启动清空重写），退出时恢复正常 stderr。
 - 未实现 fullscreen 模式，`tui.altScreen.*` 动作不列入。
 - 选择器/面板在输入区渲染；`/agents` 等少数界面走独立的覆盖层渲染路径。
 - `/reload` 会重读 `keybindings.json` 并即时生效，无需重启。

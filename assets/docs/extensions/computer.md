@@ -112,6 +112,7 @@ Linux **不支持 X11**：截图、输入与坐标都按 Wayland 会话实现，
 | 截图是黑的/错位（Windows/macOS） | 缺少屏幕录制权限；或显示缩放导致的高 DPI 差异 |
 | 点击落点偏移 | 用了缩放截图却按屏幕像素传坐标；改用 `from_frame`；Windows 上还可能是显示缩放（高 DPI） |
 | 启动应用后没有窗口 | 回执里已附日志尾部；多数是应用自己起不来（缺显示环境、驱动告警），按日志提示补 `arguments` 重试，或用 `computer_windows` 确认它其实已出现 |
+| 注入后界面被 `xkbcommon: ERROR: ...` 刷屏 | 合成器发来的 keymap 与 `libxkbcommon` 的解析器不兼容（自定义 `xkb_file` 常见），注入本身仍可用；这些告警已落 `agent_dir()/logs/tui-stderr.log` |
 | 模型声称“没有 computer 工具” | 本扩展没在 `/extension` 面板里启用；或模型没用 `tool_search` 检索（延迟工具不主动出现在工具表里） |
 | `/extension` 面板里找不到本扩展 | 当前是极简模式（Minimal）；本扩展只在 Dev / Creator / 全部模式可用 |
 | macOS 关窗/最小化没反应或关错了 | 这些动作是 ⌘ W / ⌘ M / ⌃⌘ F 模拟，应用改过快捷键就会失效；改用 `computer_ui_action` 或 `computer_click` |

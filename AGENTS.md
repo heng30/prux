@@ -78,6 +78,9 @@ git 历史以「同步 pi-vX.Y.Z」为节奏推进，与上游保持行为/文�
   刷在内联输入框上）。要读输出就走管道（`run_stdout` / `output()` / `Stdio::piped()`），不读就接
   `Stdio::null()`；启动**长命应用**用 `utils::process::spawn_detached`（输出落临时日志、Unix 上自成进程组）。
   唯一例外是外部编辑器这类**本来就要接管终端**的交互程序，调用方必须先退出 alt screen / raw mode 再接回来。
+  进程内的 C 库（`libxkbcommon` 解析 keymap 失败等）改不了输出目标，由 TUI 启动时的
+  `utils::stderr_log` 统一把 fd 2 改道到 `agent_dir()/logs/tui-stderr.log` 兜住；
+  需要用户看到 stderr 的调用点用 `with_terminal_stderr` 临时换回真实终端。
 - **`assets/` 是编译期内嵌的唯一真源**：`doc_sync` 会把内嵌文档**覆盖式**同步到 `agent_dir()/docs`（清单内文件被外部修改会被覆写，
   清单外用户文件保留）。所以改文档要改 `assets/docs/**`，改 `agent_dir()/docs` 里的副本无效。
 - **changelog 与版本绑定**：`assets/changelog/v.<Cargo.toml version>.md` 缺失会**直接编译失败**（`include_str!` 编译期路径）。
