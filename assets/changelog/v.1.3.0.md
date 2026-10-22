@@ -188,6 +188,12 @@ This release aligns prux with upstream pi 1.3.0.
 - **`settings.json` now carries a `$schema` reference** (`https://pi.dev/schemas/settings.schema.json`)
   for editor completion and validation, and the packaged themes point their `$schema` at
   `https://pi.dev/schemas/theme.schema.json`. prux never reads the key; a value you set yourself is kept.
+- **`computer_*` input injection reuses one connection instead of opening one per call**: every
+  click, key and text run used to rebuild `enigo`, after which the compositor started rejecting new
+  connections and the tools failed with `could not open an input channel: no successful connection`.
+  A failed operation now drops the shared connection so a compositor restart recovers, and the error
+  names the real cause: either the Wayland socket cannot be opened (with the OS error) or the
+  compositor exposes neither `zwp_virtual_keyboard_v1` nor `zwlr_virtual_pointer_v1`.
 
 ## 中文
 
@@ -342,3 +348,8 @@ This release aligns prux with upstream pi 1.3.0.
 - **`settings.json` 会写入 `$schema` 引用**（`https://pi.dev/schemas/settings.schema.json`）供编辑器补全与校验，
   内置主题的 `$schema` 也指向 `https://pi.dev/schemas/theme.schema.json`。prux 自身不读取该键，
   你自己改过的值会保留。
+- **`computer_*` 的输入注入改为复用同一条连接**：此前每次点击、按键、输入文本都重新建立 `enigo`
+  连接，之后合成器开始拒绝新建连接，工具只会报 `could not open an input channel: no successful
+  connection`。现在操作失败即丢弃这条连接，合成器重启后能自愈；错误文案也直接点明真因——
+  Wayland socket 打不开（附系统错误），或合成器既不提供 `zwp_virtual_keyboard_v1`
+  也不提供 `zwlr_virtual_pointer_v1`。
