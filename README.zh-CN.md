@@ -103,6 +103,19 @@ prux
 
 Windows 平台限制：在 Windows 的 `Git Bash` 上经由 `crossterm` 使用的 legacy 控制台 API 运行，该 API 既不支持 kitty 键盘协议，也不支持 bracketed paste。因此 `Shift+Enter` 无法与普通 `Enter` 区分（换行请用 `Ctrl+J`），粘贴的文本会作为普通按键输入，多行粘贴可能被逐行提交。建议在 Windows `Terminal`（启用 ANSI/VT）中使用。
 
+`computer` 扩展（操作真实桌面）的平台限制：
+
+- **Linux 仅支持 Wayland，不支持 X11**：后端按 Wayland 会话实现，没有 `WAYLAND_DISPLAY` 时所有 `computer_*` 工具都报“没有可用后端”。
+- **输入要合成器支持虚拟输入协议**：sway / Hyprland / river / wayfire 等 wlroots 系可以；GNOME 与 KDE 不实现 `zwp_virtual_keyboard_v1` / `zwlr_virtual_pointer_v1`，点击与打字会失败并说明原因。
+- **截图需要 `grim` 或可用的 `xcap`**（`grim` 在 PATH 上时优先用它）。
+- **窗口列表需要 `swaymsg`**（sway/wlroots 的 IPC 树）：没有它时 `computer_windows` 报错，其余工具照常可用。窗口截图截的是“该窗口矩形那块屏幕”，被遮挡的部分截到的是遮挡物；`minimize` 直接报错，因为 Wayland 把可见性交给合成器。
+- **指针位置不可知**：Wayland 不暴露全局指针坐标，截图回执里的 `cursor: unknown` 是正常的。
+- **无障碍取决于应用**：需要 `at-spi2-core` 在跑，GTK/Qt 应用通常可用，Electron 应用需要 `--force-renderer-accessibility`。
+- **Windows**：截图与窗口枚举走 `xcap`，无障碍走 UI Automation（无需额外授权）。高 DPI 缩放会让图内像素与屏幕像素错位，按坐标点击时优先用截图返回的 `from_frame`。
+- **macOS**：截图需要「屏幕录制」授权，输入与无障碍需要「辅助功能」授权。窗口动作（关窗 / 最小化 / 最大化）用 ⌘ W / ⌘ M / ⌃⌘ F 模拟，不是系统 API，会被应用自己的快捷键设置影响。
+- **Windows 与 macOS 上 `select_text` 与 `get_caret` 尚未接线**：前者明确报错，后者报告“不提供光标位置”。
+- **子代理不能调用 `computer_*`**：真实鼠标键盘不能靠“派个子代理”绕过权限。另外该扩展只在 Dev / Creator / 全部模式下出现在 `/extension` 面板，极简模式里看不到它。
+
 ## 许可证
 
 MIT，见 [`LICENSE`](LICENSE)。

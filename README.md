@@ -103,6 +103,19 @@ Development conventions, module layering, and build details are in [`AGENTS.md`]
 
 Windows limitations: under `Git Bash` on Windows, prux goes through the legacy console API used by `crossterm`, which implements neither the kitty keyboard protocol nor bracketed paste. `Shift+Enter` therefore cannot be told apart from a plain `Enter` (use `Ctrl+J` to insert a newline), and pasted text arrives as ordinary keystrokes, so a multi-line paste may be submitted line by line. Running inside Windows Terminal (ANSI/VT support) is recommended.
 
+Platform limits of the `computer` extension (it drives the real desktop):
+
+- **Linux is Wayland only, no X11**: the backend is written against a Wayland session, so without `WAYLAND_DISPLAY` every `computer_*` tool reports that no usable backend exists.
+- **Input needs a compositor implementing the virtual input protocols**: sway / Hyprland / river / wayfire (wlroots) work; GNOME and KDE implement neither `zwp_virtual_keyboard_v1` nor `zwlr_virtual_pointer_v1`, so clicks and typing fail with an explanation.
+- **Capture needs `grim` or a working `xcap`** (`grim` wins when it is on `PATH`).
+- **Window listing needs `swaymsg`** (the sway/wlroots IPC tree): without it `computer_windows` errors while the other tools keep working. A window screenshot is the screen region of that window's rectangle, so occluded parts show whatever covers them; `minimize` fails outright because Wayland leaves visibility to the compositor.
+- **The pointer position is unknowable**: Wayland exposes no global cursor coordinates, so `cursor: unknown` in a screenshot receipt is expected.
+- **Accessibility depends on the app**: `at-spi2-core` must be running; GTK/Qt apps usually work, Electron apps need `--force-renderer-accessibility`.
+- **Windows**: capture and window enumeration use `xcap`, accessibility uses UI Automation (no extra grant needed). High-DPI scaling makes image pixels differ from screen pixels, so prefer the screenshot's `from_frame` when clicking by coordinates.
+- **macOS**: capture needs the Screen Recording grant; input and accessibility need the Accessibility grant. Window actions (close / minimize / maximize) are simulated with ⌘ W / ⌘ M / ⌃⌘ F rather than a system API, so an app's own key bindings can interfere.
+- **`select_text` and `get_caret` are not wired up on Windows or macOS**: the former fails explicitly, the latter reports that no caret is available.
+- **Subagents cannot call `computer_*`**: a real mouse and keyboard must not be reachable by "delegating to a subagent". The extension also only appears in `/extension` in Dev / Creator / All mode, not in Minimal.
+
 ## License
 
 MIT, see [`LICENSE`](LICENSE).
