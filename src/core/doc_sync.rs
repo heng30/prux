@@ -41,6 +41,10 @@ const DOCS: &[(&str, &str)] = &[
         embedded!("docs/extensions/permissions.md"),
     ),
     ("extensions/vet.md", embedded!("docs/extensions/vet.md")),
+    (
+        "extensions/computer.md",
+        embedded!("docs/extensions/computer.md"),
+    ),
     ("custom-provider.md", embedded!("docs/custom-provider.md")),
     ("sessions.md", embedded!("docs/sessions.md")),
     ("compaction.md", embedded!("docs/compaction.md")),

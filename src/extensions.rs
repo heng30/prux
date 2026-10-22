@@ -14,6 +14,7 @@ pub mod browser;
 pub mod cache_usage;
 pub mod cache_watch;
 pub mod codemode;
+pub mod computer;
 pub mod debug;
 pub mod doc_helper;
 pub mod doctor;
@@ -87,6 +88,8 @@ pub const PRIORITY_WEB_ACCESS: u32 = 70;
 pub const PRIORITY_MCP: u32 = 69;
 /// browser 真实浏览器自动化（CDP）扩展的注册优先级。
 pub const PRIORITY_BROWSER: u32 = 68;
+/// computer 桌面操作（截图/输入/窗口/无障碍）扩展的注册优先级。
+pub const PRIORITY_COMPUTER: u32 = 77;
 /// cache-usage prompt cache 命中率统计扩展的注册优先级。
 pub const PRIORITY_CACHE_USAGE: u32 = 66;
 /// lsp 语言服务器查询（定义 / 引用 / 符号 / 诊断）扩展的注册优先级。

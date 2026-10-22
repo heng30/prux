@@ -112,6 +112,15 @@ This release aligns prux with upstream pi 1.3.0.
   `autoRun` / `maxIterations` / `timeout` / `announce` / `requireEdits`. Off by default. See
   `docs/extensions/vet.md`.
 
+- **New `computer` extension (off by default)**: 14 `computer_*` tools that drive the real desktop —
+  screenshots, mouse/keyboard, window listing and focusing, accessibility-tree reads and actions,
+  clipboard, paste-with-restore, app launch and an emergency stop. `/computer on|off|status` toggles it;
+  while it is off the whole tool family is absent from the request. Screenshots return a `frame` id so
+  coordinates can be given as pixels *in the image* and are projected back (a frame whose window has
+  moved is refused). Linux supports Wayland only (`grim` or `xcap` for capture, `swaymsg` for windows,
+  `enigo` virtual keyboard/pointer, AT-SPI2 for accessibility); Windows and macOS use `xcap` + `enigo`
+  and read the accessibility tree through UI Automation (Windows) and AXUIElement (macOS). Subagents cannot call it.
+
 ### Changed
 
 - **`read` shows its line range as `:start-end`** in the transcript and in HTML exports, the same
@@ -261,6 +270,13 @@ This release aligns prux with upstream pi 1.3.0.
   识别 Cargo、npm/pnpm/yarn/bun、make/just、pytest/ruff、Go、Deno 项目，设置面板可调
   `autoRun` / `maxIterations` / `timeout` / `announce` / `requireEdits`。默认不启用。
   详见 `docs/extensions/vet.md`。
+
+- **新增 `computer` 扩展（默认关闭）**：14 个 `computer_*` 工具操作真实桌面——截图、鼠标键盘、
+  窗口列表与置前、无障碍树读取与控件动作、剪贴板、粘贴后还原、启动应用、急停。`/computer on|off|status`
+  开关；关闭时这一族工具整个不进请求。截图返回 `frame` id，坐标可以按图内像素给出并由扩展投影
+  （帧对应的窗口移动过后拒绝执行）。Linux 只支持 Wayland（`grim` 或 `xcap` 截图、`swaymsg` 列窗口、
+  `enigo` 虚拟键鼠、AT-SPI2 读无障碍）；Windows / macOS 用 `xcap` + `enigo`，无障碍分别走 UI Automation 与 AXUIElement。
+  子代理不可调用。
 
 ### 变更
 
