@@ -55,15 +55,15 @@ pub fn window_action(id: u64, action: &str) -> Result<String, String> {
             Ok(format!("asked window {id} to close"))
         },
         "minimize" => unsafe {
-            ShowWindow(hwnd, SW_MINIMIZE);
+            let _ = ShowWindow(hwnd, SW_MINIMIZE);
             Ok(format!("minimized window {id}"))
         },
         "maximize" => unsafe {
-            ShowWindow(hwnd, SW_MAXIMIZE);
+            let _ = ShowWindow(hwnd, SW_MAXIMIZE);
             Ok(format!("maximized window {id}"))
         },
         "restore" => unsafe {
-            ShowWindow(hwnd, SW_RESTORE);
+            let _ = ShowWindow(hwnd, SW_RESTORE);
             Ok(format!("restored window {id}"))
         },
         other => Err(format!("unknown window action {other:?}")),
