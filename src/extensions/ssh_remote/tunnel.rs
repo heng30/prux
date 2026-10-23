@@ -166,6 +166,22 @@ pub fn forget(local_port: u16) -> Result<bool, String> {
     Ok(changed)
 }
 
+/// 清空配置里的全部转发，返回删掉的条数。
+///
+/// 只改配置，不管正在跑的转发：停掉它们由 [`stop_all`] 负责，两者分开才能让
+/// `/tunnel stop-all`（暂时断）与 `/tunnel remove-all`（永久删）语义不混。
+/// 配置本来就空时不写文件，避免无谓的磁盘写入。
+pub fn forget_all() -> Result<usize, String> {
+    let mut cfg = RemoteConfig::load();
+    let removed = cfg.tunnels.len();
+    if removed == 0 {
+        return Ok(0);
+    }
+    cfg.tunnels.clear();
+    cfg.save()?;
+    Ok(removed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,5 +212,23 @@ mod tests {
         assert!(forget(15432).unwrap());
         assert!(!forget(15432).unwrap(), "重复删除返回 false");
         assert!(RemoteConfig::load().tunnels.is_empty());
+    }
+
+    /// 批量清空：返回删掉条数，第二次清空返回 0
+    #[test]
+    fn forget_all_clears_every_configured_forward() {
+        let _l = crate::extensions::ssh_remote::state::TEST_ROOT_LOCK.blocking_lock();
+        let _g = crate::extensions::ssh_remote::state::TestRootGuard::temp();
+        let spec = |local_port: u16| TunnelSpec {
+            host: String::new(),
+            local_port,
+            remote_host: "db".to_string(),
+            remote_port: 5432,
+        };
+        remember(&spec(15432)).unwrap();
+        remember(&spec(15433)).unwrap();
+        assert_eq!(forget_all().unwrap(), 2);
+        assert!(RemoteConfig::load().tunnels.is_empty());
+        assert_eq!(forget_all().unwrap(), 0, "已空时返回 0");
     }
 }

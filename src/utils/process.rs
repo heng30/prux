@@ -1,8 +1,10 @@
 //! 进程辅助：执行外部命令时的平台差异、输出收集与回收。
 //!
-//! 八件事：
+//! 十件事：
 //! - [`shell_command`]：按平台构造「执行一条命令字符串」的 shell 调用；
 //! - [`shell_tokenize`]：按 shell 引号规则把一条命令行拆成参数；
+//! - [`shell_quote`]：把一段文本包成 shell 里的一个安全字面量（[`shell_tokenize`] 的逆操作）；
+//! - [`wrap_cd`]：把一条命令包进「先 cd 到某目录，失败则退出」的壳；
 //! - [`run_stdout`]：跑一条现成的命令并取 stdout，失败时把 stderr 带进错误；
 //! - [`drain_tail`]：持续读空管道而只保留尾部（限量，且不会因为管道写满把子进程卡死）；
 //! - [`spawn_detached`]：拉起一个**不占用终端**的长命子进程（GUI 应用等），输出落临时日志；
@@ -80,6 +82,34 @@ pub fn shell_tokenize(input: &str) -> Vec<String> {
         out.push(current);
     }
     out
+}
+
+/// 用单引号把一段文本包成 shell 里的一个安全字面量。
+///
+/// 单引号内除 `'` 外不解释任何字符（变量、通配符、空格都成字面量），所以只需把 `'`
+/// 替换成 `'\''`；空串必须显式包成 `''`，否则会被 shell 吞掉，参数个数就变了。
+pub fn shell_quote(value: &str) -> String {
+    if value.is_empty() {
+        return "''".to_string();
+    }
+    let escaped = value.replace('\'', "'\\''");
+    format!("'{escaped}'")
+}
+
+/// 把命令包进 `cd <cwd> 2>/dev/null || exit 1; ...`，让它在指定目录下执行。
+///
+/// `cwd` 为空或为 `~` 时原样返回（默认目录本就是 HOME）；目录不可用时以退出码 1 结束，
+/// 而不是默默在 HOME 里执行——那会让「在错的目录跑对的命令」看起来像成功。
+pub fn wrap_cd(command: &str, cwd: &str) -> String {
+    let trimmed = cwd.trim();
+    if trimmed.is_empty() || trimmed == "~" {
+        return command.to_string();
+    }
+    format!(
+        "cd {} 2>/dev/null || exit 1; {}",
+        shell_quote(trimmed),
+        command
+    )
 }
 
 /// 持续读空管道，只保留尾部 `limit` 字节。返回 `(文本, 是否丢弃过前缀)`。
@@ -261,6 +291,27 @@ where
 mod tests {
     use super::*;
     use std::{io::Cursor, time::Duration};
+
+    /// 引号包裹后的文本不能带引号泄漏到参数里；空串必须被引号保住。
+    #[test]
+    fn shell_quote_roundtrips_through_tokenize() {
+        assert_eq!(shell_quote("plain"), "'plain'");
+        assert_eq!(shell_quote("it's"), "'it'\\''s'");
+        assert_eq!(shell_quote(""), "''");
+        // 分词不认反斜杠转义、且会丢掉空参数，含单引号与空串都无法往返，只校验其余情形
+        for raw in ["plain", "a b", "$HOME"] {
+            assert_eq!(shell_tokenize(&shell_quote(raw)), vec![raw.to_string()]);
+        }
+    }
+
+    #[test]
+    fn wrap_cd_quotes_the_working_directory() {
+        assert_eq!(wrap_cd("ls", "~"), "ls");
+        assert_eq!(
+            wrap_cd("ls", "/srv/x"),
+            "cd '/srv/x' 2>/dev/null || exit 1; ls"
+        );
+    }
 
     #[test]
     fn shell_tokenize_keeps_quoted_arguments_whole() {

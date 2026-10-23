@@ -457,50 +457,9 @@ pub fn attachment(bytes: &[u8], mime: &str) -> Option<ToolResultAttachment> {
     })
 }
 
-/// 极简 glob 匹配：`*` 匹配任意长度（可为零）、`?` 匹配单个字符，其余字符逐个字面比较。
-///
-/// 不支持 `[]` 字符集与 `**` 跨段语义；大小写敏感。
-pub fn glob_match(pattern: &str, text: &str) -> bool {
-    let p: Vec<char> = pattern.chars().collect();
-    let t: Vec<char> = text.chars().collect();
-    let (mut pi, mut ti) = (0usize, 0usize);
-    let (mut star, mut mark) = (None, 0usize);
-    while ti < t.len() {
-        if pi < p.len() && (p[pi] == '?' || p[pi] == t[ti]) {
-            pi += 1;
-            ti += 1;
-        } else if pi < p.len() && p[pi] == '*' {
-            star = Some(pi);
-            mark = ti;
-            pi += 1;
-        } else if let Some(s) = star {
-            pi = s + 1;
-            mark += 1;
-            ti = mark;
-        } else {
-            return false;
-        }
-    }
-    while pi < p.len() && p[pi] == '*' {
-        pi += 1;
-    }
-    pi == p.len()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn glob_match_handles_star_and_question() {
-        assert!(glob_match("gpu-*", "gpu-1"));
-        assert!(glob_match("gpu-*", "gpu-"));
-        assert!(glob_match("gpu-?", "gpu-1"));
-        assert!(!glob_match("gpu-?", "gpu-11"));
-        assert!(glob_match("*", "anything"));
-        assert!(glob_match("a*b*c", "axxbyyc"));
-        assert!(!glob_match("a*b*c", "axxbyy"));
-    }
 
     #[test]
     fn spinner_frame_index_stays_in_range_and_survives_degenerate_input() {

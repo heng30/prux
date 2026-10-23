@@ -1,3 +1,8 @@
+// gitignore 风格的匹配规则：单条 glob 模式、取反、目录限定与整组求值。
+//
+// 这里的匹配器用于「哪些路径该被忽略」；只有一个模式、不需要规则优先级时用
+// `pattern_matches` 或 `glob_match`。
+
 /// 单条 gitignore 风格规则：匹配模式、是否取反、是否仅匹配目录。
 #[derive(Clone)]
 pub struct IgnoreRule {
@@ -52,6 +57,17 @@ pub fn glob_match(pattern: &str, text: &str) -> bool {
         }
     }
     go(&pat, &txt)
+}
+
+/// 带可选 `!` 取反前缀的单条 glob 匹配。
+///
+/// `!` 只对整串取反（`!gpu-1` 表示「不是 gpu-1」），不做多规则优先级求值——
+/// 需要「后规则覆盖前规则」那套语义时用 [`IgnoreMatcher`]。
+pub fn pattern_matches(pattern: &str, text: &str) -> bool {
+    if let Some(neg) = pattern.strip_prefix('!') {
+        return !glob_match(neg, text);
+    }
+    glob_match(pattern, text)
 }
 
 /// 规则匹配：无 / 的模式按任意层级 basename 匹配；否则相对根路径匹配

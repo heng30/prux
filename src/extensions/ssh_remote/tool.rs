@@ -13,10 +13,14 @@ use crate::{
         tools::{ToolError, ToolResult},
     },
     extensions::ssh_remote::{
-        connect, exec, fs,
+        exec, fs,
         transport::{self, RemoteConn},
     },
-    utils::display::format_bytes,
+    utils::{
+        display::format_bytes,
+        paths::{file_name_of, join_posix, walk_files},
+        process::shell_quote,
+    },
 };
 use serde_json::{Value, json};
 use std::{path::Path, sync::Arc};
@@ -305,8 +309,8 @@ async fn run_grep(host: Option<&str>, args: &Value) -> Result<ToolResult, ToolEr
     let path = str_arg(args, "path")
         .map(|s| s.to_string())
         .unwrap_or_else(|| conn.endpoint.cwd.clone());
-    let quoted_pattern = connect::shell_quote(pattern);
-    let quoted_path = connect::shell_quote(&path);
+    let quoted_pattern = shell_quote(pattern);
+    let quoted_path = shell_quote(&path);
     let glob = str_arg(args, "glob");
     // 远端优先用 ripgrep；没有就退回 grep。两者都限制总行数，避免刷屏。
     let command = match glob {
@@ -315,8 +319,8 @@ async fn run_grep(host: Option<&str>, args: &Value) -> Result<ToolResult, ToolEr
              --max-count {max} --glob {} -- {quoted_pattern} {quoted_path}; \
              else grep -rn --color=never -m {max} --include={} -- {quoted_pattern} {quoted_path}; fi \
              2>/dev/null | head -n {max}",
-            connect::shell_quote(g),
-            connect::shell_quote(g),
+            shell_quote(g),
+            shell_quote(g),
         ),
         None => format!(
             "if command -v rg >/dev/null 2>&1; then rg --no-heading --line-number --color never \
@@ -352,41 +356,6 @@ async fn run_grep(host: Option<&str>, args: &Value) -> Result<ToolResult, ToolEr
         text
     };
     Ok(ToolResult::text(shown))
-}
-
-/// 本地递归列文件（相对路径），供 push 使用
-fn walk_local(root: &Path) -> Result<Vec<std::path::PathBuf>, String> {
-    let mut out = Vec::new();
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let entries =
-            std::fs::read_dir(&dir).map_err(|e| format!("read {}: {e}", dir.display()))?;
-        for entry in entries {
-            let entry = entry.map_err(|e| format!("read {}: {e}", dir.display()))?;
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
-            } else {
-                if out.len() >= MAX_SYNC_FILES {
-                    return Err(format!(
-                        "more than {MAX_SYNC_FILES} files under {}; narrow the path",
-                        root.display()
-                    ));
-                }
-                out.push(path);
-            }
-        }
-    }
-    out.sort();
-    Ok(out)
-}
-
-/// 拼接远端路径
-fn join_remote(base: &str, rel: &str) -> String {
-    if rel.is_empty() {
-        return base.to_string();
-    }
-    format!("{}/{}", base.trim_end_matches('/'), rel)
 }
 
 /// `remote_sync`
@@ -438,7 +407,7 @@ async fn push(
     let meta = std::fs::metadata(local).map_err(|e| format!("{}: {e}", local.display()))?;
     if meta.is_file() {
         let target = if sftp.stat(remote).await.map(|s| s.is_dir).unwrap_or(false) {
-            join_remote(remote, &file_name(local)?)
+            join_posix(remote, &file_name_of(local)?)
         } else {
             remote.to_string()
         };
@@ -460,7 +429,7 @@ async fn push(
             local.display()
         ));
     }
-    let files = walk_local(local)?;
+    let files = walk_files(local, MAX_SYNC_FILES)?;
     if files.is_empty() {
         return Ok(ToolResult::text(format!(
             "{}: nothing to push",
@@ -475,7 +444,7 @@ async fn push(
             .map_err(|e| format!("{}: {e}", path.display()))?
             .to_string_lossy()
             .replace('\\', "/");
-        let target = join_remote(remote, &rel);
+        let target = join_posix(remote, &rel);
         let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
         total += size;
         if !dry_run {
@@ -539,7 +508,7 @@ async fn pull(
     let mut total = 0u64;
     let mut listed = Vec::new();
     for rel in &files {
-        let source = join_remote(remote, rel);
+        let source = join_posix(remote, rel);
         let size = sftp.stat(&source).await.map(|s| s.size).unwrap_or(0);
         total += size;
         if !dry_run {
@@ -570,13 +539,6 @@ async fn pull(
     Ok(ToolResult::text(text))
 }
 
-/// 取文件名
-fn file_name(path: &Path) -> Result<String, String> {
-    path.file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .ok_or_else(|| format!("{}: no file name", path.display()))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -596,26 +558,6 @@ mod tests {
                 "limits 必须可用（工具定义依赖默认预算）"
             );
         }
-    }
-
-    #[test]
-    fn join_remote_handles_trailing_slash() {
-        assert_eq!(join_remote("/srv/app", "a.rs"), "/srv/app/a.rs");
-        assert_eq!(join_remote("/srv/app/", "a.rs"), "/srv/app/a.rs");
-        assert_eq!(join_remote("/srv/app", ""), "/srv/app");
-    }
-
-    #[test]
-    fn walk_local_lists_relative_files() {
-        let dir = std::env::temp_dir().join(format!("prux-walk-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(dir.join("sub")).unwrap();
-        std::fs::write(dir.join("a.txt"), "a").unwrap();
-        std::fs::write(dir.join("sub/b.txt"), "b").unwrap();
-        let files = walk_local(&dir).unwrap();
-        assert_eq!(files.len(), 2);
-        assert!(files.iter().all(|p| p.starts_with(&dir)));
-        _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

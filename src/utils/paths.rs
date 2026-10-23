@@ -51,6 +51,65 @@ pub fn relative_posix(root: &Path, target: &Path) -> String {
     }
 }
 
+/// 取 POSIX 风格路径的父目录：`/a/b` → `/a`，`/a` → `/`。
+///
+/// 只做字符串处理，不碰文件系统，因此对远端路径也能用。没有父目录时返回 `None`
+/// （`a.txt` 这类相对单名），末尾多余的 `/` 先被剥掉。
+pub fn parent_posix(path: &str) -> Option<String> {
+    let trimmed = path.trim_end_matches('/');
+    match trimmed.rsplit_once('/') {
+        Some(("", _)) => Some("/".to_string()),
+        Some((parent, _)) => Some(parent.to_string()),
+        None => None,
+    }
+}
+
+/// 拼接 POSIX 风格路径：去掉 `base` 尾部斜杠后接 `rel`；`rel` 为空时原样返回 `base`。
+pub fn join_posix(base: &str, rel: &str) -> String {
+    if rel.is_empty() {
+        return base.to_string();
+    }
+    format!("{}/{}", base.trim_end_matches('/'), rel)
+}
+
+/// 列出 `root` 下所有普通文件，结果已排序（不限层数，符号链接目录会被跟随）。
+///
+/// 超过 `max_files` 时返回 `Err` 而不是截断：静默截断会让调用方以为「搬完了」，
+/// 而实际上只搬了一部分，比直接报错危险得多。读取失败时错误带上是哪个目录。
+pub fn walk_files(root: &Path, max_files: usize) -> Result<Vec<PathBuf>, String> {
+    let mut out = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries =
+            std::fs::read_dir(&dir).map_err(|e| format!("read {}: {e}", dir.display()))?;
+
+        for entry in entries {
+            let entry = entry.map_err(|e| format!("read {}: {e}", dir.display()))?;
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else {
+                if out.len() >= max_files {
+                    return Err(format!(
+                        "more than {max_files} files under {}; narrow the path",
+                        root.display()
+                    ));
+                }
+                out.push(path);
+            }
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
+/// 取路径的最后一段文件名；`/`、`..` 这类没有文件名的路径返回 `Err`（文案带原路径）。
+pub fn file_name_of(path: &Path) -> Result<String, String> {
+    path.file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .ok_or_else(|| format!("{}: no file name", path.display()))
+}
+
 /// 展开 ~ 与 ~/ 前缀
 pub fn expand_tilde(path: PathBuf) -> PathBuf {
     let s = path.to_string_lossy();
@@ -448,6 +507,36 @@ mod tests {
         assert_eq!(expand_home("~user/work"), "~user/work");
         assert_eq!(expand_home("/a/$HOME/b"), "/a/$HOME/b");
         assert_eq!(expand_home("work"), "work");
+    }
+
+    #[test]
+    fn join_posix_handles_trailing_slash() {
+        assert_eq!(join_posix("/srv/app", "a.rs"), "/srv/app/a.rs");
+        assert_eq!(join_posix("/srv/app/", "a.rs"), "/srv/app/a.rs");
+        assert_eq!(join_posix("/srv/app", ""), "/srv/app");
+    }
+
+    #[test]
+    fn parents_are_split_correctly() {
+        assert_eq!(parent_posix("/srv/x/a.txt").as_deref(), Some("/srv/x"));
+        assert_eq!(parent_posix("/a").as_deref(), Some("/"));
+        assert_eq!(parent_posix("a.txt"), None);
+    }
+
+    /// 递归列出本地文件：不限层数、结果排序、超上限报错而不是截断。
+    #[test]
+    fn walk_files_lists_local_files() {
+        let dir = std::env::temp_dir().join(format!("prux-walk-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("a.txt"), "a").unwrap();
+        std::fs::write(dir.join("sub/b.txt"), "b").unwrap();
+        let files = walk_files(&dir, 100).unwrap();
+        assert_eq!(files.len(), 2);
+        assert!(files.iter().all(|p| p.starts_with(&dir)));
+        // 上限为 1 时必须报错，不能只返回第一个文件
+        assert!(walk_files(&dir, 1).is_err());
+        _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -6,7 +6,7 @@
 //! 客户端私钥是随测试内嵌的固定 ed25519 测试密钥（服务端 `auth_publickey` 直接接受），
 //! 不是任何真实环境的凭据。
 
-use super::{connect, fs, state, tool, transport};
+use super::{connect, state, tool, transport};
 use russh::{
     Channel, ChannelId,
     keys::PrivateKey,
@@ -755,12 +755,4 @@ fn remote_paths_map_under_root() {
     assert_eq!(local_path(root, "/a/b"), root.join("a/b"));
     assert_eq!(local_path(root, "."), root.to_path_buf());
     assert_eq!(local_path(root, "/"), root.to_path_buf());
-}
-
-/// `fs::slice_lines` 与本地 read 的行范围语义一致
-#[test]
-fn slice_matches_local_read_semantics() {
-    let slice = fs::slice_lines(b"a\nb\nc", Some(2), Some(1));
-    assert_eq!(slice.content, "b");
-    assert_eq!(slice.total_lines, 3);
 }

@@ -56,7 +56,8 @@
 | `/tunnel add [host:]本地端口:远端主机:远端端口` | 把远端服务映射到 `127.0.0.1:本地端口` |
 | `/tunnel remove <本地端口>` | 停掉一条转发 |
 | `/tunnel list` | 列出活跃与已配置的转发 |
-| `/tunnel stop-all` | 停掉全部转发 |
+| `/tunnel stop-all` | 停掉全部转发（配置保留，下次启动会重新拉起） |
+| `/tunnel remove-all` | 停掉并删除全部转发（含配置里的条目，下次启动不再拉起） |
 
 ```text
 /tunnel add 15432:localhost:5432

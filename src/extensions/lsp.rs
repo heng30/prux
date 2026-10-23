@@ -102,7 +102,7 @@ impl Extension for Lsp {
         false
     }
 
-    /// 只在 `Dev` / `Creator` 扩展模式下可用。
+    /// 只在 `Dev` 扩展模式下可用。
     fn modes(&self) -> Vec<ExtensionMode> {
         vec![ExtensionMode::Dev]
     }

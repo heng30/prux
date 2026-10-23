@@ -14,7 +14,7 @@ use crate::{
         auth,
         state::{RemoteConfig, load_known_hosts, save_known_host},
     },
-    utils::proxy,
+    utils::{net, process, proxy, truncate},
 };
 use russh::{
     ChannelMsg,
@@ -27,9 +27,6 @@ use std::{
     time::Duration,
 };
 use tokio::net::TcpStream;
-
-/// 单个网络阶段的超时
-const STAGE_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// 默认私钥候选（按顺序尝试，缺文件跳过）
 const DEFAULT_KEYS: &[&str] = &["id_ed25519", "id_ecdsa", "id_rsa"];
@@ -143,7 +140,7 @@ pub async fn connect(target: &Target) -> Result<Connection, String> {
             connect_via_jump(target, jump, config, handler, rejection.clone()).await?
         } else {
             let stream = connect_transport(&target.host, target.port).await?;
-            let handshake = stage(
+            let handshake = net::stage_timeout(
                 &format!("SSH handshake to {id}"),
                 client::connect_stream(config, stream, handler),
             )
@@ -178,7 +175,7 @@ async fn connect_transport(host: &str, port: u16) -> Result<Box<dyn TransportStr
     let configured = RemoteConfig::load().proxy;
     let stream: Box<dyn TransportStream> = match proxy::from_url(configured.as_deref())? {
         Some(proxy) => {
-            let s = stage(
+            let s = net::stage_timeout(
                 &format!("proxy connect to {host}:{port} via {}", proxy.describe()),
                 proxy.connect(host, port),
             )
@@ -186,7 +183,7 @@ async fn connect_transport(host: &str, port: u16) -> Result<Box<dyn TransportStr
             Box::new(s)
         }
         None => {
-            let s = stage(
+            let s = net::stage_timeout(
                 &format!("TCP connect to {host}:{port}"),
                 TcpStream::connect((host, port)),
             )
@@ -209,7 +206,7 @@ async fn connect_via_jump(
     let jump_conn = Box::pin(connect_jump(&jump_target)).await?;
     let jump_handle = jump_conn.handle;
 
-    let channel = stage(
+    let channel = net::stage_timeout(
         &format!(
             "open jump tunnel {}:{} → {}:{}",
             jump_target.host, jump_target.port, target.host, target.port
@@ -223,7 +220,7 @@ async fn connect_via_jump(
     )
     .await?;
 
-    let handshake = stage(
+    let handshake = net::stage_timeout(
         &format!("SSH handshake to {}:{} via jump", target.host, target.port),
         client::connect_stream(config, channel.into_stream(), handler),
     )
@@ -246,7 +243,7 @@ async fn connect_jump(target: &Target) -> Result<Connection, String> {
         rejection: rejection.clone(),
     };
     let stream = connect_transport(&target.host, target.port).await?;
-    let handshake = stage(
+    let handshake = net::stage_timeout(
         &format!("SSH handshake to jump host {id}"),
         client::connect_stream(client_config(), stream, handler),
     )
@@ -273,7 +270,7 @@ pub fn parse_jump(value: &str) -> Result<(Target, ()), String> {
         ),
     };
 
-    let (host, port) = split_host_port(hostport, 22);
+    let (host, port) = net::split_host_port(hostport, 22);
     if host.is_empty() {
         return Err("jump host is empty".to_string());
     }
@@ -289,26 +286,6 @@ pub fn parse_jump(value: &str) -> Result<(Target, ()), String> {
         },
         (),
     ))
-}
-
-/// 拆分 `host[:port]`，缺省端口用 `default_port`
-pub fn split_host_port(value: &str, default_port: u16) -> (String, u16) {
-    // IPv6 字面量 `[::1]:22`
-    if let Some(rest) = value.strip_prefix('[')
-        && let Some((host, tail)) = rest.split_once(']')
-    {
-        let port = tail
-            .strip_prefix(':')
-            .and_then(|p| p.parse().ok())
-            .unwrap_or(default_port);
-        return (host.to_string(), port);
-    }
-    match value.rsplit_once(':') {
-        Some((host, port)) if port.chars().all(|c| c.is_ascii_digit()) && !host.is_empty() => {
-            (host.to_string(), port.parse().unwrap_or(default_port))
-        }
-        _ => (value.to_string(), default_port),
-    }
 }
 
 /// 认证：公钥认证优先，失败后（有密码来源时）尝试密码与 keyboard-interactive。
@@ -349,7 +326,7 @@ async fn authenticate(handle: &mut Handle<ClientHandler>, target: &Target) -> Re
             .is_rsa()
             .then_some(russh::keys::HashAlg::Sha256);
         let with_hash = PrivateKeyWithHashAlg::new(Arc::new(key), hash);
-        let result = stage(
+        let result = net::stage_timeout(
             &format!("public-key auth at {} as {}", target.id(), target.user),
             handle.authenticate_publickey(&target.user, with_hash),
         )
@@ -372,7 +349,7 @@ async fn authenticate(handle: &mut Handle<ClientHandler>, target: &Target) -> Re
         .await
         {
             auth::Acquired::Found(password) => {
-                let result = stage(
+                let result = net::stage_timeout(
                     &format!("password auth at {} as {}", target.id(), target.user),
                     handle.authenticate_password(&target.user, password.clone()),
                 )
@@ -457,7 +434,7 @@ async fn keyboard_interactive(
     password: &str,
 ) -> Result<bool, String> {
     use russh::client::KeyboardInteractiveAuthResponse as Response;
-    let start = stage(
+    let start = net::stage_timeout(
         &format!("keyboard-interactive auth at {}", target.id()),
         handle.authenticate_keyboard_interactive_start(&target.user, None::<String>),
     )
@@ -467,7 +444,7 @@ async fn keyboard_interactive(
         Response::Failure { .. } => Ok(false),
         Response::InfoRequest { prompts, .. } => {
             let responses: Vec<String> = prompts.iter().map(|_| password.to_string()).collect();
-            let next = stage(
+            let next = net::stage_timeout(
                 &format!("keyboard-interactive response at {}", target.id()),
                 handle.authenticate_keyboard_interactive_respond(responses),
             )
@@ -485,24 +462,6 @@ fn client_config() -> Arc<client::Config> {
     })
 }
 
-/// 给一个网络阶段套独立超时，超时时把阶段名写进错误
-async fn stage<T, E>(
-    label: &str,
-    future: impl std::future::Future<Output = Result<T, E>>,
-) -> Result<T, String>
-where
-    E: std::fmt::Display,
-{
-    match tokio::time::timeout(STAGE_TIMEOUT, future).await {
-        Ok(Ok(v)) => Ok(v),
-        Ok(Err(e)) => Err(format!("{label}: {e}")),
-        Err(_) => Err(format!(
-            "{label}: timed out after {} seconds",
-            STAGE_TIMEOUT.as_secs()
-        )),
-    }
-}
-
 /// 执行一条命令并收集输出（一次性捕获，用于 sf 之外的短命令）
 pub async fn exec_capture(
     handle: &Handle<ClientHandler>,
@@ -511,7 +470,7 @@ pub async fn exec_capture(
     max_bytes: usize,
     timeout: Duration,
 ) -> Result<CommandOutput, String> {
-    let full = wrap_cd(command, cwd);
+    let full = process::wrap_cd(command, cwd);
     let collected = tokio::time::timeout(timeout, async {
         let mut channel = handle
             .channel_open_session()
@@ -528,10 +487,10 @@ pub async fn exec_capture(
         while let Some(msg) = channel.wait().await {
             match msg {
                 ChannelMsg::Data { data } => {
-                    append_bounded(&mut stdout, &data, max_bytes, &mut truncated);
+                    truncate::append_bounded(&mut stdout, &data, max_bytes, &mut truncated);
                 }
                 ChannelMsg::ExtendedData { data, .. } => {
-                    append_bounded(&mut stderr, &data, max_bytes, &mut truncated);
+                    truncate::append_bounded(&mut stderr, &data, max_bytes, &mut truncated);
                 }
                 ChannelMsg::ExitStatus { exit_status } => exit_code = Some(exit_status as i32),
                 ChannelMsg::Close => break,
@@ -583,53 +542,9 @@ impl CommandOutput {
     }
 }
 
-/// 把命令包进 `cd <cwd> && ...`，使远程命令落在工作区的当前目录上
-pub fn wrap_cd(command: &str, cwd: &str) -> String {
-    let trimmed = cwd.trim();
-    if trimmed.is_empty() || trimmed == "~" {
-        return command.to_string();
-    }
-    format!(
-        "cd {} 2>/dev/null || exit 1; {}",
-        shell_quote(trimmed),
-        command
-    )
-}
-
-/// 用单引号安全包裹一段 shell 文本
-pub fn shell_quote(value: &str) -> String {
-    if value.is_empty() {
-        return "''".to_string();
-    }
-    let escaped = value.replace('\'', "'\\''");
-    format!("'{escaped}'")
-}
-
-/// 追加一段输出，超出上限时置截断标志
-fn append_bounded(sink: &mut Vec<u8>, data: &[u8], max_bytes: usize, truncated: &mut bool) {
-    if *truncated {
-        return;
-    }
-    let room = max_bytes.saturating_sub(sink.len());
-    if data.len() > room {
-        sink.extend_from_slice(&data[..room]);
-        *truncated = true;
-    } else {
-        sink.extend_from_slice(data);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn splits_host_port() {
-        assert_eq!(split_host_port("gpu:2202", 22), ("gpu".into(), 2202));
-        assert_eq!(split_host_port("gpu", 22), ("gpu".into(), 22));
-        assert_eq!(split_host_port("[::1]:2222", 22), ("::1".into(), 2222));
-        assert_eq!(split_host_port("dash-name", 22), ("dash-name".into(), 22));
-    }
 
     #[test]
     fn parses_jump_host() {
@@ -637,16 +552,5 @@ mod tests {
         assert_eq!(t.user, "deploy");
         assert_eq!(t.host, "bastion");
         assert_eq!(t.port, 2222);
-    }
-
-    #[test]
-    fn quotes_shell_arguments() {
-        assert_eq!(shell_quote("plain"), "'plain'");
-        assert_eq!(shell_quote("it's"), "'it'\\''s'");
-        assert_eq!(wrap_cd("ls", "~"), "ls");
-        assert_eq!(
-            wrap_cd("ls", "/srv/x"),
-            "cd '/srv/x' 2>/dev/null || exit 1; ls"
-        );
     }
 }

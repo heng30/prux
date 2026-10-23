@@ -1,4 +1,7 @@
-// head/tail 截断逻辑
+// 截断与容量控制：head/tail 截断、按行范围切片、流式读的限量追加。
+//
+// 这些逻辑的共同点是「保留多少、丢掉哪一部分」，工具输出与远端读取都要在此处统一，
+// 否则每个调用点各写一份，语义（保留头部还是尾部、是否标记截断）迟早会打架。
 
 /// head/tail 截断未显式指定行数上限时的默认值（2000 行）。
 pub const DEFAULT_MAX_LINES: usize = 2000;
@@ -45,6 +48,69 @@ pub struct TruncationResult {
     pub max_bytes: usize,
 }
 
+/// 一次按行范围切分的结果（`offset`/`limit` 语义与文件读取工具一致）。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LineRange {
+    /// 选中的文本（不含行尾换行）
+    pub content: String,
+    /// 选中行数
+    pub selected_lines: usize,
+    /// 总行数（`split('\n')` 语义：以换行结尾时最后一段为空行）
+    pub total_lines: usize,
+    /// 起始行已超出末尾（此时 `content` 为空）
+    pub offset_beyond_end: bool,
+}
+
+/// 把一段内容按行范围切分：`offset` 是 1 起始的行号，`limit` 是要取的行数。
+///
+/// 切行语义是 `split('\n')`（与本地读取工具一致）：以换行结尾的内容末尾多一个空行。
+/// `offset` 越界时不报错，返回 `offset_beyond_end = true` 的空结果，由调用方决定文案。
+/// 非 UTF-8 字节用替换字符处理，不返回错误。
+pub fn line_range(bytes: &[u8], offset: Option<i64>, limit: Option<i64>) -> LineRange {
+    let text = String::from_utf8_lossy(bytes).to_string();
+    let all: Vec<&str> = text.split('\n').collect();
+    let total_lines = all.len();
+    let start = match offset {
+        Some(o) => (o - 1).max(0) as usize,
+        None => 0,
+    };
+    if start >= total_lines {
+        return LineRange {
+            offset_beyond_end: true,
+            total_lines,
+            ..Default::default()
+        };
+    }
+    let end = match limit {
+        Some(l) => (start + l.max(0) as usize).min(total_lines),
+        None => total_lines,
+    };
+    LineRange {
+        content: all[start..end].join("\n"),
+        selected_lines: end - start,
+        total_lines,
+        offset_beyond_end: false,
+    }
+}
+
+/// 往缓冲区追加一段数据，超出 `max_bytes` 时只保留能装下的部分并置 `truncated`。
+///
+/// 一旦 `truncated` 为 true 后续调用直接忽略：流式读的语义是「只保留前 `max_bytes` 字节」，
+/// 不是「留最后多少」。容量按需增长，不会预先分配 `max_bytes`。
+pub fn append_bounded(sink: &mut Vec<u8>, data: &[u8], max_bytes: usize, truncated: &mut bool) {
+    if *truncated {
+        return;
+    }
+    let room = max_bytes.saturating_sub(sink.len());
+    if data.len() > room {
+        sink.extend_from_slice(&data[..room]);
+        *truncated = true;
+    } else {
+        sink.extend_from_slice(data);
+    }
+}
+
+/// 字节数渲染成紧凑的人类可读文本（`512B` / `1.5KB` / `2.0MB`）。
 pub fn format_size(bytes: usize) -> String {
     if bytes < 1024 {
         format!("{}B", bytes)
@@ -332,6 +398,33 @@ pub fn truncate_chars_within(s: &str, max_chars: usize, postfix: &str) -> String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 追加时超出上限即截断，且一旦截断后续追加全部丢弃。
+    #[test]
+    fn append_bounded_stops_at_the_cap() {
+        let mut sink: Vec<u8> = Vec::new();
+        let mut truncated = false;
+        append_bounded(&mut sink, b"abc", 5, &mut truncated);
+        assert!(!truncated);
+        append_bounded(&mut sink, b"def", 5, &mut truncated);
+        assert!(truncated);
+        append_bounded(&mut sink, b"ghi", 5, &mut truncated);
+        assert_eq!(sink, b"abcde");
+    }
+
+    /// 行范围切分与本地 read 一致：1 起始行号、越界标记、末尾空行计入总数。
+    #[test]
+    fn line_range_slices_like_local_read() {
+        let r = line_range(b"l1\nl2\nl3\nl4", Some(2), Some(2));
+        assert_eq!(r.content, "l2\nl3");
+        assert_eq!(r.selected_lines, 2);
+        assert_eq!(r.total_lines, 4);
+        assert!(!r.offset_beyond_end);
+
+        let beyond = line_range(b"l1\nl2", Some(9), None);
+        assert!(beyond.offset_beyond_end);
+        assert!(beyond.content.is_empty());
+    }
 
     #[test]
     fn tail_chars_keeps_the_last_characters() {

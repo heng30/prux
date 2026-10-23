@@ -1,10 +1,58 @@
-//! 网络地址与端口工具：监听地址的校验与规范化、OpenAI 兼容 base_url 推导、
-//! 回环端口的挑选与探活。
+//! 网络地址与端口工具：监听地址的校验与规范化、`host[:port]` 拆分、OpenAI 兼容
+//! base_url 推导、回环端口的挑选与探活，以及给单个网络阶段套超时。
 
 use std::time::Duration;
 
 /// 探活时连一下回环地址的超时（端口没人监听会立刻被拒，这个上限只是防某些防火墙丢包）。
 const PROBE_TIMEOUT: Duration = Duration::from_millis(300);
+
+/// 单个网络阶段的超时：一条半开的 TCP 不该把整次连接（握手 / 建隧道 / 认证）拖死。
+const STAGE_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// 拆分 `host[:port]`，缺省端口用 `default_port`。
+///
+/// 支持 IPv6 字面量 `[::1]:22`（裸 `::1` 无法与端口区分，按「无端口的 IPv6」处理）；
+/// 冒号后不是纯数字时整串当主机名，不报错，因此 `dash-name` 这类写法原样返回。
+pub fn split_host_port(value: &str, default_port: u16) -> (String, u16) {
+    // IPv6 字面量 `[::1]:22`
+    if let Some(rest) = value.strip_prefix('[')
+        && let Some((host, tail)) = rest.split_once(']')
+    {
+        let port = tail
+            .strip_prefix(':')
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(default_port);
+        return (host.to_string(), port);
+    }
+
+    match value.rsplit_once(':') {
+        Some((host, port)) if port.chars().all(|c| c.is_ascii_digit()) && !host.is_empty() => {
+            (host.to_string(), port.parse().unwrap_or(default_port))
+        }
+        _ => (value.to_string(), default_port),
+    }
+}
+
+/// 给一个网络阶段套独立超时，失败或超时时把阶段名写进错误。
+///
+/// `label` 是人类可读的阶段描述（如 `TCP connect to gpu:22`），作为错误前缀，
+/// 于是调用方拿到的报错总能说清是哪一步卡住了。底层错误按 `Display` 呈现。
+pub async fn stage_timeout<T, E>(
+    label: &str,
+    future: impl std::future::Future<Output = Result<T, E>>,
+) -> Result<T, String>
+where
+    E: std::fmt::Display,
+{
+    match tokio::time::timeout(STAGE_TIMEOUT, future).await {
+        Ok(Ok(v)) => Ok(v),
+        Ok(Err(e)) => Err(format!("{label}: {e}")),
+        Err(_) => Err(format!(
+            "{label}: timed out after {} seconds",
+            STAGE_TIMEOUT.as_secs()
+        )),
+    }
+}
 
 /// 校验并规范化监听地址 `host:port`。
 ///
@@ -157,6 +205,14 @@ mod tests {
             "localhost:8765"
         );
         assert_eq!(normalize_listen("[::1]:8765").unwrap(), "[::1]:8765");
+    }
+
+    #[test]
+    fn splits_host_port() {
+        assert_eq!(split_host_port("gpu:2202", 22), ("gpu".into(), 2202));
+        assert_eq!(split_host_port("gpu", 22), ("gpu".into(), 22));
+        assert_eq!(split_host_port("[::1]:2222", 22), ("::1".into(), 2222));
+        assert_eq!(split_host_port("dash-name", 22), ("dash-name".into(), 22));
     }
 
     #[test]

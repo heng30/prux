@@ -8,7 +8,6 @@ use crate::{
     extensions::{
         ssh_remote::{
             self, auth,
-            connect::split_host_port,
             sshcfg::SshHost,
             state::{self, Endpoint, RemoteConfig, TunnelSpec},
             transport, tunnel,
@@ -16,7 +15,9 @@ use crate::{
         util::notify_text,
     },
     modes::interactive::app::App,
-    utils::{display::split_head, env::default_user, process::shell_tokenize},
+    utils::{
+        display::split_head, env::default_user, net::split_host_port, process::shell_tokenize,
+    },
 };
 use std::time::Duration;
 
@@ -24,8 +25,20 @@ use std::time::Duration;
 pub const CMD: &str = "ssh";
 /// 隧道命令名
 pub const TUNNEL_CMD: &str = "tunnel";
-/// 命令描述（`/` 候选面板里显示）
-pub const DESCRIPTION: &str = "/ssh [user@host[:port]] sets the default SSH target; /ssh list|status|cd|note|disconnect|forget-host|forget";
+/// 命令描述（`/` 候选面板里显示；一行写完，所以只点出可用的 flag 名）
+pub const DESCRIPTION: &str = "/ssh [user@host[:port]] [-p port] [-i key] [-J jump] [-o PasswordFile=path] sets the default SSH target; /ssh list|status|cd|note|disconnect|forget-host|forget";
+
+/// 目标写法的完整说明：`/ssh` 空参时随状态一起显示。
+///
+/// 面板里的一行放不下 flag 的取值与语义，而用户不知道 `-i` / `-J` 存在就用不上它们，
+/// 所以把「能写什么」集中在状态输出里。
+const USAGE: &str = "Target: /ssh [user@host[:port]] (an ~/.ssh/config alias works too) plus ssh-style flags:
+  -p <port>                port on the remote host
+  -i <key>                 private key; no password fallback unless a password source is also given
+  -J [user@]host[:port]    jump host (same as `-o ProxyJump=...`)
+  -o PasswordFile=<path>   read the password from a 0600 file (`PRUX_SSH_PASSWORD` also works)
+Host / HostName / User / Port / IdentityFile / ProxyJump come from ~/.ssh/config when not given.
+Subcommands: list | status | cd <path> | note <text> | disconnect [target|all] | forget-host <host:port> | forget [all]";
 
 /// 子命令候选（顺序 = 面板候选顺序，与 [`handle`] 的分支一一对应）
 pub const SUBCOMMANDS: &[SubcommandDef] = &[
@@ -70,6 +83,10 @@ pub const TUNNEL_SUBCOMMANDS: &[SubcommandDef] = &[
         description: "Stop one forward by local port: /tunnel remove <localPort>",
     },
     SubcommandDef {
+        name: "remove-all",
+        description: "Stop and delete every forward (including the configured ones)",
+    },
+    SubcommandDef {
         name: "list",
         description: "List active and configured forwards",
     },
@@ -95,7 +112,7 @@ pub fn tunnel_command() -> ExtensionCommand {
     ExtensionCommand {
         name: TUNNEL_CMD.to_string(),
         description:
-            "/tunnel add [host:]localPort:remoteHost:remotePort | remove <localPort> | list | stop-all"
+            "/tunnel add [host:]localPort:remoteHost:remotePort | remove <localPort> | remove-all | list | stop-all "
                 .to_string(),
         busy_safe: true,
         subcommands: TUNNEL_SUBCOMMANDS.to_vec(),
@@ -184,9 +201,25 @@ pub fn handle_tunnel(_app: &mut App, raw: &str) -> bool {
             let count = tunnel::stop_all();
             notify_text(&format!("Stopped {count} forward(s)."), UiNotifyLevel::Info);
         }
+        "remove-all" => {
+            let stopped = tunnel::stop_all();
+            match tunnel::forget_all() {
+                Ok(removed) => notify_text(
+                    &format!(
+                        "Stopped {stopped} forward(s) and deleted {removed} configured one(s)."
+                    ),
+                    UiNotifyLevel::Info,
+                ),
+                // 转发已经停了，只是配置没落盘：下次启动不会再自动拉起
+                Err(e) => notify_text(
+                    &format!("Stopped {stopped} forward(s) but cannot update config: {e}"),
+                    UiNotifyLevel::Error,
+                ),
+            }
+        }
         "list" => notify_text(&tunnel_text(), UiNotifyLevel::Info),
         _ => notify_text(
-            "Usage: /tunnel add [host:]localPort:remoteHost:remotePort | remove <localPort> | list | stop-all",
+            "Usage: /tunnel add [host:]localPort:remoteHost:remotePort | remove <localPort> | remove-all | list | stop-all",
             UiNotifyLevel::Warning,
         ),
     }
@@ -366,7 +399,7 @@ fn status_text() -> String {
         .unwrap_or_else(|| "(none: run `/ssh user@host[:port]`)".to_string());
     let active = tunnel::active();
     format!(
-        "Default target: {default}\nKnown targets: {}\nActive forwards: {}\nExec timeout: {}s · per-turn output budget: {} KiB",
+        "Default target: {default}\nKnown targets: {}\nActive forwards: {}\nExec timeout: {}s · per-turn output budget: {} KiB\n\n{USAGE}",
         cfg.known.len(),
         active.len(),
         cfg.limits.timeout_seconds,
@@ -595,5 +628,15 @@ mod tests {
     fn parses_quoted_target() {
         let ep = parse_ssh_command("ssh \"my host\" -p 22").unwrap();
         assert_eq!(ep.host, "my host");
+    }
+
+    /// 命令描述与状态输出必须把可用的 flag 写全，否则用户不知道能设跳板机 / 私钥。
+    #[test]
+    fn description_lists_the_supported_flags() {
+        for flag in ["-p ", "-i ", "-J ", "-o PasswordFile="] {
+            assert!(DESCRIPTION.contains(flag), "描述缺少 {flag}");
+            assert!(USAGE.contains(flag), "用法说明缺少 {flag}");
+        }
+        assert!(USAGE.contains("ProxyJump"), "应说明 -o ProxyJump= 等价写法");
     }
 }

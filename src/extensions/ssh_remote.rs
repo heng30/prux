@@ -83,9 +83,9 @@ impl Extension for SshRemote {
         })
     }
 
-    /// 仅在 Dev / Creator 两个模式下可用（All 之外更低的级别）。
+    /// 仅在 Dev 模式下可用（All 与 Creator 之外更低的级别；按当前需要不覆盖 Creator）。
     fn modes(&self) -> Vec<ExtensionMode> {
-        vec![ExtensionMode::Dev, ExtensionMode::Creator]
+        vec![ExtensionMode::Dev]
     }
 
     /// 会建立出站连接、可能改动远端文件，必须显式开启

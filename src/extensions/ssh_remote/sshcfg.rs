@@ -7,9 +7,9 @@
 //! `Include` 只展开一层（相对路径按 `~/.ssh` 解析）；嵌套 include 不再递归，
 //! 避免用户配置里的循环引用把启动卡住。
 
-use crate::{
-    extensions::util::glob_match,
-    utils::paths::{expand_tilde, home_dir},
+use crate::utils::{
+    ignore::pattern_matches,
+    paths::{expand_tilde, home_dir},
 };
 use std::path::{Path, PathBuf};
 
@@ -167,14 +167,6 @@ fn expand_include(value: &str, ssh_dir: &Path) -> PathBuf {
     } else {
         ssh_dir.join(expanded)
     }
-}
-
-/// 判断主机别名是否命中某个 `Host` 模式（支持 `*`、`?` 与前置 `!` 取反）
-pub fn pattern_matches(pattern: &str, alias: &str) -> bool {
-    if let Some(neg) = pattern.strip_prefix('!') {
-        return !glob_match(neg, alias);
-    }
-    glob_match(pattern, alias)
 }
 
 #[cfg(test)]
