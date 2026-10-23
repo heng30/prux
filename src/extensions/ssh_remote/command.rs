@@ -26,7 +26,7 @@ pub const CMD: &str = "ssh";
 /// 隧道命令名
 pub const TUNNEL_CMD: &str = "tunnel";
 /// 命令描述（`/` 候选面板里显示；一行写完，所以只点出可用的 flag 名）
-pub const DESCRIPTION: &str = "/ssh [user@host[:port]] [-p port] [-i key] [-J jump] [-o PasswordFile=path] sets the default SSH target; /ssh list|status|cd|note|disconnect|forget-host|forget";
+pub const DESCRIPTION: &str = "/ssh [user@host[:port]] [-p port] [-i key] [-J jump] [-o PasswordFile=path] sets the default SSH target; /ssh help|list|status|cd|note|disconnect|forget-host|forget";
 
 /// 目标写法的完整说明：`/ssh` 空参时随状态一起显示。
 ///
@@ -38,10 +38,14 @@ const USAGE: &str = "Target: /ssh [user@host[:port]] (an ~/.ssh/config alias wor
   -J [user@]host[:port]    jump host (same as `-o ProxyJump=...`)
   -o PasswordFile=<path>   read the password from a 0600 file (`PRUX_SSH_PASSWORD` also works)
 Host / HostName / User / Port / IdentityFile / ProxyJump come from ~/.ssh/config when not given.
-Subcommands: list | status | cd <path> | note <text> | disconnect [target|all] | forget-host <host:port> | forget [all]";
+Subcommands: help | list | status | cd <path> | note <text> | disconnect [target|all] | forget-host <host:port> | forget [all]";
 
 /// 子命令候选（顺序 = 面板候选顺序，与 [`handle`] 的分支一一对应）
 pub const SUBCOMMANDS: &[SubcommandDef] = &[
+    SubcommandDef {
+        name: "help",
+        description: "Print the target syntax and every subcommand: /ssh help",
+    },
     SubcommandDef {
         name: "list",
         description: "List connected endpoints and remembered targets",
@@ -129,6 +133,7 @@ pub fn handle(_app: &mut App, raw: &str) -> bool {
 
     let (head, rest) = split_head(text);
     match head.to_ascii_lowercase().as_str() {
+        "help" => notify_text(USAGE, UiNotifyLevel::Info),
         "list" => notify_text(&list_text(), UiNotifyLevel::Info),
         "status" => notify_text(&status_text(), UiNotifyLevel::Info),
         "cd" => set_default(|ep| ep.cwd = expand_remote_path(rest)),
@@ -638,5 +643,17 @@ mod tests {
             assert!(USAGE.contains(flag), "用法说明缺少 {flag}");
         }
         assert!(USAGE.contains("ProxyJump"), "应说明 -o ProxyJump= 等价写法");
+    }
+
+    /// `/ssh help` 要能把面板候选里的每个子命令都印出来，候选与用法不许各说各话。
+    #[test]
+    fn help_covers_every_subcommand() {
+        assert!(
+            SUBCOMMANDS.iter().any(|s| s.name == "help"),
+            "help 必须是子命令候选"
+        );
+        for sub in SUBCOMMANDS {
+            assert!(USAGE.contains(sub.name), "USAGE 缺少子命令 {}", sub.name);
+        }
     }
 }

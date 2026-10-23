@@ -3,7 +3,10 @@
 //! 输出按 [`Limits`] 与每轮预算双重截断：远端日志动辄几十万行，一次 `tail` 就能
 //! 吃掉整轮上下文。截断时明确告诉模型「还有多少没显示」，而不是静默丢内容。
 
-use crate::extensions::ssh_remote::transport::{self, RemoteConn};
+use crate::extensions::ssh_remote::{
+    state::MAX_TIMEOUT_SECONDS,
+    transport::{self, RemoteConn},
+};
 use std::{sync::Arc, time::Duration};
 
 /// 一次 `remote_exec` 的请求
@@ -25,11 +28,10 @@ pub async fn run(conn: &Arc<RemoteConn>, req: &ExecRequest) -> Result<String, St
         Some(n) if n > 0 => format!("{} 2>&1 | tail -n {n}", req.command),
         _ => req.command.clone(),
     };
-    let timeout = req.timeout_secs.map(|s| {
-        Duration::from_secs(
-            s.clamp(1, crate::extensions::ssh_remote::state::MAX_TIMEOUT_SECONDS) as u64,
-        )
-    });
+    let timeout = req
+        .timeout_secs
+        .map(|s| Duration::from_secs(s.clamp(1, MAX_TIMEOUT_SECONDS) as u64));
+
     // 先按 exec 上限抓，还剩多少预算就只给多少，避免一轮里堆满远端输出
     let wanted = limits.exec_max_bytes.min(limits.turn_max_bytes);
     let granted = transport::take_turn_budget(wanted);
@@ -53,15 +55,18 @@ pub async fn run(conn: &Arc<RemoteConn>, req: &ExecRequest) -> Result<String, St
             limits.exec_max_lines
         ));
     }
+
     if out.truncated {
         notes.push(format!(
             "output hit the {} byte cap (the command was still running when it was cut)",
             granted
         ));
     }
+
     if body.trim().is_empty() {
         body = "(no output)".to_string();
     }
+
     let exit = match out.exit_code {
         Some(code) => format!("exit {code}"),
         None => "exit unknown (the command was cut off)".to_string(),
@@ -71,10 +76,12 @@ pub async fn run(conn: &Arc<RemoteConn>, req: &ExecRequest) -> Result<String, St
         conn.endpoint.display(),
         req.cwd.clone().unwrap_or_else(|| conn.endpoint.cwd.clone())
     );
+
     if !notes.is_empty() {
         header.push_str(" · ");
         header.push_str(&notes.join("; "));
     }
+
     Ok(format!(
         "{header}\n$ {}\n{}\n({exit})",
         req.command,

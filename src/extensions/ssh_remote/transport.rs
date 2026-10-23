@@ -8,15 +8,15 @@
 //! [`exec`] 会按端点重连一次再重试。
 
 use crate::extensions::ssh_remote::{
+    command::parse_ssh_command,
     connect::{self, ClientHandler, CommandOutput},
     state::{Endpoint, Limits, RemoteConfig},
 };
 use russh::client::Handle;
-use std::sync::Mutex;
 use std::{
     collections::HashMap,
     sync::{
-        Arc, OnceLock,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicUsize, Ordering},
     },
     time::Duration,
@@ -25,6 +25,20 @@ use tokio::sync::Mutex as AsyncMutex;
 
 /// 连接池上限：超过后新建连接会先踢掉最久未用的一半，避免长跑会话把 fd 用光
 const MAX_POOLED: usize = 8;
+
+/// 串行化「建连/重连」：并发工具不会对同一端点重复握手
+static CONNECT_LOCK: AsyncMutex<()> = AsyncMutex::const_new(());
+
+/// 本回合已回给模型的远程输出字节数（每轮 `turn_start` 归零）
+static TURN_OUTPUT_BYTES: AtomicUsize = AtomicUsize::new(0);
+
+/// 端点标识 → 连接
+static POOL: OnceLock<Mutex<HashMap<String, Arc<RemoteConn>>>> = OnceLock::new();
+
+/// 连接池容器
+fn pool() -> &'static Mutex<HashMap<String, Arc<RemoteConn>>> {
+    POOL.get_or_init(|| Mutex::new(HashMap::new()))
+}
 
 /// 一个已建立的端点连接（跳板机句柄必须与目标同寿，一起放在这里）
 pub struct RemoteConn {
@@ -52,20 +66,6 @@ impl RemoteConn {
         !self.handle.is_closed()
     }
 }
-
-/// 端点标识 → 连接
-static POOL: OnceLock<Mutex<HashMap<String, Arc<RemoteConn>>>> = OnceLock::new();
-
-/// 连接池容器
-fn pool() -> &'static Mutex<HashMap<String, Arc<RemoteConn>>> {
-    POOL.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-/// 串行化「建连/重连」：并发工具不会对同一端点重复握手
-static CONNECT_LOCK: AsyncMutex<()> = AsyncMutex::const_new(());
-
-/// 本回合已回给模型的远程输出字节数（每轮 `turn_start` 归零）
-static TURN_OUTPUT_BYTES: AtomicUsize = AtomicUsize::new(0);
 
 /// 归零本回合的远程输出预算
 pub fn reset_turn_budget() {
@@ -101,10 +101,12 @@ pub async fn ensure(ep: Endpoint) -> Result<Arc<RemoteConn>, String> {
     if let Some(conn) = lookup(&key) {
         return Ok(conn);
     }
+
     let _guard = CONNECT_LOCK.lock().await;
     if let Some(conn) = lookup(&key) {
         return Ok(conn);
     }
+
     let conn = Arc::new(connect_now(ep).await?);
     install(conn.clone());
     Ok(conn)
@@ -129,15 +131,17 @@ pub async fn resolve_host(host: &str) -> Result<Arc<RemoteConn>, String> {
     if spec.is_empty() {
         return resolve_default().await;
     }
+
     if let Some(conn) = find_connected(spec) {
         return Ok(conn);
     }
+
     let cfg = RemoteConfig::load();
     if let Some(ep) = cfg.known.iter().find(|ep| matches_spec(ep, spec)) {
         return ensure(ep.clone()).await;
     }
-    let endpoint =
-        crate::extensions::ssh_remote::command::parse_ssh_command(&format!("ssh {spec}"))?;
+
+    let endpoint = parse_ssh_command(&format!("ssh {spec}"))?;
     ensure(endpoint).await
 }
 
@@ -196,6 +200,7 @@ async fn connect_now(ep: Endpoint) -> Result<RemoteConn, String> {
         password_file: ep.password_file.clone(),
         jump: ep.jump.clone(),
     };
+
     let conn = connect::connect(&target).await?;
     remember(&ep);
     Ok(RemoteConn {
@@ -241,6 +246,7 @@ pub async fn exec(
     if first.is_ok() {
         return first;
     }
+
     let first_err = first.expect_err("checked is_ok above");
     let fresh = reconnect(conn.endpoint.clone())
         .await

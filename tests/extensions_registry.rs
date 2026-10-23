@@ -390,6 +390,4 @@ fn ssh_remote_registers_remote_tool_and_command() {
     let mut cmds: Vec<String> = ext.commands().into_iter().map(|c| c.name).collect();
     cmds.sort();
     assert_eq!(cmds, vec!["ssh", "tunnel"], "应声明 /ssh 与 /tunnel");
-    let some = ext.fork_project().expect("应标注来源项目");
-    assert_eq!(some.plugin_name, "pi-ssh-remote");
 }

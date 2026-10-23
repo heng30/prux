@@ -3,11 +3,21 @@
 //! 两个文件，都在 `agent_dir()/extensions/ssh-remote/` 下：
 //! - `config.json`：默认端点、已知端点、隧道列表与输出预算；
 //! - `known-hosts.json`：`host:port` → 已确认的主机公钥（OpenSSH 单行形式）。
+//!
+//! 两个文件各自走一个 [`ConfigCache`]（`(path, mtime, len)` 命中免读盘/解析），读/写都在
+//! 各自的 `RwLock` 作用域内进行，锁序恒为「RwLock → 缓存 Mutex」。
 
-use crate::core::settings_manager::agent_dir;
+use crate::{
+    core::{config_cache::ConfigCache, settings_manager::agent_dir},
+    utils::paths::read_json_file,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+    sync::RwLock,
+};
 
 /// 配置子目录（与其它扩展一致）
 const CONFIG_SUBDIR: &str = "extensions";
@@ -17,6 +27,19 @@ const EXTENSION_DIR: &str = "ssh-remote";
 const CONFIG_FILE: &str = "config.json";
 /// 已知主机文件名（在 [`EXTENSION_DIR`] 内）
 const KNOWN_HOSTS_FILE: &str = "known-hosts.json";
+
+/// 主配置文件读写锁（面板保存与工具调用可能并发）
+static CONFIG_LOCK: RwLock<()> = RwLock::new(());
+
+/// `config.json` 的缓存层（锁序恒为「RwLock → 缓存 Mutex」）
+static CONFIG_CACHE: ConfigCache = ConfigCache::new();
+
+/// 已知主机文件读写锁
+static KNOWN_HOSTS_LOCK: RwLock<()> = RwLock::new(());
+
+/// `known-hosts.json` 的缓存层（锁序恒为「RwLock → 缓存 Mutex」）
+static KNOWN_HOSTS_CACHE: ConfigCache = ConfigCache::new();
+
 /// 远端默认目录（未显式设置时）
 pub const FALLBACK_REMOTE_CWD: &str = "~";
 /// 远程命令默认超时秒数
@@ -271,15 +294,16 @@ pub struct RemoteConfig {
 }
 
 impl RemoteConfig {
-    /// 读配置：缺失或损坏时返回默认值（不覆盖用户文件）
+    /// 读配置：缺失或损坏时返回默认值（不覆盖用户文件）。走 [`CONFIG_CACHE`]。
     pub fn load() -> Self {
         let path = config_path();
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            return Self::default();
-        };
-        let Ok(value) = serde_json::from_str::<Value>(&text) else {
-            return Self::default();
-        };
+        let _guard = CONFIG_LOCK.read().unwrap_or_else(|e| e.into_inner());
+        let value = CONFIG_CACHE.read(&path, || read_json_file(&path));
+        Self::from_value(&value)
+    }
+
+    /// 把 JSON 值按容错口径解析成配置：单个字段写坏只回退该字段的默认值。
+    fn from_value(value: &Value) -> Self {
         let endpoint = |raw: &Value| -> Option<Endpoint> {
             let mut ep = serde_json::from_value::<Endpoint>(raw.clone()).ok()?;
             if ep.port == 0 {
@@ -322,19 +346,26 @@ impl RemoteConfig {
             known,
             tunnels,
             proxy,
-            limits: Limits::from_value(&value),
+            limits: Limits::from_value(value),
         }
     }
 
-    /// 写配置：目录不存在时创建；写入失败返回错误文本
+    /// 写配置：目录不存在时创建；写入失败返回错误文本。
+    ///
+    /// 落盘成功后回填 [`CONFIG_CACHE`]（取写盘后的元数据），下次读取即命中。
     pub fn save(&self) -> Result<(), String> {
         let path = config_path();
+        let _guard = CONFIG_LOCK.write().unwrap_or_else(|e| e.into_inner());
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
         }
+
+        let value = serde_json::to_value(self).map_err(|e| format!("serialize config: {e}"))?;
         let text =
-            serde_json::to_string_pretty(self).map_err(|e| format!("serialize config: {e}"))?;
-        std::fs::write(&path, text).map_err(|e| format!("write {}: {e}", path.display()))
+            serde_json::to_string_pretty(&value).map_err(|e| format!("serialize config: {e}"))?;
+        std::fs::write(&path, text).map_err(|e| format!("write {}: {e}", path.display()))?;
+        CONFIG_CACHE.store(&path, value);
+        Ok(())
     }
 
     /// 记住一个端点（按 key 去重覆盖）；返回是否有变化
@@ -367,41 +398,51 @@ impl RemoteConfig {
     }
 }
 
-/// 载入已确认的主机公钥：`host:port` → OpenSSH 单行形式
+/// 载入已确认的主机公钥：`host:port` → OpenSSH 单行形式。走 [`KNOWN_HOSTS_CACHE`]。
 pub fn load_known_hosts() -> BTreeMap<String, String> {
     let path = known_hosts_path();
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        return BTreeMap::new();
-    };
-    serde_json::from_str::<BTreeMap<String, String>>(&text).unwrap_or_default()
+    let _guard = KNOWN_HOSTS_LOCK.read().unwrap_or_else(|e| e.into_inner());
+    read_known_hosts(&path)
 }
 
-/// 记录一台主机的公钥（覆盖旧值）
-pub fn save_known_host(id: &str, openssh_key: &str) -> Result<(), String> {
-    let mut hosts = load_known_hosts();
-    hosts.insert(id.to_string(), openssh_key.to_string());
+/// 读已知主机（命中缓存则免读盘）；调用方必须已持 [`KNOWN_HOSTS_LOCK`]。
+fn read_known_hosts(path: &Path) -> BTreeMap<String, String> {
+    let value = KNOWN_HOSTS_CACHE.read(path, || read_json_file(path));
+    serde_json::from_value(value).unwrap_or_default()
+}
 
-    let path = known_hosts_path();
+/// 落盘已知主机并回填缓存；调用方必须已持 [`KNOWN_HOSTS_LOCK`] 写锁。
+fn write_known_hosts(path: &Path, hosts: &BTreeMap<String, String>) -> Result<(), String> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
     }
 
+    let value = serde_json::to_value(hosts).map_err(|e| format!("serialize known hosts: {e}"))?;
     let text =
-        serde_json::to_string_pretty(&hosts).map_err(|e| format!("serialize known hosts: {e}"))?;
-    std::fs::write(&path, text).map_err(|e| format!("write {}: {e}", path.display()))
+        serde_json::to_string_pretty(&value).map_err(|e| format!("serialize known hosts: {e}"))?;
+    std::fs::write(path, text).map_err(|e| format!("write {}: {e}", path.display()))?;
+    KNOWN_HOSTS_CACHE.store(path, value);
+    Ok(())
+}
+
+/// 记录一台主机的公钥（覆盖旧值）
+pub fn save_known_host(id: &str, openssh_key: &str) -> Result<(), String> {
+    let path = known_hosts_path();
+    let _guard = KNOWN_HOSTS_LOCK.write().unwrap_or_else(|e| e.into_inner());
+    let mut hosts = read_known_hosts(&path);
+    hosts.insert(id.to_string(), openssh_key.to_string());
+    write_known_hosts(&path, &hosts)
 }
 
 /// 删除一台主机的公钥记录（主机密钥变化后重新走 TOFU）
 pub fn forget_known_host(id: &str) -> bool {
-    let mut hosts = load_known_hosts();
+    let path = known_hosts_path();
+    let _guard = KNOWN_HOSTS_LOCK.write().unwrap_or_else(|e| e.into_inner());
+    let mut hosts = read_known_hosts(&path);
     if hosts.remove(id).is_none() {
         return false;
     }
-    let path = known_hosts_path();
-    let Ok(text) = serde_json::to_string_pretty(&hosts) else {
-        return false;
-    };
-    std::fs::write(&path, text).is_ok()
+    write_known_hosts(&path, &hosts).is_ok()
 }
 
 /// 测试期间把状态根目录指向一个临时目录，返回的 guard drop 时还原。
@@ -537,6 +578,39 @@ mod tests {
         let text = std::fs::read_to_string(config_path()).unwrap();
         assert!(!text.contains("proxy"), "未配置代理时不应写出该键");
         assert!(RemoteConfig::load().proxy.is_none());
+    }
+
+    #[test]
+    fn config_cache_follows_external_edits() {
+        let _l = TEST_ROOT_LOCK.blocking_lock();
+        let _g = TestRootGuard::temp();
+        let mut cfg = RemoteConfig::default();
+        cfg.set_default(Endpoint {
+            host: "gpu".into(),
+            user: "root".into(),
+            port: 22,
+            ..Default::default()
+        });
+        cfg.save().unwrap();
+        assert_eq!(
+            RemoteConfig::load().default_key().as_deref(),
+            Some("root@gpu:22")
+        );
+
+        // 外部改写（长度不同）→ 缓存失效，读到新值
+        std::fs::write(
+            config_path(),
+            r#"{"known":[{"host":"h2","user":"u","port":2200}]}"#,
+        )
+        .unwrap();
+        let reloaded = RemoteConfig::load();
+        assert!(reloaded.default.is_none());
+        assert_eq!(reloaded.known.len(), 1);
+        assert_eq!(reloaded.known[0].key(), "u@h2:2200");
+
+        // 删除后回落默认
+        std::fs::remove_file(config_path()).unwrap();
+        assert!(RemoteConfig::load().known.is_empty());
     }
 
     #[test]

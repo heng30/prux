@@ -11,15 +11,15 @@
 
 use crate::{
     extensions::ssh_remote::{
-        auth,
+        self, auth,
         state::{RemoteConfig, load_known_hosts, save_known_host},
     },
-    utils::{net, process, proxy, truncate},
+    utils::{net, paths::expand_tilde_path, process, proxy, truncate},
 };
 use russh::{
     ChannelMsg,
     client::{self, Handle, Handler},
-    keys::{PrivateKeyWithHashAlg, PublicKeyOrCertificate, load_secret_key},
+    keys::{PrivateKey, PrivateKeyWithHashAlg, PublicKeyOrCertificate, load_secret_key},
 };
 use std::{
     path::{Path, PathBuf},
@@ -295,15 +295,16 @@ pub fn parse_jump(value: &str) -> Result<(Target, ()), String> {
 async fn authenticate(handle: &mut Handle<ClientHandler>, target: &Target) -> Result<(), String> {
     let mut last_error = String::new();
     let mut candidates: Vec<PathBuf> = Vec::new();
+
     if let Some(identity) = target.identity.as_deref().filter(|s| !s.trim().is_empty()) {
-        let path = crate::utils::paths::expand_tilde_path(identity.trim().to_string());
+        let path = expand_tilde_path(identity.trim().to_string());
         if path.exists() {
             candidates.push(path);
         } else {
             // 显式路径写错时不要立刻失败：同时给了密码来源就还有别的路可走
             last_error = format!("identity file not found: {}", path.display());
         }
-    } else if let Some(ssh_dir) = crate::extensions::ssh_remote::sshcfg::ssh_dir() {
+    } else if let Some(ssh_dir) = ssh_remote::sshcfg::ssh_dir() {
         for name in DEFAULT_KEYS {
             let path = ssh_dir.join(name);
             if path.exists() {
@@ -320,26 +321,31 @@ async fn authenticate(handle: &mut Handle<ClientHandler>, target: &Target) -> Re
                 continue;
             }
         };
+
         // RSA 必须显式指定签名哈希，其它算法自带
         let hash = key
             .algorithm()
             .is_rsa()
             .then_some(russh::keys::HashAlg::Sha256);
+
         let with_hash = PrivateKeyWithHashAlg::new(Arc::new(key), hash);
         let result = net::stage_timeout(
             &format!("public-key auth at {} as {}", target.id(), target.user),
             handle.authenticate_publickey(&target.user, with_hash),
         )
         .await?;
+
         if result.success() {
             return Ok(());
         }
+
         last_error = format!("{}: rejected by server", path.display());
     }
 
     if password_allowed(target) {
         let scope = target.scope();
         let prompt = format!("password for {scope}");
+
         match auth::acquire(
             &scope,
             auth::SecretKind::Password,
@@ -354,9 +360,11 @@ async fn authenticate(handle: &mut Handle<ClientHandler>, target: &Target) -> Re
                     handle.authenticate_password(&target.user, password.clone()),
                 )
                 .await?;
+
                 if result.success() {
                     return Ok(());
                 }
+
                 // 只开 keyboard-interactive 的服务器（常见于 PAM 配置）用同一密码再试一次
                 if keyboard_interactive(handle, target, &password).await? {
                     return Ok(());
@@ -395,11 +403,12 @@ fn password_allowed(target: &Target) -> bool {
     if std::env::var("PRUX_SSH_PASSWORD").is_ok_and(|v| !v.is_empty()) {
         return true;
     }
+
     target.identity.is_none()
 }
 
 /// 加载私钥；口令保护时询问口令并重试一次
-async fn load_key(path: &Path, target: &Target) -> Result<russh::keys::PrivateKey, String> {
+async fn load_key(path: &Path, target: &Target) -> Result<PrivateKey, String> {
     match load_secret_key(path, None) {
         Ok(key) => Ok(key),
         Err(first) => {
@@ -439,6 +448,7 @@ async fn keyboard_interactive(
         handle.authenticate_keyboard_interactive_start(&target.user, None::<String>),
     )
     .await?;
+
     match start {
         Response::Success => Ok(true),
         Response::Failure { .. } => Ok(false),
@@ -480,10 +490,12 @@ pub async fn exec_capture(
             .exec(true, full.as_bytes())
             .await
             .map_err(|e| format!("send command: {e}"))?;
+
         let mut stdout: Vec<u8> = Vec::new();
         let mut stderr: Vec<u8> = Vec::new();
         let mut exit_code = None;
         let mut truncated = false;
+
         while let Some(msg) = channel.wait().await {
             match msg {
                 ChannelMsg::Data { data } => {

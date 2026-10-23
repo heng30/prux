@@ -129,6 +129,7 @@ impl Sftp {
             .map(|l| l.max(0) as usize)
             .unwrap_or(limits.read_max_lines);
         let quoted = shell_quote(path);
+
         // split('\n') 的段数恒等于换行符数 + 1：用它把 wc 的结果对齐到本地语义
         let command = format!(
             "if [ -f {quoted} ]; then wc -l < {quoted}; else echo MISSING; fi; sed -n '{} , {} p' {quoted} 2>/dev/null | head -c {}",
@@ -136,6 +137,7 @@ impl Sftp {
             start_line.saturating_add(max_take.saturating_sub(1)),
             limits.read_max_bytes
         );
+
         let out = transport::exec(&self.conn, &command, None, None, 4 * 1024 * 1024)
             .await
             .map_err(|e| format!("read {path}: {e}"))?;
@@ -144,6 +146,7 @@ impl Sftp {
         if head == "MISSING" {
             return Err(format!("{path}: no such file"));
         }
+
         let newlines: usize = head.parse().unwrap_or(0);
         let total_lines = newlines + 1;
         if start_line > total_lines {
@@ -153,11 +156,13 @@ impl Sftp {
                 ..Default::default()
             });
         }
+
         let mut selected: Vec<&str> = lines.collect();
         // sed 输出以换行结尾，split 后多一个空段
         if selected.last().is_some_and(|l| l.is_empty()) {
             selected.pop();
         }
+
         Ok(LineRange {
             selected_lines: selected.len(),
             content: selected.join("\n"),
@@ -171,6 +176,7 @@ impl Sftp {
         if let Some(parent) = parent_posix(path) {
             self.mkdir_p(&parent).await?;
         }
+
         let mut file = self
             .session
             .create(path)
@@ -189,11 +195,12 @@ impl Sftp {
         if dir.is_empty() || dir == "/" {
             return Ok(());
         }
+
         let mut current = String::new();
         for part in dir.split('/').filter(|p| !p.is_empty()) {
             current.push('/');
             current.push_str(part);
-            let _ = self.session.create_dir(current.clone()).await;
+            _ = self.session.create_dir(current.clone()).await;
         }
         Ok(())
     }
@@ -202,16 +209,19 @@ impl Sftp {
     pub async fn walk_files(&self, root: &str) -> Result<Vec<String>, String> {
         let mut out = Vec::new();
         let mut stack = vec![(root.to_string(), String::new())];
+
         while let Some((dir, prefix)) = stack.pop() {
             for (name, is_dir) in self.list(&dir).await? {
                 if name == "." || name == ".." {
                     continue;
                 }
+
                 let rel = if prefix.is_empty() {
                     name.clone()
                 } else {
                     format!("{prefix}/{name}")
                 };
+
                 if is_dir {
                     stack.push((format!("{dir}/{name}"), rel));
                 } else {
@@ -235,6 +245,7 @@ impl Sftp {
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("create {}: {e}", parent.display()))?;
         }
+
         std::fs::write(local, &bytes).map_err(|e| format!("write {}: {e}", local.display()))?;
         Ok(bytes.len() as u64)
     }

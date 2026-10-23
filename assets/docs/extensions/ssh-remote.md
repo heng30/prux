@@ -28,8 +28,13 @@
 所有工具都有 `host` 参数：`user@host[:port]`，或 `~/.ssh/config` 里的别名。
 省略时使用 `/ssh <target>` 设置的默认目标。
 
+这五个工具是**延迟工具**：它们不在开箱可见的工具列表里，模型要先调用 `tool_search`
+检索（`query: "ssh remote"` 即可命中整族），命中后从下一次调用起直接可用。所以
+`tool-search` 扩展需要处于启用状态；`/extension` 面板里 ssh-remote 的详情页会标出这一前置关系。
+
 ```text
 用户：看看线上机器 /var/log/app 里最近的报错
+→ tool_search { query: "ssh remote" }
 → remote_exec { command: "tail -n 100 /var/log/app/error.log", host: "prod-web-1" }
 → remote_grep { pattern: "panic|ERROR", path: "/var/log/app", host: "prod-web-1" }
 ```
@@ -48,6 +53,7 @@
 | `/ssh disconnect [target\|all]` | 断开连接 |
 | `/ssh forget-host <host:port>` | 忘记已记录的主机密钥 |
 | `/ssh forget [all]` | 清除缓存的密码 / 私钥口令 |
+| `/ssh help` | 打印目标写法（`-p` / `-i` / `-J` / `-o PasswordFile=`）与全部子命令 |
 
 ### `/tunnel`
 

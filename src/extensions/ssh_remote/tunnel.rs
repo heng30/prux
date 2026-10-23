@@ -65,7 +65,7 @@ pub async fn start(spec: TunnelSpec) -> Result<u16, String> {
         transport::resolve_host(&spec.host).await?
     };
 
-    let (shutdown, mut stopped) = tokio::sync::oneshot::channel::<()>();
+    let (shutdown, mut stopped) = oneshot::channel::<()>();
     let target = (spec.remote_host.clone(), spec.remote_port);
     let task = tokio::spawn(async move {
         loop {
@@ -73,11 +73,14 @@ pub async fn start(spec: TunnelSpec) -> Result<u16, String> {
                 _ = &mut stopped => break,
                 accepted = listener.accept() => accepted,
             };
+
             let Ok((mut local, _)) = accepted else {
                 continue;
             };
+
             let handle = conn.handle.clone();
             let (remote_host, remote_port) = target.clone();
+
             // 每条客户端连接一条 direct-tcpip 通道，互相不阻塞
             tokio::spawn(async move {
                 let Ok(channel) = handle
@@ -177,6 +180,7 @@ pub fn forget_all() -> Result<usize, String> {
     if removed == 0 {
         return Ok(0);
     }
+
     cfg.tunnels.clear();
     cfg.save()?;
     Ok(removed)

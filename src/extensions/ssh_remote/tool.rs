@@ -6,15 +6,27 @@
 //!
 //! 每个工具都按 `host` 取连接（`None` = `/ssh <target>` 设的默认端点），
 //! 连接按端点缓存在 [`crate::extensions::ssh_remote::transport`] 里，多台机器可以同时在线。
+//!
+//! # 按需加载
+//!
+//! 五个工具整体声明为**延迟工具**（[`ToolExposure::Deferred`]）：描述、参数 schema、
+//! snippet 与 guidelines 都不进模型可见列表与系统提示。远程不是常用能力，用户要用时会
+//! 明说（「连到 prod-web-1 看日志」），模型据此先 `tool_search` 检索，**下一次调用**即拿到
+//! 完整声明。整族一起延迟是刻意的：只放出其中一部分会让模型按半套能力规划——只给
+//! `remote_exec` 它就用 `cat` 绕过 `remote_read`。因此本扩展的前置工具是 `tool_search`
+//! （由 [`crate::extensions::ssh_remote::SshRemote::prerequisite_tools`] 声明）。
 
 use crate::{
     core::{
-        extensions::{ExtensionTool, ToolAnnotations},
+        extensions::{ExtensionTool, ToolAnnotations, ToolExposure},
         tools::{ToolError, ToolResult},
     },
-    extensions::ssh_remote::{
-        exec, fs,
-        transport::{self, RemoteConn},
+    extensions::{
+        ssh_remote::{
+            exec, fs,
+            transport::{self, RemoteConn},
+        },
+        util::{opt_i64, opt_str},
     },
     utils::{
         display::format_bytes,
@@ -43,15 +55,18 @@ const LIST_LIMIT: usize = 50;
 /// 单次 sync 的文件数上限
 const MAX_SYNC_FILES: usize = 2000;
 
-/// 全部工具定义
+/// 全部工具定义（整族统一标记为延迟工具，见模块文档「按需加载」）
 pub fn tools() -> Vec<ExtensionTool> {
-    vec![
+    [
         exec_tool(),
         read_tool(),
         ls_tool(),
         grep_tool(),
         sync_tool(),
     ]
+    .into_iter()
+    .map(|tool| tool.with_exposure(ToolExposure::Deferred))
+    .collect()
 }
 
 /// `host` 参数的通用说明
@@ -181,19 +196,9 @@ async fn conn_for(host: Option<&str>) -> Result<Arc<RemoteConn>, String> {
     }
 }
 
-/// 从参数里取字符串
-fn str_arg<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
-    args.get(key).and_then(|v| v.as_str())
-}
-
-/// 从参数里取整数
-fn int_arg(args: &Value, key: &str) -> Option<i64> {
-    args.get(key).and_then(|v| v.as_i64())
-}
-
 /// 分派一个工具调用；`cwd` 是本地会话工作目录（解析 `remote_sync` 的相对本地路径）
 pub async fn dispatch(name: &str, args: &Value, cwd: &str) -> Result<ToolResult, ToolError> {
-    let host = str_arg(args, "host");
+    let host = opt_str(args, "host");
     match name {
         EXEC => run_exec(host, args).await,
         READ => run_read(host, args).await,
@@ -206,16 +211,16 @@ pub async fn dispatch(name: &str, args: &Value, cwd: &str) -> Result<ToolResult,
 
 /// `remote_exec`
 async fn run_exec(host: Option<&str>, args: &Value) -> Result<ToolResult, ToolError> {
-    let command = str_arg(args, "command")
+    let command = opt_str(args, "command")
         .map(str::trim)
         .filter(|c| !c.is_empty())
         .ok_or_else(|| ToolError("`command` is required".to_string()))?;
     let conn = conn_for(host).await.map_err(ToolError)?;
     let request = exec::ExecRequest {
         command: command.to_string(),
-        cwd: str_arg(args, "cwd").map(|s| s.to_string()),
-        timeout_secs: int_arg(args, "timeout_secs").map(|v| v.max(1) as u32),
-        tail_lines: int_arg(args, "tail_lines").map(|v| v.max(0) as usize),
+        cwd: opt_str(args, "cwd").map(|s| s.to_string()),
+        timeout_secs: opt_i64(args, "timeout_secs").map(|v| v.max(1) as u32),
+        tail_lines: opt_i64(args, "tail_lines").map(|v| v.max(0) as usize),
     };
     let text = exec::run(&conn, &request).await.map_err(ToolError)?;
     Ok(ToolResult::text(text))
@@ -223,20 +228,20 @@ async fn run_exec(host: Option<&str>, args: &Value) -> Result<ToolResult, ToolEr
 
 /// `remote_read`
 async fn run_read(host: Option<&str>, args: &Value) -> Result<ToolResult, ToolError> {
-    let path = str_arg(args, "path").ok_or_else(|| ToolError("`path` is required".to_string()))?;
+    let path = opt_str(args, "path").ok_or_else(|| ToolError("`path` is required".to_string()))?;
     let conn = conn_for(host).await.map_err(ToolError)?;
     let limits = transport::limits();
     let sftp = fs::open(&conn).await.map_err(ToolError)?;
     let slice = sftp
         .read_range(
             path,
-            int_arg(args, "offset"),
-            int_arg(args, "limit"),
+            opt_i64(args, "offset"),
+            opt_i64(args, "limit"),
             &limits,
         )
         .await
         .map_err(ToolError)?;
-    let start = int_arg(args, "offset").unwrap_or(1).max(1);
+    let start = opt_i64(args, "offset").unwrap_or(1).max(1);
     let header = if slice.offset_beyond_end {
         format!(
             "{}:{} (offset {start} is past the end: {} lines)",
@@ -265,7 +270,7 @@ async fn run_read(host: Option<&str>, args: &Value) -> Result<ToolResult, ToolEr
 /// `remote_ls`
 async fn run_ls(host: Option<&str>, args: &Value) -> Result<ToolResult, ToolError> {
     let conn = conn_for(host).await.map_err(ToolError)?;
-    let path = str_arg(args, "path")
+    let path = opt_str(args, "path")
         .map(|s| s.to_string())
         .unwrap_or_else(|| conn.endpoint.cwd.clone());
     let sftp = fs::open(&conn).await.map_err(ToolError)?;
@@ -299,19 +304,20 @@ async fn run_ls(host: Option<&str>, args: &Value) -> Result<ToolResult, ToolErro
 
 /// `remote_grep`
 async fn run_grep(host: Option<&str>, args: &Value) -> Result<ToolResult, ToolError> {
-    let pattern = str_arg(args, "pattern")
+    let pattern = opt_str(args, "pattern")
         .filter(|p| !p.is_empty())
         .ok_or_else(|| ToolError("`pattern` is required".to_string()))?;
     let conn = conn_for(host).await.map_err(ToolError)?;
-    let max = int_arg(args, "max_matches")
+    let max = opt_i64(args, "max_matches")
         .map(|v| v.clamp(1, 5000) as usize)
         .unwrap_or(GREP_DEFAULT_MAX);
-    let path = str_arg(args, "path")
+    let path = opt_str(args, "path")
         .map(|s| s.to_string())
         .unwrap_or_else(|| conn.endpoint.cwd.clone());
     let quoted_pattern = shell_quote(pattern);
     let quoted_path = shell_quote(&path);
-    let glob = str_arg(args, "glob");
+    let glob = opt_str(args, "glob");
+
     // 远端优先用 ripgrep；没有就退回 grep。两者都限制总行数，避免刷屏。
     let command = match glob {
         Some(g) => format!(
@@ -329,6 +335,7 @@ async fn run_grep(host: Option<&str>, args: &Value) -> Result<ToolResult, ToolEr
              2>/dev/null | head -n {max}"
         ),
     };
+
     let limits = transport::limits();
     let budget = transport::take_turn_budget(limits.exec_max_bytes);
     if budget == 0 {
@@ -360,13 +367,13 @@ async fn run_grep(host: Option<&str>, args: &Value) -> Result<ToolResult, ToolEr
 
 /// `remote_sync`
 async fn run_sync(host: Option<&str>, args: &Value, cwd: &str) -> Result<ToolResult, ToolError> {
-    let direction = str_arg(args, "direction")
+    let direction = opt_str(args, "direction")
         .filter(|d| *d == "push" || *d == "pull")
         .ok_or_else(|| ToolError("`direction` must be push or pull".to_string()))?;
-    let local_arg = str_arg(args, "local")
+    let local_arg = opt_str(args, "local")
         .filter(|s| !s.is_empty())
         .ok_or_else(|| ToolError("`local` is required".to_string()))?;
-    let remote_arg = str_arg(args, "remote")
+    let remote_arg = opt_str(args, "remote")
         .filter(|s| !s.is_empty())
         .ok_or_else(|| ToolError("`remote` is required".to_string()))?;
     let dry_run = args
@@ -552,6 +559,11 @@ mod tests {
         names.dedup();
         assert_eq!(names.len(), 5, "工具名不能重复");
         for tool in &tools {
+            assert!(
+                matches!(tool.exposure, ToolExposure::Deferred),
+                "{} 必须是延迟工具（整族一致，见模块文档）",
+                tool.name
+            );
             assert!(tool.snippet.len() < 80, "{} snippet 太长", tool.name);
             assert!(
                 crate::extensions::ssh_remote::state::Limits::default().read_max_lines > 0,

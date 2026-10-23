@@ -11,7 +11,9 @@
 //! 2. 隧道：`/tunnel add 15432:localhost:5432` 把远端服务映射到 `127.0.0.1`，
 //!    之后本地一切（含 MCP server、数据库客户端）照旧连 localhost。
 //!
-//! **默认不启用**：它会建立出站连接并可能改动远端文件。
+//! **默认不启用**：它会建立出站连接并可能改动远端文件；五个工具都是
+//! **延迟工具**（`ToolExposure::Deferred`），模型先用 `tool_search` 检索到它们，
+//! **下一轮**才拿到完整声明。
 
 mod auth;
 mod command;
@@ -30,16 +32,17 @@ mod e2e_test;
 use crate::{
     core::{
         extensions::{
-            self, DockLine, DockSpan, Extension, ExtensionCommand, ExtensionHook, ExtensionMode,
-            ExtensionTool, ExtensionUiRequest, ForkProjectInfo, OverlayEvent, OverlayView,
-            ToolExecCtx, UiNotifyLevel, request_ui,
+            DockLine, DockSpan, Extension, ExtensionCommand, ExtensionHook, ExtensionMode,
+            ExtensionTool, ExtensionUiRequest, OverlayEvent, OverlayView, ToolExecCtx,
+            UiNotifyLevel, request_ui,
         },
         provider::AgentMessage,
         session_manager::Session,
         tools::{ToolError, ToolResult},
     },
     extensions::{
-        EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_SSH_REMOTE, ssh_remote::state::RemoteConfig,
+        EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_SSH_REMOTE,
+        ssh_remote::state::RemoteConfig, tool_search,
     },
     modes::interactive::handlers::register_slash_command,
 };
@@ -74,18 +77,15 @@ impl Extension for SshRemote {
         "Remote SSH toolset: remote_exec/read/ls/grep/sync plus local port tunnels; built-in tools stay local"
     }
 
-    /// 来源信息（面板展示）
-    fn fork_project(&self) -> Option<ForkProjectInfo> {
-        Some(extensions::ForkProjectInfo {
-            plugin_name: "pi-ssh-remote".to_string(),
-            plugin_version: "0.1.15".to_string(),
-            url: "https://github.com/petrichor20211/pi-ssh-remote".to_string(),
-        })
-    }
-
     /// 仅在 Dev 模式下可用（All 与 Creator 之外更低的级别；按当前需要不覆盖 Creator）。
     fn modes(&self) -> Vec<ExtensionMode> {
         vec![ExtensionMode::Dev]
+    }
+
+    /// 前置工具：五个 `remote_*` 都是延迟工具，模型得先用 `tool_search` 才能发现它们
+    /// （`/extension` 二级详情页按此展示 `requires`）。
+    fn prerequisite_tools(&self) -> Vec<String> {
+        vec![tool_search::TOOL_NAME.to_string()]
     }
 
     /// 会建立出站连接、可能改动远端文件，必须显式开启
@@ -237,6 +237,11 @@ mod tests {
         let cmds: Vec<String> = SshRemote.commands().into_iter().map(|c| c.name).collect();
         assert_eq!(cmds, vec![command::CMD, command::TUNNEL_CMD]);
         assert!(!SshRemote.default_enabled(), "必须默认关闭");
+        assert_eq!(
+            SshRemote.prerequisite_tools(),
+            vec!["tool_search"],
+            "延迟工具的前置工具必须是 tool_search"
+        );
     }
 
     /// 没连接也没隧道时停靠面板必须为空（面板据此自动隐藏）

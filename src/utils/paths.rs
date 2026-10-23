@@ -246,6 +246,16 @@ pub fn file_stamp(path: &Path) -> (Option<SystemTime>, Option<u64>) {
     }
 }
 
+/// 读一个 JSON 配置文件（缺失 / 内容损坏 → `Value::Null`，不报错也不改写用户文件）。
+///
+/// 配合配置读缓存使用：缓存层只存 `Value`，结构体解析与容错口径由调用方决定。
+pub fn read_json_file(path: &Path) -> serde_json::Value {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .unwrap_or(serde_json::Value::Null)
+}
+
 /// 从主题参数中提取主题名（取文件名主干）
 pub fn theme_name_from_arg(arg: &str) -> String {
     let path = Path::new(arg);
