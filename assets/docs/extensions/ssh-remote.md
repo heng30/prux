@@ -1,0 +1,146 @@
+# SSH 远程工具与隧道（ssh-remote）
+
+`ssh-remote` 给 prux 加上「另一台机器」：模型可以用 `remote_exec` 在远端跑命令，
+用 `remote_read` / `remote_ls` / `remote_grep` 读远端文件，用 `remote_sync` 搬文件；
+用户可以用 `/tunnel` 把远端端口映射到本机。
+
+**它不改写任何内置工具。** 内置 `read`、`write`、`edit`、`ls`、`find`、`grep`、`bash`
+始终只操作本地，`@` 文件补全、`!` 命令、git 分支、LSP、子代理看到的也始终只有本地。
+远程是「第二个文件系统 + 一台能跑命令的机器」，不是工作区——这是刻意的：
+
+- 不存在「一半穿透、一半不穿透」的裂缝（LSP / MCP / 子代理不可能跑到远端）；
+- 本地与远端可以同时用，不需要先「切过去」；
+- 断开远端不会影响本地会话。
+
+**默认不启用**：它会建立出站连接、并可能改动远端文件。在 `/extension` 面板开启，
+或把 `ssh-remote` 加进 `settings.json` 的 `enabledExtensions`。
+
+## 工具
+
+| 工具 | 作用 |
+|---|---|
+| `remote_exec` | 在远端跑一条 shell 命令（查日志、进程、磁盘、容器） |
+| `remote_read` | 读远端文本文件，支持 `offset` / `limit` 行范围 |
+| `remote_ls` | 列远端目录（目录在前，文件带大小） |
+| `remote_grep` | 远端检索文件内容（有 ripgrep 用 ripgrep，否则退回 `grep -rn`） |
+| `remote_sync` | 本地 ↔ 远端复制文件或目录树，支持 `dry_run` |
+
+所有工具都有 `host` 参数：`user@host[:port]`，或 `~/.ssh/config` 里的别名。
+省略时使用 `/ssh <target>` 设置的默认目标。
+
+```text
+用户：看看线上机器 /var/log/app 里最近的报错
+→ remote_exec { command: "tail -n 100 /var/log/app/error.log", host: "prod-web-1" }
+→ remote_grep { pattern: "panic|ERROR", path: "/var/log/app", host: "prod-web-1" }
+```
+
+## 命令
+
+### `/ssh`
+
+| 用法 | 作用 |
+|---|---|
+| `/ssh user@host[:port]` | 设为默认目标（也接受完整 `ssh -i key -p 2202 ...` 写法）并立刻试连一次 |
+| `/ssh list` | 列出已连接端点与已记住的目标 |
+| `/ssh status` | 默认目标、已知目标数、活跃隧道数、超时与每轮输出预算 |
+| `/ssh cd <path>` | 设置默认目标的远端工作目录 |
+| `/ssh note <text>` | 给默认目标加备注（显示在停靠面板） |
+| `/ssh disconnect [target\|all]` | 断开连接 |
+| `/ssh forget-host <host:port>` | 忘记已记录的主机密钥 |
+| `/ssh forget [all]` | 清除缓存的密码 / 私钥口令 |
+
+### `/tunnel`
+
+| 用法 | 作用 |
+|---|---|
+| `/tunnel add [host:]本地端口:远端主机:远端端口` | 把远端服务映射到 `127.0.0.1:本地端口` |
+| `/tunnel remove <本地端口>` | 停掉一条转发 |
+| `/tunnel list` | 列出活跃与已配置的转发 |
+| `/tunnel stop-all` | 停掉全部转发 |
+
+```text
+/tunnel add 15432:localhost:5432
+```
+
+之后本机的数据库客户端、脚本、MCP server 全部连 `127.0.0.1:15432` 就行——
+这是访问远端服务最干净的路径：远端只是「资源」，本地工具一个都不用改。
+
+## 认证
+
+先试公钥，失败后再试密码。公钥候选顺序：
+
+1. `-i <key>` 或 `~/.ssh/config` 里该主机的 `IdentityFile`；
+2. 否则依次尝试 `~/.ssh/id_ed25519`、`~/.ssh/id_ecdsa`、`~/.ssh/id_rsa`（缺文件跳过）。
+
+显式 `-i` 保持「排他」：只有在同时提供密码来源时才回退密码。私钥有口令时会提示输入口令。
+
+密码来源按顺序：
+
+1. 进程内缓存（同一次运行里重连、再次连接直接复用）；
+2. `-o PasswordFile=<path>`（文件权限必须是 0600，否则拒绝读取并报出 `chmod 600` 提示）；
+3. 环境变量 `PRUX_SSH_PASSWORD`；
+4. TUI 掩码输入框（逐键回传，屏幕上只显示 `*`）。
+
+服务器只接受 keyboard-interactive 而不是 `password` 时（常见于 PAM 配置），会用同一个密码
+自动再试一次。私钥口令可用 `PRUX_SSH_KEY_PASSPHRASE` 提供，或直接在弹出的输入框里键入。
+
+凭据只保存在进程内存：不写文件、不进命令行参数、不进会话记录。`/ssh forget` 清空当前
+默认目标的缓存，`/ssh forget all` 清空全部；`/ssh disconnect` 保留缓存以便重连。
+
+不支持 SSH agent（`SSH_AUTH_SOCK`）。
+
+## 主机密钥
+
+首次连接采用 TOFU：把服务器公钥记进 `agent_dir()/ssh-remote-known-hosts.json`。
+之后公钥不匹配会**直接拒绝**，并提示运行 `/ssh forget-host <host:port>`。
+这挡的是中间人与「同 IP 换了机器」，不是可以随手跳过的提示。
+
+## 跳板机与代理
+
+- `-J user@bastion:22` 或 `-o ProxyJump=bastion`：经跳板机连接（跳板机自己也走完整认证）；
+- `~/.ssh/config` 的 `Host` / `HostName` / `User` / `Port` / `IdentityFile` / `ProxyJump` 会被应用；
+- 出站代理取 `ALL_PROXY`（`socks5://` / `socks5h://` / `http://`），也可在 `agent_dir()/extensions/ssh-remote.json`
+  里设置 `proxy`。
+
+## 输出预算
+
+远端输出动辄几十万行，直接回灌会瞬间吃掉上下文。因此有三道闸：
+
+- 单次 `remote_exec` 默认 8 KiB / 200 行，超出的部分只保留尾部并明确告知「还剩多少行」；
+- `remote_exec` 支持 `tail_lines`，在**远端**就用 `tail -n N` 截断，省带宽；
+- 每轮所有远程输出合计默认 32 KiB，用尽后工具会直接说明「本轮预算已用尽」，不静默丢内容。
+
+`remote_read` 对大文件（大于 2 MiB）走「远端 `wc -l` + `sed -n` 取范围」，不会把整个文件拉回本地。
+
+## 配置
+
+`agent_dir()/extensions/ssh-remote.json`：
+
+```json
+{
+  "default": { "host": "gpu1", "user": "root", "port": 22, "cwd": "/srv/app" },
+  "known": [ { "host": "gpu1", "user": "root", "port": 22 } ],
+  "tunnels": [ { "host": "", "localPort": 15432, "remoteHost": "localhost", "remotePort": 5432 } ],
+  "timeoutSeconds": 30,
+  "execMaxLines": 200,
+  "execMaxBytes": 8192,
+  "readMaxLines": 400,
+  "readMaxBytes": 16384,
+  "turnMaxBytes": 32768
+}
+```
+
+- `default`：工具省略 `host` 时用的目标；
+- `known`：连过一次就记住，省掉重述参数与 `~/.ssh/config` 查询；
+- `tunnels`：扩展启用时自动拉起（失败只提示，不阻断启动）；
+- 其余字段是上面「输出预算」里的上限，可手改。
+
+主机密钥单独存在 `agent_dir()/ssh-remote-known-hosts.json`，与配置分开是为了能安全删除。
+
+## 已知边界
+
+- 不支持 SSH agent（`SSH_AUTH_SOCK`）；密码与私钥口令走「认证」一节的来源。
+- 远端没有 `rg` 时 `remote_grep` 退回 `grep -rn`，语义略有差异（`grep` 的 `-m` 是每文件上限）。
+- `remote_sync` 是逐文件 SFTP 传输，不做增量对比、不删目标端多余文件；单次上限 2000 个文件。
+- 端口转发只监听 `127.0.0.1`，不对外暴露。
+- 远端 LSP / 远端 MCP / 远端子代理不在本扩展范围内。

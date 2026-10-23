@@ -344,9 +344,11 @@ mod tests {
         for i in 0..5 {
             s.create(format!("t{i}"), "d".into(), None, None).unwrap();
         }
-        let mut cfg = TasksConfig::default();
-        cfg.max_visible = Some(2);
-        cfg.hidden_at = Some(super::super::config::HiddenAt::Top);
+        let cfg = TasksConfig {
+            max_visible: Some(2),
+            hidden_at: Some(super::super::config::HiddenAt::Top),
+            ..Default::default()
+        };
         let lines = build_lines(
             &s,
             &cfg,
@@ -375,8 +377,10 @@ mod tests {
             },
         )
         .unwrap();
-        let mut cfg = TasksConfig::default();
-        cfg.collapse_completed = Some(true);
+        let cfg = TasksConfig {
+            collapse_completed: Some(true),
+            ..Default::default()
+        };
         let lines = build_lines(
             &s,
             &cfg,

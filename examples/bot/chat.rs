@@ -237,7 +237,7 @@ async fn handle_event(tx: &mpsc::Sender<response::StreamTextItem>, event: &str) 
             }
         }
         // Continue processing other events instead of breaking
-        Err(e) => log::error!("Parse error: {:?} event={}", e, &event),
+        Err(e) => log::error!("Parse error: {:?} event={}", e, event),
     }
     Ok(false)
 }
@@ -246,13 +246,14 @@ async fn handle_event(tx: &mpsc::Sender<response::StreamTextItem>, event: &str) 
 /// (end of the event content, length of the separator). `\n` never occurs
 /// inside a multi-byte UTF-8 sequence, so searching raw bytes is safe.
 fn find_event_separator(buf: &[u8]) -> Option<(usize, usize)> {
-    if let Some(pos) = buf.windows(2).position(|w| w == b"\n\n") {
-        Some((pos, 2))
-    } else if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
-        Some((pos, 4))
-    } else {
-        None
-    }
+    buf.windows(2)
+        .position(|w| w == b"\n\n")
+        .map(|pos| (pos, 2))
+        .or_else(|| {
+            buf.windows(4)
+                .position(|w| w == b"\r\n\r\n")
+                .map(|pos| (pos, 4))
+        })
 }
 
 #[cfg(test)]

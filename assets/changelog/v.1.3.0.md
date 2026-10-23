@@ -4,6 +4,19 @@ This release aligns prux with upstream pi 1.3.0.
 
 ### Added
 
+- **`ssh-remote` extension: remote tools and port tunnels**: adds `remote_exec` (run a command on
+  a remote host), `remote_read` / `remote_ls` / `remote_grep` (read remote files) and `remote_sync`
+  (copy files or trees between local and remote, with `dry_run`), plus `/ssh` for target management
+  and `/tunnel` for mapping a remote port onto `127.0.0.1`. Built-in tools are untouched: `read`,
+  `write`, `edit`, `ls`, `find`, `grep`, `bash`, `@` completion and `!` commands keep operating on
+  local files only, so nothing ends up half-redirected. Targets accept `-i`, `-p`, `-J` and
+  `-o ProxyJump=`, resolve `~/.ssh/config` aliases and `ALL_PROXY`. Authentication tries public keys
+  first (`-i`, `IdentityFile`, then the default keys), then a password from `-o PasswordFile=`
+  (0600), `PRUX_SSH_PASSWORD`, or a masked TUI prompt, falling back to keyboard-interactive for
+  PAM-only servers; credentials stay in process memory and `/ssh forget` clears them. SSH agent is
+  not supported. Host keys are remembered TOFU-style with a hard refusal when the fingerprint
+  changes. Large files are read by line range instead of being downloaded whole, and command output
+  is bounded per call (200 lines / 8 KiB) and per turn (32 KiB). Disabled by default.
 - **`/share` destination is configurable**: `settings.json` takes
   `sessionShareDestination` (`auto` / `gist` / `radius`), switchable from `/settings`. `auto` and
   `gist` create a private gist; `radius` fails with a clear message instead of silently falling back,
@@ -201,6 +214,16 @@ This release aligns prux with upstream pi 1.3.0.
 
 ### 新增
 
+- **新增 `ssh-remote` 扩展：远程工具族与端口隧道**：提供 `remote_exec`（在远端跑命令）、
+  `remote_read` / `remote_ls` / `remote_grep`（读远端文件）、`remote_sync`（本地↔远端复制文件或
+  目录树，支持 `dry_run`），以及 `/ssh` 目标管理与 `/tunnel` 端口映射。**不改写任何内置工具**：
+  `read` / `write` / `edit` / `ls` / `find` / `grep` / `bash`、`@` 补全与 `!` 命令始终只操作本地，
+  不会出现「一半穿透、一半不穿透」。目标支持 `-i`、`-p`、`-J`、`-o ProxyJump=`，会解析
+  `~/.ssh/config` 别名与 `ALL_PROXY`。认证先试公钥（`-i`、`IdentityFile`、再退到默认密钥），
+  失败后取密码（`-o PasswordFile=` 的 0600 文件、`PRUX_SSH_PASSWORD`、或 TUI 掩码输入），对只开
+  keyboard-interactive 的服务器自动用同一密码重试；凭据只留在进程内存，`/ssh forget` 清除。
+  不支持 SSH agent。主机密钥按 TOFU 记录，指纹变化时直接拒绝。大文件按行范围读取而不是整份
+  下载，命令输出有单次（200 行 / 8 KiB）与每轮（32 KiB）两级预算。**默认不启用**。
 - **`/share` 的上传目标可配置**：`settings.json` 新增 `sessionShareDestination`（`auto` / `gist` /
   `radius`），在 `/settings` 里可切换。`auto` 与 `gist` 建私密 gist；本版没有 Radius 上传，
   `radius` 直接给出明确报错，而不是静默降级成 gist。

@@ -1372,7 +1372,7 @@ fn memory_list(cwd: Option<&str>, scope_arg: Option<&str>) -> String {
     if entries.is_empty() {
         return "No memories stored.".to_string();
     }
-    entries.sort_by(|a, b| b.1.updated_ms().cmp(&a.1.updated_ms()));
+    entries.sort_by_key(|entry| std::cmp::Reverse(entry.1.updated_ms()));
     entries.truncate(MAX_LIST_LIMIT);
 
     let mut out = format!("Memories ({}):\n\n", entries.len());

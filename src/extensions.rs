@@ -39,6 +39,7 @@ pub mod rewind;
 pub mod session_search;
 pub mod shake;
 pub mod skills;
+pub mod ssh_remote;
 pub mod subagent;
 pub mod tasks;
 pub mod tool_search;
@@ -118,6 +119,8 @@ pub const PRIORITY_MEMORY: u32 = 56;
 pub const PRIORITY_UPDATE_CHECK: u32 = 55;
 /// usage provider 配额面板扩展的注册优先级。
 pub const PRIORITY_USAGE: u32 = 54;
+/// ssh-remote 远程工具族与隧道扩展的注册优先级。
+pub const PRIORITY_SSH_REMOTE: u32 = 51;
 /// doc-helper 按需文档查询扩展的注册优先级。
 pub const PRIORITY_DOC_HELPER: u32 = 50;
 /// debug 调试工具集扩展注册优先级。

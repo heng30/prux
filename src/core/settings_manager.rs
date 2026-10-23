@@ -287,7 +287,7 @@ pub fn agent_dir() -> PathBuf {
             return expand_tilde(PathBuf::from(dir));
         }
 
-        return test_agent_dir_fallback();
+        test_agent_dir_fallback()
     }
 
     #[cfg(not(any(test, feature = "test-support")))]

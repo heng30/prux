@@ -67,9 +67,9 @@ async fn main() {
     let handle = tokio::spawn(async move {
         while let Some(item) = rx.recv().await {
             if let Some(ref text) = item.reasoning_text {
-                content.push_str(&text);
+                content.push_str(text);
             } else if let Some(ref text) = item.text {
-                content.push_str(&text);
+                content.push_str(text);
             }
 
             // 网关/上游失败（401 / 404 model_not_found / 上游 5xx / 流中途错误帧）走 etext；

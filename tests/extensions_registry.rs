@@ -47,6 +47,7 @@ fn register_all_collects_and_sorts_slices() {
         "mcp",
         "web-access",
         "proxy",
+        "ssh-remote",
         "rewind",
         "skills",
         "extra-themes",
@@ -78,11 +79,12 @@ fn register_all_collects_and_sorts_slices() {
 
     prux::extensions::register_all();
 
-    // 分布式切片确实汇聚：36 个工具扩展 + 3 个底栏扩展
-    assert_eq!(extension_count(), 36, "普通扩展应被切片收集");
+    // 分布式切片确实汇聚：37 个工具扩展 + 3 个底栏扩展
+    assert_eq!(extension_count(), 37, "普通扩展应被切片收集");
     assert_eq!(footer_extension_count(), 3, "footer 扩展应全被切片收集");
 
-    // plan-mode / goal / subagent / tasks / web-access / proxy / doc-helper / notify 是声明 default_enabled() == false 的默认可选扩展：
+    // plan-mode / goal / subagent / tasks / web-access / proxy / ssh-remote / doc-helper / notify
+    // 是声明 default_enabled() == false 的默认可选扩展：
     // 注册后在注册表中但为禁用态，不进入 registered()（工具/命令/flag 均不生效）
     assert!(!is_extension_enabled("plan-mode"), "plan-mode 应默认不启用");
     assert!(!is_extension_enabled("goal"), "goal 应默认不启用");
@@ -95,6 +97,10 @@ fn register_all_collects_and_sorts_slices() {
     assert!(
         !is_extension_enabled("proxy"),
         "proxy 应默认不启用（占端口 + 暴露凭据）"
+    );
+    assert!(
+        !is_extension_enabled("ssh-remote"),
+        "ssh-remote 应默认不启用（会改写内置工具的执行落点）"
     );
     assert!(
         !is_extension_enabled("rewind"),
@@ -348,4 +354,42 @@ fn no_extensions_disables_registered_extensions() {
     set_all_extensions_disabled(false);
     reload_from_settings();
     assert!(unregister_extension("no-extensions-probe"));
+}
+
+/// `ssh-remote` 在分布式切片里应暴露五个 `remote_*` 工具与两条命令，
+/// 并保持「默认不启用」（它会建立出站连接、可能改动远端文件）。
+///
+/// 只查切片、不调 `register_all()`：全局注册表由本文件的主测试独占，
+/// 这里再注册一次会把 footer 计数翻倍（互斥组没有「重复注册去重」）。
+#[test]
+fn ssh_remote_registers_remote_tool_and_command() {
+    let _l = guard();
+    let ext = prux::extensions::EXTENSION_FACTORIES
+        .iter()
+        .map(|f| (f.make)())
+        .find(|e| e.name() == "ssh-remote")
+        .expect("ssh-remote 应声明在 EXTENSION_FACTORIES 切片里");
+
+    assert!(
+        !ext.default_enabled(),
+        "ssh-remote 必须默认不启用（会建立出站连接）"
+    );
+    let mut tools: Vec<String> = ext.tools().into_iter().map(|t| t.name).collect();
+    tools.sort();
+    assert_eq!(
+        tools,
+        vec![
+            "remote_exec",
+            "remote_grep",
+            "remote_ls",
+            "remote_read",
+            "remote_sync"
+        ],
+        "远程工具族不能与内置工具同名（内置 read/grep/ls 仍走本地）"
+    );
+    let mut cmds: Vec<String> = ext.commands().into_iter().map(|c| c.name).collect();
+    cmds.sort();
+    assert_eq!(cmds, vec!["ssh", "tunnel"], "应声明 /ssh 与 /tunnel");
+    let some = ext.fork_project().expect("应标注来源项目");
+    assert_eq!(some.plugin_name, "pi-ssh-remote");
 }

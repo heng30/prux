@@ -31,7 +31,6 @@ codegen-units = 1
 incremental = true
 
 [features]
-# 仅测试构建启用的公共接缝（集成测试通过 self dev-dependency 激活）
 test-support = []
 
 [dependencies]
@@ -46,6 +45,7 @@ linkme = { version = "0.3", default-features = false }
 tempfile = { version = "3.27", default-features = false }
 stacksafe = { version = "1.0", default-features = false }
 thiserror = { version = "2.0", default-features = false }
+russh-sftp = { version = "3.0", default-features = false }
 quick-xml = { version = "0.42", default-features = false }
 sse-stream = { version = "0.2", default-features = false }
 webbrowser = { version = "1.0", default-features = false }
@@ -87,6 +87,11 @@ rmcp = { version = "3.1", default-features = false, features = [
   "transport-child-process",
   "reqwest-tls-no-provider",
   "transport-streamable-http-client-reqwest",
+] }
+russh = { version = "0.64", default-features = false, features = [
+  "rsa",
+  "flate2",
+  "aws-lc-rs",
 ] }
 regex = { version = "1.11", default-features = false, features = [
   "unicode-perl",
