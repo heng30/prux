@@ -1,7 +1,8 @@
 //! 进程辅助：执行外部命令时的平台差异、输出收集与回收。
 //!
-//! 七件事：
+//! 八件事：
 //! - [`shell_command`]：按平台构造「执行一条命令字符串」的 shell 调用；
+//! - [`shell_tokenize`]：按 shell 引号规则把一条命令行拆成参数；
 //! - [`run_stdout`]：跑一条现成的命令并取 stdout，失败时把 stderr 带进错误；
 //! - [`drain_tail`]：持续读空管道而只保留尾部（限量，且不会因为管道写满把子进程卡死）；
 //! - [`spawn_detached`]：拉起一个**不占用终端**的长命子进程（GUI 应用等），输出落临时日志；
@@ -42,6 +43,43 @@ pub fn shell_command(command: &str) -> Command {
         cmd.args(["-c", command]);
         cmd
     }
+}
+
+/// 按 shell 的引号规则把一条命令行拆成参数列表。
+///
+/// 只做最小分词：单引号与双引号成对时丢弃引号并保留其中的空白，引号外按空白切分，
+/// 没有任何转义、变量展开或通配符处理。未闭合的引号不报错，余下内容原样成为一个参数。
+/// 返回的参数不含空串（连续空白不产生空参数）。
+pub fn shell_tokenize(input: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+
+    for ch in input.chars() {
+        match quote {
+            Some(q) => {
+                if ch == q {
+                    quote = None;
+                } else {
+                    current.push(ch);
+                }
+            }
+            None => match ch {
+                '\'' | '"' => quote = Some(ch),
+                c if c.is_whitespace() => {
+                    if !current.is_empty() {
+                        out.push(std::mem::take(&mut current));
+                    }
+                }
+                c => current.push(c),
+            },
+        }
+    }
+
+    if !current.is_empty() {
+        out.push(current);
+    }
+    out
 }
 
 /// 持续读空管道，只保留尾部 `limit` 字节。返回 `(文本, 是否丢弃过前缀)`。
@@ -223,6 +261,18 @@ where
 mod tests {
     use super::*;
     use std::{io::Cursor, time::Duration};
+
+    #[test]
+    fn shell_tokenize_keeps_quoted_arguments_whole() {
+        let tokens = shell_tokenize("ssh \"my host\" -p 22");
+        assert_eq!(tokens, vec!["ssh", "my host", "-p", "22"]);
+    }
+
+    #[test]
+    fn shell_tokenize_ignores_extra_whitespace() {
+        assert_eq!(shell_tokenize("  a   'b c'  "), vec!["a", "b c"]);
+        assert!(shell_tokenize("   ").is_empty());
+    }
 
     #[test]
     fn drain_tail_keeps_everything_below_the_limit() {

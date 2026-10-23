@@ -18,7 +18,6 @@ mod command;
 mod connect;
 mod exec;
 mod fs;
-mod proxy;
 mod sshcfg;
 mod state;
 mod tool;
@@ -31,9 +30,9 @@ mod e2e_test;
 use crate::{
     core::{
         extensions::{
-            self, DockLine, DockSpan, Extension, ExtensionCommand, ExtensionHook, ExtensionTool,
-            ExtensionUiRequest, ForkProjectInfo, OverlayEvent, OverlayView, ToolExecCtx,
-            UiNotifyLevel, request_ui,
+            self, DockLine, DockSpan, Extension, ExtensionCommand, ExtensionHook, ExtensionMode,
+            ExtensionTool, ExtensionUiRequest, ForkProjectInfo, OverlayEvent, OverlayView,
+            ToolExecCtx, UiNotifyLevel, request_ui,
         },
         provider::AgentMessage,
         session_manager::Session,
@@ -82,6 +81,11 @@ impl Extension for SshRemote {
             plugin_version: "0.1.15".to_string(),
             url: "https://github.com/petrichor20211/pi-ssh-remote".to_string(),
         })
+    }
+
+    /// 仅在 Dev / Creator 两个模式下可用（All 之外更低的级别）。
+    fn modes(&self) -> Vec<ExtensionMode> {
+        vec![ExtensionMode::Dev, ExtensionMode::Creator]
     }
 
     /// 会建立出站连接、可能改动远端文件，必须显式开启

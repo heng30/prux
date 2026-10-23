@@ -1,8 +1,8 @@
-//! 本地端口转发：把远端服务映射到 `127.0.0.1:<local>`。
+//! 本地端口转发：把远端服务映射到 `127.0.0.1:<localPort>`。
 //!
 //! 这是「远程资源本地化」的通道：映射之后，本地工具、本地 MCP server、本地数据库
 //! 客户端全部照旧连 `localhost`，不需要任何工具改造。转发记录写在
-//! `ssh-remote.json` 的 `tunnels` 里，扩展启用时自动拉起。
+//! `config.json` 的 `tunnels` 里，扩展启用时自动拉起。
 
 use crate::extensions::ssh_remote::{
     state::{RemoteConfig, TunnelSpec},
@@ -12,20 +12,20 @@ use std::{
     collections::BTreeMap,
     sync::{Mutex, OnceLock},
 };
-use tokio::{net::TcpListener, task::JoinHandle};
+use tokio::{net::TcpListener, sync::oneshot, task::JoinHandle};
+
+/// 本地端口 → 运行中的转发
+static RUNNING: OnceLock<Mutex<BTreeMap<u16, Running>>> = OnceLock::new();
 
 /// 一条正在运行的转发
 struct Running {
     /// 转发规格
     spec: TunnelSpec,
     /// 关闭信号（drop 后 accept 循环退出）
-    shutdown: tokio::sync::oneshot::Sender<()>,
+    shutdown: oneshot::Sender<()>,
     /// accept 循环的任务句柄
     task: JoinHandle<()>,
 }
-
-/// 本地端口 → 运行中的转发
-static RUNNING: OnceLock<Mutex<BTreeMap<u16, Running>>> = OnceLock::new();
 
 /// 运行表容器
 fn running() -> &'static Mutex<BTreeMap<u16, Running>> {
@@ -50,6 +50,7 @@ pub async fn start(spec: TunnelSpec) -> Result<u16, String> {
             spec.local_port
         ));
     }
+
     let listener = TcpListener::bind(("127.0.0.1", spec.local_port))
         .await
         .map_err(|e| format!("bind 127.0.0.1:{}: {e}", spec.local_port))?;

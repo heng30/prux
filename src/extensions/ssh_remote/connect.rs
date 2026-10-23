@@ -1,15 +1,20 @@
 //! 建立并认证一条 SSH 连接。
 //!
 //! 流程：解析目标 →（可选）经跳板机开 `direct-tcpip` 通道 → SSH 握手（含主机密钥校验）
-//! → 公钥认证。每个网络阶段都有独立超时，避免一条半开的 TCP 把整次连接拖死。
+//! → 认证。每个网络阶段都有独立超时，避免一条半开的 TCP 把整次连接拖死。
 //!
-//! 认证只做公钥：交互式密码与私钥口令都需要向用户索取文本，而扩展 API 没有自由文本
-//! 输入通道，硬塞进命令行参数会把凭据写进会话历史与 shell history。需要密码的服务器
-//! 请改用密钥（`-i` 或 `~/.ssh/config` 的 `IdentityFile`）。
+//! 认证先试公钥认证：用 `-i` 指定的私钥、`~/.ssh/config` 的 `IdentityFile`，或 `~/.ssh/`
+//! 下依次尝试的默认私钥；失败后若有密码来源（`-o PasswordFile=` 的 0600 文件、
+//! `PRUX_SSH_PASSWORD`、TUI 掩码输入）再试密码，并对只开 keyboard-interactive 的服务器
+//! 用同一密码兜底。凭据只留在进程内存，来源顺序与掩码输入的实现见 `auth` 模块。
+//! 显式 `-i` 时保持排他语义：只有同时提供了密码来源才会回退到密码。
 
-use crate::extensions::ssh_remote::{
-    auth, proxy,
-    state::{load_known_hosts, save_known_host},
+use crate::{
+    extensions::ssh_remote::{
+        auth,
+        state::{RemoteConfig, load_known_hosts, save_known_host},
+    },
+    utils::proxy,
 };
 use russh::{
     ChannelMsg,
@@ -28,6 +33,11 @@ const STAGE_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// 默认私钥候选（按顺序尝试，缺文件跳过）
 const DEFAULT_KEYS: &[&str] = &["id_ed25519", "id_ecdsa", "id_rsa"];
+
+/// 可作为 SSH 承载流的对象
+trait TransportStream: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send {}
+impl TransportStream for TcpStream {}
+impl TransportStream for russh::ChannelStream<russh::client::Msg> {}
 
 /// 一个连接目标
 #[derive(Debug, Clone)]
@@ -91,7 +101,9 @@ impl Handler for ClientHandler {
             .public_key()
             .to_openssh()
             .unwrap_or_default();
+
         *self.seen.lock().unwrap() = Some(line.clone());
+
         let hosts = load_known_hosts();
         match hosts.get(&self.id) {
             Some(known) if known != &line => {
@@ -126,7 +138,7 @@ pub async fn connect(target: &Target) -> Result<Connection, String> {
     };
     let config = client_config();
 
-    let (handle, jump_handles) =
+    let (mut handle, jump_handles) =
         if let Some(jump) = target.jump.as_deref().filter(|j| !j.trim().is_empty()) {
             connect_via_jump(target, jump, config, handler, rejection.clone()).await?
         } else {
@@ -145,7 +157,6 @@ pub async fn connect(target: &Target) -> Result<Connection, String> {
             }
         };
 
-    let mut handle = handle;
     authenticate(&mut handle, target).await?;
 
     // 握手通过且认证成功才记录指纹：失败连接不该污染 known_hosts
@@ -162,9 +173,10 @@ pub async fn connect(target: &Target) -> Result<Connection, String> {
     })
 }
 
-/// 建一条到 `host:port` 的 TCP 流（`ALL_PROXY` 存在时经代理）
+/// 建一条到 `host:port` 的 TCP 流（配置里 `proxy` 非空时经代理，不读环境变量）
 async fn connect_transport(host: &str, port: u16) -> Result<Box<dyn TransportStream>, String> {
-    let stream: Box<dyn TransportStream> = match proxy::from_env() {
+    let configured = RemoteConfig::load().proxy;
+    let stream: Box<dyn TransportStream> = match proxy::from_url(configured.as_deref())? {
         Some(proxy) => {
             let s = stage(
                 &format!("proxy connect to {host}:{port} via {}", proxy.describe()),
@@ -184,11 +196,6 @@ async fn connect_transport(host: &str, port: u16) -> Result<Box<dyn TransportStr
     };
     Ok(stream)
 }
-
-/// 可作为 SSH 承载流的对象
-trait TransportStream: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send {}
-impl TransportStream for TcpStream {}
-impl TransportStream for russh::ChannelStream<russh::client::Msg> {}
 
 /// 经跳板机连接：先连并认证跳板机，在它上面开 `direct-tcpip` 通道，再在通道上握手
 async fn connect_via_jump(
@@ -221,6 +228,7 @@ async fn connect_via_jump(
         client::connect_stream(config, channel.into_stream(), handler),
     )
     .await;
+
     match handshake {
         Ok(handle) => Ok((handle, vec![jump_handle])),
         Err(e) => Err(rejection.lock().unwrap().clone().unwrap_or(e)),
@@ -264,10 +272,12 @@ pub fn parse_jump(value: &str) -> Result<(Target, ()), String> {
             value,
         ),
     };
+
     let (host, port) = split_host_port(hostport, 22);
     if host.is_empty() {
         return Err("jump host is empty".to_string());
     }
+
     Ok((
         Target {
             host,
@@ -301,7 +311,7 @@ pub fn split_host_port(value: &str, default_port: u16) -> (String, u16) {
     }
 }
 
-/// 认证：公钥优先，失败后（有密码来源时）尝试密码与 keyboard-interactive。
+/// 认证：公钥认证优先，失败后（有密码来源时）尝试密码与 keyboard-interactive。
 ///
 /// 显式 `-i` 保持「排他」语义：只有在同时给出 `PasswordFile` 或设置了
 /// `PRUX_SSH_PASSWORD` 时才回退到密码。没有可用密钥时直接走密码。
@@ -404,6 +414,7 @@ fn password_allowed(target: &Target) -> bool {
     if target.password_file.is_some() {
         return true;
     }
+
     if std::env::var("PRUX_SSH_PASSWORD").is_ok_and(|v| !v.is_empty()) {
         return true;
     }

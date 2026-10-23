@@ -404,6 +404,14 @@ pub fn is_uuid(value: &str) -> bool {
     })
 }
 
+/// 按第一个空白切成 `(头部, 其余)`
+pub fn split_head(text: &str) -> (&str, &str) {
+    match text.find(char::is_whitespace) {
+        Some(idx) => (&text[..idx], text[idx..].trim_start()),
+        None => (text, ""),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

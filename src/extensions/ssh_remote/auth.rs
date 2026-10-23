@@ -10,9 +10,12 @@
 //! 交互输入走覆盖层而不是内联输入框：`OverlayInput` 的文本由核心持有并原样显示，
 //! 密码会明文出现在屏幕上；逐键回传（`OverlayKey::Char`）才能自己掩码。
 
-use crate::core::extensions::{
-    self, DockSpan, ExtensionUiRequest, OverlayEvent, OverlayKey, OverlaySize, OverlayView,
-    UiNotifyLevel, next_ui_id,
+use crate::{
+    core::extensions::{
+        self, DockSpan, ExtensionUiRequest, OverlayEvent, OverlayKey, OverlaySize, OverlayView,
+        UiNotifyLevel, next_ui_id,
+    },
+    utils::paths::expand_tilde_path,
 };
 use std::{
     collections::HashMap,
@@ -24,12 +27,11 @@ use tokio::sync::oneshot;
 /// 交互输入的超时（用户离开时不要让后台连接永久挂着）
 const PROMPT_TIMEOUT: Duration = Duration::from_secs(180);
 
-/// 串行化操作凭据缓存的测试。
-///
-/// 缓存是进程级单例：并行的用例互相 `forget_all()` 会把对方的条目清掉。
-/// 同步用例用 `blocking_lock()`，e2e 用 `lock().await`。
-#[cfg(test)]
-pub static AUTH_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+/// 进行中的交互输入
+static PROMPT: OnceLock<Mutex<Option<PromptState>>> = OnceLock::new();
+
+/// 凭据缓存：(端点标识, 种类) → 明文
+static SECRETS: OnceLock<Mutex<HashMap<(String, SecretKind), String>>> = OnceLock::new();
 
 /// 凭据种类
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -49,9 +51,6 @@ impl SecretKind {
         }
     }
 }
-
-/// 凭据缓存：(端点标识, 种类) → 明文
-static SECRETS: OnceLock<Mutex<HashMap<(String, SecretKind), String>>> = OnceLock::new();
 
 /// 缓存容器
 fn secrets() -> &'static Mutex<HashMap<(String, SecretKind), String>> {
@@ -73,9 +72,6 @@ struct PromptState {
     /// 结果回传口（提交或取消时消费）
     reply: Option<oneshot::Sender<Option<String>>>,
 }
-
-/// 进行中的交互输入
-static PROMPT: OnceLock<Mutex<Option<PromptState>>> = OnceLock::new();
 
 /// 进行中状态容器
 fn prompt_slot() -> &'static Mutex<Option<PromptState>> {
@@ -139,6 +135,7 @@ pub async fn acquire(
     if let Some(value) = cached(scope, kind) {
         return Acquired::Found(value);
     }
+
     if let Some(path) = password_file {
         match read_secret_file(path) {
             Ok(value) => {
@@ -148,15 +145,18 @@ pub async fn acquire(
             Err(e) => return Acquired::Rejected(e),
         }
     }
+
     if let Ok(value) = std::env::var(kind.env_var())
         && !value.is_empty()
     {
         remember(scope, kind, &value);
         return Acquired::Found(value);
     }
+
     if !extensions::ui_ready() {
         return Acquired::Missing;
     }
+
     match ask_overlay(scope, kind, prompt).await {
         Some(value) if !value.is_empty() => {
             remember(scope, kind, &value);
@@ -168,8 +168,9 @@ pub async fn acquire(
 
 /// 读凭据文件：取第一行，要求权限为 0600（Unix）
 pub fn read_secret_file(path: &str) -> Result<String, String> {
-    let expanded = crate::utils::paths::expand_tilde_path(path.to_string());
+    let expanded = expand_tilde_path(path.to_string());
     let meta = std::fs::metadata(&expanded).map_err(|e| format!("{}: {e}", expanded.display()))?;
+
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -183,8 +184,10 @@ pub fn read_secret_file(path: &str) -> Result<String, String> {
             ));
         }
     }
+
     #[cfg(not(unix))]
     let _ = &meta;
+
     let text =
         std::fs::read_to_string(&expanded).map_err(|e| format!("{}: {e}", expanded.display()))?;
     let first = text.lines().next().unwrap_or("").trim();
@@ -198,12 +201,14 @@ pub fn read_secret_file(path: &str) -> Result<String, String> {
 async fn ask_overlay(scope: &str, kind: SecretKind, prompt: &str) -> Option<String> {
     let id = next_ui_id();
     let (tx, rx) = oneshot::channel();
+
     {
-        let mut slot = prompt_slot().lock().unwrap();
         // 同一时刻只允许一个输入框：后来的请求直接失败，不覆盖前者
+        let mut slot = prompt_slot().lock().unwrap();
         if slot.is_some() {
             return None;
         }
+
         *slot = Some(PromptState {
             id,
             kind,
@@ -213,6 +218,7 @@ async fn ask_overlay(scope: &str, kind: SecretKind, prompt: &str) -> Option<Stri
             reply: Some(tx),
         });
     }
+
     extensions::request_ui(ExtensionUiRequest::ShowOverlay { id });
 
     let result = tokio::time::timeout(PROMPT_TIMEOUT, rx).await;
@@ -225,6 +231,7 @@ async fn ask_overlay(scope: &str, kind: SecretKind, prompt: &str) -> Option<Stri
             if !extensions::ui_ready() {
                 return None;
             }
+
             extensions::request_ui(ExtensionUiRequest::Notify {
                 text: format!("SSH credential prompt timed out ({prompt})"),
                 level: UiNotifyLevel::Warning,
@@ -232,6 +239,7 @@ async fn ask_overlay(scope: &str, kind: SecretKind, prompt: &str) -> Option<Stri
             return None;
         }
     };
+
     if value.is_none() {
         extensions::request_ui(ExtensionUiRequest::Notify {
             text: "SSH authentication cancelled".to_string(),
@@ -268,6 +276,7 @@ pub fn on_overlay_event(id: u64, ev: &OverlayEvent) -> bool {
     let Some(state) = slot.as_mut().filter(|s| s.id == id) else {
         return false;
     };
+
     match ev {
         OverlayEvent::Key { key, .. } => match key {
             OverlayKey::Char(c) => {
@@ -291,6 +300,7 @@ pub fn on_overlay_event(id: u64, ev: &OverlayEvent) -> bool {
                 if let Some(reply) = reply {
                     _ = reply.send(Some(buffer.clone()));
                 }
+
                 extensions::request_ui(ExtensionUiRequest::HideOverlay { id });
                 // 提交即缓存（`acquire` 也会缓存，这里冗余一次以防等待端被丢弃）
                 if !buffer.is_empty() {
@@ -301,9 +311,11 @@ pub fn on_overlay_event(id: u64, ev: &OverlayEvent) -> bool {
             OverlayKey::Esc => {
                 let reply = state.reply.take();
                 drop(slot);
+
                 if let Some(reply) = reply {
                     _ = reply.send(None);
                 }
+
                 prompt_slot().lock().unwrap().take();
                 extensions::request_ui(ExtensionUiRequest::HideOverlay { id });
                 true
@@ -323,6 +335,13 @@ pub fn on_overlay_event(id: u64, ev: &OverlayEvent) -> bool {
         _ => false,
     }
 }
+
+/// 串行化操作凭据缓存的测试。
+///
+/// 缓存是进程级单例：并行的用例互相 `forget_all()` 会把对方的条目清掉。
+/// 同步用例用 `blocking_lock()`，e2e 用 `lock().await`。
+#[cfg(test)]
+pub static AUTH_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[cfg(test)]
 mod tests {

@@ -1,27 +1,53 @@
 //! SSH 端点的持久化状态。
 //!
-//! 两个文件，都在 `agent_dir()` 下：
-//! - `extensions/ssh-remote.json`：默认端点、已知端点、隧道列表与输出预算；
-//! - `ssh-remote-known-hosts.json`：`host:port` → 已确认的主机公钥（OpenSSH 单行形式）。
+//! 两个文件，都在 `agent_dir()/extensions/ssh-remote/` 下：
+//! - `config.json`：默认端点、已知端点、隧道列表与输出预算；
+//! - `known-hosts.json`：`host:port` → 已确认的主机公钥（OpenSSH 单行形式）。
 
 use crate::core::settings_manager::agent_dir;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::{collections::BTreeMap, path::PathBuf};
 
 /// 配置子目录（与其它扩展一致）
 const CONFIG_SUBDIR: &str = "extensions";
-/// 主配置文件名
-const CONFIG_FILE: &str = "ssh-remote.json";
-/// 已知主机文件名
-const KNOWN_HOSTS_FILE: &str = "ssh-remote-known-hosts.json";
+/// 本扩展独占的配置目录名（`agent_dir()/extensions/ssh-remote/`）
+const EXTENSION_DIR: &str = "ssh-remote";
+/// 主配置文件名（在 [`EXTENSION_DIR`] 内）
+const CONFIG_FILE: &str = "config.json";
+/// 已知主机文件名（在 [`EXTENSION_DIR`] 内）
+const KNOWN_HOSTS_FILE: &str = "known-hosts.json";
 /// 远端默认目录（未显式设置时）
 pub const FALLBACK_REMOTE_CWD: &str = "~";
 /// 远程命令默认超时秒数
 pub const DEFAULT_TIMEOUT_SECONDS: u32 = 30;
 /// 远端命令超时允许的最大秒数
 pub const MAX_TIMEOUT_SECONDS: u32 = 2_147_483;
+
+/// 状态根目录（配置与已知主机都在它下面）
+fn root_dir() -> PathBuf {
+    #[cfg(any(test, feature = "test-support"))]
+    if let Some(dir) = TEST_ROOT.lock().unwrap().clone() {
+        return dir;
+    }
+
+    agent_dir()
+}
+
+/// 本扩展的配置目录（配置与已知主机都在它下面）
+pub fn config_dir() -> PathBuf {
+    root_dir().join(CONFIG_SUBDIR).join(EXTENSION_DIR)
+}
+
+/// 主配置文件路径
+pub fn config_path() -> PathBuf {
+    config_dir().join(CONFIG_FILE)
+}
+
+/// 已知主机文件路径
+pub fn known_hosts_path() -> PathBuf {
+    config_dir().join(KNOWN_HOSTS_FILE)
+}
 
 /// 一个 SSH 端点（`user@host:port` 唯一标识）的持久化描述。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,7 +108,7 @@ impl Endpoint {
     }
 }
 
-/// 输出预算与超时（`ssh-remote.json` 的顶层字段，可手改）
+/// 输出预算与超时（`config.json` 的顶层字段，可手改）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Limits {
@@ -222,7 +248,7 @@ impl TunnelSpec {
     }
 }
 
-/// `ssh-remote.json` 的完整内容。
+/// `config.json` 的完整内容。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteConfig {
@@ -235,6 +261,10 @@ pub struct RemoteConfig {
     /// 端口转发（`/tunnel add` 写入，扩展启用时自动拉起）
     #[serde(default)]
     pub tunnels: Vec<TunnelSpec>,
+    /// 出站代理 URL（`socks5://` / `socks5h://` / `http://` / `https://`）；
+    /// `None` 或空串 = 直连（不读环境变量里的代理）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy: Option<String>,
     /// 输出预算
     #[serde(flatten, default)]
     pub limits: Limits,
@@ -271,6 +301,7 @@ impl RemoteConfig {
                 }
             }
         }
+
         let mut tunnels = Vec::new();
         if let Some(items) = value.get("tunnels").and_then(|v| v.as_array()) {
             for raw in items {
@@ -279,10 +310,18 @@ impl RemoteConfig {
                 }
             }
         }
+        let proxy = value
+            .get("proxy")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+
         Self {
             default,
             known,
             tunnels,
+            proxy,
             limits: Limits::from_value(&value),
         }
     }
@@ -328,28 +367,41 @@ impl RemoteConfig {
     }
 }
 
-/// 测试用的状态根目录覆盖（`None` = 用 `agent_dir()`）
-///
-/// 不用 env / 线程本地：连接流程里的路径读取发生在 tokio 的任意 worker 线程上，
-/// 线程本地 override 会漏，而进程级 env 会污染同一进程里其它并行测试。
-#[cfg(any(test, feature = "test-support"))]
-static TEST_ROOT: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+/// 载入已确认的主机公钥：`host:port` → OpenSSH 单行形式
+pub fn load_known_hosts() -> BTreeMap<String, String> {
+    let path = known_hosts_path();
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return BTreeMap::new();
+    };
+    serde_json::from_str::<BTreeMap<String, String>>(&text).unwrap_or_default()
+}
 
-/// 串行化用到 [`TestRootGuard`] 的测试。
-///
-/// 根目录是进程级单例：两个测试各自 `temp()` 会互相覆盖，先 drop 的那个还会把
-/// 后一个的目录还原掉。同步测试用 `blocking_lock()`，async 测试（e2e）用 `lock().await`。
-#[cfg(any(test, feature = "test-support"))]
-#[allow(dead_code)]
-pub static TEST_ROOT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+/// 记录一台主机的公钥（覆盖旧值）
+pub fn save_known_host(id: &str, openssh_key: &str) -> Result<(), String> {
+    let mut hosts = load_known_hosts();
+    hosts.insert(id.to_string(), openssh_key.to_string());
 
-/// 状态根目录（配置与已知主机都在它下面）
-fn root_dir() -> PathBuf {
-    #[cfg(any(test, feature = "test-support"))]
-    if let Some(dir) = TEST_ROOT.lock().unwrap().clone() {
-        return dir;
+    let path = known_hosts_path();
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
     }
-    agent_dir()
+
+    let text =
+        serde_json::to_string_pretty(&hosts).map_err(|e| format!("serialize known hosts: {e}"))?;
+    std::fs::write(&path, text).map_err(|e| format!("write {}: {e}", path.display()))
+}
+
+/// 删除一台主机的公钥记录（主机密钥变化后重新走 TOFU）
+pub fn forget_known_host(id: &str) -> bool {
+    let mut hosts = load_known_hosts();
+    if hosts.remove(id).is_none() {
+        return false;
+    }
+    let path = known_hosts_path();
+    let Ok(text) = serde_json::to_string_pretty(&hosts) else {
+        return false;
+    };
+    std::fs::write(&path, text).is_ok()
 }
 
 /// 测试期间把状态根目录指向一个临时目录，返回的 guard drop 时还原。
@@ -386,50 +438,20 @@ impl Drop for TestRootGuard {
     }
 }
 
-/// 主配置文件路径
-pub fn config_path() -> PathBuf {
-    root_dir().join(CONFIG_SUBDIR).join(CONFIG_FILE)
-}
+/// 测试用的状态根目录覆盖（`None` = 用 `agent_dir()`）
+///
+/// 不用 env / 线程本地：连接流程里的路径读取发生在 tokio 的任意 worker 线程上，
+/// 线程本地 override 会漏，而进程级 env 会污染同一进程里其它并行测试。
+#[cfg(any(test, feature = "test-support"))]
+static TEST_ROOT: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
 
-/// 已知主机文件路径
-pub fn known_hosts_path() -> PathBuf {
-    root_dir().join(KNOWN_HOSTS_FILE)
-}
-
-/// 载入已确认的主机公钥：`host:port` → OpenSSH 单行形式
-pub fn load_known_hosts() -> BTreeMap<String, String> {
-    let path = known_hosts_path();
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        return BTreeMap::new();
-    };
-    serde_json::from_str::<BTreeMap<String, String>>(&text).unwrap_or_default()
-}
-
-/// 记录一台主机的公钥（覆盖旧值）
-pub fn save_known_host(id: &str, openssh_key: &str) -> Result<(), String> {
-    let mut hosts = load_known_hosts();
-    hosts.insert(id.to_string(), openssh_key.to_string());
-    let path = known_hosts_path();
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
-    }
-    let text =
-        serde_json::to_string_pretty(&hosts).map_err(|e| format!("serialize known hosts: {e}"))?;
-    std::fs::write(&path, text).map_err(|e| format!("write {}: {e}", path.display()))
-}
-
-/// 删除一台主机的公钥记录（主机密钥变化后重新走 TOFU）
-pub fn forget_known_host(id: &str) -> bool {
-    let mut hosts = load_known_hosts();
-    if hosts.remove(id).is_none() {
-        return false;
-    }
-    let path = known_hosts_path();
-    let Ok(text) = serde_json::to_string_pretty(&hosts) else {
-        return false;
-    };
-    std::fs::write(&path, text).is_ok()
-}
+/// 串行化用到 [`TestRootGuard`] 的测试。
+///
+/// 根目录是进程级单例：两个测试各自 `temp()` 会互相覆盖，先 drop 的那个还会把
+/// 后一个的目录还原掉。同步测试用 `blocking_lock()`，async 测试（e2e）用 `lock().await`。
+#[cfg(any(test, feature = "test-support"))]
+#[allow(dead_code)]
+pub static TEST_ROOT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[cfg(test)]
 mod tests {
@@ -496,6 +518,25 @@ mod tests {
         assert_eq!(cfg.known[0].cwd, "/srv");
         cfg.set_default(moved);
         assert_eq!(cfg.default_key().as_deref(), Some("root@gpu:22"));
+    }
+
+    #[test]
+    fn proxy_roundtrips_and_absent_stays_absent() {
+        let _l = TEST_ROOT_LOCK.blocking_lock();
+        let _g = TestRootGuard::temp();
+        let cfg = RemoteConfig {
+            proxy: Some("socks5://127.0.0.1:1080".into()),
+            ..Default::default()
+        };
+        cfg.save().unwrap();
+        assert_eq!(
+            RemoteConfig::load().proxy.as_deref(),
+            Some("socks5://127.0.0.1:1080")
+        );
+        RemoteConfig::default().save().unwrap();
+        let text = std::fs::read_to_string(config_path()).unwrap();
+        assert!(!text.contains("proxy"), "未配置代理时不应写出该键");
+        assert!(RemoteConfig::load().proxy.is_none());
     }
 
     #[test]

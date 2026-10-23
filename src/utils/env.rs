@@ -25,6 +25,13 @@ pub fn expand(value: &str) -> String {
     output
 }
 
+/// 默认用户名（`$USER`，取不到时用 root）
+pub fn default_user() -> String {
+    std::env::var("USER")
+        .or_else(|_| std::env::var("USERNAME"))
+        .unwrap_or_else(|_| "root".to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

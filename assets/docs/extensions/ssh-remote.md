@@ -67,7 +67,7 @@
 
 ## 认证
 
-先试公钥，失败后再试密码。公钥候选顺序：
+先试公钥认证，失败后再试密码。私钥候选顺序：
 
 1. `-i <key>` 或 `~/.ssh/config` 里该主机的 `IdentityFile`；
 2. 否则依次尝试 `~/.ssh/id_ed25519`、`~/.ssh/id_ecdsa`、`~/.ssh/id_rsa`（缺文件跳过）。
@@ -91,7 +91,7 @@
 
 ## 主机密钥
 
-首次连接采用 TOFU：把服务器公钥记进 `agent_dir()/ssh-remote-known-hosts.json`。
+首次连接采用 TOFU：把服务器公钥记进 `agent_dir()/extensions/ssh-remote/known-hosts.json`。
 之后公钥不匹配会**直接拒绝**，并提示运行 `/ssh forget-host <host:port>`。
 这挡的是中间人与「同 IP 换了机器」，不是可以随手跳过的提示。
 
@@ -99,8 +99,9 @@
 
 - `-J user@bastion:22` 或 `-o ProxyJump=bastion`：经跳板机连接（跳板机自己也走完整认证）；
 - `~/.ssh/config` 的 `Host` / `HostName` / `User` / `Port` / `IdentityFile` / `ProxyJump` 会被应用；
-- 出站代理取 `ALL_PROXY`（`socks5://` / `socks5h://` / `http://`），也可在 `agent_dir()/extensions/ssh-remote.json`
-  里设置 `proxy`。
+- 出站代理由 `config.json` 的 `proxy` 指定（`socks5://` / `socks5h://` / `http://` / `https://`，
+  可带 `user:pass@`）；留空或省略即直连。**它不读 `ALL_PROXY` 等环境变量**，代理写错会直接报错，
+  不会静默退回直连。
 
 ## 输出预算
 
@@ -114,13 +115,14 @@
 
 ## 配置
 
-`agent_dir()/extensions/ssh-remote.json`：
+`agent_dir()/extensions/ssh-remote/config.json`：
 
 ```json
 {
   "default": { "host": "gpu1", "user": "root", "port": 22, "cwd": "/srv/app" },
   "known": [ { "host": "gpu1", "user": "root", "port": 22 } ],
   "tunnels": [ { "host": "", "localPort": 15432, "remoteHost": "localhost", "remotePort": 5432 } ],
+  "proxy": "socks5://127.0.0.1:1080",
   "timeoutSeconds": 30,
   "execMaxLines": 200,
   "execMaxBytes": 8192,
@@ -133,9 +135,10 @@
 - `default`：工具省略 `host` 时用的目标；
 - `known`：连过一次就记住，省掉重述参数与 `~/.ssh/config` 查询；
 - `tunnels`：扩展启用时自动拉起（失败只提示，不阻断启动）；
+- `proxy`：出站代理 URL，省略 = 直连；格式不合法时连接直接失败并说明原因；
 - 其余字段是上面「输出预算」里的上限，可手改。
 
-主机密钥单独存在 `agent_dir()/ssh-remote-known-hosts.json`，与配置分开是为了能安全删除。
+主机密钥单独存在 `agent_dir()/extensions/ssh-remote/known-hosts.json`，与配置分开是为了能安全删除。
 
 ## 已知边界
 

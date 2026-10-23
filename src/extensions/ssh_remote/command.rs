@@ -7,13 +7,16 @@ use crate::{
     core::extensions::{ExtensionCommand, SubcommandDef, UiNotifyLevel},
     extensions::{
         ssh_remote::{
-            auth,
+            self, auth,
+            connect::split_host_port,
+            sshcfg::SshHost,
             state::{self, Endpoint, RemoteConfig, TunnelSpec},
             transport, tunnel,
         },
         util::notify_text,
     },
     modes::interactive::app::App,
+    utils::{display::split_head, env::default_user, process::shell_tokenize},
 };
 use std::time::Duration;
 
@@ -60,7 +63,7 @@ pub const SUBCOMMANDS: &[SubcommandDef] = &[
 pub const TUNNEL_SUBCOMMANDS: &[SubcommandDef] = &[
     SubcommandDef {
         name: "add",
-        description: "Forward a remote port: /tunnel add [host:]local:remoteHost:remotePort",
+        description: "Forward a remote port: /tunnel add [host:]localPort:remoteHost:remotePort",
     },
     SubcommandDef {
         name: "remove",
@@ -92,7 +95,7 @@ pub fn tunnel_command() -> ExtensionCommand {
     ExtensionCommand {
         name: TUNNEL_CMD.to_string(),
         description:
-            "/tunnel add [host:]local:remoteHost:remotePort | remove <localPort> | list | stop-all"
+            "/tunnel add [host:]localPort:remoteHost:remotePort | remove <localPort> | list | stop-all"
                 .to_string(),
         busy_safe: true,
         subcommands: TUNNEL_SUBCOMMANDS.to_vec(),
@@ -106,6 +109,7 @@ pub fn handle(_app: &mut App, raw: &str) -> bool {
         notify_text(&status_text(), UiNotifyLevel::Info);
         return false;
     }
+
     let (head, rest) = split_head(text);
     match head.to_ascii_lowercase().as_str() {
         "list" => notify_text(&list_text(), UiNotifyLevel::Info),
@@ -155,6 +159,7 @@ pub fn handle_tunnel(_app: &mut App, raw: &str) -> bool {
         notify_text(&tunnel_text(), UiNotifyLevel::Info);
         return false;
     }
+
     let (head, rest) = split_head(text);
     match head.to_ascii_lowercase().as_str() {
         "add" => add_tunnel(rest),
@@ -181,19 +186,11 @@ pub fn handle_tunnel(_app: &mut App, raw: &str) -> bool {
         }
         "list" => notify_text(&tunnel_text(), UiNotifyLevel::Info),
         _ => notify_text(
-            "Usage: /tunnel add [host:]local:remoteHost:remotePort | remove <localPort> | list | stop-all",
+            "Usage: /tunnel add [host:]localPort:remoteHost:remotePort | remove <localPort> | list | stop-all",
             UiNotifyLevel::Warning,
         ),
     }
     false
-}
-
-/// 按第一个空白切成 `(头部, 其余)`
-fn split_head(text: &str) -> (&str, &str) {
-    match text.find(char::is_whitespace) {
-        Some(idx) => (&text[..idx], text[idx..].trim_start()),
-        None => (text, ""),
-    }
 }
 
 /// 远端路径：`~` 原样交给远端 shell 展开，其余按输入保存
@@ -216,7 +213,9 @@ fn set_default(f: impl FnOnce(&mut Endpoint)) {
         );
         return;
     };
+
     f(&mut ep);
+
     // 已连接的端点同步更新，避免下一次工具调用还用旧目录/旧备注
     let updated = ep.clone();
     cfg.set_default(updated.clone());
@@ -224,6 +223,7 @@ fn set_default(f: impl FnOnce(&mut Endpoint)) {
         notify_text(&format!("Cannot save config: {e}"), UiNotifyLevel::Error);
         return;
     }
+
     notify_text(
         &format!("Default target is now {}.", updated.display()),
         UiNotifyLevel::Info,
@@ -255,6 +255,7 @@ fn disconnect(rest: &str) {
             hit
         }
     };
+
     if count == 0 {
         notify_text("No matching connection.", UiNotifyLevel::Warning);
     } else {
@@ -272,6 +273,7 @@ fn set_target(text: &str) {
     } else {
         format!("ssh {text}")
     };
+
     let endpoint = match parse_ssh_command(&query) {
         Ok(ep) => ep,
         Err(e) => {
@@ -279,16 +281,19 @@ fn set_target(text: &str) {
             return;
         }
     };
+
     let mut cfg = RemoteConfig::load();
     cfg.set_default(endpoint.clone());
     if let Err(e) = cfg.save() {
         notify_text(&format!("Cannot save config: {e}"), UiNotifyLevel::Error);
         return;
     }
+
     notify_text(
         &format!("Default SSH target: {}.", endpoint.display()),
         UiNotifyLevel::Info,
     );
+
     // 连一次当场暴露认证/主机密钥问题，而不是等到第一次工具调用
     let probe = endpoint.clone();
     tokio::spawn(async move {
@@ -314,11 +319,12 @@ fn set_target(text: &str) {
 fn add_tunnel(rest: &str) {
     let Some(spec) = TunnelSpec::parse(rest.trim()) else {
         notify_text(
-            "Usage: /tunnel add [host:]local:remoteHost:remotePort (e.g. /tunnel add 15432:localhost:5432)",
+            "Usage: /tunnel add [host:]localPort:remoteHost:remotePort (e.g. /tunnel add 15432:localhost:5432)",
             UiNotifyLevel::Warning,
         );
         return;
     };
+
     let saved = spec.clone();
     tokio::spawn(async move {
         match tunnel::start(saved.clone()).await {
@@ -376,16 +382,20 @@ fn list_text() -> String {
     if connected.is_empty() {
         lines.push("  (none)".to_string());
     }
+
     for ep in &connected {
         lines.push(format!("  {} · cwd {}", ep.key(), ep.cwd));
     }
+
     lines.push("Remembered:".to_string());
     if cfg.known.is_empty() {
         lines.push("  (none)".to_string());
     }
+
     for ep in &cfg.known {
         lines.push(format!("  {}", ep.display()));
     }
+
     if !cfg.tunnels.is_empty() {
         lines.push("Configured forwards:".to_string());
         for spec in &cfg.tunnels {
@@ -403,6 +413,7 @@ fn tunnel_text() -> String {
     if active.is_empty() {
         lines.push("  (none)".to_string());
     }
+
     for spec in &active {
         lines.push(format!(
             "  127.0.0.1:{} → {}:{} (via {})",
@@ -416,17 +427,21 @@ fn tunnel_text() -> String {
             }
         ));
     }
+
     lines.push("Configured:".to_string());
     if cfg.tunnels.is_empty() {
         lines.push("  (none)".to_string());
     }
+
     for spec in &cfg.tunnels {
         lines.push(format!("  {}", spec.to_spec_text()));
     }
+
     lines.join("\n")
 }
+
 pub fn parse_ssh_command(input: &str) -> Result<Endpoint, String> {
-    let mut tokens = tokenize(input);
+    let mut tokens = shell_tokenize(input);
     if tokens
         .first()
         .map(|t| t.eq_ignore_ascii_case("ssh"))
@@ -434,6 +449,7 @@ pub fn parse_ssh_command(input: &str) -> Result<Endpoint, String> {
     {
         tokens.remove(0);
     }
+
     if tokens.is_empty() {
         return Err("empty ssh command".to_string());
     }
@@ -502,7 +518,8 @@ pub fn parse_ssh_command(input: &str) -> Result<Endpoint, String> {
         Some((u, h)) => (Some(u.to_string()), h.to_string()),
         None => (None, target.clone()),
     };
-    let (host, host_port) = crate::extensions::ssh_remote::connect::split_host_port(&host, 22);
+
+    let (host, host_port) = split_host_port(&host, 22);
     let mut port = port.unwrap_or(host_port);
     let mut host = host;
 
@@ -541,46 +558,8 @@ pub fn parse_ssh_command(input: &str) -> Result<Endpoint, String> {
 }
 
 /// 在当前用户下按别名（或配置里写的主机名）查 ssh config
-fn lookup_ssh_config(alias: &str) -> Option<crate::extensions::ssh_remote::sshcfg::SshHost> {
-    crate::extensions::ssh_remote::sshcfg::lookup(alias)
-}
-
-/// 默认用户名（`$USER`，取不到时用 root）
-fn default_user() -> String {
-    std::env::var("USER")
-        .or_else(|_| std::env::var("USERNAME"))
-        .unwrap_or_else(|_| "root".to_string())
-}
-
-/// 按 shell 规则做最小分词（支持引号）
-fn tokenize(input: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut current = String::new();
-    let mut quote: Option<char> = None;
-    for ch in input.chars() {
-        match quote {
-            Some(q) => {
-                if ch == q {
-                    quote = None;
-                } else {
-                    current.push(ch);
-                }
-            }
-            None => match ch {
-                '\'' | '"' => quote = Some(ch),
-                c if c.is_whitespace() => {
-                    if !current.is_empty() {
-                        out.push(std::mem::take(&mut current));
-                    }
-                }
-                c => current.push(c),
-            },
-        }
-    }
-    if !current.is_empty() {
-        out.push(current);
-    }
-    out
+fn lookup_ssh_config(alias: &str) -> Option<SshHost> {
+    ssh_remote::sshcfg::lookup(alias)
 }
 
 #[cfg(test)]
@@ -613,8 +592,8 @@ mod tests {
     }
 
     #[test]
-    fn tokenizes_quoted_arguments() {
-        let tokens = tokenize("ssh \"my host\" -p 22");
-        assert_eq!(tokens, vec!["ssh", "my host", "-p", "22"]);
+    fn parses_quoted_target() {
+        let ep = parse_ssh_command("ssh \"my host\" -p 22").unwrap();
+        assert_eq!(ep.host, "my host");
     }
 }

@@ -512,7 +512,7 @@ async fn connects_runs_remote_tools_and_enforces_host_keys() {
     let (port, root, shutdown) = start_server().await;
 
     // 客户端私钥：写在状态临时目录里，用显式 -i 传入（不碰真实 HOME）
-    let key_dir = state::config_path().parent().unwrap().to_path_buf();
+    let key_dir = state::config_dir();
     std::fs::create_dir_all(&key_dir).unwrap();
     let key_path = key_dir.join("id_ed25519");
     std::fs::write(&key_path, TEST_KEY).unwrap();
