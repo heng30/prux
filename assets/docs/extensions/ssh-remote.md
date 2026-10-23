@@ -55,6 +55,9 @@
 | `/ssh forget [all]` | 清除缓存的密码 / 私钥口令 |
 | `/ssh help` | 打印目标写法（`-p` / `-i` / `-J` / `-o PasswordFile=`）与全部子命令 |
 
+首个词与子命令同名会被当成子命令；`~/.ssh/config` 里的别名正好叫 `help` / `list` 时，
+用带 `ssh` 前缀的写法连它：`/ssh ssh help`。
+
 ### `/tunnel`
 
 | 用法 | 作用 |

@@ -6,6 +6,7 @@
 use crate::{
     core::extensions::{ExtensionCommand, SubcommandDef, UiNotifyLevel},
     extensions::{
+        command_arg,
         ssh_remote::{
             self, auth,
             sshcfg::SshHost,
@@ -125,7 +126,8 @@ pub fn tunnel_command() -> ExtensionCommand {
 
 /// `/ssh` 执行入口
 pub fn handle(_app: &mut App, raw: &str) -> bool {
-    let text = raw.trim();
+    // `raw` 是 `/` 后的原文（含命令名，如 `ssh help`），与其它扩展命令同一约定
+    let text = command_arg(raw);
     if text.is_empty() {
         notify_text(&status_text(), UiNotifyLevel::Info);
         return false;
@@ -176,7 +178,7 @@ pub fn handle(_app: &mut App, raw: &str) -> bool {
 
 /// `/tunnel` 执行入口
 pub fn handle_tunnel(_app: &mut App, raw: &str) -> bool {
-    let text = raw.trim();
+    let text = command_arg(raw);
     if text.is_empty() || text.eq_ignore_ascii_case("list") {
         notify_text(&tunnel_text(), UiNotifyLevel::Info);
         return false;
@@ -654,6 +656,22 @@ mod tests {
         );
         for sub in SUBCOMMANDS {
             assert!(USAGE.contains(sub.name), "USAGE 缺少子命令 {}", sub.name);
+        }
+    }
+
+    /// TUI 传来的原文含命令名：不剥就会把 `help` / `list` 当成主机名去连接。
+    #[test]
+    fn subcommands_are_not_parsed_as_targets() {
+        let _lock = state::TEST_ROOT_LOCK.blocking_lock();
+        let _root = state::TestRootGuard::temp();
+        let mut app = App::new();
+
+        for raw in ["ssh help", "ssh list", "ssh status"] {
+            handle(&mut app, raw);
+            assert!(
+                RemoteConfig::load().default.is_none(),
+                "`/{raw}` 被当成了目标"
+            );
         }
     }
 }

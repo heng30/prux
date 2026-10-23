@@ -31,7 +31,8 @@ use std::{
 
 /// 扩展注册的键位回调：用户按下绑定键后直接操作 App 状态。
 pub type ExtensionKeybindingHandler = fn(&mut App);
-/// 扩展注册的斜杠命令回调：接收命令名后的参数字符串，返回是否已处理。
+/// 扩展注册的斜杠命令回调：接收 `/` 后的完整原文（含命令名，如 `plan 分析`），
+/// 取参数用 [`crate::extensions::command_arg`]；返回是否退出 TUI。
 type SlashCommandHandler = fn(&mut App, &str) -> bool;
 
 /// 忙碌时可安全执行的内置命令（handler 不锁 agent、纯 UI 操作）。
