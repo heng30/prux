@@ -24,7 +24,7 @@ use windows::{
             UIA_SelectionItemPatternId, UIA_TextPatternId, UIA_TogglePatternId, UIA_ValuePatternId,
         },
     },
-    core::{BSTR, Interface},
+    core::BSTR,
 };
 
 /// 无障碍通道是否可用（Windows 上只要有桌面会话就能建 UIA 客户端）。

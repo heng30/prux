@@ -8,7 +8,6 @@ use crate::extensions::computer::state;
 use enigo::{Axis, Button, Coordinate, Direction, Enigo, Key, Keyboard, Mouse, Settings};
 use std::{
     ops::{Deref, DerefMut},
-    path::PathBuf,
     sync::{Mutex, MutexGuard},
     thread::sleep,
     time::Duration,
@@ -124,7 +123,7 @@ fn connect_hint() -> String {
         return "no Wayland session: WAYLAND_DISPLAY or XDG_RUNTIME_DIR is unset".to_string();
     };
 
-    let socket = PathBuf::from(runtime).join(display);
+    let socket = std::path::PathBuf::from(runtime).join(display);
     match std::os::unix::net::UnixStream::connect(&socket) {
         Ok(_) => format!(
             "{} accepts connections, so this compositor exposes neither \
