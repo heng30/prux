@@ -25,7 +25,7 @@
 | `remote_grep` | 远端检索文件内容（有 ripgrep 用 ripgrep，否则退回 `grep -rn`） |
 | `remote_sync` | 本地 ↔ 远端复制文件或目录树，支持 `dry_run` |
 
-所有工具都有 `host` 参数：`user@host[:port]`，或 `~/.ssh/config` 里的别名。
+所有工具都有 `host` 参数：`[user@]host[:port]`（省略 `user` 时用当前用户名），或 `~/.ssh/config` 里的别名。
 省略时使用 `/ssh <target>` 设置的默认目标。
 
 这五个工具是**延迟工具**：它们不在开箱可见的工具列表里，模型要先调用 `tool_search`
@@ -45,15 +45,15 @@
 
 | 用法 | 作用 |
 |---|---|
-| `/ssh user@host[:port]` | 设为默认目标（也接受完整 `ssh -i key -p 2202 ...` 写法）并立刻试连一次 |
+| `/ssh [user@]host[:port]` | 设为默认目标（也接受 `ssh -i key -J jump ...` 这类写法）并立刻试连一次；只有这一下真正登录成功，目标才会被记进默认值与已知列表。端口只写在 `host:port` 里，`-p` 会报错 |
 | `/ssh list` | 列出已连接端点与已记住的目标 |
 | `/ssh status` | 默认目标、已知目标数、活跃隧道数、超时与每轮输出预算 |
 | `/ssh cd <path>` | 设置默认目标的远端工作目录 |
 | `/ssh note <text>` | 给默认目标加备注（显示在停靠面板） |
 | `/ssh disconnect [target\|all]` | 断开连接 |
-| `/ssh forget-host <host:port>` | 忘记已记录的主机密钥 |
-| `/ssh forget [all]` | 清除缓存的密码 / 私钥口令 |
-| `/ssh help` | 打印目标写法（`-p` / `-i` / `-J` / `-o PasswordFile=`）与全部子命令 |
+| `/ssh remove <target\|all>` | 彻底移除目标：删掉 `config.json` 里的记录（含默认目标项）、它的主机密钥与缓存的密码 / 口令 |
+| `/ssh forget <host[:port]\|all>` | 只删主机密钥（目标仍留在列表里，用于指纹变化后重新信任） |
+| `/ssh help` | 打印目标写法（`-i` / `-J` / `-o PasswordFile=`）与全部子命令 |
 
 首个词与子命令同名会被当成子命令；`~/.ssh/config` 里的别名正好叫 `help` / `list` 时，
 用带 `ssh` 前缀的写法连它：`/ssh ssh help`。
@@ -94,15 +94,17 @@
 服务器只接受 keyboard-interactive 而不是 `password` 时（常见于 PAM 配置），会用同一个密码
 自动再试一次。私钥口令可用 `PRUX_SSH_KEY_PASSPHRASE` 提供，或直接在弹出的输入框里键入。
 
-凭据只保存在进程内存：不写文件、不进命令行参数、不进会话记录。`/ssh forget` 清空当前
-默认目标的缓存，`/ssh forget all` 清空全部；`/ssh disconnect` 保留缓存以便重连。
+凭据只保存在进程内存：不写文件、不进命令行参数、不进会话记录。`/ssh remove <target>`
+清掉该目标的缓存（目标本身也从列表里移除），`/ssh remove all` 清空全部并删掉所有已记住的
+目标；`/ssh disconnect` 保留缓存以便重连。
 
 不支持 SSH agent（`SSH_AUTH_SOCK`）。
 
 ## 主机密钥
 
 首次连接采用 TOFU：把服务器公钥记进 `agent_dir()/extensions/ssh-remote/known-hosts.json`。
-之后公钥不匹配会**直接拒绝**，并提示运行 `/ssh forget-host <host:port>`。
+之后公钥不匹配会**直接拒绝**，并提示运行 `/ssh forget <host:port>`（不带端口时删该主机
+所有端口的记录）。`/ssh forget` 只动 `known-hosts.json`；要连目标记录一起清掉用 `/ssh remove`。
 这挡的是中间人与「同 IP 换了机器」，不是可以随手跳过的提示。
 
 ## 跳板机与代理

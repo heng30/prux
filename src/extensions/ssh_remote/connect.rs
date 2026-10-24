@@ -49,7 +49,7 @@ pub struct Target {
     pub identity: Option<String>,
     /// 密码来源文件（`-o PasswordFile=<path>`）；Some 时允许在公钥失败后尝试密码
     pub password_file: Option<String>,
-    /// 跳板机（`user@host[:port]`）
+    /// 跳板机（`[user@]host[:port]`）
     pub jump: Option<String>,
 }
 
@@ -105,7 +105,7 @@ impl Handler for ClientHandler {
         match hosts.get(&self.id) {
             Some(known) if known != &line => {
                 *self.rejection.lock().unwrap() = Some(format!(
-                    "host key for {} changed (known fingerprint differs)\nrun `/remote forget-host {}` to trust the new key",
+                    "host key for {} changed (known fingerprint differs)\nrun `/ssh forget {}` to trust the new key",
                     self.id, self.id
                 ));
                 Ok(false)
@@ -259,7 +259,7 @@ async fn connect_jump(target: &Target) -> Result<Connection, String> {
     })
 }
 
-/// 解析 `-J` 的跳板机串（支持 `user@host[:port]`）
+/// 解析 `-J` 的跳板机串（支持 `[user@]host[:port]`）
 pub fn parse_jump(value: &str) -> Result<(Target, ()), String> {
     let value = value.trim();
     let (user, hostport) = match value.split_once('@') {

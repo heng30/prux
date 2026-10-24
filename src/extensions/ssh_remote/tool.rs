@@ -73,7 +73,7 @@ pub fn tools() -> Vec<ExtensionTool> {
 fn host_schema(desc: &str) -> Value {
     json!({
         "type": "string",
-        "description": format!("SSH target: `user@host[:port]` or a ~/.ssh/config alias. Omit to use the default set by `/ssh <target>`. {desc}")
+        "description": format!("SSH target: `[user@]host[:port]` or a ~/.ssh/config alias. Omit to use the default set by `/ssh <target>`. {desc}")
     })
 }
 

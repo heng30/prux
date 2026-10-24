@@ -95,7 +95,7 @@ pub fn remember(scope: &str, kind: SecretKind, value: &str) {
         .insert((scope.to_string(), kind), value.to_string());
 }
 
-/// 清空某端点的全部缓存（`/remote forget`）
+/// 清空某端点的全部缓存（`/ssh remove <target>`）
 pub fn forget(scope: &str) -> usize {
     let mut map = secrets().lock().unwrap();
     let before = map.len();
@@ -254,20 +254,24 @@ pub fn overlay_view(id: u64, _cols: u16) -> Option<OverlayView> {
     let slot = prompt_slot().lock().unwrap();
     let state = slot.as_ref().filter(|s| s.id == id)?;
     let masked = "*".repeat(state.buffer.chars().count());
-    let mut view = OverlayView::inline(
-        "SSH authentication",
-        vec![
+    Some(OverlayView {
+        title: "SSH authentication".to_string(),
+        header: vec![
+            vec![DockSpan::new("accent", "#8abeb7", " SSH authentication")],
             vec![DockSpan::plain(state.prompt.clone())],
-            vec![DockSpan::new("accent", "#8abeb7", masked)],
         ],
-        4,
-    );
-    view.size = OverlaySize::Inline { max_rows: 4 };
-    view.footer = vec![
-        ("Enter".to_string(), "confirm".to_string()),
-        ("Esc".to_string(), "cancel".to_string()),
-    ];
-    Some(view)
+        lines: vec![vec![DockSpan::new("accent", "#8abeb7", masked)]],
+        messages: Vec::new(),
+        footer: vec![
+            ("Enter".to_string(), "confirm".to_string()),
+            ("Esc".to_string(), "cancel".to_string()),
+        ],
+        input: None,
+        editor: None,
+        size: OverlaySize::Panel { max_rows: 9 },
+        selected: None,
+        input_focus: false,
+    })
 }
 
 /// 处理进行中的密码输入框的按键（`Extension::on_overlay_event` 调用）
@@ -376,6 +380,40 @@ mod tests {
         );
         assert_eq!(forget_all(), 1);
         assert!(cached("other@host:22", SecretKind::Password).is_none());
+    }
+
+    /// 密码输入面板必须占据输入区（Panel）：若用 Inline，主页输入框会留在面板下方，
+    /// 但按键全被覆盖层吃掉，用户看到的是个打不了字的框。
+    #[test]
+    fn prompt_panel_takes_over_the_input_area() {
+        let _l = AUTH_TEST_LOCK.blocking_lock();
+        let (tx, _rx) = oneshot::channel();
+        *prompt_slot().lock().unwrap() = Some(PromptState {
+            id: 7,
+            kind: SecretKind::Password,
+            scope: "blue@ubuntu:22".to_string(),
+            prompt: "password for blue@ubuntu:22".to_string(),
+            buffer: "abc".to_string(),
+            reply: Some(tx),
+        });
+
+        let view = overlay_view(7, 80).expect("进行中应有覆盖层");
+        assert_eq!(view.size, OverlaySize::Panel { max_rows: 9 });
+        assert!(
+            view.header
+                .iter()
+                .any(|line| line.iter().any(|s| s.text.contains("SSH authentication"))),
+            "面板无标题行，标题要塞进固定区"
+        );
+        assert!(
+            view.header
+                .iter()
+                .any(|line| line.iter().any(|s| s.text.contains("blue@ubuntu:22"))),
+            "固定区要写清这是谁的口令"
+        );
+        assert_eq!(view.lines[0][0].text, "***", "密码必须掩码");
+
+        prompt_slot().lock().unwrap().take();
     }
 
     #[test]

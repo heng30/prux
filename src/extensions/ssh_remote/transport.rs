@@ -118,7 +118,7 @@ pub async fn resolve_default() -> Result<Arc<RemoteConn>, String> {
     match cfg.default {
         Some(ep) => ensure(ep).await,
         None => Err(
-            "no SSH target: pass `host` (`user@host[:port]` or a ~/.ssh/config alias) or set a \
+            "no SSH target: pass `host` (`[user@]host[:port]` or a ~/.ssh/config alias) or set a \
              default with `/ssh <target>`"
                 .to_string(),
         ),
@@ -154,14 +154,24 @@ fn find_connected(spec: &str) -> Option<Arc<RemoteConn>> {
         .cloned()
 }
 
-/// 端点是否对应用户写的 `host` 串
-fn matches_spec(ep: &Endpoint, spec: &str) -> bool {
-    if ep.key() == spec || ep.host == spec {
+/// 端点是否对应用户写的 `spec`
+///
+/// 用户可能写完整 key（`user@host:port`）、主机名、`host:port`，或 ssh 命令里的目标段
+/// （`ssh root@alias` 里的 `root@alias`，也接受不带用户的 `alias`）。**不做子串匹配**：
+/// `gpu` 不能命中 `gpu.example.com`，否则断连、删除这类操作会误伤。
+pub fn matches_spec(ep: &Endpoint, spec: &str) -> bool {
+    let spec = spec.trim();
+    if spec.is_empty() {
+        return false;
+    }
+
+    if ep.key() == spec || ep.host == spec || format!("{}:{}", ep.host, ep.port) == spec {
         return true;
     }
-    ep.command.split_whitespace().any(|word| {
-        word == spec || word.ends_with(&format!("@{spec}")) || word == format!("ssh {spec}")
-    })
+
+    ep.command
+        .split_whitespace()
+        .any(|word| word == spec || word.contains(&format!("@{spec}")))
 }
 
 /// 池内查询（顺手剔除已失效的句柄）
@@ -289,8 +299,14 @@ mod tests {
         };
         assert!(matches_spec(&ep, "root@10.0.0.5:2202"));
         assert!(matches_spec(&ep, "10.0.0.5"));
+        assert!(matches_spec(&ep, "10.0.0.5:2202"));
         assert!(matches_spec(&ep, "root@gpu1"));
+        assert!(matches_spec(&ep, "gpu1"), "别名不带用户也认");
         assert!(!matches_spec(&ep, "gpu2"));
+        // 不做子串匹配：半截主机名会把不相干的连接一起断掉 / 删掉
+        assert!(!matches_spec(&ep, "10.0.0"));
+        assert!(!matches_spec(&ep, "gpu"));
+        assert!(!matches_spec(&ep, ""), "空串不该命中任何端点");
     }
 
     /// 预算是原子累加的：并发申请不会超过上限

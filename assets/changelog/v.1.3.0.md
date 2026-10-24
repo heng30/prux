@@ -9,8 +9,8 @@ This release aligns prux with upstream pi 1.3.0.
   (copy files or trees between local and remote, with `dry_run`), plus `/ssh` for target management
   (`/ssh help` prints the target syntax and every subcommand) and `/tunnel` for mapping a remote port onto `127.0.0.1`. Built-in tools are untouched: `read`,
   `write`, `edit`, `ls`, `find`, `grep`, `bash`, `@` completion and `!` commands keep operating on
-  local files only, so nothing ends up half-redirected. Targets accept `-i`, `-p`, `-J` and
-  `-o ProxyJump=` and resolve `~/.ssh/config` aliases; the outbound proxy comes from the extension's
+  local files only, so nothing ends up half-redirected. Targets accept `-i`, `-J` and
+  `-o ProxyJump=` and resolve `~/.ssh/config` aliases (the port goes into `host:port`); the outbound proxy comes from the extension's
   own `proxy` setting, not from environment variables. Authentication tries public keys
   first (`-i`, `IdentityFile`, then the default keys), then a password from `-o PasswordFile=`
   (0600), `PRUX_SSH_PASSWORD`, or a masked TUI prompt, falling back to keyboard-interactive for
@@ -151,9 +151,21 @@ This release aligns prux with upstream pi 1.3.0.
   its value even when the call fails, instead of claiming every failure rejects.
 - **`tool_search` loads up to 15 matches by default** (was 8), enough to pick up a whole deferred
   family in one call.
+- **`/ssh` writes the port as `host:port` and no longer takes `-p`**: the port goes into
+  `host:port` (`/ssh root@gpu:2202`), and a `-p` flag fails with a message instead of being applied.
+  `/ssh forget-host` became `/ssh forget` (drops a recorded host key only, the target stays), and
+  the new `/ssh remove <target|all>` drops the target together with its host key and cached
+  password.
 
 ### Fixed
 
+- **`/ssh` remembers a target only after it actually logs in**: a failed probe no longer leaves the
+  target in the list or changes the default.
+- **`/ssh disconnect <target>` drops only the connection you named**: it used to match half-typed
+  substrings (`gpu` matched `gpu.example.com`) and disconnected unrelated hosts.
+- **The SSH password prompt renders as a panel that owns the input area**: the fixed header rows
+  are counted in the overlay height now, so the key hints and the bottom divider are no longer
+  pushed off-screen.
 - **A stream cut off before `finish_reason` now fails instead of ending the turn silently**: when a
   provider that reports `finish_reason` closes the stream mid-answer, the partial text and tool
   arguments are kept, but the turn ends with an error saying the response was truncated instead of
@@ -221,7 +233,7 @@ This release aligns prux with upstream pi 1.3.0.
   `remote_read` / `remote_ls` / `remote_grep`（读远端文件）、`remote_sync`（本地↔远端复制文件或
   目录树，支持 `dry_run`），以及 `/ssh` 目标管理（`/ssh help` 打印目标写法与全部子命令）与 `/tunnel` 端口映射。**不改写任何内置工具**：
   `read` / `write` / `edit` / `ls` / `find` / `grep` / `bash`、`@` 补全与 `!` 命令始终只操作本地，
-  不会出现「一半穿透、一半不穿透」。目标支持 `-i`、`-p`、`-J`、`-o ProxyJump=`，会解析
+  不会出现「一半穿透、一半不穿透」。目标支持 `-i`、`-J`、`-o ProxyJump=`（端口写在 `host:port` 里），会解析
   `~/.ssh/config` 别名；出站代理只认扩展自己配置里的 `proxy`，不读环境变量。认证先试公钥（`-i`、`IdentityFile`、再退到默认密钥），
   失败后取密码（`-o PasswordFile=` 的 0600 文件、`PRUX_SSH_PASSWORD`、或 TUI 掩码输入），对只开
   keyboard-interactive 的服务器自动用同一密码重试；凭据只留在进程内存，`/ssh forget` 清除。
@@ -334,9 +346,17 @@ This release aligns prux with upstream pi 1.3.0.
 - **codemode 的工具描述**改为说明「声明了 output schema 的工具失败时返回自己的值」，
   不再声称所有失败都抛错。
 - **`tool_search` 单次默认最多激活 15 个工具**（原为 8），足以一次载入一整族延迟工具。
+- **`/ssh` 的端口改写进 `host:port`，不再接受 `-p`**：端口写成 `host:port`（`/ssh root@gpu:2202`），
+  传 `-p` 直接报错而不是被采纳。`/ssh forget-host` 改为 `/ssh forget`（只删主机密钥，目标仍留在列表里），
+  新增 `/ssh remove <target|all>`（连目标记录、主机密钥与缓存凭据一起清掉）。
 
 ### 修复
 
+- **`/ssh` 只在真正登录成功后记住目标**：探测失败的目标不再进列表，也不会改掉默认目标。
+- **`/ssh disconnect <target>` 只断你点名的那条连接**：此前按半截子串匹配（`gpu` 命中
+  `gpu.example.com`），会把不相干的主机一并断开。
+- **SSH 口令输入面板按面板布局渲染并接管输入区**：覆盖层高度现在计入固定区行数，键位提示与
+  底部分割线不再被顶出屏幕。
 - **流在 `finish_reason` 之前被抳断时报错，不再静默结束回合**：会报告 `finish_reason` 的 provider
   在中途关闭连接时，已收到的文本与工具参数仍会保留，但本回合以「响应被截断」的错误结束，
   不再谎报成正常收尾。

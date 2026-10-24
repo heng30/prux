@@ -76,7 +76,7 @@ pub fn known_hosts_path() -> PathBuf {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Endpoint {
-    /// 用户输入的原始 ssh 命令（`ssh root@host -p 22` 的完整形式）
+    /// 用户输入的原始 ssh 命令（`ssh root@host:port` 的完整形式）
     #[serde(default)]
     pub command: String,
     /// 解析后的主机名（已应用 `~/.ssh/config` 的 HostName）
@@ -443,6 +443,21 @@ pub fn forget_known_host(id: &str) -> bool {
         return false;
     }
     write_known_hosts(&path, &hosts).is_ok()
+}
+
+/// 删除所有主机公钥记录，返回删除条数（`/ssh forget all`）
+pub fn forget_all_known_hosts() -> usize {
+    let path = known_hosts_path();
+    let _guard = KNOWN_HOSTS_LOCK.write().unwrap_or_else(|e| e.into_inner());
+    let count = read_known_hosts(&path).len();
+    if count == 0 {
+        return 0;
+    }
+
+    match write_known_hosts(&path, &BTreeMap::new()) {
+        Ok(()) => count,
+        Err(_) => 0, // 写失败时记录数没变，不能谎报清空
+    }
 }
 
 /// 测试期间把状态根目录指向一个临时目录，返回的 guard drop 时还原。

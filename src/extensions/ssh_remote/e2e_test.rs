@@ -6,7 +6,7 @@
 //! 客户端私钥是随测试内嵌的固定 ed25519 测试密钥（服务端 `auth_publickey` 直接接受），
 //! 不是任何真实环境的凭据。
 
-use super::{connect, state, tool, transport};
+use super::{command, connect, state, tool, transport};
 use russh::{
     Channel, ChannelId,
     keys::PrivateKey,
@@ -540,6 +540,17 @@ async fn connects_runs_remote_tools_and_enforces_host_keys() {
     assert_eq!(connected.len(), 1);
     assert_eq!(connected[0].key(), key);
 
+    // 1b) `/ssh disconnect <target>`：拼错/半截的 target 不得动别的连接，命中的才断
+    // （旧实现用 `command.contains(arg)` 扫 known，`127.0.0` 这种半截串会把连接一并断掉）
+    let mut app = crate::modes::interactive::app::App::new();
+    command::handle(&mut app, "ssh disconnect 127.0.0");
+    assert_eq!(transport::connected().len(), 1, "拼错的 target 断开了连接");
+    command::handle(&mut app, &format!("ssh disconnect {key}"));
+    assert!(transport::connected().is_empty(), "命中的 target 应断开");
+    let conn = transport::ensure(endpoint.clone())
+        .await
+        .expect("reconnect after disconnect");
+
     // 2) remote_exec：服务端真的跑 sh -c
     let out = transport::exec(&conn, "echo hello-from-remote", None, None, 64 * 1024)
         .await
@@ -718,7 +729,7 @@ async fn connects_runs_remote_tools_and_enforces_host_keys() {
         .await
         .expect_err("changed host key must fail");
     assert!(err.contains("host key"), "{err}");
-    assert!(err.contains("forget-host"), "{err}");
+    assert!(err.contains("/ssh forget"), "{err}");
 
     let _ = shutdown.send(true);
     let _ = std::fs::remove_dir_all(root.as_path());

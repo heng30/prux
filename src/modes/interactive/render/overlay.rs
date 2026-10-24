@@ -778,6 +778,52 @@ mod tests {
         );
     }
 
+    /// 固定区（如 SSH 口令面板的标题 + 提示）占真实行数：用覆盖层自己声明的总高渲染时，
+    /// 底部分割线仍在最后一行，不被固定区顶出屏幕。
+    #[test]
+    fn panel_size_keeps_the_bottom_border_below_the_fixed_header() {
+        let mut app = App::new();
+        let view = OverlayView {
+            title: "SSH authentication".to_string(),
+            header: vec![
+                vec![DockSpan::plain("SSH authentication")],
+                vec![DockSpan::plain("password for blue@ubuntu:22")],
+            ],
+            lines: vec![vec![DockSpan::plain("***")]],
+            footer: vec![("Enter".to_string(), "confirm".to_string())],
+            input: None,
+            editor: None,
+            size: OverlaySize::Panel { max_rows: 9 },
+            selected: None,
+            input_focus: false,
+            messages: Vec::new(),
+        };
+        crate::modes::interactive::overlay::open(&mut app, 1, view);
+        // 内容1 + 上下分割线2 + 上/中/下 3 空行 + 固定区2 + 底栏1
+        let h = crate::modes::interactive::overlay::outer_rows(&app) as u16;
+        assert_eq!(h, 9, "总高应包含固定区");
+
+        let rows = draw(&mut app, 30, h);
+        assert!(rows[0].starts_with('─'), "顶部分割线: {:?}", rows[0]);
+        assert!(
+            rows[2].contains("SSH authentication"),
+            "固定区标题: {:?}",
+            rows[2]
+        );
+        assert!(
+            rows[3].contains("blue@ubuntu:22"),
+            "固定区提示: {:?}",
+            rows[3]
+        );
+        assert!(rows[4].contains("***"), "掩码内容: {:?}", rows[4]);
+        assert!(rows[6].contains("Enter confirm"), "键位提示: {:?}", rows[6]);
+        assert!(
+            rows[8].starts_with('─'),
+            "底部分割线留在最后一行: {:?}",
+            rows[8]
+        );
+    }
+
     /// 滚到底时 thumb 应贴 track 底（不再离底一个 thumb 高度）。
     #[test]
     fn scrollbar_thumb_reaches_the_bottom_at_max_scroll() {

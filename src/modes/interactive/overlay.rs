@@ -335,7 +335,7 @@ pub fn outer_rows(st: &App) -> usize {
     }
 }
 
-/// 覆盖层除内容外的固定行数（标题/分割线/空行/底栏/输入行/编辑器）。
+/// 覆盖层除内容外的固定行数（标题/分割线/空行/固定区/底栏/输入行/编辑器）。
 /// 面板样式无标题行，但有上/中/下 3 个空行（见 [`super::render::overlay`] 的布局）。
 fn chrome_rows(view: &OverlayView, border_rows: usize) -> usize {
     let editor = view
@@ -346,6 +346,8 @@ fn chrome_rows(view: &OverlayView, border_rows: usize) -> usize {
     let title_or_blanks = if border_rows > 0 { 3 } else { 1 };
     border_rows
         + title_or_blanks
+        // 固定区不随滚动，也不随内容变短：漏算会把面板底部的键位行与分割线顶出屏幕
+        + view.header.len()
         + usize::from(!view.footer.is_empty())
         + usize::from(view.input.is_some())
         + editor
@@ -917,6 +919,24 @@ mod tests {
         let st = with_overlay(1, v);
         // 内容3 + 标题1 + 底栏1 + 标签与空行2 + 编辑器4 = 11，被 max_rows=6 截
         assert_eq!(outer_rows(&st), 6);
+    }
+
+    /// 固定区（`header`）不随滚动、也不随内容变短：高度必须算进去，否则面板底部的
+    /// 键位行与 `─` 分割线会被顶出屏幕（SSH 口令输入框踩过：固定区被当作不存在）。
+    #[test]
+    fn panel_rows_account_for_the_fixed_header() {
+        let mut v = view(1, None);
+        v.size = OverlaySize::Panel { max_rows: 9 };
+        v.header = vec![
+            vec![DockSpan::plain("SSH authentication")],
+            vec![DockSpan::plain("password for root@gpu:22")],
+        ];
+        let st = with_overlay(1, v);
+        // 内容 1 + 上下分割线 2 + 上/中/下 3 空行 + 固定区 2 + 底栏 1 = 9
+        assert_eq!(outer_rows(&st), 9);
+        // 内容区只剩 1 行：9 - (分割线2 + 空行3 + 固定区2 + 底栏1)
+        let view = &st.overlay.as_ref().unwrap().view;
+        assert_eq!(inline_content_rows(view, 0, 9, PANEL_BORDER_ROWS), 1);
     }
 
     /// 扩展消费按键后必须置 `dirty`：否则空闲时 `should_repaint()` 为 false，
