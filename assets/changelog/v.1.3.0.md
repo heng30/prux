@@ -196,7 +196,14 @@ This release aligns prux with upstream pi 1.3.0.
 
 - **The SSH password prompt renders as a panel that owns the input area**: the fixed header rows
   are counted in the overlay height now, so the key hints and the bottom divider are no longer
-  pushed off-screen.
+  pushed off-screen. The title and the prompt stay on separate lines, with a blank line between
+  them, and the panel is one row taller so the bottom divider still gets its own row.
+
+- **Cancelling the SSH credential prompt no longer reports an authentication failure**: pressing `Esc`
+  (or closing the overlay) ends the prompt with a cancellation, so `/ssh <target>` and `/tunnel add`
+  stop with just the "SSH authentication cancelled" notice instead of stacking
+  `authentication failed for … (rejected by server)` on top of it. The public key that was already
+  tried is not the reason anything failed — the user simply walked away.
 
 - **A stream cut off before `finish_reason` now fails instead of ending the turn silently**: when a
   provider that reports `finish_reason` closes the stream mid-answer, the partial text and tool
@@ -442,7 +449,13 @@ This release aligns prux with upstream pi 1.3.0.
   不再因为 `cd` 失败而让命令一条都跑不起来。
 
 - **SSH 口令输入面板按面板布局渲染并接管输入区**：覆盖层高度现在计入固定区行数，键位提示与
-  底部分割线不再被顶出屏幕。
+  底部分割线不再被顶出屏幕；标题与口令提示分行显示，中间留一空行；面板高度多留一行，
+  底部分割线不再被裁掉。
+
+- **取消 SSH 凭据输入不再报「认证失败」**：按 `Esc`（或关闭覆盖层）现在以「用户取消」收场，
+  `/ssh <target>` 与 `/tunnel add` 只留下一条 “SSH authentication cancelled” 提示，不再在后面
+  叠一句 `authentication failed for … (rejected by server)`——先试过的公钥并不是失败原因，
+  是用户自己走开了。
 
 - **流在 `finish_reason` 之前被掐断时报错，不再静默结束回合**：会报告 `finish_reason` 的 provider
   在中途关闭连接时，已收到的文本与工具参数仍会保留，但本回合以「响应被截断」的错误结束，

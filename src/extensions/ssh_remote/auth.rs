@@ -113,14 +113,17 @@ pub fn forget_all() -> usize {
 
 /// [`acquire`] 的结果。
 ///
-/// 区分「没有凭据」与「有凭据但被拒」：后者必须把原因带给调用方，
-/// 否则用户只会看到「认证失败」，不知道真正的问题是密码文件权限过宽。
+/// 区分「没有凭据」「有凭据但被拒」「用户主动取消」：被拒时必须把原因带给调用方，
+/// 否则用户只会看到「认证失败」，不知道真正的问题是密码文件权限过宽；
+/// 取消则要能被调用方识别出来，不能退化成一条认证错误。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Acquired {
     /// 取到凭据
     Found(String),
-    /// 没有可用来源（非 TUI、用户取消、超时、环境变量为空）
+    /// 没有可用来源（非 TUI、超时、环境变量为空）
     Missing,
+    /// 用户在交互输入框里主动取消（`Esc` / 关闭覆盖层）：不是错误，不要报认证失败
+    Cancelled,
     /// 有来源但不可用（文件权限过宽、文件为空等），附原因
     Rejected(String),
 }
@@ -158,11 +161,12 @@ pub async fn acquire(
     }
 
     match ask_overlay(scope, kind, prompt).await {
-        Some(value) if !value.is_empty() => {
+        Acquired::Found(value) if !value.is_empty() => {
             remember(scope, kind, &value);
             Acquired::Found(value)
         }
-        _ => Acquired::Missing,
+        Acquired::Found(_) => Acquired::Missing,
+        other => other,
     }
 }
 
@@ -197,8 +201,11 @@ pub fn read_secret_file(path: &str) -> Result<String, String> {
     Ok(first.to_string())
 }
 
-/// 弹出掩码输入框并等待结果
-async fn ask_overlay(scope: &str, kind: SecretKind, prompt: &str) -> Option<String> {
+/// 弹出掩码输入框并等待结果。
+///
+/// 用户按 `Esc` / 关闭覆盖层时返回 [`Acquired::Cancelled`]：调用方据此区分
+/// 「用户主动放弃」与「根本没有输入渠道」，不要把它当成认证失败。
+async fn ask_overlay(scope: &str, kind: SecretKind, prompt: &str) -> Acquired {
     let id = next_ui_id();
     let (tx, rx) = oneshot::channel();
 
@@ -206,7 +213,7 @@ async fn ask_overlay(scope: &str, kind: SecretKind, prompt: &str) -> Option<Stri
         // 同一时刻只允许一个输入框：后来的请求直接失败，不覆盖前者
         let mut slot = prompt_slot().lock().unwrap();
         if slot.is_some() {
-            return None;
+            return Acquired::Missing;
         }
 
         *slot = Some(PromptState {
@@ -222,31 +229,30 @@ async fn ask_overlay(scope: &str, kind: SecretKind, prompt: &str) -> Option<Stri
     extensions::request_ui(ExtensionUiRequest::ShowOverlay { id });
 
     let result = tokio::time::timeout(PROMPT_TIMEOUT, rx).await;
-    let value = match result {
-        Ok(Ok(value)) => value,
+    match result {
+        Ok(Ok(Some(value))) => Acquired::Found(value),
+        Ok(Ok(None)) => {
+            extensions::request_ui(ExtensionUiRequest::Notify {
+                text: "SSH authentication cancelled".to_string(),
+                level: UiNotifyLevel::Warning,
+            });
+            Acquired::Cancelled
+        }
         // 超时或 UI 已销毁：清掉状态，避免卡住后续请求
         _ => {
             prompt_slot().lock().unwrap().take();
             extensions::request_ui(ExtensionUiRequest::HideOverlay { id });
             if !extensions::ui_ready() {
-                return None;
+                return Acquired::Missing;
             }
 
             extensions::request_ui(ExtensionUiRequest::Notify {
                 text: format!("SSH credential prompt timed out ({prompt})"),
                 level: UiNotifyLevel::Warning,
             });
-            return None;
+            Acquired::Missing
         }
-    };
-
-    if value.is_none() {
-        extensions::request_ui(ExtensionUiRequest::Notify {
-            text: "SSH authentication cancelled".to_string(),
-            level: UiNotifyLevel::Warning,
-        });
     }
-    value
 }
 
 /// 渲染进行中的密码输入框（`Extension::overlay_view` 调用；TUI 线程，每帧一次）
@@ -258,6 +264,7 @@ pub fn overlay_view(id: u64, _cols: u16) -> Option<OverlayView> {
         title: "SSH authentication".to_string(),
         header: vec![
             vec![DockSpan::new("accent", "#8abeb7", " SSH authentication")],
+            vec![DockSpan::plain("")],
             vec![DockSpan::plain(state.prompt.clone())],
         ],
         lines: vec![vec![DockSpan::new("accent", "#8abeb7", masked)]],
@@ -268,7 +275,7 @@ pub fn overlay_view(id: u64, _cols: u16) -> Option<OverlayView> {
         ],
         input: None,
         editor: None,
-        size: OverlaySize::Panel { max_rows: 9 },
+        size: OverlaySize::Panel { max_rows: 10 },
         selected: None,
         input_focus: false,
     })
@@ -398,7 +405,7 @@ mod tests {
         });
 
         let view = overlay_view(7, 80).expect("进行中应有覆盖层");
-        assert_eq!(view.size, OverlaySize::Panel { max_rows: 9 });
+        assert_eq!(view.size, OverlaySize::Panel { max_rows: 10 });
         assert!(
             view.header
                 .iter()
@@ -411,6 +418,14 @@ mod tests {
                 .any(|line| line.iter().any(|s| s.text.contains("blue@ubuntu:22"))),
             "固定区要写清这是谁的口令"
         );
+        let title: String = view.header[0].iter().map(|s| s.text.as_str()).collect();
+        assert_eq!(title, " SSH authentication", "标题独占首行");
+        assert!(
+            view.header[1].iter().all(|s| s.text.is_empty()),
+            "标题与口令提示之间留一行空行"
+        );
+        let prompt: String = view.header[2].iter().map(|s| s.text.as_str()).collect();
+        assert_eq!(prompt, "password for blue@ubuntu:22", "口令提示另起一行");
         assert_eq!(view.lines[0][0].text, "***", "密码必须掩码");
 
         prompt_slot().lock().unwrap().take();

@@ -8,7 +8,7 @@ use crate::{
     extensions::{
         command_arg,
         ssh_remote::{
-            self, auth,
+            self, auth, connect,
             sshcfg::SshHost,
             state::{self, Endpoint, RemoteConfig, TunnelSpec},
             transport, tunnel,
@@ -430,6 +430,8 @@ fn set_target(text: &str) {
         match tokio::time::timeout(Duration::from_secs(20), transport::ensure(probe.clone())).await
         {
             Ok(Ok(_)) => save_target(probe),
+            // 用户按 Esc 取消密码输入：已经提示过「cancelled」，不要再叠一条认证失败
+            Ok(Err(e)) if connect::is_cancelled(&e) => {}
             Ok(Err(e)) => notify_text(
                 &format!("Cannot connect to {}: {e}", probe.key()),
                 UiNotifyLevel::Error,
@@ -513,6 +515,7 @@ fn add_tunnel(rest: &str) {
                     UiNotifyLevel::Info,
                 );
             }
+            Err(e) if connect::is_cancelled(&e) => {}
             Err(e) => notify_text(&format!("Cannot forward: {e}"), UiNotifyLevel::Error),
         }
     });

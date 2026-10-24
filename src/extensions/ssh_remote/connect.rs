@@ -31,6 +31,9 @@ use tokio::net::TcpStream;
 /// 默认私钥候选（按顺序尝试，缺文件跳过）
 const DEFAULT_KEYS: &[&str] = &["id_ed25519", "id_ecdsa", "id_rsa"];
 
+/// 用户在 TUI 取消凭据输入时 `connect` 返回的错误文本
+pub const CANCELLED: &str = "SSH authentication cancelled by user";
+
 /// 可作为 SSH 承载流的对象
 trait TransportStream: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send {}
 impl TransportStream for TcpStream {}
@@ -121,6 +124,11 @@ impl Handler for ClientHandler {
     ) -> Result<(), Self::Error> {
         Ok(())
     }
+}
+
+/// 错误是否只是用户取消了凭据输入（而非真正的认证失败）；`true` 表示调用方应静默处理
+pub fn is_cancelled(err: &str) -> bool {
+    err.contains(CANCELLED)
 }
 
 /// 建立并认证连接
@@ -316,6 +324,7 @@ async fn authenticate(handle: &mut Handle<ClientHandler>, target: &Target) -> Re
     for path in candidates {
         let key = match load_key(&path, target).await {
             Ok(key) => key,
+            Err(e) if is_cancelled(&e) => return Err(CANCELLED.to_string()),
             Err(e) => {
                 last_error = e;
                 continue;
@@ -371,6 +380,7 @@ async fn authenticate(handle: &mut Handle<ClientHandler>, target: &Target) -> Re
                 }
                 last_error = "password rejected by server".to_string();
             }
+            auth::Acquired::Cancelled => return Err(CANCELLED.to_string()),
             auth::Acquired::Rejected(reason) => last_error = reason,
             auth::Acquired::Missing => {
                 if last_error.is_empty() {
@@ -424,6 +434,7 @@ async fn load_key(path: &Path, target: &Target) -> Result<PrivateKey, String> {
             {
                 auth::Acquired::Found(passphrase) => load_secret_key(path, Some(&passphrase))
                     .map_err(|e| format!("{}: {e}", path.display())),
+                auth::Acquired::Cancelled => Err(CANCELLED.to_string()),
                 auth::Acquired::Rejected(reason) => {
                     Err(format!("{}: {first} ({reason})", path.display()))
                 }
