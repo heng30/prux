@@ -33,6 +33,7 @@ pub mod notify;
 pub mod open;
 pub mod permissions;
 pub mod plan_mode;
+pub mod ponytail;
 pub mod proxy;
 pub mod recap_btw;
 pub mod rewind;
@@ -115,6 +116,8 @@ pub const PRIORITY_CACHE_WATCH: u32 = 58;
 pub const PRIORITY_SESSION_SEARCH: u32 = 57;
 /// memory 跨会话记忆扩展的注册优先级。
 pub const PRIORITY_MEMORY: u32 = 56;
+/// ponytail 懒资深开发者模式扩展的注册优先级。
+pub const PRIORITY_PONYTAIL: u32 = 53;
 /// update-check 启动时版本检查扩展的注册优先级。
 pub const PRIORITY_UPDATE_CHECK: u32 = 55;
 /// usage provider 配额面板扩展的注册优先级。
