@@ -356,7 +356,7 @@ fn no_extensions_disables_registered_extensions() {
     assert!(unregister_extension("no-extensions-probe"));
 }
 
-/// `ssh-remote` 在分布式切片里应暴露五个 `remote_*` 工具与两条命令，
+/// `ssh-remote` 在分布式切片里应暴露六个 `remote_*` 工具与两条命令，
 /// 并保持「默认不启用」（它会建立出站连接、可能改动远端文件）。
 ///
 /// 只查切片、不调 `register_all()`：全局注册表由本文件的主测试独占，
@@ -382,6 +382,7 @@ fn ssh_remote_registers_remote_tool_and_command() {
             "remote_exec",
             "remote_grep",
             "remote_ls",
+            "remote_pwd",
             "remote_read",
             "remote_sync"
         ],
