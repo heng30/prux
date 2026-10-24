@@ -227,7 +227,6 @@ fn set_default(f: impl FnOnce(&mut Endpoint)) {
 
     f(&mut ep);
 
-    // 已连接的端点同步更新，避免下一次工具调用还用旧目录/旧备注
     let updated = ep.clone();
     cfg.set_default(updated.clone());
     if let Err(e) = cfg.save() {
@@ -235,8 +234,15 @@ fn set_default(f: impl FnOnce(&mut Endpoint)) {
         return;
     }
 
+    // 已连接的端点同步更新，否则下一次工具调用还用旧目录
+    transport::sync_endpoint(&updated);
+
     notify_text(
-        &format!("Default target is now {}.", updated.display()),
+        &format!(
+            "Default target is now {} · cwd {}.",
+            updated.display(),
+            updated.cwd
+        ),
         UiNotifyLevel::Info,
     );
 }
@@ -400,6 +406,7 @@ fn remove_target(arg: &str) {
 ///
 /// 未成功登录的端点既不进 `known` 也不改 `default`——否则 `/ssh list` 会一直挂着
 /// 连不上的目标，`/ssh status` 也会显示一个形同虚设的默认值。
+/// 把 `/ssh <target>` 设为默认目标：先探测登录，成功后落盘
 fn set_target(text: &str) {
     let query = if text.to_ascii_lowercase().starts_with("ssh ") {
         text.to_string()
@@ -407,13 +414,15 @@ fn set_target(text: &str) {
         format!("ssh {text}")
     };
 
-    let endpoint = match parse_ssh_command(&query) {
+    let mut endpoint = match parse_ssh_command(&query) {
         Ok(ep) => ep,
         Err(e) => {
             notify_text(&format!("Cannot parse target: {e}"), UiNotifyLevel::Warning);
             return;
         }
     };
+
+    inherit_saved(&mut endpoint);
 
     // 连一次当场暴露认证/主机密钥问题，而不是等到第一次工具调用
     let probe = endpoint.clone();
@@ -431,6 +440,24 @@ fn set_target(text: &str) {
             ),
         }
     });
+}
+
+/// 重新登录已记住的目标时保住用户设过的 `cwd` 与备注
+///
+/// [`parse_ssh_command`] 只造默认值（`cwd` = `~`、`note` 为空），直接覆盖写回会让
+/// `/ssh cd` / `/ssh note` 的结果在下次 `/ssh <target>` 时被悄悄冲掉。
+fn inherit_saved(ep: &mut Endpoint) {
+    let cfg = RemoteConfig::load();
+    let key = ep.key();
+    let saved = cfg
+        .known
+        .iter()
+        .find(|k| k.key() == key)
+        .or_else(|| cfg.default.as_ref().filter(|d| d.key() == key));
+    if let Some(saved) = saved {
+        ep.cwd = saved.cwd.clone();
+        ep.note = saved.note.clone();
+    }
 }
 
 /// 把已登录成功的端点存为默认目标（同时进 `known` 列表）
@@ -527,8 +554,16 @@ fn list_text() -> String {
         lines.push("  (none)".to_string());
     }
 
+    // 记住的端点也要写出 cwd：`/ssh cd` 改的就是这里，不显示等于改了看不见
+    let default_key = cfg.default_key();
     for ep in &cfg.known {
-        lines.push(format!("  {}", ep.display()));
+        let default = default_key.as_deref() == Some(ep.key().as_str());
+        lines.push(format!(
+            "  {} · cwd {}{}",
+            ep.display(),
+            ep.cwd,
+            if default { " (default)" } else { "" }
+        ));
     }
 
     if !cfg.tunnels.is_empty() {
@@ -833,6 +868,67 @@ mod tests {
         assert!(matching_keys(&candidates, "gpu2").is_empty());
         assert!(matching_keys(&candidates, "gpu").is_empty());
         assert!(matching_keys(&candidates, "").is_empty());
+    }
+
+    /// `/ssh cd` 之后 `/ssh list` 必须显示新的 cwd：以前只印 key，改没改成看不出来。
+    #[test]
+    fn list_shows_the_cwd_set_by_cd() {
+        let _lock = state::TEST_ROOT_LOCK.blocking_lock();
+        let _root = state::TestRootGuard::temp();
+        let mut app = App::new();
+
+        let ep = parse_ssh_command("ssh root@gpu.example.com").unwrap();
+        let mut cfg = RemoteConfig::load();
+        cfg.set_default(ep);
+        cfg.save().unwrap();
+
+        handle(&mut app, "ssh cd /srv/app");
+        let text = list_text();
+        assert!(
+            text.contains("cwd /srv/app"),
+            "Remembered 段没显示新 cwd：{text}"
+        );
+        assert!(text.contains("(default)"), "没标出默认目标：{text}");
+
+        handle(&mut app, "ssh cd");
+        assert!(
+            list_text().contains(&format!("cwd {}", state::FALLBACK_REMOTE_CWD)),
+            "空参数的 cd 应回落默认目录"
+        );
+    }
+
+    /// 重启后重新 `/ssh` 同一目标：记住的 cwd 与备注不能被解析出的默认值冲掉
+    #[test]
+    fn relogin_keeps_saved_cwd_and_note() {
+        let _lock = state::TEST_ROOT_LOCK.blocking_lock();
+        let _root = state::TestRootGuard::temp();
+
+        let mut saved = parse_ssh_command("ssh root@gpu.example.com").unwrap();
+        assert_eq!(saved.cwd, state::FALLBACK_REMOTE_CWD);
+        saved.cwd = "/srv/app".to_string();
+        saved.note = "H100".to_string();
+        let mut cfg = RemoteConfig::load();
+        cfg.set_default(saved);
+        cfg.save().unwrap();
+
+        let mut parsed = parse_ssh_command("ssh root@gpu.example.com").unwrap();
+        assert_eq!(
+            parsed.cwd,
+            state::FALLBACK_REMOTE_CWD,
+            "解析结果本身只有默认值"
+        );
+        inherit_saved(&mut parsed);
+        assert_eq!(parsed.cwd, "/srv/app", "重新登录把 cwd 重置了");
+        assert_eq!(parsed.note, "H100", "重新登录把备注清掉了");
+
+        let mut other = parse_ssh_command("ssh root@gpu2.example.com").unwrap();
+        inherit_saved(&mut other);
+        assert_eq!(
+            other.cwd,
+            state::FALLBACK_REMOTE_CWD,
+            "没见过的目标不该继承别人的设置"
+        );
+        assert!(other.note.is_empty(), "没见过的目标不该有备注");
     }
 
     /// TUI 传来的原文含命令名：不剥就会把 `help` / `list` 当成主机名去连接。

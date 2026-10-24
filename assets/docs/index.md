@@ -29,7 +29,7 @@ prux
 - [codemode](extensions/codemode.md) - `codemode` 扩展：在 QuickJS 沙箱里用一段 JavaScript 编排工具调用、脚本 API、首行选项与限制。
 - [MCP](extensions/mcp.md) - `mcp` 扩展：接入外部 MCP 服务器的配置发现与字段、`mcp` 工具、各种 `mcp.json` 配置例子、生命周期与缓存、OAuth 2.1、命令。
 - [权限门控（Permissions）](extensions/permissions.md) - `permissions` 扩展：四层策略（路径 / 工作目录边界 / 工具 / bash 命令）、模式匹配与优先级、`ask` 的 fail-closed 语义与会话放行、review log。
-- [SSH 远程工具与隧道（ssh-remote）](extensions/ssh-remote.md) - `ssh-remote` 扩展：`remote_exec` / `remote_read` / `remote_ls` / `remote_grep` / `remote_sync` 显式操作远端（内置工具仍只操作本地），`/ssh` 目标管理、`/tunnel` 端口转发、认证与主机密钥、输出预算。
+- [SSH 远程工具与隧道（ssh-remote）](extensions/ssh-remote.md) - `ssh-remote` 扩展：`remote_exec` / `remote_read` / `remote_ls` / `remote_grep` / `remote_sync` / `remote_pwd` 显式操作远端（内置工具仍只操作本地），`/ssh` 目标管理、`/tunnel` 端口转发、认证与主机密钥、输出预算。
 - [收工检查（vet）](extensions/vet.md) - `vet` 扩展：结算前跑项目检查、把失败喂回模型继续修，配置项、三条收敛条件与 `/vet` 命令。
 - [技能（Skills）](skills.md) - Agent Skills，按需复用的能力（`/skill:name`）。
 - [提示模板（Prompt templates）](prompt-templates.md) - 由斜杠命令展开的可复用提示。

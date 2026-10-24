@@ -73,8 +73,8 @@ pub async fn run(conn: &Arc<RemoteConn>, req: &ExecRequest) -> Result<String, St
     };
     let mut header = format!(
         "{} · {}",
-        conn.endpoint.display(),
-        req.cwd.clone().unwrap_or_else(|| conn.endpoint.cwd.clone())
+        conn.endpoint().display(),
+        req.cwd.clone().unwrap_or_else(|| conn.endpoint().cwd)
     );
 
     if !notes.is_empty() {

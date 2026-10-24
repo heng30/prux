@@ -5,8 +5,9 @@ This release aligns prux with upstream pi 1.3.0.
 ### Added
 
 - **`ssh-remote` extension: remote tools and port tunnels**: adds `remote_exec` (run a command on
-  a remote host), `remote_read` / `remote_ls` / `remote_grep` (read remote files) and `remote_sync`
-  (copy files or trees between local and remote, with `dry_run`), plus `/ssh` for target management
+  a remote host), `remote_read` / `remote_ls` / `remote_grep` (read remote files), `remote_sync`
+  (copy files or trees between local and remote, with `dry_run`) and `remote_pwd` (report the remote
+  working directory the other tools use and the absolute path it resolves to), plus `/ssh` for target management
   (`/ssh help` prints the target syntax and every subcommand) and `/tunnel` for mapping a remote port onto `127.0.0.1`. Built-in tools are untouched: `read`,
   `write`, `edit`, `ls`, `find`, `grep`, `bash`, `@` completion and `!` commands keep operating on
   local files only, so nothing ends up half-redirected. Targets accept `-i`, `-J` and
@@ -18,7 +19,7 @@ This release aligns prux with upstream pi 1.3.0.
   not supported. Host keys are remembered TOFU-style with a hard refusal when the fingerprint
   changes. Large files are read by line range instead of being downloaded whole, and command output
   is bounded per call (200 lines / 8 KiB) and per turn (32 KiB). Disabled by default, and the
-  five tools are **deferred**: the model finds them through `tool_search` first and sees the full
+  six tools are **deferred**: the model finds them through `tool_search` first and sees the full
   declaration from its next call onward, so the `tool-search` extension has to be enabled.
 - **`/share` destination is configurable**: `settings.json` takes
   `sessionShareDestination` (`auto` / `gist` / `radius`), switchable from `/settings`. `auto` and
@@ -159,10 +160,22 @@ This release aligns prux with upstream pi 1.3.0.
 
 ### Fixed
 
+- **`/ssh cd` actually moves the working directory of an established connection**: the pool kept the
+  endpoint it connected with, so tools kept running in the old directory; `/ssh list` shows the
+  current `cwd` for every remembered target now (with the default marked), instead of hiding it.
 - **`/ssh` remembers a target only after it actually logs in**: a failed probe no longer leaves the
   target in the list or changes the default.
+- **Logging in to an already remembered target keeps its `cwd` and note**: after a restart,
+  `/ssh user@host` used to write the parsed defaults back (`cwd` = `~`, empty note) and silently wipe
+  what `/ssh cd` / `/ssh note` had set.
 - **`/ssh disconnect <target>` drops only the connection you named**: it used to match half-typed
   substrings (`gpu` matched `gpu.example.com`) and disconnected unrelated hosts.
+- **Remote tools resolve the working directory before using it**: `remote_read` / `remote_ls` /
+  `remote_grep` / `remote_sync` handed relative paths straight to SFTP, which has no working directory
+  and never expands `~`, so files were read under the login directory or failed outright. Every tool
+  now asks the host once for the absolute working directory (`pwd -P`) and uses it for both exec and
+  SFTP, and prints that path in its first line. `~` / `~/project` in `/ssh cd` works as well instead
+  of making the remote `cd` fail silently.
 - **The SSH password prompt renders as a panel that owns the input area**: the fixed header rows
   are counted in the overlay height now, so the key hints and the bottom divider are no longer
   pushed off-screen.
@@ -231,14 +244,15 @@ This release aligns prux with upstream pi 1.3.0.
 
 - **新增 `ssh-remote` 扩展：远程工具族与端口隧道**：提供 `remote_exec`（在远端跑命令）、
   `remote_read` / `remote_ls` / `remote_grep`（读远端文件）、`remote_sync`（本地↔远端复制文件或
-  目录树，支持 `dry_run`），以及 `/ssh` 目标管理（`/ssh help` 打印目标写法与全部子命令）与 `/tunnel` 端口映射。**不改写任何内置工具**：
+  目录树，支持 `dry_run`），以及 `remote_pwd`（报出其它工具使用的远端工作目录与它解析出的
+  绝对路径）、`/ssh` 目标管理（`/ssh help` 打印目标写法与全部子命令）与 `/tunnel` 端口映射。**不改写任何内置工具**：
   `read` / `write` / `edit` / `ls` / `find` / `grep` / `bash`、`@` 补全与 `!` 命令始终只操作本地，
   不会出现「一半穿透、一半不穿透」。目标支持 `-i`、`-J`、`-o ProxyJump=`（端口写在 `host:port` 里），会解析
   `~/.ssh/config` 别名；出站代理只认扩展自己配置里的 `proxy`，不读环境变量。认证先试公钥（`-i`、`IdentityFile`、再退到默认密钥），
   失败后取密码（`-o PasswordFile=` 的 0600 文件、`PRUX_SSH_PASSWORD`、或 TUI 掩码输入），对只开
   keyboard-interactive 的服务器自动用同一密码重试；凭据只留在进程内存，`/ssh forget` 清除。
   不支持 SSH agent。主机密钥按 TOFU 记录，指纹变化时直接拒绝。大文件按行范围读取而不是整份
-  下载，命令输出有单次（200 行 / 8 KiB）与每轮（32 KiB）两级预算。**默认不启用**；五个工具都是
+  下载，命令输出有单次（200 行 / 8 KiB）与每轮（32 KiB）两级预算。**默认不启用**；六个工具都是
   延迟工具，模型先用 `tool_search` 检索（`query` 如 `ssh remote`）才能发现，下一次调用起完整声明可见，
   因此需要 `tool-search` 扩展处于启用状态。
 - **`/share` 的上传目标可配置**：`settings.json` 新增 `sessionShareDestination`（`auto` / `gist` /
@@ -352,9 +366,18 @@ This release aligns prux with upstream pi 1.3.0.
 
 ### 修复
 
+- **`/ssh cd` 真的会换掉已建立连接的工作目录**：连接池里存的还是建连时的端点，工具继续在旧目录里跑；
+  另外 `/ssh list` 的已记住目标现在逐条写出当前 `cwd`（默认目标标 `(default)`），不再把它藏起来。
 - **`/ssh` 只在真正登录成功后记住目标**：探测失败的目标不再进列表，也不会改掉默认目标。
+- **重新登录已记住的目标不再重置它的 `cwd` 与备注**：重启后用 `/ssh user@host` 登录，此前会把
+  解析出的默认值（`cwd` = `~`、备注为空）直接写回，悄悄冲掉 `/ssh cd` / `/ssh note` 设过的内容。
 - **`/ssh disconnect <target>` 只断你点名的那条连接**：此前按半截子串匹配（`gpu` 命中
   `gpu.example.com`），会把不相干的主机一并断开。
+- **远程工具先解析工作目录再动手**：`remote_read` / `remote_ls` / `remote_grep` / `remote_sync`
+  过去把相对路径原样交给 SFTP——SFTP 没有「当前目录」概念，也不展开 `~`，于是文件被读到了
+  登录目录下，或者直接报不存在。现在每个工具都会先向远端要一次绝对工作目录（`pwd -P`），
+  exec 与 SFTP 都用这个路径，并在结果首行写明；`/ssh cd ~/project` 这类写法也真的会进目录，
+  不再因为 `cd` 失败而让命令一条都跑不起来。
 - **SSH 口令输入面板按面板布局渲染并接管输入区**：覆盖层高度现在计入固定区行数，键位提示与
   底部分割线不再被顶出屏幕。
 - **流在 `finish_reason` 之前被抳断时报错，不再静默结束回合**：会报告 `finish_reason` 的 provider

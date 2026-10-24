@@ -107,9 +107,29 @@ pub fn wrap_cd(command: &str, cwd: &str) -> String {
     }
     format!(
         "cd {} 2>/dev/null || exit 1; {}",
-        shell_quote(trimmed),
+        shell_dir(trimmed),
         command
     )
+}
+
+/// 把目录交给 shell 展开：`~` 由 shell 解析，其余部分照常用单引号保护。
+///
+/// 不能直接 [`shell_quote`]：单引号里的 `~` 是普通字符，`cd '~/proj'` 必定失败，
+/// 而 `~/proj` 是用户与配置里最常见的写法之一。
+fn shell_dir(dir: &str) -> String {
+    let Some(rest) = dir.strip_prefix('~') else {
+        return shell_quote(dir);
+    };
+    let (home, tail) = match rest.split_once('/') {
+        Some((home, tail)) => (home, tail),
+        None => (rest, ""),
+    };
+    let mut out = format!("~{home}");
+    if !tail.is_empty() {
+        out.push('/');
+        out.push_str(&shell_quote(tail));
+    }
+    out
 }
 
 /// 持续读空管道，只保留尾部 `limit` 字节。返回 `(文本, 是否丢弃过前缀)`。
@@ -311,6 +331,59 @@ mod tests {
             wrap_cd("ls", "/srv/x"),
             "cd '/srv/x' 2>/dev/null || exit 1; ls"
         );
+    }
+
+    /// `~` 必须交给 shell 展开：单引号包起来后 `cd '~/proj'` 一定失败，命令根本不会执行
+    #[test]
+    fn wrap_cd_expands_tilde() {
+        assert_eq!(
+            wrap_cd("ls", "~/proj"),
+            "cd ~/'proj' 2>/dev/null || exit 1; ls"
+        );
+        assert_eq!(
+            wrap_cd("ls", "~/my dir"),
+            "cd ~/'my dir' 2>/dev/null || exit 1; ls"
+        );
+        assert_eq!(
+            wrap_cd("ls", "~bob/proj"),
+            "cd ~bob/'proj' 2>/dev/null || exit 1; ls"
+        );
+    }
+
+    /// `~` 交给 shell，路径其余部分仍要完整成词：空格、单引号都不能把目录拆开
+    #[test]
+    fn shell_dir_keeps_tilde_outside_quotes() {
+        assert_eq!(shell_dir("~"), "~");
+        assert_eq!(shell_dir("~/"), "~");
+        assert_eq!(shell_dir("~/proj"), "~/'proj'");
+        assert_eq!(shell_dir("~/my dir"), "~/'my dir'");
+        assert_eq!(shell_dir("~bob"), "~bob");
+        assert_eq!(shell_dir("~bob/proj"), "~bob/'proj'");
+
+        // 不以 `~` 开头的路径整体加引号（`~` 以外的字符不做任何解释）
+        assert_eq!(shell_dir("/srv/x"), "'/srv/x'");
+        assert_eq!(shell_dir("sub dir/x"), "'sub dir/x'");
+        assert_eq!(shell_dir(""), "''");
+        assert_eq!(shell_dir("/srv/it's"), "'/srv/it'\\''s'");
+    }
+
+    /// 拼出来的片段必须仍是一个参数：`cd` 只能收到一个目录
+    #[test]
+    fn shell_dir_produces_a_single_word() {
+        for dir in [
+            "~",
+            "~/proj",
+            "~/my dir",
+            "~bob/proj",
+            "/srv/x",
+            "sub dir/x",
+        ] {
+            assert_eq!(
+                shell_tokenize(&shell_dir(dir)),
+                vec![dir.to_string()],
+                "shell_dir({dir:?}) 没能作为一个词交给 shell"
+            );
+        }
     }
 
     #[test]

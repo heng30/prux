@@ -1,4 +1,5 @@
-//! 远程工具族：`remote_exec` / `remote_read` / `remote_ls` / `remote_grep` / `remote_sync`。
+//! 远程工具族：`remote_exec` / `remote_read` / `remote_ls` / `remote_grep` / `remote_sync` /
+//! `remote_pwd`。
 //!
 //! 设计前提：**远程是「第二个文件系统 + 一台能跑命令的机器」，不是工作区**。
 //! 所以这些工具与内置 `read` / `grep` / `bash` 是并存关系，各自带 `host` 参数，
@@ -9,7 +10,7 @@
 //!
 //! # 按需加载
 //!
-//! 五个工具整体声明为**延迟工具**（[`ToolExposure::Deferred`]）：描述、参数 schema、
+//! 六个工具整体声明为**延迟工具**（[`ToolExposure::Deferred`]）：描述、参数 schema、
 //! snippet 与 guidelines 都不进模型可见列表与系统提示。远程不是常用能力，用户要用时会
 //! 明说（「连到 prod-web-1 看日志」），模型据此先 `tool_search` 检索，**下一次调用**即拿到
 //! 完整声明。整族一起延迟是刻意的：只放出其中一部分会让模型按半套能力规划——只给
@@ -47,6 +48,8 @@ pub const LS: &str = "remote_ls";
 pub const GREP: &str = "remote_grep";
 /// `remote_sync` 工具名
 pub const SYNC: &str = "remote_sync";
+/// `remote_pwd` 工具名
+pub const PWD: &str = "remote_pwd";
 
 /// 单次 grep 的默认命中上限
 const GREP_DEFAULT_MAX: usize = 200;
@@ -54,6 +57,8 @@ const GREP_DEFAULT_MAX: usize = 200;
 const LIST_LIMIT: usize = 50;
 /// 单次 sync 的文件数上限
 const MAX_SYNC_FILES: usize = 2000;
+/// `remote_pwd` 的输出字节上限：两行路径，正常只有几十字节
+const PWD_MAX_BYTES: usize = 4096;
 
 /// 全部工具定义（整族统一标记为延迟工具，见模块文档「按需加载」）
 pub fn tools() -> Vec<ExtensionTool> {
@@ -63,6 +68,7 @@ pub fn tools() -> Vec<ExtensionTool> {
         ls_tool(),
         grep_tool(),
         sync_tool(),
+        pwd_tool(),
     ]
     .into_iter()
     .map(|tool| tool.with_exposure(ToolExposure::Deferred))
@@ -188,12 +194,90 @@ fn sync_tool() -> ExtensionTool {
     tool
 }
 
+/// `remote_pwd` 定义
+fn pwd_tool() -> ExtensionTool {
+    let mut tool = ExtensionTool::simple(
+        PWD,
+        "Report the remote working directory that this tool family uses: the cwd remembered for \
+         the target (`/ssh cd` sets it) plus the absolute path it resolves to on the host. Call it \
+         before building remote absolute paths instead of guessing.",
+        json!({
+            "type": "object",
+            "properties": {
+                "host": host_schema("")
+            }
+        }),
+        "Show the remote working directory over SSH",
+    );
+    tool.prompt_guidelines = vec![
+        "remote_pwd answers where the remote_* tools operate; they already default to that directory, so relative paths work without calling it.".to_string(),
+    ];
+    tool
+}
+
 /// 按 `host` 参数取连接（`None` → 默认端点）
 async fn conn_for(host: Option<&str>) -> Result<Arc<RemoteConn>, String> {
     match host.map(str::trim).filter(|h| !h.is_empty()) {
         Some(host) => transport::resolve_host(host).await,
         None => transport::resolve_default().await,
     }
+}
+
+/// 把远端目录解析成绝对路径（`~` / `~/x` / 相对路径交给远端 shell）
+///
+/// 绝对路径直接返回，不额外往返；其余写法先 `cd` 再 `pwd -P`：SFTP 没有工作目录概念，
+/// 也从不展开 `~`，不把真实路径拿到手的话，后续路径会落到登录目录甚至直接报错。
+async fn resolve_dir(conn: &Arc<RemoteConn>, dir: &str) -> Result<String, String> {
+    let trimmed = dir.trim();
+    if trimmed.starts_with('/') {
+        let trimmed = trimmed.trim_end_matches('/');
+        return Ok(if trimmed.is_empty() {
+            "/".to_string()
+        } else {
+            trimmed.to_string()
+        });
+    }
+
+    let out = transport::exec(conn, "pwd -P", Some(trimmed), None, PWD_MAX_BYTES).await?;
+    let resolved = out.stdout.lines().next().unwrap_or_default().trim();
+    if resolved.is_empty() {
+        return Err(format!(
+            "cannot enter remote directory `{trimmed}` (does it exist on the host?)"
+        ));
+    }
+    Ok(resolved.to_string())
+}
+
+/// 该端点本次调用实际使用的工作目录（绝对路径）
+async fn workdir(conn: &Arc<RemoteConn>) -> Result<String, String> {
+    let cwd = conn.endpoint().cwd;
+    resolve_dir(conn, &cwd).await
+}
+
+/// 工具参数里的远端路径：相对路径按工作目录展开，`~` 开头交给远端展开
+async fn resolve_path(conn: &Arc<RemoteConn>, base: &str, path: &str) -> Result<String, String> {
+    let trimmed = path.trim();
+    if trimmed.starts_with('/') {
+        return Ok(trimmed.to_string());
+    }
+    if trimmed.starts_with('~') {
+        return resolve_dir(conn, trimmed).await;
+    }
+    Ok(join_posix(base, trimmed))
+}
+
+/// `remote_exec` 的 `cwd` 参数：缺省 = 记住的目录，相对路径也相对它
+async fn exec_dir(conn: &Arc<RemoteConn>, requested: Option<&str>) -> Result<String, String> {
+    let Some(dir) = requested.map(str::trim).filter(|d| !d.is_empty()) else {
+        return workdir(conn).await;
+    };
+    if dir.starts_with('/') {
+        return Ok(dir.to_string());
+    }
+    if dir.starts_with('~') {
+        return resolve_dir(conn, dir).await;
+    }
+    Ok(join_posix(&workdir(conn).await?, dir))
 }
 
 /// 分派一个工具调用；`cwd` 是本地会话工作目录（解析 `remote_sync` 的相对本地路径）
@@ -205,6 +289,7 @@ pub async fn dispatch(name: &str, args: &Value, cwd: &str) -> Result<ToolResult,
         LS => run_ls(host, args).await,
         GREP => run_grep(host, args).await,
         SYNC => run_sync(host, args, cwd).await,
+        PWD => run_pwd(host).await,
         other => Err(ToolError(format!("unknown ssh-remote tool: {other}"))),
     }
 }
@@ -216,9 +301,12 @@ async fn run_exec(host: Option<&str>, args: &Value) -> Result<ToolResult, ToolEr
         .filter(|c| !c.is_empty())
         .ok_or_else(|| ToolError("`command` is required".to_string()))?;
     let conn = conn_for(host).await.map_err(ToolError)?;
+    let cwd = exec_dir(&conn, opt_str(args, "cwd"))
+        .await
+        .map_err(ToolError)?;
     let request = exec::ExecRequest {
         command: command.to_string(),
-        cwd: opt_str(args, "cwd").map(|s| s.to_string()),
+        cwd: Some(cwd),
         timeout_secs: opt_i64(args, "timeout_secs").map(|v| v.max(1) as u32),
         tail_lines: opt_i64(args, "tail_lines").map(|v| v.max(0) as usize),
     };
@@ -231,10 +319,12 @@ async fn run_read(host: Option<&str>, args: &Value) -> Result<ToolResult, ToolEr
     let path = opt_str(args, "path").ok_or_else(|| ToolError("`path` is required".to_string()))?;
     let conn = conn_for(host).await.map_err(ToolError)?;
     let limits = transport::limits();
+    let base = workdir(&conn).await.map_err(ToolError)?;
+    let path = resolve_path(&conn, &base, path).await.map_err(ToolError)?;
     let sftp = fs::open(&conn).await.map_err(ToolError)?;
     let slice = sftp
         .read_range(
-            path,
+            &path,
             opt_i64(args, "offset"),
             opt_i64(args, "limit"),
             &limits,
@@ -245,14 +335,14 @@ async fn run_read(host: Option<&str>, args: &Value) -> Result<ToolResult, ToolEr
     let header = if slice.offset_beyond_end {
         format!(
             "{}:{} (offset {start} is past the end: {} lines)",
-            conn.endpoint.display(),
+            conn.endpoint().display(),
             path,
             slice.total_lines
         )
     } else {
         format!(
             "{}:{} (lines {start}-{} of {})",
-            conn.endpoint.display(),
+            conn.endpoint().display(),
             path,
             start + slice.selected_lines.saturating_sub(1) as i64,
             slice.total_lines
@@ -270,9 +360,11 @@ async fn run_read(host: Option<&str>, args: &Value) -> Result<ToolResult, ToolEr
 /// `remote_ls`
 async fn run_ls(host: Option<&str>, args: &Value) -> Result<ToolResult, ToolError> {
     let conn = conn_for(host).await.map_err(ToolError)?;
-    let path = opt_str(args, "path")
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| conn.endpoint.cwd.clone());
+    let base = workdir(&conn).await.map_err(ToolError)?;
+    let path = match opt_str(args, "path").filter(|p| !p.trim().is_empty()) {
+        Some(p) => resolve_path(&conn, &base, p).await.map_err(ToolError)?,
+        None => base,
+    };
     let sftp = fs::open(&conn).await.map_err(ToolError)?;
     let entries = sftp.list(&path).await.map_err(ToolError)?;
     let mut dirs: Vec<String> = Vec::new();
@@ -289,7 +381,7 @@ async fn run_ls(host: Option<&str>, args: &Value) -> Result<ToolResult, ToolErro
             files.push((name, size));
         }
     }
-    let mut body = format!("{}:{path}\n", conn.endpoint.display());
+    let mut body = format!("{}:{path}\n", conn.endpoint().display());
     if dirs.is_empty() && files.is_empty() {
         body.push_str("(empty)");
     }
@@ -311,9 +403,11 @@ async fn run_grep(host: Option<&str>, args: &Value) -> Result<ToolResult, ToolEr
     let max = opt_i64(args, "max_matches")
         .map(|v| v.clamp(1, 5000) as usize)
         .unwrap_or(GREP_DEFAULT_MAX);
-    let path = opt_str(args, "path")
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| conn.endpoint.cwd.clone());
+    let base = workdir(&conn).await.map_err(ToolError)?;
+    let path = match opt_str(args, "path").filter(|p| !p.trim().is_empty()) {
+        Some(p) => resolve_path(&conn, &base, p).await.map_err(ToolError)?,
+        None => base.clone(),
+    };
     let quoted_pattern = shell_quote(pattern);
     let quoted_path = shell_quote(&path);
     let glob = opt_str(args, "glob");
@@ -343,7 +437,7 @@ async fn run_grep(host: Option<&str>, args: &Value) -> Result<ToolResult, ToolEr
             "Output budget for this turn is exhausted; narrow the next search or start a new turn.",
         ));
     }
-    let out = transport::exec(&conn, &command, None, None, budget)
+    let out = transport::exec(&conn, &command, Some(&base), None, budget)
         .await
         .map_err(ToolError)?;
     let body = out.combined();
@@ -351,10 +445,10 @@ async fn run_grep(host: Option<&str>, args: &Value) -> Result<ToolResult, ToolEr
     let shown = if body.trim().is_empty() {
         format!(
             "{}:{path}: no matches for {pattern}",
-            conn.endpoint.display()
+            conn.endpoint().display()
         )
     } else {
-        let mut text = format!("{}:{path}\n{}", conn.endpoint.display(), body.trim_end());
+        let mut text = format!("{}:{path}\n{}", conn.endpoint().display(), body.trim_end());
         if lines >= max {
             text.push_str(&format!(
                 "\n(stopped at {max} matching lines; narrow the pattern or raise max_matches)"
@@ -363,6 +457,34 @@ async fn run_grep(host: Option<&str>, args: &Value) -> Result<ToolResult, ToolEr
         text
     };
     Ok(ToolResult::text(shown))
+}
+
+/// `remote_pwd`：报出该端点记住的工作目录与它在远端解析出的绝对路径
+///
+/// 这里不申请每轮输出预算：结果只有两行路径，是模型用来拼远端路径的元信息，
+/// 被预算挡住只会让它去猜。
+async fn run_pwd(host: Option<&str>) -> Result<ToolResult, ToolError> {
+    let conn = conn_for(host).await.map_err(ToolError)?;
+    let endpoint = conn.endpoint();
+    let command = "pwd -P; printf '%s\\n' \"${HOME:-}\"";
+    let out = transport::exec(&conn, command, None, None, PWD_MAX_BYTES)
+        .await
+        .map_err(ToolError)?;
+
+    let mut lines = out.stdout.lines();
+    let absolute = lines.next().unwrap_or_default().trim();
+    let home = lines.next().unwrap_or_default().trim();
+
+    let mut text = format!("{} · cwd {}", endpoint.display(), endpoint.cwd);
+    if absolute.is_empty() {
+        text.push_str("\n(no absolute path: the remote could not enter that directory)");
+    } else {
+        text.push_str(&format!("\nabsolute: {absolute}"));
+    }
+    if !home.is_empty() {
+        text.push_str(&format!("\nhome: {home}"));
+    }
+    Ok(ToolResult::text(text))
 }
 
 /// `remote_sync`
@@ -390,14 +512,18 @@ async fn run_sync(host: Option<&str>, args: &Value, cwd: &str) -> Result<ToolRes
         }
     };
     let conn = conn_for(host).await.map_err(ToolError)?;
+    let base = workdir(&conn).await.map_err(ToolError)?;
+    let remote_arg = resolve_path(&conn, &base, remote_arg)
+        .await
+        .map_err(ToolError)?;
     let sftp = fs::open(&conn).await.map_err(ToolError)?;
 
     if direction == "push" {
-        push(&sftp, &conn, &local_path, remote_arg, dry_run)
+        push(&sftp, &conn, &local_path, &remote_arg, dry_run)
             .await
             .map_err(ToolError)
     } else {
-        pull(&sftp, &conn, &local_path, remote_arg, dry_run)
+        pull(&sftp, &conn, &local_path, &remote_arg, dry_run)
             .await
             .map_err(ToolError)
     }
@@ -427,7 +553,7 @@ async fn push(
             "{action} 1 file ({}) {} → {}:{target}",
             format_bytes(size),
             local.display(),
-            conn.endpoint.display()
+            conn.endpoint().display()
         )));
     }
     if !meta.is_dir() {
@@ -467,7 +593,7 @@ async fn push(
         files.len(),
         format_bytes(total),
         local.display(),
-        conn.endpoint.display()
+        conn.endpoint().display()
     );
     if !listed.is_empty() {
         text.push('\n');
@@ -504,7 +630,7 @@ async fn pull(
         return Ok(ToolResult::text(format!(
             "{action} 1 file ({}) {}:{remote} → {}",
             format_bytes(stat.size),
-            conn.endpoint.display(),
+            conn.endpoint().display(),
             target.display()
         )));
     }
@@ -530,7 +656,7 @@ async fn pull(
         "{action} {} files ({}) {}:{remote} → {}",
         files.len(),
         format_bytes(total),
-        conn.endpoint.display(),
+        conn.endpoint().display(),
         local.display()
     );
     if !listed.is_empty() {
@@ -553,11 +679,11 @@ mod tests {
     #[test]
     fn tools_are_unique_and_declare_host() {
         let tools = tools();
-        assert_eq!(tools.len(), 5);
+        assert_eq!(tools.len(), 6);
         let mut names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         names.sort();
         names.dedup();
-        assert_eq!(names.len(), 5, "工具名不能重复");
+        assert_eq!(names.len(), 6, "工具名不能重复");
         for tool in &tools {
             assert!(
                 matches!(tool.exposure, ToolExposure::Deferred),

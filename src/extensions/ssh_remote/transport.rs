@@ -16,7 +16,7 @@ use russh::client::Handle;
 use std::{
     collections::HashMap,
     sync::{
-        Arc, Mutex, OnceLock,
+        Arc, Mutex, OnceLock, RwLock,
         atomic::{AtomicUsize, Ordering},
     },
     time::Duration,
@@ -43,7 +43,10 @@ fn pool() -> &'static Mutex<HashMap<String, Arc<RemoteConn>>> {
 /// 一个已建立的端点连接（跳板机句柄必须与目标同寿，一起放在这里）
 pub struct RemoteConn {
     /// 端点配置（用户、主机、端口、密钥、默认远端目录）
-    pub endpoint: Endpoint,
+    ///
+    /// 放在锁里是因为 `/ssh cd` / `/ssh note` 会就地改它：连接已建立时也要跟上，
+    /// 否则下一次工具调用还用旧目录。
+    endpoint: RwLock<Endpoint>,
     /// 目标主机句柄
     pub handle: Arc<Handle<ClientHandler>>,
     /// 跳板机句柄：跟着连接一起 drop，提前关掉会让目标通道一起断
@@ -54,7 +57,7 @@ impl std::fmt::Debug for RemoteConn {
     /// 只打印端点信息：句柄本身没有有意义的调试输出
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RemoteConn")
-            .field("endpoint", &self.endpoint.key())
+            .field("endpoint", &self.endpoint().key())
             .field("alive", &self.is_alive())
             .finish()
     }
@@ -64,6 +67,14 @@ impl RemoteConn {
     /// 句柄是否仍然可用（网络断开后 russh 会把连接标为 closed）
     pub fn is_alive(&self) -> bool {
         !self.handle.is_closed()
+    }
+
+    /// 端点配置的副本：读一次就用这一份，别在同一段逻辑里读到两个版本
+    pub fn endpoint(&self) -> Endpoint {
+        self.endpoint
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 }
 
@@ -90,9 +101,23 @@ pub fn limits() -> Limits {
 pub fn connected() -> Vec<Endpoint> {
     let mut map = pool().lock().unwrap();
     map.retain(|_, conn| conn.is_alive());
-    let mut out: Vec<Endpoint> = map.values().map(|c| c.endpoint.clone()).collect();
+    let mut out: Vec<Endpoint> = map.values().map(|conn| conn.endpoint()).collect();
     out.sort_by_key(|e| e.key());
     out
+}
+
+/// 把更新过的端点写回池里的同名连接；返回是否命中活连接
+///
+/// `/ssh cd` / `/ssh note` 改的是配置里的端点，连接池里的那份也得跟着变，
+/// 否则下一次 `remote_exec` 还会用建连时的旧目录。锁序：连接池 → 端点 `RwLock`。
+pub fn sync_endpoint(ep: &Endpoint) -> bool {
+    let mut map = pool().lock().unwrap();
+    map.retain(|_, conn| conn.is_alive());
+    let Some(conn) = map.get(&ep.key()) else {
+        return false;
+    };
+    *conn.endpoint.write().unwrap_or_else(|e| e.into_inner()) = ep.clone();
+    true
 }
 
 /// 按端点取连接：池里有活的就复用，否则新建
@@ -150,7 +175,7 @@ fn find_connected(spec: &str) -> Option<Arc<RemoteConn>> {
     let mut map = pool().lock().unwrap();
     map.retain(|_, conn| conn.is_alive());
     map.values()
-        .find(|conn| matches_spec(&conn.endpoint, spec))
+        .find(|conn| matches_spec(&conn.endpoint(), spec))
         .cloned()
 }
 
@@ -171,7 +196,8 @@ pub fn matches_spec(ep: &Endpoint, spec: &str) -> bool {
 
     ep.command
         .split_whitespace()
-        .any(|word| word == spec || word.contains(&format!("@{spec}")))
+        // `endswith` 而不是 `contains`：`gpu` 不能命中命令里的 `root@gpu.example.com`
+        .any(|word| word == spec || word.ends_with(&format!("@{spec}")))
 }
 
 /// 池内查询（顺手剔除已失效的句柄）
@@ -197,7 +223,7 @@ fn install(conn: Arc<RemoteConn>) {
             map.remove(&key);
         }
     }
-    map.insert(conn.endpoint.key(), conn);
+    map.insert(conn.endpoint().key(), conn);
 }
 
 /// 建立一条新连接（调用方必须已持有 [`CONNECT_LOCK`]，或明确知道只有自己在建）
@@ -214,7 +240,7 @@ async fn connect_now(ep: Endpoint) -> Result<RemoteConn, String> {
     let conn = connect::connect(&target).await?;
     remember(&ep);
     Ok(RemoteConn {
-        endpoint: ep,
+        endpoint: RwLock::new(ep),
         handle: Arc::new(conn.handle),
         _jumps: conn.jump_handles,
     })
@@ -248,9 +274,10 @@ pub async fn exec(
     timeout: Option<Duration>,
     max_bytes: usize,
 ) -> Result<CommandOutput, String> {
+    let endpoint = conn.endpoint();
     let cwd = cwd
         .map(|c| c.to_string())
-        .unwrap_or_else(|| conn.endpoint.cwd.clone());
+        .unwrap_or_else(|| endpoint.cwd.clone());
     let timeout = timeout.unwrap_or_else(|| Duration::from_secs(limits().timeout_seconds as u64));
     let first = connect::exec_capture(&conn.handle, command, &cwd, max_bytes, timeout).await;
     if first.is_ok() {
@@ -258,7 +285,7 @@ pub async fn exec(
     }
 
     let first_err = first.expect_err("checked is_ok above");
-    let fresh = reconnect(conn.endpoint.clone())
+    let fresh = reconnect(endpoint)
         .await
         .map_err(|e| format!("{first_err}; reconnect failed: {e}"))?;
     connect::exec_capture(&fresh.handle, command, &cwd, max_bytes, timeout)

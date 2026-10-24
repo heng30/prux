@@ -68,6 +68,12 @@ struct TestSession {
 
 /// 把远端绝对路径映射到临时目录下的本地路径
 fn local_path(root: &Path, remote: &str) -> PathBuf {
+    // exec 的 `pwd -P` 给的是宿主的绝对路径；真实 SFTP 与 exec 共享同一个文件系统，
+    // 所以已经落在 root 里的路径要原样使用，不能再拼一次 root
+    let direct = Path::new(remote);
+    if direct.starts_with(root) {
+        return direct.to_path_buf();
+    }
     let trimmed = remote.trim_start_matches('/');
     if trimmed.is_empty() {
         root.to_path_buf()
@@ -499,7 +505,7 @@ fn fastrand() -> u64 {
         .unwrap_or(0)
 }
 
-/// 端到端：连接 → 五个远程工具 → 密码认证 → 主机密钥变化被拒绝
+/// 端到端：连接 → 六个远程工具 → 密码认证 → 主机密钥变化被拒绝
 ///
 /// 一个测试跑完全部场景：连接池与凭据缓存都是进程级状态，
 /// 拆成多个并发测试会互相顶掉。
@@ -518,7 +524,7 @@ async fn connects_runs_remote_tools_and_enforces_host_keys() {
     std::fs::write(&key_path, TEST_KEY).unwrap();
 
     let endpoint = state::Endpoint {
-        command: format!("ssh tester@127.0.0.1 -p {port}"),
+        command: format!("ssh tester@127.0.0.1:{port}"),
         host: "127.0.0.1".to_string(),
         user: "tester".to_string(),
         port,
@@ -551,6 +557,59 @@ async fn connects_runs_remote_tools_and_enforces_host_keys() {
         .await
         .expect("reconnect after disconnect");
 
+    // 1c) `/ssh cd` 改的是配置里的端点，已连接的那条也得跟着换目录：否则老连接继续用
+    // 建连时的 cwd（以前 `/ssh list` 只印 key，改没改成也看不出来）
+    {
+        let mut cfg = state::RemoteConfig::load();
+        cfg.set_default(endpoint.clone());
+        cfg.save().unwrap();
+    }
+    command::handle(&mut app, "ssh cd /");
+    assert_eq!(
+        transport::connected()[0].cwd,
+        "/",
+        "已连接的端点没跟着 `/ssh cd` 换目录"
+    );
+    let out = transport::exec(&conn, "pwd", None, None, 64 * 1024)
+        .await
+        .expect("exec after cd");
+    assert_eq!(out.stdout.trim(), "/", "exec 仍在旧 cwd 里跑");
+    command::handle(&mut app, "ssh cd .");
+
+    // 1d) 重启后重新 `/ssh` 同一目标：记住的 cwd 与备注不能被默认值冲掉。
+    // 断开全部连接等价于重启后的空连接池，重新登录要能接回旧设置。
+    command::handle(&mut app, "ssh note restart-check");
+    transport::disconnect_all();
+    command::handle(
+        &mut app,
+        &format!(
+            "ssh -i {} tester@127.0.0.1:{port}",
+            key_path.to_string_lossy()
+        ),
+    );
+    let mut relogged = None;
+    for _ in 0..100 {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        if let Some(ep) = transport::connected()
+            .into_iter()
+            .find(|ep| ep.key() == key)
+        {
+            relogged = Some(ep);
+            break;
+        }
+    }
+    let relogged = relogged.expect("重新登录应在探测成功后重新连上");
+    assert_eq!(relogged.cwd, ".", "重新登录把 cwd 冲回了默认值");
+    assert_eq!(relogged.note, "restart-check", "重新登录把备注清掉了");
+    let saved = state::RemoteConfig::load()
+        .default
+        .expect("重新登录应写回默认目标");
+    assert_eq!(saved.cwd, ".", "落盘的 cwd 被重置了");
+    assert_eq!(saved.note, "restart-check", "落盘的备注被清掉了");
+    let conn = transport::ensure(endpoint.clone())
+        .await
+        .expect("reuse relogin");
+
     // 2) remote_exec：服务端真的跑 sh -c
     let out = transport::exec(&conn, "echo hello-from-remote", None, None, 64 * 1024)
         .await
@@ -568,6 +627,18 @@ async fn connects_runs_remote_tools_and_enforces_host_keys() {
     .expect("remote_exec");
     assert!(exec.text.contains("via-tool"), "{}", exec.text);
     assert!(exec.text.contains("exit 0"), "{}", exec.text);
+
+    // 2b) remote_pwd：报出端点记住的 cwd 与它在远端解析出的绝对路径
+    let pwd = tool::dispatch(tool::PWD, &serde_json::json!({ "host": host_arg }), ".")
+        .await
+        .expect("remote_pwd");
+    assert!(pwd.text.contains("cwd ."), "{}", pwd.text);
+    assert!(
+        pwd.text.lines().any(|l| l.starts_with("absolute: /")),
+        "没报出远端绝对路径：{}",
+        pwd.text
+    );
+    assert!(pwd.text.contains("\nhome: "), "{}", pwd.text);
 
     // 3) remote_ls：SFTP 列出临时根（服务端已放好 fixture）
     std::fs::write(root.join("notes.txt"), "alpha\nbeta\ngamma\n").unwrap();
@@ -661,6 +732,41 @@ async fn connects_runs_remote_tools_and_enforces_host_keys() {
         std::fs::read_to_string(pull_dir.join("a.txt")).unwrap(),
         "payload-a"
     );
+
+    // 6b) 工具主动解析工作目录：记住的 cwd 换成相对路径后，SFTP 族也必须拿到绝对路径
+    // （SFTP 不会像 `exec` 那样先 `cd`，也不认 `~`；以前相对路径直接交给 SFTP，语义就漂了）
+    transport::reset_turn_budget();
+    command::handle(&mut app, "ssh cd sub");
+    let sub_ls = tool::dispatch(tool::LS, &serde_json::json!({ "host": host_arg }), ".")
+        .await
+        .expect("remote_ls in sub");
+    assert!(
+        sub_ls
+            .text
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .contains(":/"),
+        "路径没有按工作目录解析成绝对路径：{}",
+        sub_ls.text
+    );
+    command::handle(&mut app, "ssh cd .");
+    let rel_read = tool::dispatch(
+        tool::READ,
+        &serde_json::json!({ "host": host_arg, "path": "data.txt", "limit": 1 }),
+        ".",
+    )
+    .await
+    .expect("remote_read with relative path");
+    let canonical = std::fs::canonicalize(root.as_path()).unwrap();
+    assert!(
+        rel_read
+            .text
+            .contains(&format!("{}/data.txt", canonical.display())),
+        "相对路径没拼到工作目录上：{}",
+        rel_read.text
+    );
+    assert!(rel_read.text.contains("alpha"), "{}", rel_read.text);
 
     // 7) 池按端点复用：同一个 key 再取一次不会新建连接
     let again = transport::ensure(endpoint.clone()).await.expect("reuse");
