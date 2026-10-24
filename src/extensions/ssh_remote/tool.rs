@@ -1,8 +1,8 @@
 //! 远程工具族：`remote_exec` / `remote_read` / `remote_ls` / `remote_grep` / `remote_sync` /
-//! `remote_pwd`。
+//! `remote_pwd` / `remote_default`。
 //!
 //! 设计前提：**远程是「第二个文件系统 + 一台能跑命令的机器」，不是工作区**。
-//! 所以这些工具与内置 `read` / `grep` / `bash` 是并存关系，各自带 `host` 参数，
+//! 所以这些工具与内置 `read` / `grep` / `bash` 是并存关系，除 `remote_default` 外都带 `host` 参数，
 //! 不接管任何内置行为——`@` 补全、`!` 命令、git 状态、LSP、子代理看到的仍然只有本地。
 //!
 //! 每个工具都按 `host` 取连接（`None` = `/ssh <target>` 设的默认端点），
@@ -10,7 +10,7 @@
 //!
 //! # 按需加载
 //!
-//! 六个工具整体声明为**延迟工具**（[`ToolExposure::Deferred`]）：描述、参数 schema、
+//! 七个工具整体声明为**延迟工具**（[`ToolExposure::Deferred`]）：描述、参数 schema、
 //! snippet 与 guidelines 都不进模型可见列表与系统提示。远程不是常用能力，用户要用时会
 //! 明说（「连到 prod-web-1 看日志」），模型据此先 `tool_search` 检索，**下一次调用**即拿到
 //! 完整声明。整族一起延迟是刻意的：只放出其中一部分会让模型按半套能力规划——只给
@@ -25,7 +25,9 @@ use crate::{
     extensions::{
         ssh_remote::{
             exec, fs,
+            state::RemoteConfig,
             transport::{self, RemoteConn},
+            tunnel,
         },
         util::{opt_i64, opt_str},
     },
@@ -50,6 +52,8 @@ pub const GREP: &str = "remote_grep";
 pub const SYNC: &str = "remote_sync";
 /// `remote_pwd` 工具名
 pub const PWD: &str = "remote_pwd";
+/// `remote_default` 工具名
+pub const DEFAULT: &str = "remote_default";
 
 /// 单次 grep 的默认命中上限
 const GREP_DEFAULT_MAX: usize = 200;
@@ -59,6 +63,8 @@ const LIST_LIMIT: usize = 50;
 const MAX_SYNC_FILES: usize = 2000;
 /// `remote_pwd` 的输出字节上限：两行路径，正常只有几十字节
 const PWD_MAX_BYTES: usize = 4096;
+/// `remote_default` 最多逐个列出的已记住目标数（再多只报总数）
+const REMEMBERED_LIMIT: usize = 10;
 
 /// 全部工具定义（整族统一标记为延迟工具，见模块文档「按需加载」）
 pub fn tools() -> Vec<ExtensionTool> {
@@ -69,6 +75,7 @@ pub fn tools() -> Vec<ExtensionTool> {
         grep_tool(),
         sync_tool(),
         pwd_tool(),
+        default_tool(),
     ]
     .into_iter()
     .map(|tool| tool.with_exposure(ToolExposure::Deferred))
@@ -215,6 +222,25 @@ fn pwd_tool() -> ExtensionTool {
     tool
 }
 
+/// `remote_default` 定义
+fn default_tool() -> ExtensionTool {
+    let mut tool = ExtensionTool::simple(
+        DEFAULT,
+        "Report the default SSH target this tool family uses when `host` is omitted, plus where \
+         it operates (remembered cwd, jump host, identity) and which targets are remembered. \
+         Reads local config only: it never opens a connection.",
+        json!({
+            "type": "object",
+            "properties": {}
+        }),
+        "Show the default SSH target",
+    );
+    tool.prompt_guidelines = vec![
+        "remote_default answers which machine the remote_* tools hit by default; call it instead of asking the user, then pass the reported host as `host` to reach any other remembered target.".to_string(),
+    ];
+    tool
+}
+
 /// 按 `host` 参数取连接（`None` → 默认端点）
 async fn conn_for(host: Option<&str>) -> Result<Arc<RemoteConn>, String> {
     match host.map(str::trim).filter(|h| !h.is_empty()) {
@@ -290,6 +316,7 @@ pub async fn dispatch(name: &str, args: &Value, cwd: &str) -> Result<ToolResult,
         GREP => run_grep(host, args).await,
         SYNC => run_sync(host, args, cwd).await,
         PWD => run_pwd(host).await,
+        DEFAULT => Ok(run_default()),
         other => Err(ToolError(format!("unknown ssh-remote tool: {other}"))),
     }
 }
@@ -487,6 +514,70 @@ async fn run_pwd(host: Option<&str>) -> Result<ToolResult, ToolError> {
     Ok(ToolResult::text(text))
 }
 
+/// `remote_default`：报出工具族默认命中的端点（只读本地配置，不建连接）
+///
+/// 与 `remote_pwd` 的分工：`remote_pwd` 连上去问远端「人在哪」，这里回答「省略 `host` 时会去哪台机器」——
+/// 所以没设默认目标时如实报「没有」，不靠猜，也不顺手连一个把结果说得像真的。
+fn run_default() -> ToolResult {
+    let cfg = RemoteConfig::load();
+    let Some(ep) = cfg.default.clone() else {
+        return ToolResult::text(
+            "No default SSH target is set. Run `/ssh [user@]host[:port]` to set one, or pass `host` to every remote_* call.",
+        );
+    };
+
+    let live = transport::connected().iter().any(|c| c.key() == ep.key());
+    let mut lines = vec![
+        format!("default: {}", ep.display()),
+        format!("host: {} · user: {} · port: {}", ep.host, ep.user, ep.port),
+        format!("cwd: {}", ep.cwd),
+    ];
+
+    if let Some(jump) = ep.jump.as_deref().filter(|j| !j.trim().is_empty()) {
+        lines.push(format!("jump: {jump}"));
+    }
+
+    if let Some(identity) = ep.identity.as_deref().filter(|i| !i.trim().is_empty()) {
+        lines.push(format!("identity: {identity}"));
+    }
+
+    lines.push(format!(
+        "connection: {}",
+        if live {
+            "open (cached in the pool)"
+        } else {
+            "not open; remote_* tools connect on demand"
+        }
+    ));
+
+    let keys: Vec<String> = cfg.known.iter().map(|k| k.key()).collect();
+    if keys.is_empty() {
+        lines.push("remembered: (none)".to_string());
+    } else {
+        let mut listed = keys
+            .iter()
+            .take(REMEMBERED_LIMIT)
+            .cloned()
+            .collect::<Vec<_>>();
+        if keys.len() > listed.len() {
+            listed.push(format!("… {} more", keys.len() - listed.len()));
+        }
+        lines.push(format!("remembered: {}", listed.join(", ")));
+    }
+
+    let forwards = tunnel::active();
+    if !forwards.is_empty() {
+        let ports = forwards
+            .iter()
+            .map(|spec| format!("127.0.0.1:{}", spec.local_port))
+            .collect::<Vec<_>>()
+            .join(", ");
+        lines.push(format!("active forwards: {ports}"));
+    }
+
+    ToolResult::text(lines.join("\n"))
+}
+
 /// `remote_sync`
 async fn run_sync(host: Option<&str>, args: &Value, cwd: &str) -> Result<ToolResult, ToolError> {
     let direction = opt_str(args, "direction")
@@ -677,13 +768,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tools_are_unique_and_declare_host() {
+    fn tools_are_unique_and_deferred() {
         let tools = tools();
-        assert_eq!(tools.len(), 6);
+        assert_eq!(tools.len(), 7);
         let mut names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         names.sort();
         names.dedup();
-        assert_eq!(names.len(), 6, "工具名不能重复");
+        assert_eq!(names.len(), 7, "工具名不能重复");
         for tool in &tools {
             assert!(
                 matches!(tool.exposure, ToolExposure::Deferred),
@@ -707,5 +798,38 @@ mod tests {
                 .default
                 .is_none()
         );
+    }
+
+    /// 没设默认目标时，`remote_default` 要如实说「没有」，而不是编一个端点出来。
+    #[test]
+    fn default_tool_reports_missing_default() {
+        let _l = crate::extensions::ssh_remote::state::TEST_ROOT_LOCK.blocking_lock();
+        let _g = crate::extensions::ssh_remote::state::TestRootGuard::temp();
+        let text = run_default().text;
+        assert!(text.contains("No default SSH target"), "{text}");
+    }
+
+    /// 设了默认目标：报出 key、工作目录、备注、记住列表与（未建连的）连接状态。
+    #[test]
+    fn default_tool_reports_the_configured_target() {
+        let _l = crate::extensions::ssh_remote::state::TEST_ROOT_LOCK.blocking_lock();
+        let _g = crate::extensions::ssh_remote::state::TestRootGuard::temp();
+
+        let ep = crate::extensions::ssh_remote::command::parse_ssh_command(
+            "ssh root@gpu.example.com:2202",
+        )
+        .unwrap();
+        let mut cfg = RemoteConfig::load();
+        cfg.set_default(ep);
+        cfg.save().unwrap();
+
+        let text = run_default().text;
+        assert!(text.contains("root@gpu.example.com:2202"), "{text}");
+        assert!(text.contains("cwd: "), "缺 cwd：{text}");
+        assert!(
+            text.contains("remembered: root@gpu.example.com:2202"),
+            "{text}"
+        );
+        assert!(text.contains("not open"), "未建连时不该说已连接：{text}");
     }
 }

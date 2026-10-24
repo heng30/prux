@@ -36,6 +36,13 @@
   Off by default and available in `Dev` and `Creator` modes: it rewrites how the model writes
   in every turn, so it has to be switched on explicitly.
 
+- **`remote_default` answers which machine the remote tools hit**: the ssh-remote family gained a
+  seventh (deferred) tool reporting the target used when `host` is omitted — its `user@host:port`,
+  remembered cwd, note, jump host and identity, the remembered target list and the active
+  forwards. It only reads the local config, so it never opens a connection and never waits on the
+  network; with no default set it says so instead of guessing a host. The model can therefore stop
+  asking which server to use, and users need not run `/ssh status` for it.
+
 ## 中文
 
 ### 新增
@@ -64,3 +71,8 @@
   扩展关闭时也不会有技能描述漏进系统提示。
 
   默认不启用，`Dev` / `Creator` 模式下可用：它改写的是模型每一轮的写作风格，必须由用户显式开启。
+
+- **新增 `remote_default`：省略 `host` 时到底连哪台机器**：ssh-remote 工具族补上第七个（延迟）
+  工具，报出默认目标的 `user@host:port`、记住的 `cwd`、备注、跳板机与私钥、已记住的目标列表、
+  活跃的端口转发。它只读本地配置，不建连接、不等网络；没设默认目标时如实说「没有」，不猜主机。
+  模型因此不必再问「用哪台服务器」，用户也不必为这件事跑 `/ssh status`。

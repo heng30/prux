@@ -25,11 +25,12 @@
 | `remote_grep` | 远端检索文件内容（有 ripgrep 用 ripgrep，否则退回 `grep -rn`） |
 | `remote_sync` | 本地 ↔ 远端复制文件或目录树，支持 `dry_run` |
 | `remote_pwd` | 报出该目标的远端工作目录（其他 `remote_*` 工具默认就在这个目录里操作）与它在远端解析出的绝对路径 |
+| `remote_default` | 报出省略 `host` 时默认命中的目标（含 `cwd`、跳板机、私钥、已记住的目标、活跃转发）；只读本地配置，不建连接 |
 
-所有工具都有 `host` 参数：`[user@]host[:port]`（省略 `user` 时用当前用户名），或 `~/.ssh/config` 里的别名。
-省略时使用 `/ssh <target>` 设置的默认目标。
+除 `remote_default` 外都有 `host` 参数：`[user@]host[:port]`（省略 `user` 时用当前用户名），或 `~/.ssh/config` 里的别名。
+省略时使用 `/ssh <target>` 设置的默认目标——想知道那是哪台机器就用 `remote_default`，不必问用户。
 
-这六个工具是**延迟工具**：它们不在开箱可见的工具列表里，模型要先调用 `tool_search`
+这七个工具是**延迟工具**：它们不在开箱可见的工具列表里，模型要先调用 `tool_search`
 检索（`query: "ssh remote"` 即可命中整族），命中后从下一次调用起直接可用。所以
 `tool-search` 扩展需要处于启用状态；`/extension` 面板里 ssh-remote 的详情页会标出这一前置关系。
 

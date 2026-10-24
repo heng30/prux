@@ -2,7 +2,7 @@
 //!
 //! **定位**：远程是「第二个文件系统 + 一台能跑命令的机器」，不是工作区。
 //! 扩展只新增工具（`remote_exec` / `remote_read` / `remote_ls` / `remote_grep` /
-//! `remote_sync` / `remote_pwd`）与命令（`/ssh` / `/tunnel`），**不改写任何内置工具**——
+//! `remote_sync` / `remote_pwd` / `remote_default`）与命令（`/ssh` / `/tunnel`），**不改写任何内置工具**——
 //! 所以 `@` 补全、`!` 命令、git 状态、LSP、子代理看到的仍然只有本地，不存在
 //! 「一半穿透、一半不穿透」的裂缝。
 //!
@@ -11,7 +11,7 @@
 //! 2. 隧道：`/tunnel add 15432:localhost:5432` 把远端服务映射到 `127.0.0.1`，
 //!    之后本地一切（含 MCP server、数据库客户端）照旧连 localhost。
 //!
-//! **默认不启用**：它会建立出站连接并可能改动远端文件；六个工具都是
+//! **默认不启用**：它会建立出站连接并可能改动远端文件；七个工具都是
 //! **延迟工具**（`ToolExposure::Deferred`），模型先用 `tool_search` 检索到它们，
 //! **下一轮**才拿到完整声明。
 
@@ -74,7 +74,7 @@ impl Extension for SshRemote {
 
     /// 面板里的一句话说明
     fn description(&self) -> &str {
-        "Remote SSH toolset: remote_exec/read/ls/grep/sync/pwd plus local port tunnels; built-in tools stay local"
+        "Remote SSH toolset: remote_exec/read/ls/grep/sync/pwd/default plus local port tunnels; built-in tools stay local"
     }
 
     /// 仅在 Dev 模式下可用（All 与 Creator 之外更低的级别；按当前需要不覆盖 Creator）。
@@ -82,7 +82,7 @@ impl Extension for SshRemote {
         vec![ExtensionMode::Dev]
     }
 
-    /// 前置工具：六个 `remote_*` 都是延迟工具，模型得先用 `tool_search` 才能发现它们
+    /// 前置工具：七个 `remote_*` 都是延迟工具，模型得先用 `tool_search` 才能发现它们
     /// （`/extension` 二级详情页按此展示 `requires`）。
     fn prerequisite_tools(&self) -> Vec<String> {
         vec![tool_search::TOOL_NAME.to_string()]
@@ -93,7 +93,8 @@ impl Extension for SshRemote {
         false
     }
 
-    /// 模型侧工具：`remote_exec` / `remote_read` / `remote_ls` / `remote_grep` / `remote_sync` / `remote_pwd`
+    /// 模型侧工具：`remote_exec` / `remote_read` / `remote_ls` / `remote_grep` / `remote_sync` /
+    /// `remote_pwd` / `remote_default`
     fn tools(&self) -> Vec<ExtensionTool> {
         tool::tools()
     }
@@ -224,13 +225,13 @@ mod tests {
         assert!(ep.display().contains("H100"));
     }
 
-    /// 六个工具与两个命令都要真的声明出来（面板与提示词依赖这个清单）
+    /// 七个工具与两个命令都要真的声明出来（面板与提示词依赖这个清单）
     #[test]
-    fn declares_six_tools_and_two_commands() {
+    fn declares_seven_tools_and_two_commands() {
         let _l = state::TEST_ROOT_LOCK.blocking_lock();
         let _g = TestRootGuard::temp();
         let names: Vec<String> = SshRemote.tools().into_iter().map(|t| t.name).collect();
-        assert_eq!(names.len(), 6);
+        assert_eq!(names.len(), 7);
         for expected in [
             tool::EXEC,
             tool::READ,
@@ -238,6 +239,7 @@ mod tests {
             tool::GREP,
             tool::SYNC,
             tool::PWD,
+            tool::DEFAULT,
         ] {
             assert!(names.iter().any(|n| n == expected), "缺少工具 {expected}");
         }
