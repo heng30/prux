@@ -1,6 +1,6 @@
-//! `markit` 扩展：把文档读成 Markdown。
+//! `markit` 扩展：文档读写——把文档读成 Markdown，也把 Markdown 排成 PDF。
 //!
-//! 一个 `read_doc` 工具按扩展名分派给对应解析器，产出**纯 Markdown 文本**交给模型：
+//! `read_doc` 工具按扩展名分派给对应解析器，产出**纯 Markdown 文本**交给模型：
 //!
 //! | 扩展名 | 解析方式 | 产出 |
 //! |---|---|---|
@@ -17,10 +17,14 @@
 //! 解析器对畸形文件可能 panic（尤其 PDF），[`parse`] 用 `catch_unwind` 兜底——
 //! 注意 release 构建是 `panic = "abort"`，该兜底只在 debug / 测试构建下生效。
 //!
+//! 反方向是 `export_pdf`：Markdown → Typst 标记 → 调系统里的 `typst` 命令编译成 PDF
+//! （不内嵌排版引擎，没装就把下载地址回给模型），见 [`export`]。
+//!
 //! 默认**不启用**（`Dev` / `Creator`）：文档解析依赖较重，按需在 `/extension` 面板开启。
 
 mod docx;
 mod epub;
+mod export;
 mod ooxml;
 mod pdf;
 mod pptx;
@@ -53,8 +57,11 @@ use strum_macros::{Display, EnumString, IntoStaticStr};
 /// 扩展名（也是 `/extension` 面板中的标识）。
 const EXT: &str = "markit";
 
-/// 工具名（模型可见）。
+/// 工具名（模型可见）：读文档成 Markdown。
 const TOOL_READ_DOC: &str = "read_doc";
+
+/// 工具名（模型可见）：把 Markdown 排成 PDF。
+const TOOL_EXPORT_PDF: &str = "export_pdf";
 
 /// 解析前允许的最大文件字节数（32 MiB）；超过直接拒绝。
 const MAX_FILE_BYTES: u64 = 32 * 1024 * 1024;
@@ -80,7 +87,7 @@ impl Extension for Markit {
 
     /// 返回 `/extension` 面板展示的一句话描述。
     fn description(&self) -> &str {
-        "Read documents (PDF, Word, Excel, PowerPoint, EPUB) as Markdown (read_doc)."
+        "Read documents (PDF, Word, Excel, PowerPoint, EPUB) as Markdown (read_doc) and render Markdown to PDF through the external `typst` command (export_pdf)."
     }
 
     /// 声明本扩展移植自 oh-my-pi，供 `/extension` 面板展示来源链接。
@@ -92,7 +99,7 @@ impl Extension for Markit {
         })
     }
 
-    /// 前置工具：`read_doc` 是延迟工具，模型得先用 `tool_search` 才能发现它（`/extension` 详情页展示）。
+    /// 前置工具：`read_doc` / `export_pdf` 都是延迟工具，模型得先用 `tool_search` 才能发现它们（`/extension` 详情页展示）。
     fn prerequisite_tools(&self) -> Vec<String> {
         vec![tool_search::TOOL_NAME.to_string()]
     }
@@ -107,9 +114,9 @@ impl Extension for Markit {
         vec![ExtensionMode::Dev, ExtensionMode::Creator]
     }
 
-    /// 提供 `read_doc` 工具。
+    /// 提供 `read_doc` 与 `export_pdf` 工具。
     fn tools(&self) -> Vec<ExtensionTool> {
-        vec![read_doc_tool()]
+        vec![read_doc_tool(), export_pdf_tool()]
     }
 
     /// 按工具名分发；未知工具名返回 `ToolError`。
@@ -122,6 +129,7 @@ impl Extension for Markit {
         Box::pin(async move {
             match name.as_str() {
                 TOOL_READ_DOC => run_read_doc(&args, &ctx).await,
+                TOOL_EXPORT_PDF => export::run(&args, &ctx).await,
                 other => Err(ToolError(format!("extension {EXT}: unknown tool: {other}"))),
             }
         })
@@ -210,6 +218,57 @@ fn read_doc_tool() -> ExtensionTool {
         prompt_guidelines: vec![
             "`read_doc` extracts text only: scanned PDFs and image-only slides have no text layer, so ask the user for a text version instead of retrying.".to_string(),
             "`read_doc` output is truncated like `read`; for a huge workbook or deck, ask for a specific sheet/section instead of re-reading.".to_string(),
+        ],
+        constrained_sampling: false,
+        render_shell: None,
+        execution_mode: None,
+        prepare_arguments: None,
+        grammar_sampling: None,
+    }
+}
+
+/// 构造 `export_pdf` 工具定义（描述、参数 JSON Schema 与 snippet）。
+fn export_pdf_tool() -> ExtensionTool {
+    ExtensionTool {
+        exposure: ToolExposure::Deferred,
+        namespace: None,
+        annotations: ToolAnnotations {
+            read_only: false,
+            destructive: true,
+            idempotent: true,
+        },
+        output_schema: None,
+        name: TOOL_EXPORT_PDF.to_string(),
+        description: format!(
+            "Render Markdown into a PDF file through the external `typst` command. \
+             Requires typst to be installed ({}); when it is missing the tool returns that download \
+             URL instead of rendering, so relay it to the user rather than retrying.",
+            export::TYPST_DOWNLOAD_URL
+        ),
+        label: Some("Export PDF".to_string()),
+        parameters: json!({
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string",
+                    "description": "Markdown source to typeset: headings, paragraphs, emphasis, lists, code blocks, tables, links and $math$ are supported."
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Output PDF path; relative paths resolve against the working directory. Defaults to `output.pdf`; an existing file is overwritten."
+                }
+            },
+            "required": ["content"]
+        }),
+        snippet: "Use to render Markdown into a PDF file; needs the external `typst` command installed.".to_string(),
+        prompt_guidelines: vec![
+            format!(
+                "`export_pdf` needs the external `typst` binary; if the result says typst is missing, \
+                 give the user {} instead of retrying.",
+                export::TYPST_DOWNLOAD_URL
+            ),
+            "`export_pdf` typesets one self-contained document: no includes, no images, no Typst packages."
+                .to_string(),
         ],
         constrained_sampling: false,
         render_shell: None,
@@ -353,7 +412,7 @@ mod tests {
     use std::io::Write;
 
     /// 只填 cwd 的测试上下文：`read_doc` 不碰子代理与嵌套工具，其余字段给不可用占位。
-    fn ctx(cwd: &str) -> ToolExecCtx {
+    pub(super) fn ctx(cwd: &str) -> ToolExecCtx {
         ToolExecCtx {
             cwd: cwd.to_string(),
             make_sub_agent: Arc::new(|_spec| Err("subagents unavailable in tests".to_string())),

@@ -14,6 +14,7 @@ use crate::{
         truncate::{self, truncate_chars_within},
     },
 };
+use pulldown_cmark::HeadingLevel;
 use serde_json::Value;
 use std::{
     collections::hash_map::DefaultHasher,
@@ -462,6 +463,18 @@ pub fn tighter_u32(a: u32, b: u32) -> u32 {
     match (a, b) {
         (0, other) | (other, 0) => other,
         (a, b) => a.min(b),
+    }
+}
+
+/// Markdown 标题级别转层级数字（`#` → 1 … `######` → 6），供按标题层级排版类调用方使用。
+pub fn heading_level(level: HeadingLevel) -> usize {
+    match level {
+        HeadingLevel::H1 => 1,
+        HeadingLevel::H2 => 2,
+        HeadingLevel::H3 => 3,
+        HeadingLevel::H4 => 4,
+        HeadingLevel::H5 => 5,
+        HeadingLevel::H6 => 6,
     }
 }
 

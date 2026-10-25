@@ -2,7 +2,8 @@
 //!
 //! 面向**词法检索**的一组纯函数：把查询切成词元（CJK 按相邻二字组合展开）、找出命中位置、
 //! 围绕命中点取一段可读摘录。不含打分策略——词元上限、加权系数、停用词之外的过滤
-//! 都由调用方决定。
+//! 都由调用方决定。另带几个与检索无关的通用小工具：[`has_cjk`]（按语种换字体之类的判定）、
+//! [`code_fence`]（按内容定代码围栏长度）与 [`escape_special`]（按字符集合做反斜杠转义）。
 
 /// 停用词表：只由这些词构成的查询没有检索价值。
 ///
@@ -37,6 +38,47 @@ pub fn is_cjk_script(ch: char) -> bool {
         | 0xF900..=0xFAFF    // CJK 兼容表意文字
         | 0x20000..=0x3FFFF  // CJK 扩展 B 及以后
     )
+}
+
+/// 文本里是否有中日韩文字：决定排版时要不需要加一个 CJK 字体族。
+///
+/// 范围沿用 [`is_cjk_script`]（表意文字 / 假名 / 谚文）；全角标点不算——它们几乎只与汉字
+/// 同时出现，判「这段文字要不要中文字体」用这个就够。
+pub fn has_cjk(text: &str) -> bool {
+    text.chars().any(is_cjk_script)
+}
+
+/// 代码围栏：比内容里最长的反引号连串再多一个，至少 3 个。
+///
+/// 围栏必须比内容里任何反引号连串都长，否则内容会提前闭合围栏。返回的只是围栏本身，
+/// 调用方在代码前后各用一次（Typst 与 Markdown 的围栏规则相同）。
+pub fn code_fence(content: &str) -> String {
+    let mut longest = 0;
+    let mut run = 0;
+    for ch in content.chars() {
+        if ch == '`' {
+            run += 1;
+            longest = longest.max(run);
+        } else {
+            run = 0;
+        }
+    }
+    "`".repeat((longest + 1).max(3))
+}
+
+/// 在 `specials` 里出现的字符前加一个反斜杠，其余字符原样保留。
+///
+/// 给「特殊字符按前缀转义」的语法共用（Markdown / Typst / 正则都长这样）：
+/// 特殊字符集合由调用方提供，本函数不认任何具体语法。
+pub fn escape_special(text: &str, specials: &[char]) -> String {
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        if specials.contains(&ch) {
+            out.push('\\');
+        }
+        out.push(ch);
+    }
+    out
 }
 
 /// 把文本切成「连续 CJK」与「连续非 CJK」的交替片段，返回 `(片段, 是否为 CJK)`。
@@ -255,6 +297,34 @@ mod tests {
 
     /// 测试用词元上限（与 `session_search` 的默认值一致）。
     const MAX_TERMS: usize = 16;
+
+    /// 围栏要比内容里最长的反引号连串长，最短 3 个。
+    #[test]
+    fn code_fence_outgrows_inner_backtick_runs() {
+        assert_eq!(code_fence("plain"), "```");
+        assert_eq!(code_fence("a ` b"), "```");
+        assert_eq!(code_fence("```"), "````");
+        assert_eq!(code_fence("x ```` y"), "`````");
+    }
+
+    /// 只有列在 `specials` 里的字符才加反斜杠。
+    #[test]
+    fn escape_special_prefixes_listed_chars_only() {
+        assert_eq!(escape_special("a#b_c", &['#', '_']), "a\\#b\\_c");
+        assert_eq!(escape_special("no specials", &['#']), "no specials");
+        assert_eq!(escape_special("q\"uote\\", &['"', '\\']), "q\\\"uote\\\\");
+    }
+
+    /// CJK 判定：中文 / 假名 / 谚文命中，纯西文不命中。
+    #[test]
+    fn has_cjk_detects_east_asian_scripts() {
+        assert!(has_cjk("中文"));
+        assert!(has_cjk("カタカナ"));
+        assert!(has_cjk("한국어"));
+        assert!(has_cjk("mixed 中文 text"));
+        assert!(!has_cjk("plain ascii only"));
+        assert!(!has_cjk(""));
+    }
 
     #[test]
     fn terms_drop_stop_words_single_chars_and_duplicates() {

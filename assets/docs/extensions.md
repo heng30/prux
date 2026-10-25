@@ -75,7 +75,7 @@ core::extensions::register_banner_extension(extensions::banner::Banner::new());
 | `browser` | 扩展 | 真实浏览器自动化（CDP）：单个 `browser` 工具共 16 个动作——`status`/`list_tabs`/`new_tab`/`select_tab`/`open`/`snapshot`/`get_content`/`click`/`type`/`select`/`press`/`scroll`/`wait`/`eval`/`screenshot`/`upload`。工具是**延迟工具**：模型先用 `tool_search` 载入才能调（见下文）。`snapshot` 给可交互元素分配 `e1`/`e2`… 引用，其余动作优先用引用定位（比 CSS 选择器稳）。CDP 端点写在 `agent_dir()/extensions/browser.json`（默认 `127.0.0.1:9222`，**只允许回环主机**）；那个端口上没人监听时，会按 `browsers` 列表的顺序自动启动一个浏览器（已经在跑的候选会被跳过）。连上后 `/dock` 面板里多一行浏览器状态。**默认不启用**（`Dev`/`Creator` 模式）。详见下文 |
 | `computer` | 扩展 | 操作真实的桌面：14 个 `computer_*` 工具（截图 / 鼠标键盘 / 窗口 / 无障碍控件 / 剪贴板 / 启动应用 / 急停）。**默认不启用**（需先在 `/extension` 面板开启，开启即授权）；全部是延迟工具，模型经 `tool_search` 检索后才进工具表，平时不占请求。Linux **只支持 Wayland**（`grim` 或 `xcap` 截图、`swaymsg` 列窗口、`enigo` 虚拟键鼠、AT-SPI2 读无障碍）；Windows / macOS 用 `xcap` + `enigo`，无障碍分别走 UI Automation 与 AXUIElement。截图返回 `frame` id，坐标可以按图内像素给并由扩展投影；帧对应的窗口移动过后动作会被拒绝。子代理不可调用。详见 [extensions/computer.md](extensions/computer.md) |
 | `open` | 扩展 | 用系统默认程序打开文件或 URL：`open` 工具（参数 `path`）。`http`/`https`/`file` URL 原样透传，本地路径按工作目录展开且必须存在；只把用户引到内容面前，**不把内容读回上下文**。**默认不启用**（`Dev` / `Creator` 模式） |
-| `markit` | 扩展 | 把文档读成 Markdown：`read_doc` 工具（**延迟工具**，模型先用 `tool_search` 载入；参数 `path`）按扩展名分派——`.pdf` 抽文本层，`.docx` 还原标题 / 列表 / 表格，`.xlsx` / `.xls` / `.xlsb` / `.xlsm` / `.ods` 每个工作表一段 Markdown 表格，`.pptx` 每张幻灯片一节，`.epub` 按 spine 顺序拼接各章。超过 32 MiB 的文件在解析前拒绝，输出按 `read` 的口径截断（2000 行 / 50KB）。**默认不启用**（`Dev` / `Creator` 模式） |
+| `markit` | 扩展 | 文档读写双向：`read_doc` 工具（**延迟工具**，模型先用 `tool_search` 载入；参数 `path`）把文档读成 Markdown——按扩展名分派：`.pdf` 抽文本层，`.docx` 还原标题 / 列表 / 表格，`.xlsx` / `.xls` / `.xlsb` / `.xlsm` / `.ods` 每个工作表一段 Markdown 表格，`.pptx` 每张幻灯片一节，`.epub` 按 spine 顺序拼接各章；超过 32 MiB 的文件在解析前拒绝，输出按 `read` 的口径截断（2000 行 / 50KB）。反方向是 `export_pdf`（同样是延迟工具）：Markdown → Typst 标记 → 调系统里的 `typst` 命令编译成 PDF，没装 typst 时把下载地址回给模型。**默认不启用**（`Dev` / `Creator` 模式） |
 | `lsp` | 扩展 | 向语言服务器按需查询：`lsp` 工具按 `operation` 分派——`diagnostics` 拿该文件的编译 / 类型诊断，`definition` / `references` 按行列找定义与引用，`symbols` 用 `path` 出文件符号大纲或用 `query` 搜整个工作区。服务器按文件扩展名在 `$PATH` 里找（rust-analyzer、clangd、typescript-language-server、pyright、gopls、jdtls、ruby-lsp、lua-language-server、csharp-ls、intelephense），进程按「命令 + 工作区根」常驻复用，关闭扩展时一并退出。行列参数是 **1-based、按字符计**；查询前会把磁盘上的当前内容同步给服务器，因此诊断能覆盖已写入但还没编译的修改。**默认不启用**（`Dev` / `Creator` 模式）。详见下文 |
 | `session-search` | 扩展 | 跨会话检索：`session_search` 工具（**延迟工具**，模型先用 `tool_search` 载入）。扫描 `agent_dir()/sessions` 下最新的 200 份会话文件，按关键词返回**按会话分组**的片段；默认隐藏当前会话、工具调用与结果、以及 `<system-reminder>` 注入消息，每个会话默认只出 1 条。**默认不启用**（`Dev` / `Creator` 模式） |
 | `memory` | 扩展 | 跨会话记忆：`memory` 工具（`remember` / `recall` / `search` / `list` / `forget` / `tag` / `link` / `related`），外加每轮请求前按当前输入做**词法**（BM25）召回，把命中条目拼成一段稳定文本注入本次请求（不进会话历史、不改系统提示）。记忆图分两份落盘：`agent_dir()/extensions/memory/global.json`（跨项目）与 `agent_dir()/extensions/memory/projects/<project-key>.json`（按工作目录）；每 12 次 `turn_end` 用**一次**独立的一次性请求把最近对话抽成结构化条目。设置面板可调召回条数、抽取间隔与注入字符预算；`--offline` 跳过抽取。**默认不启用**（`Dev` / `Creator` 模式） |
@@ -119,6 +119,13 @@ TTL 取目录 `promptCache.{short,long}`（按 `PRUX_CACHE_RETENTION` 选档）�
 - 没有可提取文本时（扫描件、空文档）返回明确提示，不会静默给空内容。
 - 图表、图片、页眉页脚、批注、演讲者备注都不读。
 - 解析器对畸形文件可能崩，扩展会把它变成一条错误而不是让进程退出——注意 release 构建是 `panic = "abort"`，该兜底只在 debug / 测试构建下生效。
+
+反方向是 `export_pdf`：把 Markdown 排成 PDF，参数是 `content`（Markdown 正文）与可选的 `path`（默认工作目录下的 `output.pdf`，已存在的同名文件会被覆盖）。
+
+- 转换范围：标题、段落、强调 / 删除线、列表（含嵌套）、围栏代码块、表格、引用、链接、`$行内公式$`。图片、HTML、脚注按纯文本降级；任意用户文本里的 Typst 标记字符都会被转义，不会被执行成排版指令。
+- 排版引擎**不在 prux 里**：调用系统已安装的 `typst` 命令（<https://github.com/typst/typst>）编译，`$PATH` 里找不到时工具直接回下载地址并让模型转告你，不会反复重试。
+- 字体：Typst 不做隐式回退，所以正文含中文时先跑一次 `typst fonts` 取系统字体族，挑一个 CJK 族写进 `#set text(font: (..))`；一个都挑不到时照常出 PDF，但会明确提示中文会是空框（装 Noto Sans CJK SC 之类的字体即可）。
+- 只排一份自包含文档：临时目录里编译，所以 `#include`、图片、Typst 包都用不了；需要多文件工程时直接自己跑 `typst compile`。
 
 ### lsp
 

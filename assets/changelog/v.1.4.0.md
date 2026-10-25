@@ -55,6 +55,17 @@
   forwards. It only reads the local config, so it never opens a connection and never waits on the
   network; with no default set it says so instead of guessing a host. The model can therefore stop
   asking which server to use, and users need not run `/ssh status` for it.
+
+- **`markit` can write PDFs too**: the new `export_pdf` tool (deferred, loaded through
+  `tool_search` like `read_doc`) typesets Markdown into a PDF with the external `typst` command
+  (`https://github.com/typst/typst`): headings, emphasis, lists, fenced code, tables, links and
+  `$math$` become Typst markup, which is compiled from a temporary directory so only the `.pdf`
+  is left behind. No typesetting engine is embedded: when `typst` is not on `$PATH` the tool
+  answers with that download URL and tells the model to relay it instead of retrying. When the
+  source contains CJK text it asks `typst fonts` which families exist and puts one into
+  `#set text(font: (..))` — Typst never falls back on its own, so without that step Chinese
+  would come out as empty boxes. Parameters: `content` and an optional `path` (`output.pdf`).
+
 ### Fixed
 
 - **Left/Right now reach the panel**: the TUI key translation never mapped `←`/`→`, so every
@@ -103,6 +114,14 @@
   工具，报出默认目标的 `user@host:port`、记住的 `cwd`、备注、跳板机与私钥、已记住的目标列表、
   活跃的端口转发。它只读本地配置，不建连接、不等网络；没设默认目标时如实说「没有」，不猜主机。
   模型因此不必再问「用哪台服务器」，用户也不必为这件事跑 `/ssh status`。
+
+- **`markit` 也能写 PDF 了**：新增 `export_pdf` 工具（**延迟工具**，与 `read_doc` 一样经
+  `tool_search` 载入），把 Markdown 翻成 Typst 标记——标题、强调、列表、围栏代码、表格、
+  链接、`$公式$`——再交给系统里安装的 `typst` 命令（`https://github.com/typst/typst`）编译；
+  源文件写在临时目录，只在目标位置留下 `.pdf`。**不内嵌排版引擎**：`$PATH` 里没有 `typst`
+  时直接回下载地址，让模型转告用户而不是反复重试。正文含中文时先跑 `typst fonts` 问系统
+  装了哪些字体族，挑一个拼进 `#set text(font: (..))`——Typst 不做隐式回退，少了这步中文会
+  变成空框。参数：`content` 与可选的 `path`（默认 `output.pdf`）。
 
 ### 修复
 
