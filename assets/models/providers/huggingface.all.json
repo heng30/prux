@@ -247,7 +247,7 @@
       "supportsDeveloperRole": false
     },
     "contextWindow": 262144,
-    "maxTokens": 131072,
+    "maxTokens": 81920,
     "type": "chat"
   },
   {
@@ -299,6 +299,39 @@
     "type": "chat"
   },
   {
+    "id": "Qwen/Qwen3-8B",
+    "name": "Qwen3 8B",
+    "api": "openai-completions",
+    "provider": "huggingface",
+    "baseUrl": "https://router.huggingface.co/v1",
+    "reasoning": true,
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 0.07,
+      "output": 0.18,
+      "cacheRead": 0,
+      "cacheWrite": 0
+    },
+    "compat": {
+      "supportsStrictMode": true,
+      "supportsDeveloperRole": false
+    },
+    "contextWindow": 40960,
+    "maxTokens": 32768,
+    "thinkingLevelMap": {
+      "off": "none",
+      "minimal": null,
+      "low": "low",
+      "medium": "medium",
+      "high": "high",
+      "xhigh": null,
+      "max": null
+    },
+    "type": "chat"
+  },
+  {
     "id": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
     "name": "Qwen3-Coder 30B-A3B Instruct",
     "api": "openai-completions",
@@ -343,7 +376,7 @@
       "supportsDeveloperRole": false
     },
     "contextWindow": 262144,
-    "maxTokens": 66536,
+    "maxTokens": 65536,
     "type": "chat"
   },
   {
@@ -391,7 +424,7 @@
       "supportsDeveloperRole": false
     },
     "contextWindow": 262144,
-    "maxTokens": 66536,
+    "maxTokens": 32768,
     "type": "chat"
   },
   {
@@ -400,7 +433,7 @@
     "api": "openai-completions",
     "provider": "huggingface",
     "baseUrl": "https://router.huggingface.co/v1",
-    "reasoning": false,
+    "reasoning": true,
     "input": [
       "text"
     ],
@@ -415,7 +448,7 @@
       "supportsDeveloperRole": false
     },
     "contextWindow": 262144,
-    "maxTokens": 131072,
+    "maxTokens": 32768,
     "type": "chat"
   },
   {
@@ -998,7 +1031,7 @@
       "supportsDeveloperRole": false
     },
     "contextWindow": 163840,
-    "maxTokens": 163840,
+    "maxTokens": 32768,
     "type": "chat"
   },
   {
@@ -1294,6 +1327,50 @@
       "medium": null,
       "high": "high",
       "xhigh": "xhigh",
+      "max": "max"
+    },
+    "inputLimits": {
+      "images": {
+        "resize": {
+          "maxWidth": 2000,
+          "maxHeight": 2000,
+          "maxBytes": 4718592,
+          "jpegQuality": 80
+        }
+      }
+    },
+    "type": "chat"
+  },
+  {
+    "id": "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+    "name": "DeepSeek V4.1 Flash 1017",
+    "api": "openai-completions",
+    "provider": "huggingface",
+    "baseUrl": "https://router.huggingface.co/v1",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.3,
+      "output": 1.2,
+      "cacheRead": 0,
+      "cacheWrite": 0
+    },
+    "compat": {
+      "supportsStrictMode": true,
+      "supportsDeveloperRole": false
+    },
+    "contextWindow": 1048576,
+    "maxTokens": 384000,
+    "thinkingLevelMap": {
+      "off": null,
+      "minimal": null,
+      "low": "low",
+      "medium": null,
+      "high": "high",
+      "xhigh": null,
       "max": "max"
     },
     "inputLimits": {

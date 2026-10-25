@@ -1091,7 +1091,9 @@ impl Agent {
     /// - 只在启动选择是 `Default` 时生效：显式 `--tools 名单` / `--no-tools` / `--no-builtin-tools`
     ///   仍然整体覆盖会话记录；
     /// - 会话从未记录过 active tools 时不动（沿用当前选择）；
-    /// - 启动时的 `--tools +name`/`-name` 修饰符作用在会话记录之上。
+    /// - 会话历史里从未出现过的**已注册扩展工具**默认激活：那是会话开始后才注册的
+    ///   工具（或新安装的扩展），没被记录不等于被用户关掉；
+    /// - 启动时的 `--tools +name`/`-name` 修饰符作用在最终名单之上。
     ///
     /// 调用时机是 [`Self::set_default_tool_modifiers`] 之后（否则拿不到修饰符）。
     pub fn restore_session_tools(&mut self) {
@@ -1103,10 +1105,21 @@ impl Agent {
             return;
         };
 
-        let names = settings_manager::apply_tool_modifiers(
-            &recorded,
-            &self.settings_default_tool_modifiers,
-        );
+        let mut names = recorded;
+        if let Some(session) = self.session.as_ref() {
+            let seen = session.ever_active_tools();
+            for tool in core::extensions::registered()
+                .iter()
+                .flat_map(|e| e.tools())
+            {
+                if !seen.contains(&tool.name) && !names.contains(&tool.name) {
+                    names.push(tool.name);
+                }
+            }
+        }
+
+        let names =
+            settings_manager::apply_tool_modifiers(&names, &self.settings_default_tool_modifiers);
         self.rebuild_ctx.selection = ToolSelection::Default(names.clone());
 
         // 同步 `/reload` 的基线：后续重读 settings 的 defaultTools 时按同一组修饰符重算
@@ -1547,15 +1560,15 @@ impl Agent {
         let summary_result = match custom_summary {
             Some(s) => Ok((s, Usage::default())),
             None => {
-                let reserve = settings.reserve_tokens.max(1);
-                let budget = ((reserve as f64) * 0.8).floor() as u32;
-                let max_tokens = limit_model.max_tokens.unwrap_or(u32::MAX).min(budget);
+                // 摘要用模型自己的输出上限：reserveTokens 只决定何时开始压缩，
+                // 不能拿来当输出额度（reasoning 吃光额度后摘要直接失败）。
+                let max_tokens = limit_model.max_tokens.filter(|m| *m > 0);
 
                 core::provider::simple_completion(
                     &limit_model,
                     compaction::SUMMARIZATION_SYSTEM_PROMPT,
                     &format!("{}\n\n{}", user_prompt, summary_prompt),
-                    Some(max_tokens),
+                    max_tokens,
                 )
                 .await
             }
@@ -1871,7 +1884,7 @@ impl Agent {
                     summary_model,
                     compaction::SUMMARIZATION_SYSTEM_PROMPT,
                     &prompt,
-                    Some(branch_summary_max_tokens(summary_model)),
+                    branch_summary_max_tokens(summary_model),
                 )
                 .await?;
 
@@ -2339,7 +2352,7 @@ impl Agent {
     fn is_retryable_assistant_error(msg: &str) -> bool {
         let m = msg.to_lowercase();
         /// 不可重试错误特征子串：配额或计费耗尽等，命中则直接失败。
-        const NON_RETRYABLE: [&str; 10] = [
+        const NON_RETRYABLE: [&str; 11] = [
             "gousagelimiterror",
             "freeusagelimiterror",
             "monthly usage limit reached",
@@ -2351,6 +2364,8 @@ impl Agent {
             "daily limit",
             // Sign in with ChatGPT：订阅共享用量上限（需等数小时而非数秒）
             "subscription_sharing_usage_limit_exceeded",
+            // Sign in with ChatGPT 的 Business 工作区上限：只有管理员能提额
+            "subscription_sharing_workplace_individual_usage_limit_exceeded",
         ];
 
         if NON_RETRYABLE.iter().any(|p| m.contains(p)) {
@@ -2370,13 +2385,6 @@ impl Agent {
             "model is at capacity",
             "rate limit",
             "too many requests",
-            "429",
-            "500",
-            "502",
-            "503",
-            "504",
-            "520",
-            "524",
             "service unavailable",
             "server error",
             "internal error",
@@ -2398,8 +2406,13 @@ impl Agent {
             "enotfound",
             "eai_again",
             "upstream connect",
+            "upstream_stream_read_error",
             "reset before headers",
             "socket hang up",
+            "stream was interrupted",
+            "http/2 stream failed",
+            "stream disconnected before completion",
+            "pending stream has been canceled",
             "timed out",
             "timeout",
             "terminated",
@@ -2421,6 +2434,36 @@ impl Agent {
             "resourceexhausted",
         ];
         RETRYABLE.iter().any(|p| m.contains(p))
+            || Self::contains_http_status_code(&m)
+            || Self::is_oauth_token_refresh_failure(&m)
+    }
+
+    /// Google ADC / Vertex OAuth token 刷新失败的 node-fetch 文案：
+    /// `request to <url> failed, reason:`（reason 常为空）。
+    /// 只说 `failed, reason:` 太宽，故要求与 `request to ` 同时出现。
+    fn is_oauth_token_refresh_failure(m: &str) -> bool {
+        m.contains("request to ") && m.contains(" failed, reason:")
+    }
+
+    /// `m`（已小写）里是否出现独立的 HTTP 状态码 token。
+    ///
+    /// 不能裸子串匹配：`req_011CU503xyz`、`5242880 bytes` 里的数字不是状态码，
+    /// 否则一个正常失败会被无谓地退避重试。
+    fn contains_http_status_code(m: &str) -> bool {
+        /// 参与判定的瞬时状态码
+        const CODES: [&str; 7] = ["429", "500", "502", "503", "504", "520", "524"];
+
+        let bytes = m.as_bytes();
+        (0..bytes.len()).any(|i| {
+            if i > 0 && bytes[i - 1].is_ascii_alphanumeric() {
+                return false;
+            }
+            CODES.iter().any(|code| {
+                let end = i + code.len();
+                m.get(i..end) == Some(*code)
+                    && bytes.get(end).is_none_or(|b| !b.is_ascii_alphanumeric())
+            })
+        })
     }
 
     /// 派发一次主循环：`agent_loop` 有自定义实现时调用它，否则走内置 [`agent_loop::default_loop`]。
@@ -3224,10 +3267,21 @@ impl Agent {
             .is_some_and(|(_, body)| body.trim().is_empty())
     }
 
-    /// 是否上下文溢出。覆盖三种形态：
-    /// 1) error 文案（含 Cerebras 无 body 400/413，仅当 provider=cerebras）；
-    /// 2) z.ai 静默溢出：成功但 input+cacheRead 超过上下文窗口；
-    /// 3) Xiaomi length-stop 溢出：output=0 且输入填满窗口（≥99%）。
+    /// 是否 HTTP 413（请求体过大）。任何 provider 的 413 都视为上下文溢出：
+    /// 调用方可以压缩后重试，而不是直接失败（pi 1.4.0 #11016）。
+    fn is_payload_too_large(msg: &str) -> bool {
+        let lower = msg.to_lowercase();
+        let Some(rest) = lower.strip_prefix("provider returned ") else {
+            return false;
+        };
+        rest.starts_with("413") && rest[3..].starts_with(|c: char| !c.is_ascii_digit())
+    }
+
+    /// 是否上下文溢出。覆盖四种形态：
+    /// 1) error 文案（含 Cerebras 无 body 400，仅当 provider=cerebras）；
+    /// 2) 任何 provider 的 HTTP 413；
+    /// 3) z.ai 静默溢出：成功但 input+cacheRead 超过上下文窗口；
+    /// 4) Xiaomi length-stop 溢出：output=0 且输入填满窗口（≥99%）。
     fn message_is_context_overflow(
         msg: &AgentMessage,
         context_window: u32,
@@ -3244,6 +3298,7 @@ impl Agent {
                 return false;
             };
             return Self::is_overflow_error_str(err)
+                || Self::is_payload_too_large(err)
                 || (provider == "cerebras" && Self::is_bodyless_status_error(err));
         }
 
@@ -4504,14 +4559,12 @@ pub(crate) fn stream_event_to_json(ev: StreamEvent, partial: Option<&AgentMessag
     }
 }
 
-/// branch summary 输出上限：`min(4096, model.max_tokens)`
-/// reasoning 模型的 thinking 会计入输出上限，硬编码 2048 会被 thinking 耗尽导致摘要截断。
-fn branch_summary_max_tokens(model: &ModelConfig) -> u32 {
-    model
-        .max_tokens
-        .filter(|m| *m > 0)
-        .unwrap_or(u32::MAX)
-        .min(4096)
+/// branch summary 输出上限：用模型自己的输出上限（`None` = 不设限，交给 provider 默认）。
+///
+/// 不能给硬上限：reasoning 模型的 thinking 会计入输出额度，额度被 thinking 吃完时
+/// 摘要就只剩空字符串。目录里 `maxTokens: 0` 表示“不限制”。
+fn branch_summary_max_tokens(model: &ModelConfig) -> Option<u32> {
+    model.max_tokens.filter(|m| *m > 0)
 }
 
 #[cfg(test)]
@@ -4582,6 +4635,33 @@ mod tests {
         // Sign in with ChatGPT：订阅共享用量上限不重试
         assert!(!Agent::is_retryable_assistant_error(
             "provider returned 429 Too Many Requests: {\"error\":{\"code\":\"subscription_sharing_usage_limit_exceeded\"}}"
+        ));
+        // ChatGPT Business 工作区上限（pi 1.4.0）：只有管理员能提额，不重试
+        assert!(!Agent::is_retryable_assistant_error(
+            "provider returned 429 Too Many Requests: {\"error\":{\"code\":\"subscription_sharing_workplace_individual_usage_limit_exceeded\"}}"
+        ));
+        // 网关 / 代理 / OAuth 刷新（pi 1.4.0 #10920 / #11057 / #10996）
+        assert!(Agent::is_retryable_assistant_error(
+            "upstream_error: upstream_stream_read_error"
+        ));
+        assert!(Agent::is_retryable_assistant_error(
+            "stream was interrupted"
+        ));
+        assert!(Agent::is_retryable_assistant_error(
+            "Upstream HTTP/2 stream failed"
+        ));
+        assert!(Agent::is_retryable_assistant_error(
+            "stream disconnected before completion: stream closed before response.completed"
+        ));
+        assert!(Agent::is_retryable_assistant_error(
+            "request to https://oauth2.googleapis.com/token failed, reason:"
+        ));
+        // 状态码必须独立成 token：请求 id / 字节数里的数字不算（pi 1.4.0 #11057）
+        assert!(!Agent::is_retryable_assistant_error(
+            "invalid request id: req_011CU503xyz"
+        ));
+        assert!(!Agent::is_retryable_assistant_error(
+            "response body was 5242880 bytes, nothing else to report"
         ));
         assert!(!Agent::is_retryable_assistant_error("random model error"));
     }
@@ -4819,9 +4899,9 @@ mod tests {
     }
 
     #[test]
-    fn branch_summary_max_tokens_caps_at_4096_and_model() {
-        // 默认（无 max_tokens）→ 4096；模型 max_tokens 更小时用模型的；0 视为无上限。
-        let base = ModelConfig {
+    fn branch_summary_max_tokens_uses_the_model_output_limit() {
+        // 模型的输出上限就是摘要上限；目录里的 0 与缺省都表示“不设限”。
+        let mut model = ModelConfig {
             model_type: Default::default(),
             image_resize: crate::utils::image::ImageResizeLimits::default(),
             allowed_fallback_models: Vec::new(),
@@ -4858,16 +4938,13 @@ mod tests {
             provider_routing: None,
             thinking_budgets: None,
         };
-        assert_eq!(branch_summary_max_tokens(&base), 4096);
-        let mut small = base.clone();
-        small.max_tokens = Some(1024);
-        assert_eq!(branch_summary_max_tokens(&small), 1024);
-        let mut zero = base.clone();
-        zero.max_tokens = Some(0);
-        assert_eq!(branch_summary_max_tokens(&zero), 4096);
-        let mut big = base.clone();
-        big.max_tokens = Some(60000);
-        assert_eq!(branch_summary_max_tokens(&big), 4096);
+        assert_eq!(branch_summary_max_tokens(&model), None);
+        model.max_tokens = Some(1024);
+        assert_eq!(branch_summary_max_tokens(&model), Some(1024));
+        model.max_tokens = Some(0);
+        assert_eq!(branch_summary_max_tokens(&model), None);
+        model.max_tokens = Some(60000);
+        assert_eq!(branch_summary_max_tokens(&model), Some(60000));
     }
 
     #[test]
@@ -5208,6 +5285,20 @@ mod tests {
         // 2) Cerebras 无 body 400/413（仅 cerebras）
         m.error_message = Some("provider returned 400 Bad Request: ".into());
         assert!(Agent::message_is_context_overflow(&m, 200_000, "cerebras"));
+        assert!(!Agent::message_is_context_overflow(&m, 200_000, "openai"));
+
+        // 2b) 任何 provider 的 413 都算溢出（pi 1.4.0 #11016，Copilot 大请求体）
+        m.error_message =
+            Some("provider returned 413 Payload Too Large: failed to parse request".into());
+        assert!(Agent::message_is_context_overflow(
+            &m,
+            200_000,
+            "github-copilot"
+        ));
+        // 4xx 里只有 413 算；4130 / 413 开头的数字不算
+        m.error_message = Some("provider returned 4130 odd failure".into());
+        assert!(!Agent::message_is_context_overflow(&m, 200_000, "openai"));
+        m.error_message = Some("provider returned 400 Bad Request: malformed input".into());
         assert!(!Agent::message_is_context_overflow(&m, 200_000, "openai"));
 
         // 3) 静默溢出（z.ai）：stop + input+cacheRead > window
@@ -6019,10 +6110,12 @@ mod tests {
         let ToolSelection::Default(names) = &agent.rebuild_ctx.selection else {
             panic!("Default 选择不应被改写成其它变体");
         };
-        assert_eq!(
-            names,
-            &vec!["read".to_string(), "bash".to_string(), "ls".to_string()]
-        );
+        // 记录里的工具 + 修饰符生效；`slow_probe` 这类“会话从未记录过”的已注册扩展
+        // 工具也会默认激活（pi 1.4.0 #11062），故不断言整份名单。
+        assert_eq!(names[0], "read");
+        assert_eq!(names[1], "bash");
+        assert!(names.contains(&"ls".to_string()), "{names:?}");
+        assert!(!names.contains(&"edit".to_string()), "{names:?}");
         let active = agent.get_active_tools();
         assert!(active.contains(&"ls".to_string()), "{active:?}");
         assert!(!active.contains(&"edit".to_string()), "{active:?}");

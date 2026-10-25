@@ -223,6 +223,7 @@ pub async fn run_interactive(
     let _stderr_log = StderrLog::install(&tui_stderr_log_path()).ok();
 
     install_shutdown_signal_handlers();
+    install_panic_terminal_restore();
 
     // UI 任务队列：任何后台线程经 run_in_event_loop 投闭包 → 主循环这里执行。
     // 单一队列兼管 worker 回执 / 文件扫描 / 工具状态 / 高亮补全等一切后台→UI 更新。
@@ -1408,6 +1409,37 @@ fn teardown_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) {
     }
 
     terminal.show_cursor().ok();
+}
+
+/// 静默还原终端状态：panic 等“没走到 [`teardown_terminal`]”的退出路径用。
+///
+/// 逆序列是幂等的，重复发送无害，所以不判断当前是否真在 TUI 里。
+fn restore_terminal_modes() {
+    let mut out = io::stdout();
+    _ = crossterm::terminal::disable_raw_mode();
+    // 鼠标（含 tmux 全量模式）、focus 上报、括号粘贴、备用屏、键盘增强协议一次写全
+    _ = write!(
+        out,
+        "\x1b[?1006l\x1b[?1004l\x1b[?1003l\x1b[?1002l\x1b[?1000l\x1b[>4;0m\x1b[?2004l\x1b[?1049l\x1b[<u"
+    );
+    _ = out.flush();
+}
+
+/// 安装 panic 钩子：先还原终端，再交给已安装的钩子（崩溃日志 + 原钩子输出）。
+///
+/// 不还原的话鼠标跟踪、focus 上报、Kitty 键盘协议、备用屏会全部留在开启态，
+/// panic 退出后 shell 提示符被转义序列糊满。只装一次。
+fn install_panic_terminal_restore() {
+    static INSTALLED: AtomicBool = AtomicBool::new(false);
+    if INSTALLED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        restore_terminal_modes();
+        previous(info);
+    }));
 }
 
 #[cfg(test)]

@@ -1709,6 +1709,25 @@ impl Session {
         })
     }
 
+    /// 会话历史里出现过的全部工具名（各次 `ActiveToolsChange` 快照的并集）。
+    ///
+    /// 用来区分「被增删过」与「这段历史里根本没出现过」：后者对应会话开始后才
+    /// 注册的扩展工具，恢复会话时应当默认激活。
+    pub fn ever_active_tools(&self) -> HashSet<String> {
+        self.state
+            .entries()
+            .iter()
+            .filter_map(|e| match e {
+                Entry::ActiveToolsChange {
+                    active_tool_names, ..
+                } => Some(active_tool_names),
+                _ => None,
+            })
+            .flatten()
+            .cloned()
+            .collect()
+    }
+
     /// /clone 的 fork 目标：main lane 叶子若不是 message（如配置变更条目），
     /// 向上回溯到最近一条 message entry 并返回其 id；无 message 时返回 None。
     pub fn clone_target_id(&self) -> Option<String> {

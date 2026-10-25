@@ -380,14 +380,16 @@ fn push_google_tool_result(
     } else {
         Vec::new()
     };
-    let has_text = !text_joined.is_empty();
+
+    // 只有空白的输出按空输出处理：部分 provider 会直接 400
+    let has_text = !text_joined.trim().is_empty();
     let has_images = !image_parts.is_empty();
     let response_value = if has_text {
         sanitize_surrogates(&text_joined)
     } else if has_images {
         "(see attached image)".to_string()
     } else {
-        String::new()
+        "(no tool output)".to_string()
     };
     let tool_name = msg.tool_name.clone().unwrap_or_default();
     let tool_call_id = msg.tool_call_id.clone().unwrap_or_default();
@@ -1290,6 +1292,27 @@ mod tests {
         );
         // gemini 3+ 带 id
         assert_eq!(out[0]["parts"][0]["functionResponse"]["id"], "call_1");
+    }
+
+    /// 空 / 只有空白的工具输出都给占位文案（pi 1.4.0 #8720）：Google 会拒空 functionResponse。
+    #[test]
+    fn empty_and_whitespace_tool_outputs_use_the_placeholder() {
+        let m = model("gemini-3-flash");
+        for text in ["", "\r\n", "  \n"] {
+            let mut tr = AgentMessage::user_text("");
+            tr.role = "toolResult".into();
+            tr.tool_call_id = Some("call_1".into());
+            tr.tool_name = Some("bash".into());
+            tr.content = vec![ContentBlock::Text {
+                text: text.into(),
+                text_signature: None,
+            }];
+            let out = convert_google_messages(&[tr], "", &m);
+            assert_eq!(
+                out[0]["parts"][0]["functionResponse"]["response"]["output"], "(no tool output)",
+                "输入 {text:?}"
+            );
+        }
     }
 
     #[test]

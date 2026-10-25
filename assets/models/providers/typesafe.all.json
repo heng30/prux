@@ -7,7 +7,8 @@
     "provider": "typesafe",
     "baseUrl": "https://api.typesafe.ai/v1/",
     "input": [
-      "text"
+      "text",
+      "image"
     ],
     "cost": {
       "input": 0,
@@ -15,6 +16,10 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
-    "contextWindow": 64000
+    "contextWindow": 64000,
+    "compat": {
+      "imageInput": "assets",
+      "sendImageOptInHeader": true
+    }
   }
 ]

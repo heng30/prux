@@ -106,7 +106,9 @@ fn convert_tool_result_output(model: &ModelConfig, content: &[ContentBlock]) -> 
         .iter()
         .filter(|b| matches!(b, ContentBlock::Image { .. }))
         .collect();
-    let has_text = !text_result.is_empty();
+
+    // 只有空白的输出按空输出处理：部分 provider 会直接 400
+    let has_text = !text_result.trim().is_empty();
     let supports_images = model.input.iter().any(|x| x == "image");
     if images.is_empty() || !supports_images {
         return json!(sanitize_surrogates(if has_text {
@@ -2160,6 +2162,21 @@ mod tests {
         assert_eq!(out[0]["type"], "function_call_output");
         assert_eq!(out[0]["call_id"], "call_1");
         assert_eq!(out[0]["output"], "file contents");
+    }
+
+    /// 只有空白的工具输出按空输出处理（pi 1.4.0 #8720）。
+    #[test]
+    fn whitespace_only_tool_output_uses_the_empty_placeholder() {
+        let m = model(false);
+        let mut tr = AgentMessage::user_text("");
+        tr.role = "toolResult".into();
+        tr.tool_call_id = Some("call_1".into());
+        tr.content = vec![ContentBlock::Text {
+            text: "\r\n".into(),
+            text_signature: None,
+        }];
+        let out = convert_responses_messages(&[tr], "", &m);
+        assert_eq!(out[0]["output"], "(no tool output)");
     }
 
     /// grammar 能力开启时工具下发为 `custom`（responses 形状）；关闭时仍是 function。

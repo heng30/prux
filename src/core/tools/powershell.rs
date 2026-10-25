@@ -8,7 +8,10 @@ use crate::{
         },
         index::{ToolError, ToolResult},
     },
-    utils::truncate::{self, DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES},
+    utils::{
+        paths,
+        truncate::{self, DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES},
+    },
 };
 use serde_json::json;
 use std::{
@@ -18,24 +21,44 @@ use std::{
 };
 use tokio::{io::AsyncReadExt, process::Command};
 
-/// powershell 解析顺序（pwsh 优先，回退 powershell）
+/// powershell 解析顺序：`PATH` 上的 `pwsh` → `%ProgramFiles%\PowerShell\7\pwsh.exe`
+/// → `PATH` 上的 `powershell` → `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`。
+///
+/// 后两级是为了“装了但没加 PATH”的机器：安装目录可能在任意盘、也可能不在 PATH 上。
 pub fn find_powershell() -> Option<PathBuf> {
-    for name in ["pwsh", "powershell"] {
-        if let Some(paths) = std::env::var_os("PATH") {
-            for dir in std::env::split_paths(&paths) {
-                let candidate = dir.join(if cfg!(windows) {
-                    format!("{}.exe", name)
-                } else {
-                    name.to_string()
-                });
-
-                if candidate.is_file() {
-                    return Some(candidate);
-                }
-            }
+    let exe = |name: &str| {
+        if cfg!(windows) {
+            format!("{}.exe", name)
+        } else {
+            name.to_string()
         }
+    };
+
+    if let Some(found) = paths::find_in_path("pwsh") {
+        return Some(found);
     }
-    None
+
+    if let Some(found) = std::env::var_os("ProgramFiles")
+        .map(PathBuf::from)
+        .map(|dir| dir.join("PowerShell").join("7").join(exe("pwsh")))
+        .filter(|candidate| candidate.is_file())
+    {
+        return Some(found);
+    }
+
+    if let Some(found) = paths::find_in_path("powershell") {
+        return Some(found);
+    }
+
+    std::env::var_os("SystemRoot")
+        .map(PathBuf::from)
+        .map(|dir| {
+            dir.join("System32")
+                .join("WindowsPowerShell")
+                .join("v1.0")
+                .join(exe("powershell"))
+        })
+        .filter(|candidate| candidate.is_file())
 }
 
 /// 执行 powershell 命令（Windows 语义：-NoProfile -NonInteractive -Command）

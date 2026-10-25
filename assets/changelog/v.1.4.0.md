@@ -71,6 +71,41 @@
 - **Left/Right now reach the panel**: the TUI key translation never mapped `←`/`→`, so every
   overlay saw them as "some other key" — the `ask-user-question` tabs only moved on `Tab`, and
   no extension could bind horizontal navigation. Both arrows are mapped now.
+- **Transient gateway, proxy and OAuth failures now retry**: `upstream_stream_read_error`,
+  `stream was interrupted`, `Upstream HTTP/2 stream failed`, `stream disconnected before
+  completion` and a failed Google Vertex OAuth token refresh (`request to … failed, reason:`)
+  all fall through to the retry policy instead of failing the turn on the first attempt.
+- **HTTP status codes must stand alone**: `429`/`5xx` used to match anywhere in the error text,
+  so a request id such as `req_011CU503xyz` or a byte count such as `5242880 bytes` triggered
+  pointless backoff retries. A code now only counts when it is not part of a longer word or number.
+- **ChatGPT Business workspace limits are not retried**: the workspace admin has to raise that
+  limit, so backing off on it only wasted turns.
+- **Compaction and branch summaries use the model's output limit**: they no longer derive a cap
+  from `compaction.reserveTokens` (which only decides *when* to compact), so a thinking model
+  can no longer exhaust the summary budget and fail with "generation hit the token cap".
+- **Any HTTP 413 counts as context overflow**: an oversized request body (for example a session
+  full of large images on GitHub Copilot) now compacts and retries instead of failing.
+- **Whitespace-only tool output uses the empty placeholder**: a bare `\r\n` from `bash` used to
+  be sent verbatim to the OpenAI Completions, OpenAI Responses and Google APIs, which reject it
+  with a 400. Google now also has a placeholder for genuinely empty output.
+- **`grep` runs `rg --no-config`**: a `RIPGREP_CONFIG_PATH` in the user's shell (for example
+  with `--fixed-strings`) silently turned regex searches into literal ones.
+- **PowerShell is found off `PATH`**: `pwsh` in `%ProgramFiles%\PowerShell\7` and
+  `powershell.exe` in `%SystemRoot%\System32\WindowsPowerShell\v1.0` are now detected.
+- **An `mcp.json` that starts with a UTF-8 BOM parses**: before, the whole file failed to parse
+  and every MCP server in it was silently skipped.
+- **The clipboard helper leaves our process group**: `wl-copy` is spawned detached, so
+  suspending prux with Ctrl+Z no longer suspends the process that owns the clipboard and makes
+  every later paste hang.
+- **A panic restores the terminal**: raw mode, mouse tracking, focus reporting, bracketed paste,
+  the Kitty keyboard protocol and the alternate screen are now turned off by the panic hook, so
+  a crash no longer floods the shell prompt with escape sequences.
+- **Tools registered after the session started stay active**: resuming a session or switching
+  branches used to restore exactly the recorded tool list, leaving extension tools that were
+  registered later permanently inactive. Registered tools the branch never added or removed are
+  now active.
+- **HTML export renders CJK emphasis**: bold and italic next to CJK punctuation no longer show
+  up as literal asterisks.
 
 ## 中文
 
@@ -128,3 +163,27 @@
 - **`←` / `→` 现在能送到面板**：TUI 的按键翻译从来没映射左右方向键，所有覆盖层都把这两个键当成
   「其它键」——`ask-user-question` 的标签页只有 `Tab` 能翻，扩展也无法绑定横向导航。现在两个方向键
   都会映射过去。
+- **网关、代理与 OAuth 瞬时故障会重试了**：`upstream_stream_read_error`、`stream was interrupted`、
+  `Upstream HTTP/2 stream failed`、`stream disconnected before completion`，以及 Google Vertex
+  的 OAuth token 刷新失败（`request to … failed, reason:`）现在都走重试策略，不再第一下就判死。
+- **HTTP 状态码必须独立成 token**：`429` / `5xx` 原来在错误文案里任意位置都命中，`req_011CU503xyz`
+  这类请求 id、`5242880 bytes` 这类字节数都会触发无谓的退避重试；现在前后是字母或数字就不算状态码。
+- **ChatGPT Business 的工作区上限不再重试**：那种额度只有管理员能提，退避重试只是浪费回合。
+- **压缩与分支摘要改用模型的输出上限**：不再从 `compaction.reserveTokens` 推一个输出额度（那个值只决定
+  **何时**开始压缩），思考型模型不会再把摘要额度吃光后报 "generation hit the token cap"。
+- **任何 HTTP 413 都算上下文溢出**：请求体过大（例如 Copilot 上塞满大图的会话）会先压缩再重试，
+  而不是直接失败。
+- **只有空白的工具输出改用空输出占位文案**：`bash` 吐的一个裸 `\r\n` 原来原样发给 OpenAI Completions、
+  OpenAI Responses 与 Google，被这三家以 400 拒掉。Google 侧此前连真空输出都没有占位文案，一并补上。
+- **`grep` 固定走 `rg --no-config`**：用户 shell 里的 `RIPGREP_CONFIG_PATH`（例如带 `--fixed-strings`）
+  会把正则搜索静默改成字面量搜索。
+- **PowerShell 不装在 `PATH` 上也能找到**：`%ProgramFiles%\PowerShell\7` 下的 `pwsh` 与
+  `%SystemRoot%\System32\WindowsPowerShell\v1.0` 下的 `powershell.exe` 都纳入探测。
+- **带 UTF-8 BOM 的 `mcp.json` 能解析**：此前整份文件解析失败，里面的 MCP server 全部被静默跳过。
+- **剪贴板子进程脱离我们的进程组**：`wl-copy` 以独立进程组启动，`Ctrl+Z` 挂起 prux 时不会连带把它停掉，
+  之后的粘贴不会卡住。
+- **panic 时还原终端**：raw mode、鼠标跟踪、focus 上报、括号粘贴、Kitty 键盘协议与备用屏现在由 panic
+  钩子关掉，崩溃退出不再把 shell 提示符糊满转义序列。
+- **会话开始后才注册的工具保持激活**：恢复会话、切换分支原来只装回记录的名单，后来注册的扩展工具
+  永远是非激活态；分支既没加过也没删过的已注册工具现在默认激活。
+- **HTML 导出的 CJK 强调正常了**：CJK 标点紧邻 `**` / `*` 时不再显示字面星号。

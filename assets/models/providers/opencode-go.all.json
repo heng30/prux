@@ -1,7 +1,7 @@
 [
   {
-    "id": "cat-jam-free",
-    "name": "Cat Jam Free",
+    "id": "beam-free",
+    "name": "Beam Free",
     "api": "openai-completions",
     "provider": "opencode-go",
     "baseUrl": "https://opencode.ai/inference/go/v1",
@@ -21,7 +21,7 @@
       "supportsStrictMode": true,
       "maxTokensField": "max_tokens"
     },
-    "contextWindow": 262144,
+    "contextWindow": 1048576,
     "maxTokens": 131072,
     "thinkingLevelMap": {
       "off": null,
@@ -877,6 +877,52 @@
     "type": "chat"
   },
   {
+    "id": "minimax-m3.1-flash-free",
+    "name": "MiniMax M3.1 Flash Free",
+    "api": "openai-completions",
+    "provider": "opencode-go",
+    "baseUrl": "https://opencode.ai/inference/go/v1",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0
+    },
+    "compat": {
+      "supportsStore": false,
+      "supportsDeveloperRole": false,
+      "supportsStrictMode": true,
+      "maxTokensField": "max_tokens"
+    },
+    "contextWindow": 1000000,
+    "maxTokens": 512000,
+    "thinkingLevelMap": {
+      "off": null,
+      "minimal": null,
+      "low": "low",
+      "medium": "medium",
+      "high": "high",
+      "xhigh": "xhigh",
+      "max": "max"
+    },
+    "inputLimits": {
+      "images": {
+        "resize": {
+          "maxWidth": 2000,
+          "maxHeight": 2000,
+          "maxBytes": 4718592,
+          "jpegQuality": 80
+        }
+      }
+    },
+    "type": "chat"
+  },
+  {
     "id": "muse-spark-1.2-contributor",
     "name": "Muse Spark 1.2 Contributor",
     "api": "openai-responses",
@@ -1068,8 +1114,8 @@
     "type": "chat"
   },
   {
-    "id": "space-bunny",
-    "name": "Space Bunny",
+    "id": "step-5-preview",
+    "name": "Step 5 Preview",
     "api": "openai-completions",
     "provider": "opencode-go",
     "baseUrl": "https://opencode.ai/inference/go/v1",
@@ -1079,55 +1125,9 @@
       "image"
     ],
     "cost": {
-      "input": 0.15,
-      "output": 0.6,
-      "cacheRead": 0.03,
-      "cacheWrite": 0
-    },
-    "compat": {
-      "supportsStore": false,
-      "supportsDeveloperRole": false,
-      "supportsStrictMode": true,
-      "maxTokensField": "max_tokens"
-    },
-    "contextWindow": 1048576,
-    "maxTokens": 524288,
-    "thinkingLevelMap": {
-      "off": null,
-      "minimal": null,
-      "low": "low",
-      "medium": "medium",
-      "high": "high",
-      "xhigh": "xhigh",
-      "max": "max"
-    },
-    "inputLimits": {
-      "images": {
-        "resize": {
-          "maxWidth": 2000,
-          "maxHeight": 2000,
-          "maxBytes": 4718592,
-          "jpegQuality": 80
-        }
-      }
-    },
-    "type": "chat"
-  },
-  {
-    "id": "step-5-preview-free",
-    "name": "Step 5 Preview Free",
-    "api": "openai-completions",
-    "provider": "opencode-go",
-    "baseUrl": "https://opencode.ai/inference/go/v1",
-    "reasoning": true,
-    "input": [
-      "text",
-      "image"
-    ],
-    "cost": {
-      "input": 0,
-      "output": 0,
-      "cacheRead": 0,
+      "input": 1,
+      "output": 2.7,
+      "cacheRead": 0.1,
       "cacheWrite": 0
     },
     "compat": {

@@ -77,6 +77,7 @@ pub async fn execute_grep_with_ops(
     let effective_limit = (limit.unwrap_or(GREP_DEFAULT_LIMIT as i64)).max(1) as usize;
 
     let mut args: Vec<String> = vec![
+        "--no-config".into(),
         "--json".into(),
         "--line-number".into(),
         "--color=never".into(),

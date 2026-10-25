@@ -243,12 +243,14 @@ fn is_wayland() -> bool {
 fn copy_to_wayland_clipboard(text: &str) -> Result<()> {
     // wl-copy 必须保持运行以持有剪贴板所有权（Wayland 数据在提供者进程内），
     // .status() 会永久阻塞直到剪贴板被替换；detach 后由下一次 wl-copy 替换时自行退出。
-    use std::process::Stdio;
+    // 必须自成进程组：否则 Ctrl+Z 把 prux 挂起时它也被 SIGTSTP，剪贴板数据源停摆，之后在任何地方粘贴都会卡住。
+    use std::{os::unix::process::CommandExt, process::Stdio};
     std::process::Command::new("wl-copy")
         .arg(text)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
+        .process_group(0)
         .spawn()?;
     Ok(())
 }

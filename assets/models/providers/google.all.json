@@ -882,6 +882,57 @@
     "type": "chat"
   },
   {
+    "id": "gemini-pro-latest",
+    "name": "Gemini Pro Latest",
+    "api": "google-generative-ai",
+    "provider": "google",
+    "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "off": null,
+      "minimal": null,
+      "low": "low",
+      "medium": "medium",
+      "high": "high",
+      "xhigh": null,
+      "max": null
+    },
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 2,
+      "output": 12,
+      "cacheRead": 0.2,
+      "cacheWrite": 0,
+      "tiers": [
+        {
+          "inputTokensAbove": 200000,
+          "input": 4,
+          "output": 18,
+          "cacheRead": 0.4,
+          "cacheWrite": 0
+        }
+      ]
+    },
+    "contextWindow": 1048576,
+    "maxTokens": 65536,
+    "inputLimits": {
+      "maxRequestBytes": 20971520,
+      "images": {
+        "maxPerRequest": 3600,
+        "resize": {
+          "maxWidth": 2000,
+          "maxHeight": 2000,
+          "maxBytes": 4718592,
+          "jpegQuality": 80
+        }
+      }
+    },
+    "type": "chat"
+  },
+  {
     "id": "gemma-4-26b-a4b-it",
     "name": "Gemma 4 26B A4B IT",
     "api": "google-generative-ai",

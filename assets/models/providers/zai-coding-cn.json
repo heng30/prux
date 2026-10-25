@@ -13,7 +13,7 @@
     "cost": {
       "input": 0.3,
       "output": 0.9,
-      "cacheRead": 0,
+      "cacheRead": 0.05,
       "cacheWrite": 0
     },
     "compat": {

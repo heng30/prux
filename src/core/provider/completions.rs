@@ -322,9 +322,10 @@ fn convert_tool_result_message(msg: &AgentMessage, model: &ModelConfig) -> Conve
             _ => {}
         }
     }
+
     let text = text_result.join("\n");
     let has_images = !image_parts.is_empty();
-    let has_text = !text.is_empty();
+    let has_text = !text.trim().is_empty();
     let tool_result_text = if has_text {
         text
     } else if has_images {
@@ -1907,6 +1908,23 @@ mod tests {
         );
         assert_eq!(out[3]["content"][1]["type"], "image_url");
         assert_eq!(out[4]["content"][0]["text"], "继续");
+    }
+
+    /// 只有空白的工具输出（bash 的一个裸 `\r\n`）按空输出处理，
+    /// 否则部分 provider 直接 400（pi 1.4.0 #8720）。
+    #[test]
+    fn whitespace_only_tool_output_uses_the_empty_placeholder() {
+        let m = model(false, None);
+        let out = convert_messages(
+            &[
+                assistant_with_calls(&["call_bash"]),
+                tool_result_with_image("call_bash", "\r\n", false),
+            ],
+            "",
+            &m,
+        );
+        assert_eq!(out[1]["role"], "tool");
+        assert_eq!(out[1]["content"], "(no tool output)");
     }
 
     /// 批次被列表末尾截断时同样要等全部 tool 消息发完。

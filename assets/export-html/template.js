@@ -1614,7 +1614,9 @@
               text: match[2],
               tokens: this.lexer.inlineTokens(match[2])
             };
-          }
+          },
+          // CJK 标点紧邻 ** / * 时也要能识别为强调，否则导出页显示字面星号
+          emStrong: markedCjkFriendly().tokenizer.emStrong
         },
         renderer: {
           // Sanitize link URLs with a scheme allow-list. Browsers strip C0

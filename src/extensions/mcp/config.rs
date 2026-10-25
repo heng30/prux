@@ -884,7 +884,10 @@ fn read_json_value(path: &Path) -> Result<Option<Value>> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
     };
-    let cleaned = strip_json_comments(&text);
+
+    // 先剥 BOM：Windows 编辑器（含 PowerShell 5.1）会在开头写 `\u{feff}`，
+    // serde_json 会因此整份解析失败、静默跳过全部 MCP server。
+    let cleaned = strip_json_comments(text.strip_prefix('\u{feff}').unwrap_or(&text));
     let value = serde_json::from_str(&cleaned)
         .with_context(|| format!("parse MCP config {}", path.display()))?;
     Ok(Some(value))
@@ -1029,6 +1032,21 @@ mod tests {
             command: Some(command.to_string()),
             ..Default::default()
         }
+    }
+
+    /// 带 UTF-8 BOM 的 `mcp.json` 仍要正常解析（Windows 编辑器会加，pi 1.4.0 #11191）。
+    #[test]
+    fn config_reads_through_a_utf8_bom() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mcp.json");
+        std::fs::write(
+            &path,
+            "\u{feff}{\n  // 注释\n  \"mcpServers\": { \"srv\": { \"command\": \"cmd\" } }\n}",
+        )
+        .unwrap();
+
+        let parsed = read_json_value(&path).unwrap().expect("配置应存在");
+        assert_eq!(parsed["mcpServers"]["srv"]["command"], "cmd");
     }
 
     /// 暴露方式：精确名 > 首个匹配的通配模式 > 服务器 exposure > 默认 direct。

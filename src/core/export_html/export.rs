@@ -19,6 +19,8 @@ const TEMPLATE_CSS: &str = embedded!("export-html/template.css");
 const TEMPLATE_JS: &str = embedded!("export-html/template.js");
 /// 内嵌的 marked 库，用于在导出页把 markdown 渲染为 HTML。
 const MARKED_JS: &str = embedded!("export-html/vendor/marked.min.js");
+/// 内嵌的 marked-cjk-friendly 插件：让 CJK 标点紧邻 `**` / `*` 时仍按强调渲染。
+const MARKED_CJK_FRIENDLY_JS: &str = embedded!("export-html/vendor/marked-cjk-friendly.min.js");
 /// 内嵌的 highlight.js 库，用于导出页代码块语法高亮。
 const HIGHLIGHT_JS: &str = embedded!("export-html/vendor/highlight.min.js");
 
@@ -66,6 +68,7 @@ pub fn export_session_extra(
         .replace("{{JS}}", TEMPLATE_JS)
         .replace("{{SESSION_DATA}}", &session_data_b64)
         .replace("{{MARKED_JS}}", MARKED_JS)
+        .replace("{{MARKED_CJK_FRIENDLY_JS}}", MARKED_CJK_FRIENDLY_JS)
         .replace("{{HIGHLIGHT_JS}}", HIGHLIGHT_JS);
 
     // 展开 ~、相对路径基于会话 cwd；未指定路径时默认
