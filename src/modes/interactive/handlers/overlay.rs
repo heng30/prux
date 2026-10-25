@@ -77,6 +77,8 @@ pub fn to_overlay_key(key: &KeyEvent) -> OverlayKey {
     match key.code {
         KeyCode::Up => OverlayKey::Up,
         KeyCode::Down => OverlayKey::Down,
+        KeyCode::Left => OverlayKey::Left,
+        KeyCode::Right => OverlayKey::Right,
         KeyCode::PageUp => OverlayKey::PageUp,
         KeyCode::PageDown => OverlayKey::PageDown,
         KeyCode::Home => OverlayKey::Home,
@@ -492,6 +494,14 @@ mod tests {
         assert_eq!(
             to_overlay_key(&KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE)),
             OverlayKey::PageDown
+        );
+        assert_eq!(
+            to_overlay_key(&KeyEvent::new(KeyCode::Left, KeyModifiers::NONE)),
+            OverlayKey::Left
+        );
+        assert_eq!(
+            to_overlay_key(&KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)),
+            OverlayKey::Right
         );
         assert_eq!(
             to_overlay_key(&KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE)),

@@ -55,6 +55,11 @@
   forwards. It only reads the local config, so it never opens a connection and never waits on the
   network; with no default set it says so instead of guessing a host. The model can therefore stop
   asking which server to use, and users need not run `/ssh status` for it.
+### Fixed
+
+- **Left/Right now reach the panel**: the TUI key translation never mapped `←`/`→`, so every
+  overlay saw them as "some other key" — the `ask-user-question` tabs only moved on `Tab`, and
+  no extension could bind horizontal navigation. Both arrows are mapped now.
 
 ## 中文
 
@@ -98,3 +103,9 @@
   工具，报出默认目标的 `user@host:port`、记住的 `cwd`、备注、跳板机与私钥、已记住的目标列表、
   活跃的端口转发。它只读本地配置，不建连接、不等网络；没设默认目标时如实说「没有」，不猜主机。
   模型因此不必再问「用哪台服务器」，用户也不必为这件事跑 `/ssh status`。
+
+### 修复
+
+- **`←` / `→` 现在能送到面板**：TUI 的按键翻译从来没映射左右方向键，所有覆盖层都把这两个键当成
+  「其它键」——`ask-user-question` 的标签页只有 `Tab` 能翻，扩展也无法绑定横向导航。现在两个方向键
+  都会映射过去。
