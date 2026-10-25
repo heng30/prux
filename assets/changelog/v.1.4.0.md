@@ -30,8 +30,7 @@
   `/ponytail gain` (the published benchmark scoreboard) and `/ponytail help` (level and command
   reference). Their text is embedded in the binary and delivered as a `<skill>` block when
   invoked, so nothing is written to disk and no skill description leaks into the system prompt
-  while the extension is off; a checklist is refused while a turn is running, while raising or
-  lowering the level stays available.
+  while the extension is off; a checklist sent while a turn is running steers into that turn.
 
   Off by default and available in `Dev` mode only: it rewrites how the model writes in every
   turn, so it has to be switched on explicitly.
@@ -67,7 +66,7 @@
   排序）、`/ponytail debt [标记词]`（把 `shortcut:` 注释收成债务账本）、`/ponytail gain`
   （已发布的 benchmark 记分牌）、`/ponytail help`（档位与命令速查）。这些正文随二进制内嵌，
   执行时作为 `<skill>` 块投递给模型，不落盘；扩展关闭时也不会有技能描述漏进系统提示。
-  回合运行中拒绝投递清单，换档则随时可用。
+  回合运行中投递清单会作为 steer 插进当前回合。
 
   默认不启用，仅在 `Dev` 模式下可用：它改写的是模型每一轮的写作风格，必须由用户显式开启。
 

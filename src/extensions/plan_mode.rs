@@ -1182,7 +1182,7 @@ fn is_injected_plan_context(m: &AgentMessage) -> bool {
 }
 
 /// `/plan [text]`：无参数切换 plan mode；带参数时先确保进入 plan mode（只读工具集生效），
-/// 再把参数作为输入发送（经 `status_start` 触发下一轮，与扩展 follow-up 同路径）。
+/// 再把参数作为输入发送（空闲开新回合，忙碌时 steer 进当前回合）。
 fn command_plan(st: &mut App, cmd: &str) -> bool {
     let arg = command_arg(cmd);
     if arg.is_empty() {

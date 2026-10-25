@@ -466,15 +466,7 @@ fn command_ponytail(st: &mut App, cmd: &str) -> bool {
             }
         }
         Cmd::Skill(action, args) => {
-            // 清单是一次性投递（会开新回合），忙碌时投进去没人接，直接回绝。
-            if st.busy {
-                st.push_msg(
-                    "Ponytail: finish or abort the current turn before running a checklist."
-                        .to_string(),
-                    MsgLevel::Warning,
-                );
-                return false;
-            }
+            // 清单走与输入框同一条投递路径：空闲开新回合，忙碌时 steer 进当前回合。
             send_prompt(st, skill_block(&action.skill_name(), action.body(), args));
         }
         Cmd::Invalid => st.push_msg(
@@ -771,5 +763,26 @@ mod tests {
             parse_cmd("review src/Foo.rs", Level::Full, Level::Full),
             Cmd::Skill(Action::Review, "src/Foo.rs")
         );
+    }
+
+    /// 忙碌时投递清单改走 steer 注入箱：忙碌态的 `status_start` 不会被消费，写了就等于丢消息。
+    #[test]
+    fn checklist_steers_when_busy() {
+        let _guard = crate::test_support::AgentDirGuard::temp();
+        let mut st = App::new();
+        st.busy = true;
+        st.runtime_steer_inbox.lock().unwrap().clear();
+        st.messages.clear();
+
+        assert!(!command_ponytail(&mut st, "/ponytail review src/Foo.rs"));
+
+        {
+            let inbox = st.runtime_steer_inbox.lock().unwrap();
+            assert_eq!(inbox.len(), 1, "忙碌态应把清单作为 steer 注入");
+            assert!(inbox[0].text().contains("<skill name=\"ponytail-review\">"));
+            assert!(inbox[0].text().ends_with("src/Foo.rs"));
+        }
+        assert!(st.messages.is_empty(), "忙碌态不得把消息塞进 messages");
+        assert!(st.status_start.is_none(), "忙碌态不得置 status_start");
     }
 }

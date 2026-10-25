@@ -16,7 +16,6 @@ use crate::{
     APP_NAME,
     core::{
         extensions::{Extension, ExtensionCommand, ExtensionMode, ExtensionTool},
-        provider::AgentMessage,
         system_prompt::documentation_section,
     },
     extensions::{
@@ -127,17 +126,7 @@ fn command_help(st: &mut App, raw: &str) -> bool {
     }
 
     let text = format!("{}\n\nQuestion: {}", documentation_section(), question);
-    if st.busy {
-        // 忙碌：作为 steer 立即注入当前回合（与输入框 steer 提交同路径，不锁 agent）
-        if let Ok(mut inbox) = st.runtime_steer_inbox.lock() {
-            inbox.push_back(AgentMessage::user_text(&text));
-        }
-        st.dirty = true;
-    } else {
-        // 空闲：按普通用户提问路径投递，渲染用户气泡并触发新回合
-        send_prompt(st, text);
-        st.dirty = true;
-    }
+    send_prompt(st, text); // 空闲开新回合，忙碌时 steer 进当前回合（不锁 agent）
     false
 }
 

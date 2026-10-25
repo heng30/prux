@@ -245,13 +245,21 @@ pub fn notify_cmd(text: &str, level: MsgLevel) {
     );
 }
 
-/// 把一条文本作为下一轮输入投出：写进 `messages` 并置 `status_start`，由主循环接手开新回合。
+/// 把一条文本作为下一轮输入投出：空闲时写进 `messages` 并置 `status_start`，由主循环接手开新回合。
 ///
-/// 与输入框提交同路径（用户气泡 + 触发新回合），因此命令自己不必再碰回合状态；
-/// 需要 steer 语义（忙碌时插进当前回合）的调用方自己判 `busy`，本函数不代劳。
+/// 与输入框提交同路径（用户气泡 + 触发新回合），因此命令自己不必再碰回合状态。
+/// 忙碌时改走 steer 注入箱：忙碌态的 `status_start` 不会被消费，写了就等于丢消息。
 pub fn send_prompt(st: &mut App, text: String) {
-    st.messages.push(AgentMessage::user_text(&text));
-    st.status_start = Some(text);
+    if st.busy {
+        // 与输入框 steer 提交同路径：插进当前回合，不锁 agent
+        if let Ok(mut inbox) = st.runtime_steer_inbox.lock() {
+            inbox.push_back(AgentMessage::user_text(&text));
+        }
+    } else {
+        st.messages.push(AgentMessage::user_text(&text));
+        st.status_start = Some(text);
+    }
+    st.dirty = true;
 }
 
 /// 往消息列表尾部追加一条 user 文本消息（作为注入的上下文）。
