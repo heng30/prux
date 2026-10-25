@@ -1,7 +1,7 @@
 use crate::{
     core::{
         extensions::{
-            self, DockSpan, ExtensionSetting, ExtensionUiRequest, RichSpan, UiNotifyLevel,
+            self, DockLine, DockSpan, ExtensionSetting, ExtensionUiRequest, RichSpan, UiNotifyLevel,
         },
         provider::AgentMessage,
         tools::{ToolError, ToolResultAttachment},
@@ -182,6 +182,16 @@ pub fn dock_span(key: &'static str, fallback: &'static str, text: impl Into<Stri
 /// 无主题色的 dock span（终端默认前景）。
 pub fn dock_plain(text: impl Into<String>) -> DockSpan {
     DockSpan::plain(text)
+}
+
+/// 一行纯文本（无主题色）。
+pub fn plain(text: impl Into<String>) -> DockLine {
+    vec![DockSpan::plain(text)]
+}
+
+/// 主题键着色的一行。
+pub fn styled(key: &'static str, fallback: &'static str, text: impl Into<String>) -> DockLine {
+    vec![DockSpan::new(key, fallback, text)]
 }
 
 /// 遮蔽展示机密值（API key / token）：首尾各留 [`MASK_HEAD`] / [`MASK_TAIL`] 个字符，

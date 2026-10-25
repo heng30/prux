@@ -57,6 +57,7 @@ core::extensions::register_banner_extension(extensions::banner::Banner::new());
 | `doc-helper` | 扩展 | 精简系统提示词：启用后从默认系统提示词移除整段 prux 文档描述（README/docs/examples 指针 + 主题映射），改用 `/help <question>` 按需提问——把**同一段**文档描述当作一条普通 user 消息投出（不动系统提示词，保护缓存命中率）；无参 `/help` 只列出文档主题。**默认不启用**，需在 `/extension` 面板开启 |
 | `permissions` | 扩展 | 工具调用的集中式权限门控：四层策略（`path` 横切路径 / `external_directory` 工作目录边界 / 按工具 / `bash` 命令模式）按 **most-restrictive-wins** 组合，值为 `allow` / `ask` / `deny` 或 `{action, reason}`，一张 pattern 表内 last-match-wins。策略在 `agent_dir()/extensions/permissions/config.json`（项目配置 `<cwd>/.prux/extensions/permissions/config.json` 仅在项目受信任时加载）。命中 `ask` 时弹确认面板（`Approve once` / `Approve for this session` / `Deny`），走的是扩展**等待式提问** `ask_prompt`（异步工具前钩子）；面板拿不到答复（Esc / 超时 / 非交互运行 / 已有别的确认在等）一律按拒绝处理，`/permissions allow <surface> <pattern>` 作为非交互兜底，且放行**不会**覆盖 `deny`。bash 命令按语句切分逐条判定（含 `$(…)` / 反引号 / 子 shell 里的命令、字面 `cd` 之后的路径、重定向目标），`bash -c` / `eval` / `sudo` / `xargs` / `find -exec` / 解释器 `-c` 这类看不透的包装一律按 `ask` 处理。`/permissions show\|allow\|drop\|allowlist\|init\|log\|reset`。**默认不启用**（`Dev`/`Creator` 模式可用）。详见 [extensions/permissions.md](extensions/permissions.md) |
 | `plan-mode` | 扩展 | 只读探索模式：禁用 `edit`/`write`、`bash`/`powershell` 白名单、`Plan:` 编号步骤 + `[DONE:n]` 进度跟踪（`/plan [text]`、`/todos`、`Alt+P`、`--plan`）。**默认不启用**，需在 `/extension` 面板开启 |
+| `ask-user-question` | 扩展 | 结构化问卷：模型调 `ask_user_question` 弹出 1–4 题的覆盖层面板，每题 2–4 个写好的选项（单选 / 多选），每题末尾自动带一行 `Type something.` 自由作答，`n` 写逐题备注、提交页写全局备注；答案以结构化数据（`details.answers[]` / `globalNote` / `unanswered`）回到同一轮。没有 UI 时工具直接报 `no_ui`。**默认不启用**，需在 `/extension` 面板开启。详见下文 |
 | `goal` | 扩展 | 持久化自主目标：`/goal [--tokens 50k] <objective>` 设置长期目标，agent 持续工作直到完成/暂停/清除/预算耗尽。裸 `/goal` 开关停靠面板，`/goal pause\|resume\|clear` 换挡；提供 `create_goal`/`get_goal`/`update_goal` 工具。**默认不启用**，需在 `/extension` 面板开启 |
 | `vet` | 扩展 | 收工前的项目检查闭环：主 agent 结算前自动跑配置的检查命令（测试 / lint / 类型检查），有阻塞失败就把失败输出注入上下文并**继续修**，直到全绿 / 用满 `maxIterations` / 发现同一条失败重复。只在主 agent、本回合改过文件、无排队输入且未中断时动作；`optional` 检查失败只报告。配置在 `agent_dir()/extensions/vet.json` 与受信项目的 `.prux/extensions/vet.json`（项目覆盖全局），命令 `/vet settings\|run\|status\|detect\|add\|remove\|reset`，设置面板调 `autoRun`/`maxIterations`/`timeout`/`announce`/`requireEdits`。**默认不启用**（仅 `Dev` 模式可用）。详见 [extensions/vet.md](extensions/vet.md) |
 | `ponytail` | 扩展 | 懒资深开发者模式：每次请求前把「最小完整改动」规则追加到**系统提示**末尾（只影响本次请求，不写进会话历史、不进压缩上下文），并按档位调强度——`/ponytail lite\|full\|ultra\|off` 设本会话档位，裸 `/ponytail` 在关闭时开启、在开启时报告当前档，`/ponytail status` 同时报默认档，`/ponytail default <档位>` 把默认档写进 `agent_dir()/extensions/ponytail.json` 的 `defaultMode`；本会话档位记在会话自定义条目（`ponytail-mode`）里，恢复/切换会话时重放。规则梯子：这东西需要存在吗 → 仓库里已经有了吗 → 标准库/平台原生有吗 → 已装依赖有吗 → 能一行写清吗 → 最小实现；但信任边界校验、防丢数据的错误处理、安全、无障碍**不许省**，带分支/循环/解析/钱/安全的逻辑要留一个小测试，刻意的简化用 `shortcut: <上限>, <何时升级>` 注释标注。另提供四个子命令投递检查清单：`/ponytail review [目标]`（改动审查）、`/ponytail audit [目标]`（全仓审查）、`/ponytail debt [标记词]`（`shortcut:` 债务账本）、`/ponytail gain`（benchmark 记分牌），正文随二进制内嵌、直接投递给模型，不落盘、不依赖技能目录；回合运行中投递清单会作为 steer 插进当前回合。`/ponytail help` 是档位与命令速查卡，直接在终端里打印出来（含表格的 Markdown 渲染），不投递给模型、不进会话历史、也不消耗回合。**默认不启用**（仅 `Dev` 模式可用） |
@@ -331,6 +332,57 @@ prompt cache 命中率（读会话文件、可离线），这个查 **provider �
 - **回执**：TUI 经 `AgentCommand::Rewind` 下发，worker 调 `Agent::rewind_last_user_input`（移动叶子后立即用 `build_context_messages` 重建 `agent.messages`），回执 `RewindDone` 让 TUI 替换消息流并按选择回填/丢弃输入。
 - **确认**：`/rewind` **每次都弹选择面板**（避免误操作）——`Rewind and restore input to the editor`（回退并回填输入框供修改重发）、`Rewind and discard the input`（回退并丢弃，历史仍可用 `/history` 找回）、`Cancel`。
 - **忙碌拒绝**：run 进行中（流式输出 / 工具执行）时分支正被追加，回退会破坏进行中的回合，因此直接提示先按 Esc 中断；命令声明 `busy_safe`（handler 不锁 agent），忙碌时不会被当成普通文本排进 steer 队列。
+
+### ask-user-question
+
+`ask-user-question` 给模型一个 `ask_user_question` 工具：需求里有真实决策（选哪种缓存策略、改配置的取舍）时，模型先问而不是替你猜。
+
+**参数**
+
+- `questions`：1–4 题，题面必须唯一；
+- 每题 `header`（≤16 字符的短标签，标签页上显示）、`options`（2–4 个）、`multiSelect`（可选）；
+- 每个选项 `label`（≤60 字符）、`description`（选它意味着什么 / 代价）、可选 `preview`（草图、代码、配置；单选时聚焦该选项显示在选项下方，纯文本行）；
+- `label` 不得使用保留标签 `Other` / `Type something.` / `Next`（运行时标位是唯一真源），同一题内不得重名。
+
+**界面与按键**
+
+问卷是占据输入框区域的覆盖层面板，顶部一行标签页（每题一个 + `Submit`），第二行起是题面。
+
+- `↑` / `↓`：在选项与末尾的 `Type something.` 行之间移动（首尾循环）；
+- 单选：`Enter` 选中并翻到下一题；多选：`Space` 或 `Enter` 勾选/取消勾选，`Tab` / `→` / `←` 翻页；
+- `Enter` 落在 `Type something.` 行：开始自由作答，`Enter` 保存（单选保存后直接进入下一题，多选保存后留在原页继续勾选），`Esc` 只退出输入、不取消问卷；
+- `n`：给当前题写备注；在提交页写整份问卷的全局备注（备注是单行）；
+- 提交页：`Submit answers` / `Cancel`，`Enter` 确认；未作答的题允许留空提交；
+- `Esc`（非输入态）：取消整份问卷。
+
+**回传**
+
+成功时工具文本是 `User has answered your questions: "<题>"="<答>" … You can now continue with the user's answers in mind.`，选项预览以 `selected preview: …`、逐题备注以 `user notes: …`、全局备注以 `global note: …` 追加；留空的题在 `unanswered: …` 段点名。`details` 里是结构化同一份数据：
+
+```json
+{
+  "answers": [
+    { "questionIndex": 0, "question": "…", "kind": "option", "answer": "…", "notes": "…", "preview": "…" },
+    { "questionIndex": 1, "question": "…", "kind": "multi", "answer": null, "selected": ["a", "b"] },
+    { "questionIndex": 2, "question": "…", "kind": "custom", "answer": "自己写的答案" }
+  ],
+  "cancelled": false,
+  "unanswered": [3],
+  "globalNote": "…"
+}
+```
+
+`kind` 取值：`option`（选了写好的选项）、`custom`（单选时自由作答）、`multi`（多选，勾选的标签在 `selected`，自由作答在 `answer`）。取消、或既没有任何作答也没有全局备注，一律折叠成同一句 `User declined to answer questions`（`details.cancelled` 为 `true`）。备注不构成「已作答」：只写了备注的题仍算留空。
+
+**校验失败**
+
+参数不合法时工具返回 `cancelled: true` + `details.error`（`no_questions` / `too_many_questions` / `duplicate_question` / `empty_options` / `too_many_options` / `reserved_label` / `duplicate_option_label` / `invalid_params`），文案是写给模型看的，可以直接照做重试。
+
+**运行条件**
+
+- 只在交互式 TUI 里能用：没有事件循环（`prux -p` 之类非交互运行）时直接返回 `no_ui`，不会挂住；
+- 同一时刻只允许一份问卷，第二份会被拒绝，先答完或取消再问；
+- 回合被中断（Esc）时问卷状态一并清理，面板自动收起。
 
 ### 扩展设置面板
 占据输入框区域的设置视图（`ext_settings` 模块，对齐 `/settings`：打开时隐藏输入框）：**一次只展示一个扩展**的设置项，由该扩展自己的命令（如 `/loop-detect`）或 [`ExtensionUiRequest::ShowSettings { ext }`] 打开；`Space`/`Enter` 在预定义选项里循环切换（无自由输入，搜索框不捕获空格），顶部搜索框可直接输入过滤配置项（type to search），`Esc`/`Ctrl+C` 隐藏面板并把键盘交还编辑器；再次运行同一命令也会切换隐藏。变更经 [`Extension::apply_setting`] 回写，扩展自行决定是否落盘（loop-detect 立即写盘）。声明 [`Extension::settings`] 的扩展应自备一个打开面板的命令（或请求 `ShowSettings`）。选中项的配置说明行过长时按面板宽度自动折行完整展示（面板随折行行数撑高）。
@@ -889,12 +941,12 @@ banner 扩展**互斥**：注册/面板切换时启用一个会自动禁用其�
 - **Tab**：切换扩展模式（`all` → `dev` → `creator` → `minimal` → `all`），写盘持久化
 - **Esc**：关闭面板并应用变更（`RebuildTools`）
 
-极简模式下非本模式扩展不显示。默认可选（`default_enabled() == false`）的扩展共 16 个：`plan-mode`、`goal`、`web-access`、`proxy`、`doc-helper`、`subagent`、`loop-detect`、`hang-detect`、`notify`、`rewind`、`codemode`、`mcp`、`browser`、`jet`、`tasks`、`debug`；它们默认未勾选（关闭），空格开启后立即生效并写入 `enabledExtensions`。
+极简模式下非本模式扩展不显示。默认可选（`default_enabled() == false`）的扩展共 17 个：`plan-mode`、`goal`、`web-access`、`proxy`、`doc-helper`、`subagent`、`loop-detect`、`hang-detect`、`notify`、`rewind`、`codemode`、`mcp`、`browser`、`jet`、`tasks`、`debug`、`ask-user-question`；它们默认未勾选（关闭），空格开启后立即生效并写入 `enabledExtensions`。
 
 ## settings 与启用状态
 
 - **`disabledExtensions`**：settings.json 中禁用的扩展名数组。注册时据此恢复初始状态（对默认启用的扩展 = 关闭）；/extension 面板切换后写回**全局**。项目 `.prux/settings.json` 里的同名字段与全局取并集（只在本项目禁用某内置扩展；未受信任的项目不生效）。
-- **`enabledExtensions`**：settings.json 中显式启用的扩展名数组，仅对声明 [`default_enabled() == false`] 的默认可选扩展（`plan-mode`、`goal`、`web-access`、`proxy`、`doc-helper`、`subagent`、`loop-detect`、`hang-detect`、`notify`、`rewind`、`codemode`、`mcp`、`browser`、`jet`、`tasks`、`debug`、`cache-usage`、`doctor`、`btw`、`recap`、`open`、`pdf`、`cache-watch`、`session-search`、`usage`、`memory`、`permissions`）有意义。这些扩展注册后默认禁用，必须在此列出（或经 `/extension` 面板开启）才参与钩子/工具/命令分发；关闭时从列表移除（回到默认态）。项目层同样与全局取并集（项目可自行开启默认关闭的扩展）；两层冲突时禁用优先（与 `disabledExtensions` 的并集语义一致）。
+- **`enabledExtensions`**：settings.json 中显式启用的扩展名数组，仅对声明 [`default_enabled() == false`] 的默认可选扩展（`plan-mode`、`goal`、`web-access`、`proxy`、`doc-helper`、`subagent`、`loop-detect`、`hang-detect`、`notify`、`rewind`、`codemode`、`mcp`、`browser`、`jet`、`tasks`、`debug`、`cache-usage`、`doctor`、`btw`、`recap`、`open`、`pdf`、`cache-watch`、`session-search`、`usage`、`memory`、`permissions`、`ask-user-question`）有意义。这些扩展注册后默认禁用，必须在此列出（或经 `/extension` 面板开启）才参与钩子/工具/命令分发；关闭时从列表移除（回到默认态）。项目层同样与全局取并集（项目可自行开启默认关闭的扩展）；两层冲突时禁用优先（与 `disabledExtensions` 的并集语义一致）。
 - **`extensionMode`**：`"minimal"`、`"dev"`、`"creator"`、`"all"`（默认，兜底全集）。`All` 是兜底模式，所有扩展隐式属于它；扩展声明的模式（如 `Minimal`）表示“该级别及以上可用”，列出多个（如 `[Dev, Creator]`）则覆盖两个并排模式。是运行时过滤层，不触碰各扩展 enabled 状态；切回全部模式即恢复原状。
 
 settings 相关键见 [settings.md](settings.md)。修改 settings 后重启生效；`/reload` 会重新接线扩展并重建工具列表与系统提示，但无法加载新编译的扩展代码。
