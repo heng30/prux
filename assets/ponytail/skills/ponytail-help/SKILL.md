@@ -1,14 +1,11 @@
 ---
 name: ponytail-help
 description: >
-  Quick reference for ponytail levels and commands. One-shot display.
-  Use for /ponytail help, "ponytail help", "how do I use ponytail".
+  Quick reference for ponytail levels and commands, printed locally by
+  /ponytail help.
 ---
 
 # Ponytail Help
-
-Display this reference card when invoked. One-shot, do NOT change mode,
-write flag files, or persist anything.
 
 ## Levels
 

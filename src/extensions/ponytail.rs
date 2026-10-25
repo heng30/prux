@@ -15,9 +15,28 @@
 //! - **换挡**：`/ponytail [lite|full|ultra|off|status|default <档位>]`，裸 `/ponytail` 开启或报档。
 //!   本会话档位写进会话自定义条目（`customType = ponytail-mode`），随会话保存/恢复；
 //!   默认档位写 `agent_dir()/extensions/ponytail.json` 的 `defaultMode`。
-//! - **五个检查清单**（[`Action`]）：[`SKILL_REVIEW`] / [`SKILL_AUDIT`] / [`SKILL_DEBT`] /
-//!   [`SKILL_GAIN`] / [`SKILL_HELP`] 的正文随二进制内嵌，`/ponytail review|audit|debt|gain|help`
-//!   直接投递对应正文（不依赖技能目录、不落盘，因此档位为 `off` 时也不会有技能描述漏进系统提示）。
+//! - **四个检查清单**（[`Action`]）：[`SKILL_REVIEW`] / [`SKILL_AUDIT`] / [`SKILL_DEBT`] /
+//!   [`SKILL_GAIN`] 的正文随二进制内嵌，`/ponytail review|audit|debt|gain` 直接投递对应正文
+//!   （不依赖技能目录、不落盘，因此档位为 `off` 时也不会有技能描述漏进系统提示）。
+//! - **速查卡**：[`SKILL_HELP`] 只给用户看，`/ponytail help` 在本机渲染成一条系统消息，
+//!   不进模型上下文、不花一个回合。
+//!
+//! **技能清单**（`assets/ponytail/skills/<目录>/SKILL.md`，均随二进制内嵌）：
+//!
+//! - `ponytail` → [`SKILL_PONYTAIL`]：主规则正文，常驻注入系统提示。要求先读懂问题，
+//!   再爬「最小改动梯子」，末尾交代省了什么、有什么风险；档位 `lite` / `full` / `ultra` 由
+//!   [`filter_body`] 裁剪表格与示例行实现。
+//! - `ponytail-review` → [`SKILL_REVIEW`]：审一处改动（未提交/分支/PR/指定文件）。
+//!   按「正确 → 安全 → 扛得住负载 → 有测试 → 够快 → 够精简」排序，读改动周边的代码而非只看 diff，
+//!   逐条用平实语言解释，只出报告、不动代码。
+//! - `ponytail-audit` → [`SKILL_AUDIT`]：审整个仓库。找 bug、安全漏洞、高负载下会崩的点、
+//!   无测试的高风险代码、慢路径，以及该删/该合并/该拆分的东西，按严重程度排序输出，只出报告。
+//! - `ponytail-debt` → [`SKILL_DEBT`]：把全仓每个 `shortcut:`（及更早的 `ponytail:`）注释
+//!   收成一份技术债账本，防止「暂时这样」悄悄变成永久；也支持用户自定义标记词。
+//! - `ponytail-gain` → [`SKILL_GAIN`]：展示 ponytail 在基准测试里量到的收益（代码量、成本、速度），
+//!   纯展示，不改档位、不落盘。
+//! - `ponytail-help` → [`SKILL_HELP`]：档位与命令的速查卡，`/ponytail help` 在本机渲染，
+//!   不进模型上下文。
 //!
 //! **默认不启用**，声明 `Dev` 模式：它改写的是模型每一轮的写作风格，只能由用户显式打开。
 
@@ -85,7 +104,7 @@ const SKILL_DEBT: &str = embedded!("ponytail/skills/ponytail-debt/SKILL.md");
 /// `/ponytail gain` 投递的正文：benchmark 记分牌。
 const SKILL_GAIN: &str = embedded!("ponytail/skills/ponytail-gain/SKILL.md");
 
-/// `/ponytail help` 投递的正文：命令与档位速查。
+/// `/ponytail help` 本机打印的正文：命令与档位速查（不投递给模型）。
 const SKILL_HELP: &str = embedded!("ponytail/skills/ponytail-help/SKILL.md");
 
 /// 自声明工厂：linkme 分布式切片。
@@ -128,18 +147,6 @@ impl Level {
     fn label(self) -> &'static str {
         self.into()
     }
-
-    /// `/ponytail default <档位>` 候选里的完整写法。
-    ///
-    /// 输入框一提交就执行，所以候选不能只写 `default`——那样会立刻以缺参执行一次。
-    fn default_arg(self) -> &'static str {
-        match self {
-            Level::Off => "default off",
-            Level::Lite => "default lite",
-            Level::Full => "default full",
-            Level::Ultra => "default ultra",
-        }
-    }
 }
 
 /// `/ponytail` 能直接投递的检查清单：一份内嵌正文一个子命令。
@@ -154,12 +161,12 @@ enum Action {
     Debt,
     /// benchmark 记分牌。
     Gain,
-    /// 档位与子命令速查。
+    /// 档位与子命令速查：唯一一个只在本机打印、不投递给模型的子命令。
     Help,
 }
 
 impl Action {
-    /// 全部检查清单，也是子命令候选的展示顺序。
+    /// 全部子命令（含只在本机打印的 [`Action::Help`]），也是子命令候选的展示顺序。
     const ALL: [Action; 5] = [
         Action::Review,
         Action::Audit,
@@ -178,15 +185,15 @@ impl Action {
         format!("ponytail-{}", self.label())
     }
 
-    /// 该子命令投递的正文。
-    fn body(self) -> &'static str {
-        match self {
+    /// 该子命令投递给模型的正文；`None` 表示只在本机打印（[`Action::Help`]）。
+    fn body(self) -> Option<&'static str> {
+        Some(match self {
             Action::Review => SKILL_REVIEW,
             Action::Audit => SKILL_AUDIT,
             Action::Debt => SKILL_DEBT,
             Action::Gain => SKILL_GAIN,
-            Action::Help => SKILL_HELP,
-        }
+            Action::Help => return None,
+        })
     }
 
     /// 子命令候选里的一句话说明。
@@ -196,7 +203,7 @@ impl Action {
             Action::Audit => "Audit the whole repo: bugs, security, load, tests, speed, bloat",
             Action::Debt => "Harvest shortcut: comments into a debt ledger",
             Action::Gain => "Show ponytail's measured impact scoreboard",
-            Action::Help => "Quick reference for ponytail levels and commands",
+            Action::Help => "Print the ponytail levels and commands reference here",
         }
     }
 }
@@ -212,6 +219,8 @@ enum Cmd<'a> {
     SetDefault(Level),
     /// 投递某份检查清单，携带子命令之后的其余参数（目标 / 标记词，保留原样大小写）。
     Skill(Action, &'a str),
+    /// 在本机打印速查卡（[`Action::Help`]）：不进模型上下文，不花一个回合。
+    Help,
     /// 参数无法识别（触发错误提示）。
     Invalid,
 }
@@ -309,7 +318,10 @@ fn parse_cmd(arg: &str, current: Level, default: Level) -> Cmd<'_> {
     let keyword = primary.to_lowercase();
 
     if let Ok(action) = Action::from_str(&keyword) {
-        return Cmd::Skill(action, rest);
+        return match action.body() {
+            Some(_) => Cmd::Skill(action, rest),
+            None => Cmd::Help,
+        };
     }
 
     match keyword.as_str() {
@@ -467,7 +479,14 @@ fn command_ponytail(st: &mut App, cmd: &str) -> bool {
         }
         Cmd::Skill(action, args) => {
             // 清单走与输入框同一条投递路径：空闲开新回合，忙碌时 steer 进当前回合。
-            send_prompt(st, skill_block(&action.skill_name(), action.body(), args));
+            // `help` 在 `parse_cmd` 已分流到 [`Cmd::Help`]，这里取不到 `None`。
+            if let Some(body) = action.body() {
+                send_prompt(st, skill_block(&action.skill_name(), body, args));
+            }
+        }
+        Cmd::Help => {
+            // 速查卡只给人看：本地按 Markdown 渲染，不进 `messages`、不走 steer 队列。
+            st.push_msg_markdown(skill_body(SKILL_HELP), MsgLevel::Info);
         }
         Cmd::Invalid => st.push_msg(
             format!(
@@ -549,17 +568,16 @@ impl Extension for Ponytail {
             });
         }
 
-        for level in Level::RUNTIME {
-            subcommands.push(SubcommandDef {
-                name: level.default_arg(),
-                description: "Set the default level for future sessions",
-            });
-        }
+        // 子命令名不允许空白：`default` 的档位只写在说明里，Tab 补全后由用户敲档位
+        subcommands.push(SubcommandDef {
+            name: "default",
+            description: "Set the default level for future sessions (off|lite|full|ultra)",
+        });
 
         vec![ExtensionCommand {
             name: CMD.to_string(),
             description:
-                "Set the ponytail level (off|lite|full|ultra), report it, set the default, or run a checklist (review|audit|debt|gain|help)"
+                "Set the ponytail level (off|lite|full|ultra), report it, set the default, run a checklist (review|audit|debt|gain), or print the quick reference (help)"
                     .to_string(),
             busy_safe: true,
             subcommands,
@@ -739,9 +757,65 @@ mod tests {
             );
         }
 
-        // `default` 必须是完整写法，否则会在输入框里被立刻执行成非法参数
-        assert!(main.subcommands.iter().all(|s| s.name != "default"));
-        assert!(main.subcommands.iter().any(|s| s.name == "default ultra"));
+        // `default` 只有裸写法：子命令名不允许空白，档位写在它的说明里
+        assert!(main.subcommands.iter().any(|s| s.name == "default"));
+        assert!(
+            main.subcommands
+                .iter()
+                .all(|s| !s.name.chars().any(char::is_whitespace)),
+            "子命令名不得含空白：{:?}",
+            main.subcommands.iter().map(|s| s.name).collect::<Vec<_>>()
+        );
+    }
+
+    /// 声明的子命令要能穿过注册表的合法性过滤：一旦名字被判定非法，
+    /// 候选会从补全列表里消失，同时刷出「invalid name」告警。
+    #[test]
+    fn declared_subcommands_survive_the_registry() {
+        use crate::core::extensions::{
+            register_extension, registered_commands, registration_issues, set_extension_enabled,
+            set_extension_mode, unregister_extension,
+        };
+
+        let _g = crate::test_support::AUTH_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _ad = crate::test_support::AgentDirGuard::temp();
+        set_extension_mode(crate::core::extensions::ExtensionMode::All);
+        crate::core::settings_manager::write_disabled_extensions(&[]).ok();
+
+        // 本测试自带干净起点：同进程其它测试可能已注册过同名扩展
+        unregister_extension(EXT);
+        register_extension(Ponytail);
+        set_extension_enabled(EXT, true);
+
+        let issues = registration_issues().join("\n");
+        assert!(
+            !issues.contains("ponytail"),
+            "子命令声明不应被告警：{issues}"
+        );
+
+        let declared = registered_commands()
+            .into_iter()
+            .find(|c| c.name == CMD)
+            .expect("命令应出现在候选列表");
+        let expected: Vec<&str> = Ponytail.commands()[0]
+            .subcommands
+            .iter()
+            .map(|s| s.name)
+            .collect();
+        assert_eq!(
+            declared
+                .subcommands
+                .iter()
+                .map(|s| s.name)
+                .collect::<Vec<_>>(),
+            expected,
+            "声明过的子命令不得被注册表过滤掉"
+        );
+        assert!(declared.subcommands.iter().any(|s| s.name == "default"));
+
+        assert!(unregister_extension(EXT));
     }
 
     #[test]
@@ -763,6 +837,57 @@ mod tests {
             parse_cmd("review src/Foo.rs", Level::Full, Level::Full),
             Cmd::Skill(Action::Review, "src/Foo.rs")
         );
+    }
+
+    /// `help` 与四份清单必须分到两条路：只有它在本机打印。
+    #[test]
+    fn help_is_parsed_as_a_local_print() {
+        assert_eq!(parse_cmd("help", Level::Full, Level::Full), Cmd::Help);
+        assert_eq!(parse_cmd("HELP", Level::Full, Level::Full), Cmd::Help);
+        assert_eq!(Action::Help.body(), None);
+    }
+
+    /// `/ponytail help` 是本机渲染的速查卡：不投递、不占上下文，忙碌态也一样。
+    #[test]
+    fn help_prints_locally_and_never_reaches_the_model() {
+        let _guard = crate::test_support::AgentDirGuard::temp();
+
+        for busy in [false, true] {
+            let mut st = App::new();
+            st.busy = busy;
+            st.runtime_steer_inbox.lock().unwrap().clear();
+            st.messages.clear();
+            st.system_messages.clear();
+
+            assert!(!command_ponytail(&mut st, "/ponytail help"));
+
+            assert!(st.messages.is_empty(), "busy={busy}: help 不得进 messages");
+            assert!(
+                st.runtime_steer_inbox.lock().unwrap().is_empty(),
+                "busy={busy}: help 不得走 steer 队列"
+            );
+            assert!(
+                st.status_start.is_none(),
+                "busy={busy}: help 不得置 status_start"
+            );
+
+            let msg = st
+                .system_messages
+                .last()
+                .expect("help 应打印一条系统消息")
+                .1
+                .clone();
+            assert!(msg.markdown, "速查卡按 Markdown 渲染（含表格）");
+            let text = crate::modes::interactive::app::sys_msg_text(&msg);
+            assert!(
+                text.starts_with("# Ponytail Help"),
+                "frontmatter 应已剥掉：{text}"
+            );
+            assert!(
+                text.contains("| `/ponytail status` |"),
+                "正文应完整：{text}"
+            );
+        }
     }
 
     /// 忙碌时投递清单改走 steer 注入箱：忙碌态的 `status_start` 不会被消费，写了就等于丢消息。

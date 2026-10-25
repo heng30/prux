@@ -22,15 +22,16 @@
   The session level lives in a session entry (`ponytail-mode`), so resuming or switching a
   session replays it.
 
-- **Five checklists ship as `/ponytail` subcommands**: `/ponytail review [scope]` (quality
+- **Four checklists ship as `/ponytail` subcommands, a fifth prints locally**: `/ponytail review [scope]` (quality
   review of a change: bugs, security, load, missing tests, speed, what to cut — each finding
   says what the code does, what goes wrong, how to fix it and what happens if we skip it),
   `/ponytail audit [scope]` (the same review across the whole repo, ranked),
   `/ponytail debt [marker]` (harvest `shortcut:` comments into a debt ledger),
-  `/ponytail gain` (the published benchmark scoreboard) and `/ponytail help` (level and command
-  reference). Their text is embedded in the binary and delivered as a `<skill>` block when
-  invoked, so nothing is written to disk and no skill description leaks into the system prompt
-  while the extension is off; a checklist sent while a turn is running steers into that turn.
+  and `/ponytail gain` (the published benchmark scoreboard). Their text is embedded in the
+  binary and delivered as a `<skill>` block when invoked, so nothing is written to disk and no
+  skill description leaks into the system prompt while the extension is off; a checklist sent
+  while a turn is running steers into that turn. `/ponytail help` is different: its reference
+  card is rendered in the terminal itself, so it costs no turn and never lands in the history.
 
   Off by default and available in `Dev` mode only: it rewrites how the model writes in every
   turn, so it has to be switched on explicitly.
@@ -60,13 +61,13 @@
   `/ponytail default <档位>` 把 `defaultMode` 写进 `agent_dir()/extensions/ponytail.json`。
   本会话档位记在会话自定义条目（`ponytail-mode`）里，恢复或切换会话时重放。
 
-- **扩展自带五个检查清单，都是 `/ponytail` 的子命令**：`/ponytail review [目标]`（改动
+- **扩展自带五个检查清单，都是 `/ponytail` 的子命令（前四个投递给模型，`help` 在本机打印）**：`/ponytail review [目标]`（改动
   审查：bug、安全、真实负载、缺测试、性能、可删的代码——每条都说明这段代码在做什么、
   哪里会出错、怎么修、不修会怎样）、`/ponytail audit [目标]`（同一套审查跑全仓，按严重度
   排序）、`/ponytail debt [标记词]`（把 `shortcut:` 注释收成债务账本）、`/ponytail gain`
-  （已发布的 benchmark 记分牌）、`/ponytail help`（档位与命令速查）。这些正文随二进制内嵌，
-  执行时作为 `<skill>` 块投递给模型，不落盘；扩展关闭时也不会有技能描述漏进系统提示。
-  回合运行中投递清单会作为 steer 插进当前回合。
+  （已发布的 benchmark 记分牌）。这些正文随二进制内嵌，执行时作为 `<skill>` 块投递给模型，
+  不落盘；扩展关闭时也不会有技能描述漏进系统提示。回合运行中投递清单会作为 steer 插进当前回合。
+  而 `/ponytail help` 的速查卡直接在终端里渲染：不花一个回合，也不进会话历史。
 
   默认不启用，仅在 `Dev` 模式下可用：它改写的是模型每一轮的写作风格，必须由用户显式开启。
 

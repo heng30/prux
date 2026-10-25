@@ -1563,7 +1563,7 @@ mod tests {
     }
 
     /// pi #10054：命令名为空 / 含 `/` 或空白时，声明整体丢弃并告警，
-    /// 而不是让 `/` 候选列表出现空条目、并被任何前缀命中。
+    /// 而不是让 `/` 候选列表出现空条目、并被任何前缀命中。子命令名同一套规则。
     #[test]
     fn invalid_command_names_are_reported_and_ignored() {
         let _g = crate::test_support::AUTH_TEST_LOCK
@@ -1602,11 +1602,19 @@ mod tests {
                         subcommands: vec![
                             SubcommandDef {
                                 name: "",
-                                description: "bad sub",
+                                description: "empty sub",
+                            },
+                            SubcommandDef {
+                                name: "bad/sub",
+                                description: "slash sub",
                             },
                             SubcommandDef {
                                 name: "ok sub",
-                                description: "bad sub",
+                                description: "sub with a space",
+                            },
+                            SubcommandDef {
+                                name: "pause",
+                                description: "valid sub",
                             },
                         ],
                     },
@@ -1637,7 +1645,11 @@ mod tests {
             .iter()
             .find(|c| c.name == "good-cmd")
             .expect("合法命令仍应保留");
-        assert!(good.subcommands.is_empty(), "非法子命令应被丢弃");
+        assert_eq!(
+            good.subcommands.iter().map(|s| s.name).collect::<Vec<_>>(),
+            vec!["pause"],
+            "空名、带空白与含 `/` 的子命令丢弃，合法子命令保留"
+        );
         assert!(crate::core::extensions::command_provider("").is_none());
         assert!(crate::core::extensions::command_provider("bad/name").is_none());
 
