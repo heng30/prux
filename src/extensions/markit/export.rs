@@ -19,7 +19,7 @@ use crate::{
     extensions::util::{heading_level, truncate_chars},
     utils::{
         paths::resolve_path,
-        text::{code_fence, escape_special, has_cjk},
+        text::{code_fence, escape_special, has_cjk, pick_font_family, related_font_families},
     },
 };
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
@@ -96,6 +96,10 @@ const CJK_NAME_HINTS: &[&str] = &[
 /// `typst fonts` 的结果缓存：系统字体在一次会话里基本不变，扫一次就够。
 static FONT_FAMILIES: OnceLock<Vec<String>> = OnceLock::new();
 
+/// Typst 渲染不出来的可变字体家族缓存（小写）：
+/// 选中它们时中文字形全部变空框，且**不会**回退到列表里的下一个家族，所以必须在挑选前排除。
+static VARIABLE_FAMILIES: OnceLock<Vec<String>> = OnceLock::new();
+
 /// `export_pdf` 工具的执行体：校验参数 → 拼 Typst 源 → 写临时 `.typ` → 调 `typst compile`。
 ///
 /// typst 不在 `$PATH` 里时返回带下载地址的 [`ToolError`]；编译失败时返回 typst 自己的
@@ -114,7 +118,11 @@ pub async fn run(args: &Value, ctx: &ToolExecCtx) -> Result<ToolResult, ToolErro
         .map_err(|e| ToolError(missing_typst_message(&e)))?;
 
     let cjk = if has_cjk(content) {
-        pick_cjk_family(&font_families().await)
+        pick_font_family(
+            &usable_families(font_families().await).await,
+            CJK_CANDIDATES,
+            CJK_NAME_HINTS,
+        )
     } else {
         None
     };
@@ -189,7 +197,9 @@ fn preamble(cjk: Option<&str>) -> String {
         "#show raw: set text(font: {})\n",
         family_list(&raw)
     ));
-    source.push_str("#set par(leading: 0.7em)\n\n");
+    source.push_str("#set par(leading: 0.7em)\n");
+    source.push_str("#show heading.where(level: 1): set align(center)\n");
+    source.push_str("#show heading.where(level: 1): set text(size: 18pt, weight: \"bold\")\n\n");
     source
 }
 
@@ -200,21 +210,6 @@ fn family_list(families: &[&str]) -> String {
         .map(|f| format!("\"{}\"", escape_special(f, STRING_SPECIALS)))
         .collect();
     format!("({})", quoted.join(", "))
-}
-
-/// 从系统字体族里挑一个能写 CJK 的：先按候选表顺序找，再按名字关键字兜底。
-///
-/// 返回 `None` 表示系统里没有可用的 CJK 字体族。
-fn pick_cjk_family(families: &[String]) -> Option<String> {
-    for want in CJK_CANDIDATES {
-        if let Some(found) = families.iter().find(|f| f.eq_ignore_ascii_case(want)) {
-            return Some(found.clone());
-        }
-    }
-    families
-        .iter()
-        .find(|f| CJK_NAME_HINTS.iter().any(|hint| f.contains(hint)))
-        .cloned()
 }
 
 /// 把 Markdown 转成 Typst 标记（不含前言，前言由 [`preamble`] 拼）。
@@ -243,27 +238,41 @@ fn to_typst(md: &str) -> String {
         match event {
             Event::Start(Tag::Heading { level, .. }) => {
                 conv.blank_line();
+                conv.title_pending = false;
                 conv.push(&"=".repeat(heading_level(level)));
                 conv.push(" ");
             }
-            Event::End(TagEnd::Heading(_)) => conv.blank_line(),
+            Event::End(TagEnd::Heading(level)) => {
+                conv.blank_line();
+                conv.title_pending = heading_level(level) == 1;
+            }
+            Event::Start(Tag::Paragraph) => {
+                if conv.title_pending {
+                    conv.subtitle = Some(String::new());
+                }
+            }
             Event::End(TagEnd::Paragraph) => {
                 if conv.cell.is_some() {
                     conv.push(" ");
-                } else {
+                } else if !conv.finish_subtitle() {
                     conv.blank_line();
                 }
+                conv.title_pending = false;
             }
             Event::Start(Tag::BlockQuote(_)) => {
                 conv.blank_line();
-                conv.push("#quote(block: true)[\n");
+                conv.title_pending = false;
+                conv.push("#block(fill: luma(243), inset: 9pt, radius: 3pt, width: 100%, text(size: 9.8pt)[\n");
             }
             Event::End(TagEnd::BlockQuote(_)) => {
                 conv.trim_newlines();
-                conv.push("\n]");
+                conv.push("\n])");
                 conv.blank_line();
             }
-            Event::Start(Tag::List(start)) => conv.lists.push(start.is_some()),
+            Event::Start(Tag::List(start)) => {
+                conv.title_pending = false;
+                conv.lists.push(start.is_some())
+            }
             Event::End(TagEnd::List(_)) => {
                 conv.lists.pop();
                 if conv.lists.is_empty() {
@@ -280,6 +289,7 @@ fn to_typst(md: &str) -> String {
             Event::End(TagEnd::Item) => conv.newline(),
             Event::Start(Tag::CodeBlock(kind)) => {
                 conv.blank_line();
+                conv.title_pending = false;
                 let lang = match kind {
                     CodeBlockKind::Fenced(info) => info.trim().to_string(),
                     CodeBlockKind::Indented => String::new(),
@@ -303,6 +313,7 @@ fn to_typst(md: &str) -> String {
             Event::End(TagEnd::Image) => conv.push("]"),
             Event::Start(Tag::Table(aligns)) => {
                 conv.blank_line();
+                conv.title_pending = false;
                 conv.push(&format!(
                     "#table(columns: {}, stroke: 0.5pt, inset: 6pt,\n",
                     aligns.len()
@@ -341,7 +352,16 @@ fn to_typst(md: &str) -> String {
     conv.finish()
 }
 
-/// 转换过程中的状态：输出缓冲、当前表格单元缓冲与列表嵌套栈。
+/// 整段被单个 `_..._` 包裹时返回内部文本：Markdown 里紧跟标题的 `*副标题*` 行。
+///
+/// 段内不允许再出现 `_`——否则是「强调开头、正文结尾」的普通段落，不能整段当副标题。
+fn subtitle_text(paragraph: &str) -> Option<&str> {
+    let trimmed = paragraph.trim();
+    let inner = trimmed.strip_prefix('_')?.strip_suffix('_')?;
+    (!inner.is_empty() && !inner.contains('_')).then_some(inner.trim())
+}
+
+/// 转换过程中的状态：输出缓冲、表格单元与副标题的临时缓冲、列表嵌套栈。
 ///
 /// 表格单元的内容先写进 `cell`，到行尾才拼成 `[...],`——Typst 的表格是一行参数列表，
 /// 不能边写边换行。
@@ -351,6 +371,10 @@ struct Converter {
     out: String,
     /// `Some` 表示正在写表格单元，此时所有写入都落到这里。
     cell: Option<String>,
+    /// `Some` 表示正在缓冲一级标题后的第一段（副标题候选），到段尾才决定怎么排。
+    subtitle: Option<String>,
+    /// 上一块是一级标题：下一段若是斜体段则排成灰色居中副标题。
+    title_pending: bool,
     /// 列表嵌套栈：每个元素表示那一层是不是有序列表。
     lists: Vec<bool>,
 }
@@ -358,18 +382,20 @@ struct Converter {
 impl Converter {
     /// 原样写入片段（调用方负责转义）。
     fn push(&mut self, text: &str) {
-        match &mut self.cell {
-            Some(cell) => cell.push_str(text),
-            None => self.out.push_str(text),
+        match (&mut self.cell, &mut self.subtitle) {
+            (Some(cell), _) => cell.push_str(text),
+            (None, Some(subtitle)) => subtitle.push_str(text),
+            (None, None) => self.out.push_str(text),
         }
     }
 
     /// 写用户文本：转义 Typst 标记字符，并给行首的结构字符补反斜杠。
     fn push_text(&mut self, raw: &str) {
         let escaped = escape_special(raw, MARKUP_SPECIALS);
-        let at_line_start = match &self.cell {
-            Some(cell) => cell.is_empty() || cell.ends_with('\n'),
-            None => self.out.is_empty() || self.out.ends_with('\n'),
+        let at_line_start = match (&self.cell, &self.subtitle) {
+            (Some(cell), _) => cell.is_empty() || cell.ends_with('\n'),
+            (None, Some(subtitle)) => subtitle.is_empty() || subtitle.ends_with('\n'),
+            (None, None) => self.out.is_empty() || self.out.ends_with('\n'),
         };
         if at_line_start && escaped.starts_with(['-', '+', '=', '/']) {
             self.push("\\");
@@ -377,16 +403,43 @@ impl Converter {
         self.push(&escaped);
     }
 
-    /// 收尾当前行（不产生空行）；表格单元里不需要换行。
+    /// 段尾收下副标题候选：整段被单个 `_..._` 包裹就排成灰色居中副标题，否则按普通段落放回主线。
+    ///
+    /// 返回是否当成了副标题（此时输出已写完）。
+    fn finish_subtitle(&mut self) -> bool {
+        let Some(buffered) = self.subtitle.take() else {
+            return false;
+        };
+        match subtitle_text(&buffered) {
+            Some(text) => {
+                self.blank_line();
+                self.push(&format!(
+                    "#align(center)[#text(size: 9pt, fill: luma(110))[{text}]]"
+                ));
+                self.blank_line();
+                true
+            }
+            None => {
+                self.push(&buffered);
+                false
+            }
+        }
+    }
+
+    /// 收尾当前行（不产生空行）；表格单元与副标题缓冲里不需要换行。
     fn newline(&mut self) {
-        if self.cell.is_none() && !self.out.is_empty() && !self.out.ends_with('\n') {
+        if self.cell.is_none()
+            && self.subtitle.is_none()
+            && !self.out.is_empty()
+            && !self.out.ends_with('\n')
+        {
             self.out.push('\n');
         }
     }
 
-    /// 结束当前块：抹掉行尾换行后统一补一个空行；表格单元里只留一个空格。
+    /// 结束当前块：抹掉行尾换行后统一补一个空行；表格单元与副标题缓冲里什么都不做。
     fn blank_line(&mut self) {
-        if self.cell.is_some() {
+        if self.cell.is_some() || self.subtitle.is_some() {
             return;
         }
         while self.out.ends_with('\n') {
@@ -511,6 +564,72 @@ async fn font_families() -> Vec<String> {
     families
 }
 
+/// 去掉 Typst 渲染不出来的可变字体家族，剩下的才能进 `#set text(font: ..)`。
+async fn usable_families(families: Vec<String>) -> Vec<String> {
+    let unusable = variable_families(&families).await;
+    families
+        .into_iter()
+        .filter(|family| !unusable.iter().any(|bad| bad.eq_ignore_ascii_case(family)))
+        .collect()
+}
+
+/// 探出可变字体家族（小写），结果进 [`VARIABLE_FAMILIES`] 缓存；探测失败时缓存空表。
+async fn variable_families(families: &[String]) -> Vec<String> {
+    if let Some(cached) = VARIABLE_FAMILIES.get() {
+        return cached.clone();
+    }
+
+    let suspects = related_font_families(families, CJK_CANDIDATES, CJK_NAME_HINTS);
+    let found = if suspects.is_empty() {
+        Vec::new()
+    } else {
+        probe_variable_fonts(&suspects).await.unwrap_or_default()
+    };
+    _ = VARIABLE_FAMILIES.set(found.clone());
+    found
+}
+
+/// 把可疑家族各写一段中文交给 typst 编译，从 warning 里取回可变字体家族名。
+///
+/// Typst 遇到可变字体只发 warning（`hint: try installing a static version of "x" instead`），
+/// 一次编译可以问出全部不可用的家族；编译本身失败时返回 `None`，调用方当作没有可变字体。
+async fn probe_variable_fonts(suspects: &[String]) -> Option<Vec<String>> {
+    let dir = tempfile::Builder::new()
+        .prefix("prux-font")
+        .tempdir()
+        .ok()?;
+
+    let mut source = String::from("#set text(size: 12pt)\n");
+    for family in suspects {
+        source.push_str(&format!(
+            "#text(font: {})[中文]\n\n",
+            family_list(&[family.as_str()])
+        ));
+    }
+
+    let input = dir.path().join("probe.typ");
+    std::fs::write(&input, source).ok()?;
+    let stderr = compile_typst(&input, &dir.path().join("probe.pdf"))
+        .await
+        .ok()?;
+    Some(parse_variable_families(&stderr))
+}
+
+/// 从 typst stderr 的当行取可变字体家族名（警告里的 hint 会给出小写家族名）。
+///
+/// 认的是 `hint: try installing a static version of "x" instead` 这一行，
+/// 警告首行与代码片段行里的家族名不会误采。
+fn parse_variable_families(stderr: &str) -> Vec<String> {
+    stderr
+        .lines()
+        .filter_map(|line| {
+            let (_, rest) = line.split_once("try installing a static version of \"")?;
+            let (family, _) = rest.split_once('"')?;
+            Some(family.to_string())
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -527,13 +646,13 @@ mod tests {
         assert!(out.contains("\n\n== Sub\n"), "{out}");
     }
 
-    /// 列表嵌套按缩进表达，有序列表用 `+`；引用包一层 `#quote`。
+    /// 列表嵌套按缩进表达，有序列表用 `+`；引用包一层灰底块。
     #[test]
     fn converts_lists_and_quotes() {
         let out = to_typst("- a\n  - b\n1. c\n\n> quoted\n");
         assert!(out.contains("- a\n  - b\n"), "{out}");
         assert!(out.contains("+ c\n"), "{out}");
-        assert!(out.contains("#quote(block: true)[\nquoted\n]"), "{out}");
+        assert!(out.contains("\nquoted\n]"), "{out}");
     }
 
     /// 表格每格一行 `[...],`，列数取对齐表长度。
@@ -576,26 +695,59 @@ mod tests {
         assert!(out.contains("$a^2$"), "{out}");
     }
 
-    /// 候选表命中：优先挑名字完全对上的那个。
+    /// 字体族列表按 Typst 数组字面量拼，名字里的引号要转义。
     #[test]
-    fn picks_cjk_family_from_candidates() {
-        let families = vec![
-            "DejaVu Sans Mono".to_string(),
-            "WenQuanYi Zen Hei".to_string(),
-            "Noto Sans SC".to_string(),
-        ];
-        assert_eq!(pick_cjk_family(&families).as_deref(), Some("Noto Sans SC"));
+    fn family_list_quotes_names() {
+        assert_eq!(
+            family_list(&["Libertinus Serif", "Noto Sans SC"]),
+            "(\"Libertinus Serif\", \"Noto Sans SC\")"
+        );
+        assert_eq!(family_list(&["a\"b"]), "(\"a\\\"b\")");
     }
 
-    /// 候选表全落空时按关键字兜底，兜不到就返回 None（正文会是无字空框）。
+    /// 可变字体的家族名只在 hint 行里，警告首行与代码片段行不能误采。
     #[test]
-    fn falls_back_to_name_hints() {
-        let families = vec!["Libertinus Serif".to_string(), "Sarasa Mono HC".to_string()];
+    fn parses_variable_family_from_hint() {
+        let stderr = "warning: variable fonts are not currently supported and may render incorrectly\n  \u{250c}\u{2500} p.typ:2:12\n  \u{2502}\n2 \u{2502} #text(font: \"Noto Sans CJK SC\")[\u{4e2d}\u{6587}]\n  \u{2502}\n  = hint: try installing a static version of \"noto sans cjk sc\" instead\n";
         assert_eq!(
-            pick_cjk_family(&families).as_deref(),
-            Some("Sarasa Mono HC")
+            parse_variable_families(stderr),
+            vec!["noto sans cjk sc".to_string()]
         );
-        assert_eq!(pick_cjk_family(&["Libertinus Serif".to_string()]), None);
+        assert!(parse_variable_families("").is_empty());
+    }
+
+    /// 一级标题后的斜体段排成灰色居中副标题，普通段落不受影响。
+    #[test]
+    fn renders_italic_paragraph_after_title_as_subtitle() {
+        let out = to_typst("# 电路基础自测问卷\n*学习前摸底 · 单选 3 题*\n\n正文首句。\n");
+        assert!(
+            out.contains(
+                "#align(center)[#text(size: 9pt, fill: luma(110))[学习前摸底 · 单选 3 题]]"
+            ),
+            "{out}"
+        );
+        assert!(out.contains("正文首句。"), "{out}");
+        assert!(!out.contains("luma(110))[正文首句。]"), "{out}");
+    }
+
+    /// 标题后第一段不是整段斜体时就是普通段落，不能被当成副标题。
+    #[test]
+    fn keeps_plain_paragraph_after_title() {
+        let out = to_typst("# 项目说明\n这是正文首句，不是副标题。\n");
+        assert!(!out.contains("luma(110)"), "{out}");
+        assert!(out.contains("这是正文首句，不是副标题。"), "{out}");
+    }
+
+    /// 引用块排成灰底圆角块（模版里的提示框）。
+    #[test]
+    fn renders_blockquote_as_tinted_box() {
+        let out = to_typst("> 用法：先遮住答案\n");
+        assert!(
+            out.contains(
+                "#block(fill: luma(243), inset: 9pt, radius: 3pt, width: 100%, text(size: 9.8pt)["
+            ),
+            "{out}"
+        );
     }
 
     /// 前言按是否带 CJK 家族切换：带则追加到正文字体族列表并把 lang 设为中文。
@@ -613,6 +765,12 @@ mod tests {
             cjk.contains("#show raw: set text(font: (\"DejaVu Sans Mono\", \"Noto Sans SC\"))")
         );
         assert!(cjk.contains("#set text(lang: \"zh\")"));
+    }
+
+    /// 一级标题（文档标题）居中，其余层级保持左对齐。
+    #[test]
+    fn preamble_centers_the_title() {
+        assert!(preamble(None).contains("#show heading.where(level: 1): set align(center)"));
     }
 
     /// 缺 typst 的提示必须带下载地址，否则模型只会盲目重试。
@@ -645,7 +803,12 @@ mod tests {
         let bytes = std::fs::read(dir.join("out.pdf")).unwrap();
         assert!(bytes.starts_with(b"%PDF"), "not a PDF");
 
-        let has_cjk_font = pick_cjk_family(&font_families().await).is_some();
+        let has_cjk_font = pick_font_family(
+            &usable_families(font_families().await).await,
+            CJK_CANDIDATES,
+            CJK_NAME_HINTS,
+        )
+        .is_some();
         assert_eq!(
             result.text.contains("Chinese text will render"),
             !has_cjk_font,

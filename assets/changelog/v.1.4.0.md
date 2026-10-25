@@ -64,7 +64,11 @@
   answers with that download URL and tells the model to relay it instead of retrying. When the
   source contains CJK text it asks `typst fonts` which families exist and puts one into
   `#set text(font: (..))` — Typst never falls back on its own, so without that step Chinese
-  would come out as empty boxes. Parameters: `content` and an optional `path` (`output.pdf`).
+  would come out as empty boxes. Variable font families are probed once with a throwaway compile
+  and dropped from that list: Typst renders them as empty boxes too, and it does not fall through
+  to the next family. Layout: the level-1 heading is centered, an italic paragraph right after it
+  becomes a grey centered subtitle, and block quotes become tinted rounded boxes.
+  Parameters: `content` and an optional `path` (`output.pdf`).
 
 ### Fixed
 
@@ -156,7 +160,9 @@
   源文件写在临时目录，只在目标位置留下 `.pdf`。**不内嵌排版引擎**：`$PATH` 里没有 `typst`
   时直接回下载地址，让模型转告用户而不是反复重试。正文含中文时先跑 `typst fonts` 问系统
   装了哪些字体族，挑一个拼进 `#set text(font: (..))`——Typst 不做隐式回退，少了这步中文会
-  变成空框。参数：`content` 与可选的 `path`（默认 `output.pdf`）。
+  变成空框。可变字体家族先用一次试编译探出来再排除：它们同样会渲染成空框，而且不会回退到
+  列表里的下一个家族。排版上：一级标题居中，紧跟其后的整段斜体排成灰色居中副标题，引用块排成
+  灰底圆角框。参数：`content` 与可选的 `path`（默认 `output.pdf`）。
 
 ### 修复
 

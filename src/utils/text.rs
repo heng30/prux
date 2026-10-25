@@ -3,7 +3,8 @@
 //! 面向**词法检索**的一组纯函数：把查询切成词元（CJK 按相邻二字组合展开）、找出命中位置、
 //! 围绕命中点取一段可读摘录。不含打分策略——词元上限、加权系数、停用词之外的过滤
 //! 都由调用方决定。另带几个与检索无关的通用小工具：[`has_cjk`]（按语种换字体之类的判定）、
-//! [`code_fence`]（按内容定代码围栏长度）与 [`escape_special`]（按字符集合做反斜杠转义）。
+//! [`code_fence`]（按内容定代码围栏长度）与 [`escape_special`]（按字符集合做反斜杠转义），
+//! 外加按候选表匹配字体族的 [`pick_font_family`] / [`related_font_families`]。
 
 /// 停用词表：只由这些词构成的查询没有检索价值。
 ///
@@ -291,6 +292,46 @@ pub fn excerpt_containing(text: &str, needles: &[String], max_chars: usize) -> S
     out
 }
 
+/// 按 `candidates` 的顺序挑第一个存在的字体族，全落空时按 `hints` 关键字兜底。
+///
+/// 两个表都由调用方提供（顺序与内容随排版后端而变），本函数只做名字匹配；
+/// 返回 `None` 表示一个都没有。
+pub fn pick_font_family(
+    families: &[String],
+    candidates: &[&str],
+    hints: &[&str],
+) -> Option<String> {
+    for want in candidates {
+        if let Some(found) = families.iter().find(|f| f.eq_ignore_ascii_case(want)) {
+            return Some(found.clone());
+        }
+    }
+    families
+        .iter()
+        .find(|f| hints.iter().any(|hint| f.contains(hint)))
+        .cloned()
+}
+
+/// 与 `candidates` / `hints` 匹配的字体族子集，保持输入顺序。
+///
+/// 给「逐个家族试渲染」的探针用——系统字体常有几百个，全测太慢。
+pub fn related_font_families(
+    families: &[String],
+    candidates: &[&str],
+    hints: &[&str],
+) -> Vec<String> {
+    families
+        .iter()
+        .filter(|family| {
+            candidates
+                .iter()
+                .any(|want| family.eq_ignore_ascii_case(want))
+                || hints.iter().any(|hint| family.contains(hint))
+        })
+        .cloned()
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -436,5 +477,46 @@ mod tests {
 
         assert!(case_insensitive_matches("anything", "").is_empty());
         assert!(case_insensitive_matches("anything", "absent").is_empty());
+    }
+
+    /// 候选表顺序优先于字体列表顺序，全落空才按关键字兜底，兜不到返回 None。
+    #[test]
+    fn pick_font_family_follows_candidate_order() {
+        let families = vec![
+            "Zen Hei".to_string(),
+            "Source Han Sans SC".to_string(),
+            "Fallback Han Sans".to_string(),
+        ];
+        let candidates = ["Source Han Sans SC", "Zen Hei"];
+        assert_eq!(
+            pick_font_family(&families, &candidates, &["Han Sans"]).as_deref(),
+            Some("Source Han Sans SC")
+        );
+        assert_eq!(
+            pick_font_family(&families, &["Missing"], &["Fallback"]).as_deref(),
+            Some("Fallback Han Sans")
+        );
+        assert_eq!(
+            pick_font_family(
+                &["Libertinus Serif".to_string()],
+                &candidates,
+                &["Han Sans"]
+            ),
+            None
+        );
+    }
+
+    /// 相关家族子集保持输入顺序，未命中候选表也没有关键字的家族不进来。
+    #[test]
+    fn related_font_families_keeps_input_order() {
+        let families = vec![
+            "Libertinus Serif".to_string(),
+            "Zen Hei".to_string(),
+            "Sarasa Mono HC".to_string(),
+        ];
+        assert_eq!(
+            related_font_families(&families, &["Zen Hei"], &["Sarasa"]),
+            vec!["Zen Hei".to_string(), "Sarasa Mono HC".to_string()]
+        );
     }
 }
