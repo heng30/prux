@@ -14,6 +14,7 @@ use crate::{
         settings_manager::agent_dir,
     },
     extensions::util::cycle_setting,
+    utils::paths::write_json_file,
 };
 use serde_json::{Value, json};
 use std::{
@@ -873,19 +874,14 @@ fn read_json(path: &Path, cache: &ConfigCache) -> Option<Value> {
 pub(super) fn write_config(path: &Path, cfg: &SubagentConfig) {
     let _guard = CONFIG_LOCK.write().unwrap_or_else(|e| e.into_inner());
 
-    if let Some(parent) = path.parent() {
-        _ = fs::create_dir_all(parent);
-    }
-
-    if let Ok(text) = serde_json::to_string_pretty(&cfg.to_json())
-        && fs::write(path, format!("{text}\n")).is_ok()
-    {
+    let value = cfg.to_json();
+    if write_json_file(path, &value).is_ok() {
         let cache = if path == config_path() {
             &GLOBAL_CONFIG_CACHE
         } else {
             &PROJECT_CONFIG_CACHE
         };
-        cache.store(path, cfg.to_json());
+        cache.store(path, value);
     }
 }
 

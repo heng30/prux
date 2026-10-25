@@ -5,7 +5,7 @@ description: >
   load, risky code without tests, slow paths, and what to delete, merge or
   split. Ranked, each finding explained in plain words. One-shot report,
   changes nothing. Use for "audit this codebase", "review the whole repo",
-  "find bloat", "what can I delete", /ponytail-audit.
+  "find bloat", "what can I delete", /ponytail audit.
 ---
 
 Audit the whole repo like the senior developer who just inherited it and

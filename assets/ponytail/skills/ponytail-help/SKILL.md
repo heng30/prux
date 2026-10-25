@@ -2,7 +2,7 @@
 name: ponytail-help
 description: >
   Quick reference for ponytail levels and commands. One-shot display.
-  Use for /ponytail-help, "ponytail help", "how do I use ponytail".
+  Use for /ponytail help, "ponytail help", "how do I use ponytail".
 ---
 
 # Ponytail Help
@@ -28,16 +28,15 @@ Level sticks until changed, the extension is disabled, or the session ends.
 | `/ponytail lite\|full\|ultra\|off` | Set the level for this session. |
 | `/ponytail status` | Report the session level and the default level. |
 | `/ponytail default <lite\|full\|ultra\|off>` | Set the default level for future sessions. |
-| `/ponytail-review` | Quality review of a change: bugs, security, load, missing tests, speed, what to cut. Each finding says what goes wrong and how to fix it. |
-| `/ponytail-audit` | The same quality review for the whole repo, ranked. |
-| `/ponytail-debt` | Harvest `shortcut:` comments into a tracked ledger. |
-| `/ponytail-gain` | Measured-impact scoreboard: less code, less cost, more speed. |
-| `/ponytail-help` | This card. |
+| `/ponytail review [scope]` | Quality review of a change: bugs, security, load, missing tests, speed, what to cut. Each finding says what goes wrong and how to fix it. |
+| `/ponytail audit [scope]` | The same quality review for the whole repo, ranked. |
+| `/ponytail debt [marker]` | Harvest `shortcut:` comments into a tracked ledger. |
+| `/ponytail gain` | Measured-impact scoreboard: less code, less cost, more speed. |
+| `/ponytail help` | This card. |
 
 ## Deactivate
 
-Say "stop ponytail" or "normal mode". Resume anytime with `/ponytail`.
-`/ponytail off` also works.
+`/ponytail off` turns it off for this session. Resume anytime with `/ponytail`.
 
 ## Configure the default level
 

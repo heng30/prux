@@ -40,7 +40,10 @@ use crate::{
         tools::ToolError,
     },
     error::Result,
-    extensions::{EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_PLAN_MODE, command_arg},
+    extensions::{
+        EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_PLAN_MODE, command_arg,
+        util::{push_context, send_prompt},
+    },
     modes::interactive::{
         agent_actor::AgentCommand,
         app::{App, MsgLevel, SysSpan},
@@ -1178,11 +1181,6 @@ fn is_injected_plan_context(m: &AgentMessage) -> bool {
     text.starts_with(PLAN_MODE_MARKER) || text.starts_with(EXECUTING_MARKER)
 }
 
-/// 注入一条用户态上下文消息（不落 session，仅本轮内存上下文）
-fn push_context(messages: &mut Vec<AgentMessage>, text: &str) {
-    messages.push(AgentMessage::user_text(text));
-}
-
 /// `/plan [text]`：无参数切换 plan mode；带参数时先确保进入 plan mode（只读工具集生效），
 /// 再把参数作为输入发送（经 `status_start` 触发下一轮，与扩展 follow-up 同路径）。
 fn command_plan(st: &mut App, cmd: &str) -> bool {
@@ -1193,10 +1191,7 @@ fn command_plan(st: &mut App, cmd: &str) -> bool {
     }
 
     enable_plan_ui(st);
-
-    let text = arg.to_string();
-    st.messages.push(AgentMessage::user_text(&text));
-    st.status_start = Some(text);
+    send_prompt(st, arg.to_string());
     false
 }
 

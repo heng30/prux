@@ -8,7 +8,10 @@
 //! 损坏或非对象文件不覆盖（读回缺省）。写入一律是"读-改-写"，保留其它键。
 
 use super::super::util::str_field;
-use crate::core::{config_cache::ConfigCache, settings_manager::agent_dir};
+use crate::{
+    core::{config_cache::ConfigCache, settings_manager::agent_dir},
+    utils::paths::write_json_file,
+};
 use serde_json::{Value, json};
 use std::{
     fs,
@@ -237,14 +240,8 @@ fn read_file_value(path: &Path) -> Option<Value> {
 fn write_config(path: &Path, cfg: &JetConfig) {
     let _guard = CONFIG_LOCK.write().unwrap_or_else(|e| e.into_inner());
 
-    if let Some(parent) = path.parent() {
-        _ = fs::create_dir_all(parent);
-    }
-
     let value = to_value(cfg);
-    if let Ok(text) = serde_json::to_string_pretty(&value)
-        && fs::write(path, format!("{text}\n")).is_ok()
-    {
+    if write_json_file(path, &value).is_ok() {
         CONFIG_CACHE.store(path, value);
     }
 }

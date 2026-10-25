@@ -9,7 +9,10 @@
 //!
 //! 文件缺失或损坏时按「未配置」处理，**不覆盖**用户手写内容（仅在扩展写配置时落盘）。
 
-use crate::core::{config_cache::ConfigCache, settings_manager::agent_dir};
+use crate::{
+    core::{config_cache::ConfigCache, settings_manager::agent_dir},
+    utils::paths::write_json_file,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{path::PathBuf, sync::RwLock};
@@ -68,14 +71,11 @@ pub fn save(cfg: &ProxyConfig) {
     let path = config_path();
     let _guard = CONFIG_LOCK.write().unwrap_or_else(|e| e.into_inner());
 
-    if let Some(parent) = path.parent() {
-        _ = std::fs::create_dir_all(parent);
-    }
+    let Ok(value) = serde_json::to_value(cfg) else {
+        return;
+    };
 
-    if let Ok(text) = serde_json::to_string_pretty(cfg)
-        && std::fs::write(&path, format!("{text}\n")).is_ok()
-        && let Ok(value) = serde_json::to_value(cfg)
-    {
+    if write_json_file(&path, &value).is_ok() {
         CONFIG_CACHE.store(&path, value);
     }
 }

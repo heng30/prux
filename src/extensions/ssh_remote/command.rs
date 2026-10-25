@@ -732,6 +732,17 @@ fn lookup_ssh_config(alias: &str) -> Option<SshHost> {
 mod tests {
     use super::*;
 
+    /// 串行化「会往进程级 UI 队列推通知」的用例。
+    ///
+    /// `handle` 走到 `notify_text` 就把请求推进全局队列，而 subagent / plan_mode 的
+    /// 用例会读同一队列并断言「没有多余通知」；不串行时它们会抓到本文件的请求。
+    /// 锁序：AUTH → [`state::TEST_ROOT_LOCK`]（与其它持锁用例一致）。
+    fn auth_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        crate::test_support::AUTH_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
     #[test]
     fn parses_plain_target() {
         let ep = parse_ssh_command("ssh root@gpu.example.com:2202 -i ~/.ssh/id_ed25519").unwrap();
@@ -809,6 +820,7 @@ mod tests {
     /// `remove` 同时清配置、主机密钥与凭据；`forget` 只动主机密钥。
     #[test]
     fn remove_drops_target_and_forget_keeps_it() {
+        let _auth = auth_test_lock();
         let _lock = state::TEST_ROOT_LOCK.blocking_lock();
         let _root = state::TestRootGuard::temp();
         let mut app = App::new();
@@ -833,7 +845,9 @@ mod tests {
 
     /// 登录失败的目标不许留在 `Remembered`：只有探测成功才写 `known` / `default`。
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // 锁只用来串行化进程级 UI 队列，见 auth_test_lock
     async fn failed_target_is_not_remembered() {
+        let _auth = auth_test_lock();
         let _lock = state::TEST_ROOT_LOCK.lock().await;
         let _root = state::TestRootGuard::temp();
         let mut app = App::new();
@@ -876,6 +890,7 @@ mod tests {
     /// `/ssh cd` 之后 `/ssh list` 必须显示新的 cwd：以前只印 key，改没改成看不出来。
     #[test]
     fn list_shows_the_cwd_set_by_cd() {
+        let _auth = auth_test_lock();
         let _lock = state::TEST_ROOT_LOCK.blocking_lock();
         let _root = state::TestRootGuard::temp();
         let mut app = App::new();
@@ -937,6 +952,7 @@ mod tests {
     /// TUI 传来的原文含命令名：不剥就会把 `help` / `list` 当成主机名去连接。
     #[test]
     fn subcommands_are_not_parsed_as_targets() {
+        let _auth = auth_test_lock();
         let _lock = state::TEST_ROOT_LOCK.blocking_lock();
         let _root = state::TestRootGuard::temp();
         let mut app = App::new();

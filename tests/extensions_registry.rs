@@ -380,6 +380,7 @@ fn ssh_remote_registers_remote_tool_and_command() {
     assert_eq!(
         tools,
         vec![
+            "remote_default",
             "remote_exec",
             "remote_grep",
             "remote_ls",

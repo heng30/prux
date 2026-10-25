@@ -19,7 +19,9 @@ use crate::{
         provider::AgentMessage,
         system_prompt::documentation_section,
     },
-    extensions::{EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_DOC_HELPER, command_arg},
+    extensions::{
+        EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_DOC_HELPER, command_arg, util::send_prompt,
+    },
     modes::interactive::{
         app::{App, MsgLevel},
         handlers::register_slash_command,
@@ -133,8 +135,7 @@ fn command_help(st: &mut App, raw: &str) -> bool {
         st.dirty = true;
     } else {
         // 空闲：按普通用户提问路径投递，渲染用户气泡并触发新回合
-        st.messages.push(AgentMessage::user_text(&text));
-        st.status_start = Some(text);
+        send_prompt(st, text);
         st.dirty = true;
     }
     false

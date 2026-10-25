@@ -510,7 +510,14 @@ fn fastrand() -> u64 {
 /// 一个测试跑完全部场景：连接池与凭据缓存都是进程级状态，
 /// 拆成多个并发测试会互相顶掉。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::await_holding_lock)] // 锁只用来串行化进程级 UI 队列，见下方注释
 async fn connects_runs_remote_tools_and_enforces_host_keys() {
+    // 本用例经 `command::handle` 调 `/ssh disconnect`、`/ssh cd` 等，都会往进程级
+    // UI 队列推通知；subagent / plan_mode 的用例读同一队列并断言「没有多余通知」，
+    // 不串行时它们会抓到本用例排的请求。锁序：AUTH → TEST_ROOT_LOCK。
+    let _auth = crate::test_support::AUTH_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     // 状态隔离用 ssh-remote 自己的根目录覆盖：连接流程的路径读取发生在
     // tokio 的任意 worker 线程上，线程本地 guard 会漏
     let _lock = state::TEST_ROOT_LOCK.lock().await;

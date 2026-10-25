@@ -89,6 +89,14 @@ fn parse_frontmatter(content: &str) -> (Frontmatter, String) {
     (fm, body)
 }
 
+/// 去掉 SKILL.md 头部的 YAML frontmatter，返回纯正文（已去 BOM、归一换行、两端 trim）。
+///
+/// 给只要正文、不关心 frontmatter 字段的调用方（内嵌技能直接投递给模型等）复用
+/// [`parse_frontmatter`] 的同一套识别规则，避免另写一份手工切分。
+pub fn skill_body(content: &str) -> String {
+    parse_frontmatter(content).1
+}
+
 /// 去掉 YAML 标量两端成对的单/双引号（已 trim）；无成对引号时原样返回。
 fn unquote_yaml(s: &str) -> String {
     let s = s.trim();

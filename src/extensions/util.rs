@@ -6,7 +6,7 @@ use crate::{
         provider::AgentMessage,
         tools::{ToolError, ToolResultAttachment},
     },
-    modes::interactive::app::MsgLevel,
+    modes::interactive::app::{App, MsgLevel},
     utils::{
         glyphs::{DEF_ELLIPSIS, DEF_SPINNER, DEF_SPINNER_BRAILLE},
         image::{ImageResizeLimits, prepare_image},
@@ -243,6 +243,15 @@ pub fn notify_cmd(text: &str, level: MsgLevel) {
             MsgLevel::Success => UiNotifyLevel::Success,
         },
     );
+}
+
+/// 把一条文本作为下一轮输入投出：写进 `messages` 并置 `status_start`，由主循环接手开新回合。
+///
+/// 与输入框提交同路径（用户气泡 + 触发新回合），因此命令自己不必再碰回合状态；
+/// 需要 steer 语义（忙碌时插进当前回合）的调用方自己判 `busy`，本函数不代劳。
+pub fn send_prompt(st: &mut App, text: String) {
+    st.messages.push(AgentMessage::user_text(&text));
+    st.status_start = Some(text);
 }
 
 /// 往消息列表尾部追加一条 user 文本消息（作为注入的上下文）。

@@ -1,5 +1,6 @@
 // 路径工具
 
+use serde_json::Value;
 use std::{
     ffi::OsStr,
     io::{BufRead, BufReader},
@@ -249,11 +250,24 @@ pub fn file_stamp(path: &Path) -> (Option<SystemTime>, Option<u64>) {
 /// 读一个 JSON 配置文件（缺失 / 内容损坏 → `Value::Null`，不报错也不改写用户文件）。
 ///
 /// 配合配置读缓存使用：缓存层只存 `Value`，结构体解析与容错口径由调用方决定。
-pub fn read_json_file(path: &Path) -> serde_json::Value {
+pub fn read_json_file(path: &Path) -> Value {
     std::fs::read_to_string(path)
         .ok()
-        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-        .unwrap_or(serde_json::Value::Null)
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .unwrap_or(Value::Null)
+}
+
+/// 把一个 JSON 值写进配置文件：pretty 排版 + 结尾换行，父目录不存在时创建。
+///
+/// 写入不是原子的（需要强一致性的调用方走 core 的原子写）；序列化失败或写盘失败都
+/// 返回错误，调用方据此决定要不要回填配置缓存。
+pub fn write_json_file(path: &Path, value: &Value) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let text = serde_json::to_string_pretty(value)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    std::fs::write(path, format!("{text}\n"))
 }
 
 /// 从主题参数中提取主题名（取文件名主干）
