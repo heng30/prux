@@ -185,6 +185,7 @@ impl DocumentFormat {
 /// 构造 `read_doc` 工具定义（描述、参数 JSON Schema 与 snippet）。
 fn read_doc_tool() -> ExtensionTool {
     ExtensionTool {
+        default_active: true,
         exposure: ToolExposure::Deferred,
         namespace: None,
         annotations: ToolAnnotations {
@@ -230,6 +231,7 @@ fn read_doc_tool() -> ExtensionTool {
 /// 构造 `export_pdf` 工具定义（描述、参数 JSON Schema 与 snippet）。
 fn export_pdf_tool() -> ExtensionTool {
     ExtensionTool {
+        default_active: true,
         exposure: ToolExposure::Deferred,
         namespace: None,
         annotations: ToolAnnotations {

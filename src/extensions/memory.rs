@@ -389,6 +389,7 @@ impl Extension for Memory {
 /// 它省下的 snippet + guidelines 只有四百余字符，比召回注入块小一个数量级，不值得。
 fn memory_tool() -> ExtensionTool {
     ExtensionTool {
+        default_active: true,
         exposure: ToolExposure::Direct,
         namespace: None,
         annotations: ToolAnnotations::default(),

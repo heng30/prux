@@ -1112,6 +1112,10 @@ impl Agent {
                 .iter()
                 .flat_map(|e| e.tools())
             {
+                if !tool.default_active {
+                    continue;
+                }
+
                 if !seen.contains(&tool.name) && !names.contains(&tool.name) {
                     names.push(tool.name);
                 }
@@ -6127,6 +6131,72 @@ mod tests {
         assert!(!active.contains(&"edit".to_string()), "{active:?}");
     }
 
+    /// 恢复会话：声明 `default_active: false` 的扩展工具不随「未记录」并集一起激活（pi 1.4.0 #11075）。
+    #[test]
+    fn restore_session_tools_skips_opted_out_tools() {
+        struct OptOutProbe;
+        impl crate::core::extensions::Extension for OptOutProbe {
+            fn name(&self) -> &str {
+                "restore-default-active-probe"
+            }
+            fn modes(&self) -> Vec<crate::core::extensions::ExtensionMode> {
+                vec![crate::core::extensions::ExtensionMode::Minimal]
+            }
+            fn tools(&self) -> Vec<crate::core::extensions::ExtensionTool> {
+                let mut opt_out = crate::core::extensions::ExtensionTool::simple(
+                    "restore_optout_probe",
+                    "opt-out probe",
+                    serde_json::json!({ "type": "object" }),
+                    "opt-out probe",
+                );
+                opt_out.default_active = false;
+                vec![
+                    crate::core::extensions::ExtensionTool::simple(
+                        "restore_default_probe",
+                        "default-on probe",
+                        serde_json::json!({ "type": "object" }),
+                        "default-on probe",
+                    ),
+                    opt_out,
+                ]
+            }
+        }
+
+        let _g = crate::test_support::AUTH_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _ad = crate::test_support::AgentDirGuard::temp();
+        let dir = tempfile::tempdir().unwrap();
+        crate::core::extensions::register_extension(OptOutProbe);
+
+        let mut agent = test_agent_selection(ToolSelection::tools(vec!["read".into()]), vec![]);
+        let mut session = crate::core::session_manager::Session::create(
+            ".",
+            Some(dir.path().to_path_buf()),
+            true,
+        )
+        .unwrap();
+        session.append_active_tools_change(&["read".to_string()]);
+        agent.session = Some(session);
+
+        agent.restore_session_tools();
+        let ToolSelection::Default(names) = &agent.rebuild_ctx.selection else {
+            panic!("Default 选择不应被改写成其它变体");
+        };
+        assert!(
+            names.contains(&"restore_default_probe".to_string()),
+            "{names:?}"
+        );
+        assert!(
+            !names.contains(&"restore_optout_probe".to_string()),
+            "{names:?}"
+        );
+
+        assert!(crate::core::extensions::unregister_extension(
+            "restore-default-active-probe"
+        ));
+    }
+
     /// 显式 `--tools 名单` 时，恢复会话不拿会话记录覆盖启动选择（pi #10785）。
     #[test]
     fn restore_session_tools_keeps_explicit_selection() {
@@ -8222,6 +8292,7 @@ mod tests {
         let tool = core::extensions::InjectedChildTool {
             meta: core::extensions::ExtensionTool {
                 exposure: crate::core::extensions::ToolExposure::Direct,
+                default_active: true,
                 namespace: None,
                 annotations: crate::core::extensions::ToolAnnotations::default(),
                 output_schema: None,

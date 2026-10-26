@@ -335,6 +335,7 @@ impl Extension for Subagent {
 
         vec![
             ExtensionTool {
+                default_active: true,
                 exposure: ToolExposure::Direct,
                 namespace: None,
                 annotations: ToolAnnotations::default(),
@@ -414,6 +415,7 @@ impl Extension for Subagent {
                 grammar_sampling: None,
             },
             ExtensionTool {
+                default_active: true,
                 exposure: ToolExposure::Direct,
                 namespace: None,
                 annotations: ToolAnnotations::default(),
@@ -440,6 +442,7 @@ impl Extension for Subagent {
                 grammar_sampling: None,
             },
             ExtensionTool {
+                default_active: true,
                 exposure: ToolExposure::Direct,
                 namespace: None,
                 annotations: ToolAnnotations::default(),

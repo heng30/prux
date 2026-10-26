@@ -179,6 +179,7 @@ pub(crate) fn build_tool(compiled: Arc<CompiledSchema>, capture: CaptureSlot) ->
 
     InjectedChildTool {
         meta: ExtensionTool {
+            default_active: true,
             exposure: ToolExposure::Direct,
             namespace: None,
             annotations: ToolAnnotations::default(),

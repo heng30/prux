@@ -437,7 +437,7 @@ kitty / ghostty / wezterm / warp / iTerm2；`utils/terminal_caps.rs:206-215` 决
 | 1.8 | `mcp.json` 剥 BOM | `extensions/mcp/config.rs::read_json_value` | `config_reads_through_a_utf8_bom` |
 | 1.9 | `grep` 加 `--no-config` | `core/tools/grep.rs` | 现有 grep 用例 |
 | 1.10 | PowerShell 两级回落 | `core/tools/powershell.rs::find_powershell` | 仅 Windows 可实测 |
-| 1.11 | 会话恢复激活后注册的扩展工具 | `session_manager.rs::ever_active_tools` + `agent_session.rs::restore_session_tools` | `restore_session_tools_restores_recorded_tools` |
+| 1.11 | 会话恢复激活后注册的扩展工具 | `session_manager.rs::ever_active_tools` + `agent_session.rs::restore_session_tools` + `ExtensionTool.default_active`（`false` 时不并入并集） | `restore_session_tools_restores_recorded_tools`、`restore_session_tools_skips_opted_out_tools` |
 | 1.12 | HTML 导出 CJK 强调 | `assets/export-html/vendor/marked-cjk-friendly.min.js`（新增，MIT）、`template.html`、`template.js`、`core/export_html/export.rs` | 手工导出验证 |
 | 1.13 | `wl-copy` 自成进程组 | `utils/clipboard.rs`：`process_group(0)` | 仅 Linux/Wayland 可实测 |
 | 1.14 | panic 还原终端 | `modes/interactive.rs`：`restore_terminal_modes` + `install_panic_terminal_restore` | 手工验证（`cargo run` 后人为 panic） |

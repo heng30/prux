@@ -640,6 +640,7 @@ fn mcp_tool(exposure: ToolExposure, summary: &str) -> ExtensionTool {
     }
 
     ExtensionTool {
+        default_active: true,
         exposure,
         namespace: None,
         annotations: ToolAnnotations::default(),

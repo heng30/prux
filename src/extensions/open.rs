@@ -96,6 +96,7 @@ impl Extension for Open {
 /// 构造 `open` 工具定义（描述、参数 JSON Schema 与 snippet）。
 fn open_tool() -> ExtensionTool {
     ExtensionTool {
+        default_active: true,
         exposure: ToolExposure::Direct,
         namespace: None,
         annotations: ToolAnnotations {

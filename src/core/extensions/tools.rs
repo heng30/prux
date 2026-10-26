@@ -419,6 +419,10 @@ pub struct ExtensionTool {
     pub prepare_arguments: Option<fn(&Value) -> Value>,
     /// 暴露方式（见 [`ToolExposure`]）；默认 `Direct`。
     pub exposure: ToolExposure,
+    /// 恢复会话 / 切分支时该工具是否缺省激活。
+    /// `true`（默认）= 分支记录里既没加过也没删过的已注册工具自动启用；
+    /// `false` = 必须用户显式启用过才激活，恢复时保持关闭。
+    pub default_active: bool,
     /// 工具分组名（`/extension` 详情与诊断用，**不参与**工具名解析）；None = 不分组。
     pub namespace: Option<String>,
     /// 工具注解（只读/破坏性/幂等）；仅声明与展示，不改变执行语义。
@@ -445,6 +449,7 @@ impl ExtensionTool {
     pub fn simple(name: &str, description: &str, parameters: Value, snippet: &str) -> Self {
         ExtensionTool {
             exposure: ToolExposure::Direct,
+            default_active: true,
             namespace: None,
             annotations: ToolAnnotations::default(),
             output_schema: None,

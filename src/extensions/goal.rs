@@ -859,6 +859,7 @@ impl Extension for Goal {
     fn tools(&self) -> Vec<ExtensionTool> {
         vec![
             ExtensionTool {
+                default_active: true,
                 exposure: ToolExposure::Direct,
                 namespace: None,
                 annotations: ToolAnnotations::default(),
@@ -893,6 +894,7 @@ impl Extension for Goal {
                 grammar_sampling: None,
             },
             ExtensionTool {
+                default_active: true,
                 exposure: ToolExposure::Direct,
                 namespace: None,
                 annotations: ToolAnnotations::default(),
@@ -912,6 +914,7 @@ impl Extension for Goal {
                 grammar_sampling: None,
             },
             ExtensionTool {
+                default_active: true,
                 exposure: ToolExposure::Direct,
                 namespace: None,
                 annotations: ToolAnnotations::default(),

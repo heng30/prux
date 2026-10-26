@@ -150,6 +150,7 @@ impl Extension for WebAccess {
 /// 构造 `web_search` 工具定义（描述、参数 JSON Schema 与 snippet）。
 fn web_search_tool() -> ExtensionTool {
     ExtensionTool {
+        default_active: true,
         exposure: ToolExposure::Direct,
         namespace: None,
         annotations: ToolAnnotations::default(),
@@ -215,6 +216,7 @@ fn web_search_tool() -> ExtensionTool {
 /// 构造 `fetch_content` 工具定义（描述、参数 JSON Schema 与 snippet）。
 fn fetch_content_tool() -> ExtensionTool {
     ExtensionTool {
+        default_active: true,
         exposure: ToolExposure::Direct,
         namespace: None,
         annotations: ToolAnnotations::default(),
@@ -255,6 +257,7 @@ fn fetch_content_tool() -> ExtensionTool {
 /// 构造 `get_search_content` 工具定义；`max_inline` 决定 `limit` 参数的取值上限。
 fn get_search_content_tool(max_inline: usize) -> ExtensionTool {
     ExtensionTool {
+        default_active: true,
         exposure: ToolExposure::Direct,
         namespace: None,
         annotations: ToolAnnotations::default(),

@@ -225,6 +225,7 @@ fn remember_session(path: Option<PathBuf>) {
 /// 构造 `session_search` 工具定义（描述、参数 JSON Schema 与 snippet）。
 fn session_search_tool() -> ExtensionTool {
     ExtensionTool {
+        default_active: true,
         exposure: ToolExposure::Deferred,
         namespace: None,
         annotations: ToolAnnotations {

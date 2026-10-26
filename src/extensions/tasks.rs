@@ -1025,6 +1025,7 @@ fn run_tasks_from_command(app: &mut App, rest: &str) {
 fn tools_schema() -> Vec<ExtensionTool> {
     vec![
         ExtensionTool {
+            default_active: true,
             exposure: ToolExposure::Direct,
             namespace: None,
             annotations: ToolAnnotations::default(),
@@ -1057,6 +1058,7 @@ fn tools_schema() -> Vec<ExtensionTool> {
             grammar_sampling: None,
         },
         ExtensionTool {
+            default_active: true,
             exposure: ToolExposure::Direct,
             namespace: None,
             annotations: ToolAnnotations::default(),
@@ -1074,6 +1076,7 @@ fn tools_schema() -> Vec<ExtensionTool> {
             grammar_sampling: None,
         },
         ExtensionTool {
+            default_active: true,
             exposure: ToolExposure::Direct,
             namespace: None,
             annotations: ToolAnnotations::default(),
@@ -1098,6 +1101,7 @@ fn tools_schema() -> Vec<ExtensionTool> {
             grammar_sampling: None,
         },
         ExtensionTool {
+            default_active: true,
             exposure: ToolExposure::Direct,
             namespace: None,
             annotations: ToolAnnotations::default(),
@@ -1130,6 +1134,7 @@ fn tools_schema() -> Vec<ExtensionTool> {
             grammar_sampling: None,
         },
         ExtensionTool {
+            default_active: true,
             exposure: ToolExposure::Direct,
             namespace: None,
             annotations: ToolAnnotations::default(),
@@ -1156,6 +1161,7 @@ fn tools_schema() -> Vec<ExtensionTool> {
             grammar_sampling: None,
         },
         ExtensionTool {
+            default_active: true,
             exposure: ToolExposure::Direct,
             namespace: None,
             annotations: ToolAnnotations::default(),
@@ -1180,6 +1186,7 @@ fn tools_schema() -> Vec<ExtensionTool> {
             grammar_sampling: None,
         },
         ExtensionTool {
+            default_active: true,
             exposure: ToolExposure::Direct,
             namespace: None,
             annotations: ToolAnnotations::default(),
