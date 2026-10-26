@@ -15,6 +15,12 @@ release:
 debug:
 	$(build-env) $(run-env) cargo run --bin ${app-name}
 
+build-gui:
+	$(build-env) cargo build --bin ${app-name}-gui --features=gui
+
+debug-gui:
+	$(build-env) $(run-env) cargo run --bin ${app-name}-gui --features=gui
+
 install-linux: release
 	cp -f ~/.local/bin/${app-name} ~/.local/bin/${app-name}.bak 2>/dev/null || true
 	cp -f ./target/release/${app-name} ~/.local/bin/

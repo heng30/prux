@@ -41,10 +41,14 @@ git 历史以「同步 pi-vX.Y.Z」为节奏推进，与上游保持行为/文�
 | `cli/` | CLI 业务：参数解析（clap）、文件参数、初始消息、会话选择、模型列表、项目信任、`auth` / `mcp` 子命令 | 依赖 `core`、`utils` |
 | `core/` | 核心：模型调用、Agent 循环、会话、压缩、工具、扩展机制、设置 | 见下方三层 |
 | `extensions/` | 内置扩展（编译期静态注册），每个模块一个功能 | 依赖 `core`（trait 面）、`utils` |
-| `modes/` | 运行模式：交互 TUI（`interactive/` 下 `app.rs` / `panel.rs` / `render/` / `handlers/` / `worker.rs`） | **只向下**依赖 `core` 与 `cli` |
+| `modes/` | 运行模式：交互 TUI（`interactive/` 下 `app.rs` / `panel.rs` / `render/` / `handlers/` / `worker.rs`）与桌面 GUI（`gui/`，`#[cfg(feature = "gui")]`，二进制 `prux-gui`） | **只向下**依赖 `core` 与 `cli` |
 | `utils/` | 通用工具：diff、mime、路径、截断、终端、网络、图片、cron、zip 等 | **不依赖 `core`** |
 | `mermaid_text/` | 内嵌第三方库：Mermaid 源码 → Unicode 盒图（上游 `mermaid-text` 0.57.0，含其内部 `parser` / `render` / `layout` 子树） | 只依赖 `ascii-dag` / `chrono` / `unicode-width`，不是本仓分层的一部分 |
 | `test_support/` | 测试接缝：线程本地目录/HOME override、超时护栏 | 仅 `cfg(test)` 或 `test-support` feature 编译 |
+| `bin/prux_gui.rs` | GUI 二进制入口：自建 tokio runtime → `cli::startup::bootstrap()` → `modes::gui::run()` | 仅 `--features gui` 构建 |
+
+两个二进制共用 `cli/startup.rs::bootstrap()`（= 进程初始化 + 参数/会话/模型/工具/技能装配），
+启动逻辑只能加在那里：写进 `main.rs` 的 GUI 就看不到。
 
 `core` 内部三层（`src/core.rs` 顶部是唯一真源，此处摘要）：
 

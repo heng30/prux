@@ -8,5 +8,6 @@ pub mod list_models;
 pub mod mcp_command;
 pub mod project_trust;
 pub mod session_picker;
+pub mod startup;
 
 pub use args::{Args, Command};

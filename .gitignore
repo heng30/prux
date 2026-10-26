@@ -2,6 +2,7 @@
 /target
 /.pi
 /.prux
+/waku
 
 TODO.md
 .mcp.json*
