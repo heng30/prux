@@ -13,7 +13,8 @@
   16 characters, `label` up to 60, and `Other` / `Type something.` / `Next` rejected as
   labels. Without a UI (non-interactive runs) the tool answers `no_ui` right away instead of
   waiting forever, and one questionnaire at a time is the rule — a second call is refused.
-  Off by default and available in every extension mode; turn it on in `/extension`.
+  Off by default and available in the `Dev` / `Creator` extension modes; turn it on in
+  `/extension`.
 
 - **The `ponytail` extension writes the smallest change that works**: enabling it appends a
   "lazy senior developer" ruleset to the system prompt before every request — nothing is written
@@ -147,7 +148,7 @@
   分开，模型不必重问。保留标签与上限在弹面板之前就校验：1–4 题、每题 2–4 个选项、`header`
   最长 16 字符、`label` 最长 60 字符，`Other` / `Type something.` / `Next` 作为标签一律拒绝。
   没有 UI（非交互运行）时工具立刻返回 `no_ui` 而不是干等；同一时刻只允许一份问卷，第二份
-  会被拒绝。默认不启用（所有扩展模式可用），在 `/extension` 面板开启。
+  会被拒绝。默认不启用（仅 `Dev` / `Creator` 扩展模式可用），在 `/extension` 面板开启。
 
 - **新增 `ponytail` 扩展：只写「最小的完整改动」**：启用后每次请求前把一套「懒资深开发者」
   规则追加到系统提示末尾——**不写进会话**，所以关掉之后上下文里不留残渣。规则是一条梯子：

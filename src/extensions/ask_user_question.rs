@@ -17,9 +17,9 @@
 use crate::{
     core::{
         extensions::{
-            self, DockLine, DockSpan, Extension, ExtensionHook, ExtensionTool, ExtensionUiRequest,
-            ForkProjectInfo, OverlayEvent, OverlayInput, OverlayKey, OverlaySize, OverlayView,
-            ToolExecCtx, next_ui_id,
+            self, DockLine, DockSpan, Extension, ExtensionHook, ExtensionMode, ExtensionTool,
+            ExtensionUiRequest, ForkProjectInfo, OverlayEvent, OverlayInput, OverlayKey,
+            OverlaySize, OverlayView, ToolExecCtx, next_ui_id,
         },
         tools::{ToolError, ToolResult},
     },
@@ -250,6 +250,11 @@ impl Extension for AskUserQuestion {
             plugin_version: "2.15.0".to_string(),
             url: "https://www.npmjs.com/package/@juicesharp/rpiv-ask-user-question".to_string(),
         })
+    }
+
+    /// 只在 `Dev` / `Creator` 扩展模式下可用。
+    fn modes(&self) -> Vec<ExtensionMode> {
+        vec![ExtensionMode::Dev, ExtensionMode::Creator]
     }
 
     /// 默认不启用：它给模型加工具并改写 Guidelines，属用户显式开启的能力。
