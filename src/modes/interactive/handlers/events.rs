@@ -113,7 +113,7 @@ impl App {
                 self.dock_visible = false;
                 self.dock_offset = 0;
                 self.dock_area = None;
-                overlay::close(self); // 覆盖层属于某个会话的子代理：切会话先告知扩展关闭
+                overlay::close_all(self); // 覆盖层属于某个会话的子代理：切会话先告知扩展关闭
                 self.ext_settings.close();
                 self.banner_hidden = true;
                 self.messages = s.messages;

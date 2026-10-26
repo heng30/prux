@@ -115,7 +115,7 @@ prux 的模型条目按 provider 合并自三层（低 → 高）：
 ## 供应商字段：compat 与 quirk
 
 模型的 `compat` 对象描述协议差异。`models.json` 的 provider 级 `compat` 会深合并进该 provider 的
-**chat 条目**（已存在的 image / classifier 条目不合并；`models` 数组里新声明的条目无差别合并），
+**chat 与 classifier 条目**（已存在的 image 条目只有 `baseUrl` 变；`models` 数组里新声明的条目无差别合并），
 模型条目自身的 `compat` 胜出。prux 实际读取并生效的键：
 
 | compat 键 | 生效协议 | 作用 |
@@ -139,6 +139,8 @@ prux 的模型条目按 provider 合并自三层（低 → 高）：
 | `supportsEagerToolInputStreaming` | anthropic-messages | 控制 fine-grained beta 头（缺省 true） |
 | `sendSessionAffinityHeaders` | anthropic-messages / completions | 是否下发会话亲和头；缺省视为「是否 openrouter」（见下） |
 | `sessionAffinityFormat` | anthropic-messages / completions / responses | 会话亲和头形态：`openai` / `openai-nosession` / `openrouter`；缺省按 provider/baseUrl 探测（openrouter → `openrouter`，其余 `openai`） |
+| `imageInput` | typesafe-system-one（分类器） | 带图分类请求的图片形态（见下） |
+| `sendImageOptInHeader` | typesafe-system-one（分类器） | 带图请求是否发 `TypeSafe-Danger-Zone-Images: true`；缺省视为「非 OpenRouter 就发」 |
 
 `thinkingFormat`（openai-completions 的扩展思考形态，与模型级 `thinkingLevelMap` 配合）。**缺省/空**时会按
 provider/baseUrl 自动探测：`deepseek`→`deepseek`、`zai`→`zai`、`together`→`together`、`ant-ling`→`ant-ling`、
@@ -159,6 +161,17 @@ provider/baseUrl 自动探测：`deepseek`→`deepseek`、`zai`→`zai`、`toget
 | `chat-template` | 不注入思考字段（由模板/网关自行处理） |
 | `openai`（或空/其它） | `reasoning_effort`（仅当 `supportsReasoningEffort`）：启用取映射值，关闭仅当 `off` 为字符串才发 |
 
+分类器图片（`imageInput`）。分类器模型的 `input` 含 `image` 时才会带图，形态三选一：
+
+| 值 | 请求形态 |
+|------|------|
+| `assets`（缺省，TypeSafe） | `assets` 映射 `{"<image-1>": {type, format, data_base64}}`，文件名按顺序放进 `state` 之前；仅 PNG / JPEG |
+| `images` | `images` 数组，每项是 data URL；最多 4 张，PNG / JPEG / WebP |
+| `state-image-urls`（OpenRouter 缺省） | `state` 变成数组，图片以 `image_url` 片段排在原状态之前；MIME 交给模型判 |
+
+未声明时按 provider / baseUrl 探测：命中 openrouter（provider 或 `openrouter.ai`）为 `state-image-urls`，
+其余为 `assets`。`sendImageOptInHeader` 未声明时只在非 OpenRouter 下发。
+
 会话亲和（prompt cache / 路由）请求头的规则。会话 id 是当前会话的持久 id，
 随请求下发；`openrouter` 格式只发 `x-session-id`，`anthropic-messages` 发 `x-session-affinity`，
 `openai` 格式发 `session_id` + `x-client-request-id`（completions 额外补 `x-session-affinity`），
@@ -170,6 +183,11 @@ provider/baseUrl 自动探测：`deepseek`→`deepseek`、`zai`→`zai`、`toget
 | `anthropic-messages` / `openai-completions` 且开关为 `true`（或默认 openrouter） | 按 `sessionAffinityFormat` 下发 |
 | `openai-responses` | 只要有会话 id 就按格式下发（无开关） |
 | opencode / opencode-go（provider 或 baseUrl 命中 opencode.ai） | 额外发 `x-opencode-session` + `x-opencode-client`（所有协议） |
+
+每个请求都带 `User-Agent: prux/<版本> (<平台>; <架构>)`。OpenRouter（provider 或 `openrouter.ai`）
+额外带归因头 `HTTP-Referer` / `X-OpenRouter-Title` / `X-OpenRouter-Categories`，NVIDIA NIM
+（provider 或 `integrate.api.nvidia.com`）带 `X-BILLING-INVOKE-ORIGIN`。这些头是基线，
+provider 级 / 模型级 `headers` 与目录自带头会覆盖同名项。
 
 注意：远程目录/模型 JSON 里还带着一批 prux **当前不读取**的 compat 键（如 `cacheControlFormat`、
 `chatTemplateArgs`、`supportsStrictTools` 等）——它们只是被原样透传，配置自定义供应商时

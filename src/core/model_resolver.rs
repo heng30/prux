@@ -196,20 +196,20 @@ fn merge_compat(base: Option<&Value>, override_: Option<&Value>) -> Option<Value
 }
 
 /// 应用 models.json 用户配置到合并视图
-/// - `baseUrl` 作用于全部类型条目，`compat` 只作用于 chat（非 chat 条目只有 baseUrl 变）；
+/// - `baseUrl` 作用于全部类型条目，`compat` 作用于 chat 与 classifier（image 条目只有 baseUrl 变）；
 /// - `models` 是 chat 条目：同 id 的 **chat** 条目被替换，否则追加（不会顶掉同 id 的 image / classifier 条目）；
 /// - `modelOverrides` 同样只作用于 chat 条目。
 fn apply_models_json(merged: &mut Vec<Value>, cfg: &ProviderConfig) {
-    // 1) provider 级 baseUrl 覆盖（全部类型）+ compat 合并（仅 chat）
+    // 1) provider 级 baseUrl 覆盖（全部类型）+ compat 合并（chat 与 classifier；image 只是 baseUrl 变）
     for m in merged.iter_mut() {
-        let is_chat = ModelType::from_catalog(m.get("type")) == Some(ModelType::Chat);
+        let kind = ModelType::from_catalog(m.get("type"));
         if let Some(obj) = m.as_object_mut()
             && let Some(bu) = &cfg.base_url
         {
             obj.insert("baseUrl".to_string(), Value::String(bu.clone()));
         }
 
-        if !is_chat {
+        if kind == Some(ModelType::Image) {
             continue;
         }
 
@@ -553,6 +553,12 @@ pub struct ModelEntry {
     /// compat.sessionAffinityFormat：`openai` / `openai-nosession` / `openrouter`；
     /// `None` 表示按 provider / baseUrl 探测。
     pub session_affinity_format: Option<String>,
+    /// compat.imageInput：分类器带图请求的图片形态（`assets` / `images` / `state-image-urls`）；
+    /// `None` 表示按 provider / baseUrl 探测。
+    pub image_input: Option<String>,
+    /// compat.sendImageOptInHeader：分类器带图请求是否发 TypeSafe 的 `TypeSafe-Danger-Zone-Images` 头；
+    /// `None` 表示按 provider 探测。
+    pub send_image_opt_in_header: Option<bool>,
 }
 
 /// 解析目录 `compat.allowedFallbackModels`：无 / 非数组 / 条目缺 `model` 时丢弃。
@@ -698,6 +704,8 @@ fn virtual_model_entry(definition: &VirtualModelDefinition) -> ModelEntry {
         supports_openai_grammar_tools: false,
         send_session_affinity_headers: None,
         session_affinity_format: None,
+        image_input: None,
+        send_image_opt_in_header: None,
     }
 }
 
@@ -874,6 +882,13 @@ fn find_model_impl(provider: &str, model_id: &str, kind: Option<ModelType>) -> R
                     .get("sessionAffinityFormat")
                     .and_then(|v| v.as_str())
                     .map(|v| v.to_string()),
+                image_input: compat
+                    .get("imageInput")
+                    .and_then(|v| v.as_str())
+                    .map(|v| v.to_string()),
+                send_image_opt_in_header: compat
+                    .get("sendImageOptInHeader")
+                    .and_then(|v| v.as_bool()),
                 thinking_level_map: m.get("thinkingLevelMap").and_then(|v| v.as_object()).map(
                     |obj| {
                         obj.iter()
@@ -964,6 +979,8 @@ pub fn model_config_from_entry(
         session_id,
         send_session_affinity_headers: entry.send_session_affinity_headers,
         session_affinity_format: entry.session_affinity_format.clone(),
+        image_input: entry.image_input.clone(),
+        send_image_opt_in_header: entry.send_image_opt_in_header,
         max_retry_delay_ms: None,
         thinking_budgets: None,
     }
@@ -1311,12 +1328,12 @@ fn default_model_id(provider: &str) -> Option<&'static str> {
     Some(match provider {
         "ant-ling" => "Ring-2.6-1T",
         "anthropic" => "claude-opus-4-8",
-        "azure" => "gpt-5.4",
+        "azure" => "gpt-6.1-sol",
         "baseten" => "zai-org/GLM-5.2",
         "cerebras" => "gpt-oss-120b",
         "deepseek" => "deepseek-v4-pro",
         "fireworks" => "accounts/fireworks/models/kimi-k3",
-        "github-copilot" => "gpt-5.4",
+        "github-copilot" => "gpt-6.1-sol",
         "google" => "gemini-3.1-pro-preview",
         "groq" => "openai/gpt-oss-120b",
         "huggingface" => "moonshotai/Kimi-K2.6",
@@ -1326,7 +1343,7 @@ fn default_model_id(provider: &str) -> Option<&'static str> {
         "minimax-cn" => "MiniMax-M2.7",
         "moonshotai" => "kimi-k2.6",
         "moonshotai-cn" => "kimi-k2.6",
-        "nvidia" => "nvidia/nemotron-3-ultra-550b-a55b",
+        "nvidia" => "nvidia/nemotron-3.5-super-vl-120b-a12b",
         "openai" => "gpt-5.5",
         "opencode" => "kimi-k2.6",
         "opencode-go" => "kimi-k3",
@@ -1337,10 +1354,10 @@ fn default_model_id(provider: &str) -> Option<&'static str> {
         "together" => "moonshotai/Kimi-K3",
         "vercel-ai-gateway" => "zai/glm-5.1",
         "xai" => "grok-4.7",
-        "xiaomi" => "mimo-v2.5-pro",
-        "xiaomi-token-plan-ams" => "mimo-v2.5-pro",
-        "xiaomi-token-plan-cn" => "mimo-v2.5-pro",
-        "xiaomi-token-plan-sgp" => "mimo-v2.5-pro",
+        "xiaomi" => "mimo-v2.6-pro",
+        "xiaomi-token-plan-ams" => "mimo-v2.6-pro",
+        "xiaomi-token-plan-cn" => "mimo-v2.6-pro",
+        "xiaomi-token-plan-sgp" => "mimo-v2.6-pro",
         "zai" => "glm-5.3",
         "zai-coding-cn" => "glm-5.3",
         _ => return None,
@@ -2320,14 +2337,20 @@ mod tests {
         );
         // pi 0.99.1：openai-codex 已删除（订阅登录改走 openai 的 Sign in with ChatGPT）
         assert!(default_model_id("openai-codex").is_none());
-        // pi 1.0.1：nvidia 默认改指仍在服务的 nemotron-3-ultra-550b-a55b
+        // pi 1.4.0：nvidia 默认改指 nemotron-3.5-super-vl-120b-a12b，
+        // github-copilot / xiaomi 分别改指 gpt-6.1-sol 与 mimo-v2.6-pro
         assert_eq!(
             default_model_for("nvidia").unwrap(),
             (
                 "nvidia".to_string(),
-                "nvidia/nemotron-3-ultra-550b-a55b".to_string()
+                "nvidia/nemotron-3.5-super-vl-120b-a12b".to_string()
             )
         );
+        assert_eq!(
+            default_model_for("github-copilot").unwrap().1,
+            "gpt-6.1-sol"
+        );
+        assert_eq!(default_model_for("xiaomi").unwrap().1, "mimo-v2.6-pro");
         // 表内默认不在基线时回退基线第一个
         let v = default_model_for("zai").unwrap();
         assert_eq!(v.0, "zai");
@@ -2399,6 +2422,29 @@ mod tests {
         let (p, m) = default_model_for("my-ollama").unwrap();
         assert_eq!(p, "my-ollama");
         assert_eq!(m, "llama3.1:8b");
+        let _ = std::fs::remove_file(agent_dir().join("models.json"));
+    }
+
+    /// provider 级 `compat` 现在也合并进 classifier 条目（image 条目仍只有 `baseUrl` 变）。
+    #[test]
+    fn models_json_compat_reaches_classifier_entries() {
+        let _ad = crate::test_support::AgentDirGuard::temp();
+        test_dir();
+        let _ = std::fs::remove_file(agent_dir().join("models.json"));
+        let _ = std::fs::remove_file(agent_dir().join("models-store.json"));
+        write_models_json(serde_json::json!({
+            "providers": {
+                "openrouter": {
+                    "compat": { "imageInput": "assets", "sendImageOptInHeader": true }
+                }
+            }
+        }));
+
+        let e = find_model_of_type("openrouter", "~typesafe/jev-latest", ModelType::Classifier)
+            .unwrap();
+        // 目录原本声明 state-image-urls / false，provider 级 compat 覆盖它
+        assert_eq!(e.image_input.as_deref(), Some("assets"));
+        assert_eq!(e.send_image_opt_in_header, Some(true));
         let _ = std::fs::remove_file(agent_dir().join("models.json"));
     }
 
@@ -2757,6 +2803,8 @@ mod tests {
             supports_openai_grammar_tools: false,
             send_session_affinity_headers: None,
             session_affinity_format: None,
+            image_input: None,
+            send_image_opt_in_header: None,
         };
         let cfg = model_config_from_entry(&entry, None, None);
 

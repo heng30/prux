@@ -49,6 +49,8 @@ fn test_model() -> ModelConfig {
         supports_strict_mode: false,
         send_session_affinity_headers: None,
         session_affinity_format: None,
+        image_input: None,
+        send_image_opt_in_header: None,
         thinking_budgets: None,
     }
 }

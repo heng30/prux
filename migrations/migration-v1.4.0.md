@@ -421,9 +421,9 @@ kitty / ghostty / wezterm / warp / iTerm2；`utils/terminal_caps.rs:206-215` 决
 
 ---
 
-## 六、实施记录（bug 修复 + 终端/导出，已完成）
+## 六、实施记录（全量收口）
 
-本轮只做第一节的 🔧 与 ⚠️；1.15（覆盖层改栈）与二、三节的新增能力、数据面**未开工**。
+第一、二、三节全部落地；1.15 用「挂起栈」而非重写单槽位，1.11 / 1.12 / 1.13 见上一轮提交。
 
 | # | 项 | 改动位置 | 关键测试 |
 |---|---|---|---|
@@ -441,6 +441,13 @@ kitty / ghostty / wezterm / warp / iTerm2；`utils/terminal_caps.rs:206-215` 决
 | 1.12 | HTML 导出 CJK 强调 | `assets/export-html/vendor/marked-cjk-friendly.min.js`（新增，MIT）、`template.html`、`template.js`、`core/export_html/export.rs` | 手工导出验证 |
 | 1.13 | `wl-copy` 自成进程组 | `utils/clipboard.rs`：`process_group(0)` | 仅 Linux/Wayland 可实测 |
 | 1.14 | panic 还原终端 | `modes/interactive.rs`：`restore_terminal_modes` + `install_panic_terminal_restore` | 手工验证（`cargo run` 后人为 panic） |
+| 1.15 | 覆盖层改「挂起栈」 | `app.rs::overlay_stack` + `overlay.rs::open/hide/close_all`（单槽位保留为栈顶，未动滚动与按键路由） | `opening_a_second_overlay_keeps_the_first_underneath`、`hide_removes_a_suspended_overlay` |
+| 2.2 | 分类器 compat 与 provider 级合并 | `model_resolver.rs`（`ModelEntry.image_input` / `send_image_opt_in_header`、`apply_models_json` 放宽到 classifier）、`provider.rs::ModelConfig` | `models_json_compat_reaches_classifier_entries` |
+| 2.1 | 分类器图片三种形态 | `classifier.rs::add_images` + `image_input_mode` / `sends_image_opt_in_header`（opt-in 头随请求下发） | `image_input_follows_the_model_compat` |
+| 2.3 | UA + provider 归因头 | `provider.rs::identity_headers`（作为基线头，目录/配置可覆盖） | `identity_headers_follow_the_provider`、`provider_extra_headers_follows_provider` |
+| 2.4 | Rex 终端 | `terminal_image.rs::env_protocol`、`terminal_caps.rs` 真彩判定 | 仅环境变量判定，需实机复核 |
+| 2.5 | compat 字段文档 | `assets/docs/custom-provider.md`（`imageInput` / `sendImageOptInHeader` / 身份头）、`assets/docs/models.md` | 无（文档） |
+| 三 | 数据面 | `scripts/sync-models.py::SYNC_MARK` 指向 `migrations/sync.md`；`migrations/sync.md` → 1.4.0；`default_model_id` 三处（copilot / azure / nvidia / xiaomi） | `default_model_follows_pi_table` |
 
 **行为口径变化（升级后用户可见）**：
 
@@ -454,9 +461,13 @@ kitty / ghostty / wezterm / warp / iTerm2；`utils/terminal_caps.rs:206-215` 决
 - 终端：panic 退出会自行关掉 raw mode / 鼠标 / 键盘增强 / 备用屏。
 - 导出：CJK 标点旁的粗体斜体正常渲染；导出文件体积增加约 5 KB（内嵌插件）。
 - `mcp.json`：BOM 不再导致整份配置被跳过。
+- 分类器：带图请求按 `compat.imageInput` 拼（`assets` / `images` / `state-image-urls`），
+  TypeSafe 系自动带 opt-in 头；`models.json` 的 provider 级 `compat` 也开始作用于 classifier 条目。
+- 请求身份：每个请求带 `User-Agent: prux/<版本> (<平台>; <架构>)`；OpenRouter / NVIDIA NIM 另带归因头。
+- 终端：`TERM_PROGRAM=rex` 走 kitty 内联图片与 truecolor。
+- 覆盖层：后打开的盖住前一个而不是顶掉它，关闭后前一个回来。
 
-**未做**：1.15（覆盖层改栈，改动波及滚动状态与按键路由，收益仅限“两个扩展同时要输入”）；
-2.1–2.5 新增能力；第三节数据面同步。
+**未做**：无。2.5 只补 compat 表，未引入 `models.schema.json` 与生成器（手写文档已覆盖主要字段）。
 
 ---
 
@@ -466,7 +477,7 @@ kitty / ghostty / wezterm / warp / iTerm2；`utils/terminal_caps.rs:206-215` 决
 - [x] 1.3 `RETRYABLE` 补 4 条 gateway/代理串 + Vertex OAuth 刷新前缀匹配
 - [x] 1.4 状态码改为边界匹配，不再裸子串
 - [x] 1.5 `NON_RETRYABLE` 补 ChatGPT Business 工作区上限
-- [ ] `retryable_error_classification_matches_pi` 补全部断言
+- [x] `retryable_error_classification_matches_pi` 补全部断言
 
 **P1 压缩**
 - [x] 1.1 压缩摘要改用模型输出上限，`reserveTokens` 只管触发
@@ -487,13 +498,13 @@ kitty / ghostty / wezterm / warp / iTerm2；`utils/terminal_caps.rs:206-215` 决
 - [x] 1.11 恢复会话合并「未记录的已注册扩展工具」+ `ExtensionTool.default_active`
 
 **P5 新能力（可选）**
-- [ ] 2.2 分类器 compat（2.1 的前置）
-- [ ] 2.1 分类器图片输入三种线上形态
-- [ ] 2.3 `User-Agent` + 归因头
-- [ ] 2.4 Rex 终端
-- [ ] 2.5 `models.json` 字段参考文档（只补 compat 表）
+- [x] 2.2 分类器 compat（2.1 的前置）
+- [x] 2.1 分类器图片输入三种线上形态
+- [x] 2.3 `User-Agent` + 归因头
+- [x] 2.4 Rex 终端
+- [x] 2.5 `models.json` 字段参考文档（只补 compat 表）
 - [x] 1.12 HTML 导出 CJK 强调（vendor `marked-cjk-friendly`）
-- [ ] 1.15 覆盖层改栈（低优先，本轮未做）
-- [ ] 第三节数据面：修 `scripts/sync-models.py` 的 `SYNC_MARK` → `make sync-models` →
+- [x] 1.15 覆盖层改挂起栈（单槽位保留为栈顶）
+- [x] 第三节数据面：修 `scripts/sync-models.py` 的 `SYNC_MARK` → `make sync-models` →
       默认模型表三处 → `migrations/sync.md` 改 `1.4.0`
 - [x] 收尾：`cargo fmt`、`cargo test`（3984 + 集成全绿）、`cargo clippy`、`assets/changelog/v.1.4.0.md` 补段

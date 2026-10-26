@@ -599,6 +599,9 @@ pub struct App {
     pub dock_area: Option<Rect>,
     /// 扩展覆盖层（输入区上方导航面板 / 全屏查看器）。内容由扩展持有，核心只持快照。
     pub overlay: Option<OverlayState>,
+    /// 被后一个覆盖层顶下去的挂起覆盖层（栈顶最后打开，最后一个入栈）。
+    /// 关闭可见覆盖层时从这里弹回一个，详见 [`crate::modes::interactive::overlay::open`]。
+    pub overlay_stack: Vec<OverlayState>,
     /// /extension 二级菜单详情行（ExtensionDetail 面板渲染）
     pub extension_detail: Vec<String>,
     /// 扩展启用状态被切换过（面板关闭时重建 Agent 工具列表）
@@ -949,6 +952,7 @@ impl App {
             extension_detail_url: None,
             dock_visible: false,
             overlay: None,
+            overlay_stack: Vec::new(),
             dock_offset: 0,
             dock_area: None,
             pending_session_repair: None,

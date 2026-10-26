@@ -39,6 +39,7 @@ mod mock_tests;
 use crate::{
     APP_NAME,
     cli::args::VALID_THINKING_LEVELS,
+    core::changelog::VERSION,
     core::{self, model_config, model_resolver, settings_manager},
     error::{Error, Result},
     utils::{image::ImageResizeLimits, time::now_ms},
@@ -325,6 +326,14 @@ pub struct ModelConfig {
     /// `None` 表示按 provider / baseUrl 探测。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_affinity_format: Option<String>,
+    /// compat.imageInput：分类器带图请求的图片形态（`assets` / `images` / `state-image-urls`）；
+    /// `None` 表示按 provider / baseUrl 探测。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_input: Option<String>,
+    /// compat.sendImageOptInHeader：分类器带图请求是否发 TypeSafe 的 `TypeSafe-Danger-Zone-Images` 头；
+    /// `None` 表示按 provider 探测。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub send_image_opt_in_header: Option<bool>,
     /// openai 兼容 compat 开关
     pub supports_usage_in_streaming: bool,
     /// true 时请求体显式带 store=false，规避 store 语义差异。
@@ -765,6 +774,16 @@ pub(crate) fn session_affinity_headers(model: &ModelConfig) -> Vec<(&'static str
 /// 后写入的覆盖先写入的；非法 header 名/值直接跳过。
 pub(crate) fn provider_extra_headers(model: &ModelConfig) -> HeaderMap {
     let mut headers = HeaderMap::new();
+    // 身份头（User-Agent + 归因头）作为基线：目录头、会话头与 models.json 配置都在其后插入，可覆盖它
+    for (k, v) in identity_headers(model) {
+        if let (Ok(k), Ok(v)) = (
+            HeaderName::from_bytes(k.as_bytes()),
+            HeaderValue::from_str(&v),
+        ) {
+            headers.insert(k, v);
+        }
+    }
+
     for (k, v) in model_resolver::provider_headers(&model.provider) {
         if let (Ok(k), Ok(v)) = (
             HeaderName::from_bytes(k.as_bytes()),
@@ -812,6 +831,51 @@ pub(crate) fn provider_extra_headers(model: &ModelConfig) -> HeaderMap {
     }
 
     headers
+}
+
+/// provider 归因头里的应用主页（OpenRouter `HTTP-Referer`，同时也是排名里的应用标识）。
+const ATTRIBUTION_URL: &str = "https://github.com/heng30/prux";
+/// 归因分类（OpenRouter `X-OpenRouter-Categories`，逗号分隔）。
+const ATTRIBUTION_CATEGORIES: &str = "cli-agent";
+
+/// 身份头：`User-Agent` 与 provider 归因头（OpenRouter 排名、NVIDIA 计费来源）。
+///
+/// UA 是 `prux/<version> (<os>; <arch>)`；归因头按 provider / baseUrl 识别，
+/// OpenCode 的 `x-opencode-client` 已在 [`provider_session_headers`] 里按会话下发。
+fn identity_headers(model: &ModelConfig) -> Vec<(&'static str, String)> {
+    let mut headers = vec![(
+        "user-agent",
+        format!(
+            "{}/{VERSION} ({}; {})",
+            APP_NAME,
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        ),
+    )];
+
+    let base = model.base_url.to_ascii_lowercase();
+    if model.provider == "openrouter" || base.contains("openrouter.ai") {
+        headers.push(("http-referer", ATTRIBUTION_URL.to_string()));
+        headers.push(("x-openrouter-title", APP_NAME.to_string()));
+        headers.push((
+            "x-openrouter-categories",
+            ATTRIBUTION_CATEGORIES.to_string(),
+        ));
+    } else if model.provider == "nvidia" || base.contains("integrate.api.nvidia.com") {
+        // NVIDIA 要求首字母大写的来源名（如 `Pi`）
+        headers.push(("x-billing-invoke-origin", sentence_case(APP_NAME)));
+    }
+
+    headers
+}
+
+/// 把首字母改成大写（`prux` → `Prux`），供 NVIDIA 的计费来源头使用。
+fn sentence_case(name: &str) -> String {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
 }
 
 /// 非流式简单调用：用于压缩摘要等一次性请求。
@@ -1738,6 +1802,8 @@ mod tests {
             supports_strict_mode: false,
             send_session_affinity_headers: None,
             session_affinity_format: None,
+            image_input: None,
+            send_image_opt_in_header: None,
             provider: "test".into(),
             model_id: "m".into(),
             base_url: "https://example.com/v1".into(),
@@ -1910,9 +1976,48 @@ mod tests {
             map.get("x-opencode-client").and_then(|v| v.to_str().ok()),
             Some("prux")
         );
-        // 非 opencode provider：不受会话影响
+        // 非 opencode provider：不受会话影响（只剩身份头 UA）
         let m2 = model(false, None);
-        assert!(provider_extra_headers(&m2).is_empty());
+        let h2 = provider_extra_headers(&m2);
+        assert!(h2.get("x-opencode-session").is_none());
+        assert!(
+            h2.get("user-agent")
+                .and_then(|v| v.to_str().ok())
+                .is_some_and(|ua| ua.starts_with("prux/"))
+        );
+    }
+
+    /// 身份头：UA 恒发；OpenRouter 带归因头，NVIDIA 带首字母大写的计费来源。
+    #[test]
+    fn identity_headers_follow_the_provider() {
+        let mut m = model(false, None);
+        m.provider = "openrouter".into();
+        m.base_url = "https://openrouter.ai/api/v1".into();
+        let h = provider_extra_headers(&m);
+        assert_eq!(
+            h.get("http-referer").and_then(|v| v.to_str().ok()),
+            Some(ATTRIBUTION_URL)
+        );
+        assert_eq!(
+            h.get("x-openrouter-title").and_then(|v| v.to_str().ok()),
+            Some("prux")
+        );
+        assert_eq!(
+            h.get("x-openrouter-categories")
+                .and_then(|v| v.to_str().ok()),
+            Some(ATTRIBUTION_CATEGORIES)
+        );
+
+        // 未声明 provider 但 baseUrl 指向 NVIDIA：只发计费来源头
+        let mut nvidia = model(false, None);
+        nvidia.base_url = "https://integrate.api.nvidia.com/v1".into();
+        let h = provider_extra_headers(&nvidia);
+        assert_eq!(
+            h.get("x-billing-invoke-origin")
+                .and_then(|v| v.to_str().ok()),
+            Some("Prux")
+        );
+        assert!(h.get("http-referer").is_none());
     }
 
     #[test]

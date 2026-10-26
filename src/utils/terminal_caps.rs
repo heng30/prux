@@ -169,7 +169,7 @@ fn detect_inner() -> CapsInner {
         let true_color = match env_override("PRUX_TRUE_COLOR") {
             Some(v) => v,
             None => {
-                // COLORTERM=truecolor/24bit 或常见现代终端
+                // COLORTERM=truecolor/24bit 或常见现代终端（Rex 靠 TERM_PROGRAM 识别）
                 let term = std::env::var("TERM").unwrap_or_default();
                 std::env::var("COLORTERM")
                     .map(|c| c.contains("truecolor") || c.contains("24bit"))
@@ -179,6 +179,7 @@ fn detect_inner() -> CapsInner {
                     || term.contains("ghostty")
                     || term.contains("wezterm")
                     || term.contains("alacritty")
+                    || std::env::var("TERM_PROGRAM").is_ok_and(|p| p.eq_ignore_ascii_case("rex"))
             }
         };
 

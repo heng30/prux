@@ -19,12 +19,22 @@ use crate::{
     error::{Error, Result},
     utils::{http, time::now_ms},
 };
+use reqwest::header::{HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::{collections::BTreeMap, time::Duration};
 
 /// 错误文案里的服务名
 const LABEL: &str = "System One API";
+
+/// 分类器图片形态：TypeSafe 的 `assets` 映射（默认）。
+const IMAGE_INPUT_ASSETS: &str = "assets";
+/// 分类器图片形态：Clef 的 `images` data URL 列表。
+const IMAGE_INPUT_IMAGES: &str = "images";
+/// 分类器图片形态：OpenRouter 的 `state` 内 `image_url` 片段。
+const IMAGE_INPUT_STATE_IMAGE_URLS: &str = "state-image-urls";
+/// Clef 单次请求接受的图片张数上限。
+const MAX_DATA_URL_IMAGES: usize = 4;
 
 /// 判断题两侧的判据文案（线上原样下发，不做转换）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -75,7 +85,7 @@ pub struct ClassifierContext {
     /// 与 `state` 一起判定的一组图片（每项是 `{"type":"image","data":…,"mimeType":…}`）。
     ///
     /// 只有目录 `input` 含 `"image"` 的模型接受它们；其它模型在 [`super::classify`] 入口就返回错误结果。
-    /// 目前唯一的协议实现 `typesafe-system-one` 本身不支持图片输入，会再拒一次。
+    /// 图片按模型的 `compat.imageInput` 拼接（`assets` / `images` / `state-image-urls`）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub images: Option<Vec<ImageContent>>,
     /// 问题 id → 问题；id 由调用方自取，用于在答案里对号入座。
@@ -167,16 +177,18 @@ pub(crate) async fn classify_typesafe_system_one(
         );
     }
 
-    // 本协议只吃文本：带上图片就没法拼请求
-    if context
+    let mut body = build_body(model, context);
+    let images = context
         .images
-        .as_ref()
-        .is_some_and(|images| !images.is_empty())
+        .as_deref()
+        .filter(|images| !images.is_empty());
+    let opt_in_header = images.is_some() && sends_image_opt_in_header(model);
+    if let Some(images) = images
+        && let Err(err) = add_images(model, images, &mut body)
     {
-        return error_result(model, format!("{LABEL} does not support image input"));
+        return error_result(model, err.to_string());
     }
-
-    let body = build_body(model, context);
+    let body = body.to_string();
     let url = system_one_url(model);
     let client = match http::build_client() {
         Ok(client) => client,
@@ -185,11 +197,18 @@ pub(crate) async fn classify_typesafe_system_one(
 
     let response = match send_with_retry(
         || {
+            let mut headers = provider_extra_headers(model);
+            if opt_in_header {
+                headers.insert(
+                    HeaderName::from_static("typesafe-danger-zone-images"),
+                    HeaderValue::from_static("true"),
+                );
+            }
             client
                 .post(&url)
                 .header("Content-Type", "application/json")
                 .bearer_auth(&model.api_key)
-                .headers(provider_extra_headers(model))
+                .headers(headers)
                 .timeout(Duration::from_millis(MAX_TIMEOUT_MS))
                 .body(body.clone())
         },
@@ -242,7 +261,7 @@ pub(crate) async fn classify_typesafe_system_one(
 }
 
 /// 组装请求体：`{ model, state, questions }`（`bool` 问题转成线上的 `noul`）。
-fn build_body(model: &ModelConfig, context: &ClassifierContext) -> String {
+fn build_body(model: &ModelConfig, context: &ClassifierContext) -> Value {
     let questions: Map<String, Value> = context
         .questions
         .iter()
@@ -254,7 +273,125 @@ fn build_body(model: &ModelConfig, context: &ClassifierContext) -> String {
         "state": context.state,
         "questions": questions,
     })
-    .to_string()
+}
+
+/// 图片的线上形态（`compat.imageInput`）：`assets` / `images` / `state-image-urls`。
+///
+/// - `assets`：TypeSafe 的 `assets` 映射，文件名按 `<image-N>` 放进 `state` 之前，仅 PNG / JPEG；
+/// - `images`：Clef 的 data URL 列表，最多 4 张，PNG / JPEG / WebP；
+/// - `state-image-urls`：OpenRouter 的 `image_url` 片段放在 `state` 之前，任意 MIME 交给模型判。
+fn image_input_mode(model: &ModelConfig) -> &str {
+    model
+        .image_input
+        .as_deref()
+        .unwrap_or(if is_openrouter(model) {
+            IMAGE_INPUT_STATE_IMAGE_URLS
+        } else {
+            IMAGE_INPUT_ASSETS
+        })
+}
+
+/// provider 是否 OpenRouter（按 provider id 或 baseUrl，后者覆盖区域端点与自建代理）。
+fn is_openrouter(model: &ModelConfig) -> bool {
+    model.provider == "openrouter" || model.base_url.contains("openrouter.ai")
+}
+
+/// 带图请求是否发 TypeSafe 的实验性 opt-in 头；未声明时只有非 OpenRouter 的服务要发。
+fn sends_image_opt_in_header(model: &ModelConfig) -> bool {
+    model
+        .send_image_opt_in_header
+        .unwrap_or(!is_openrouter(model))
+}
+
+/// 把 `images` 里实际图片部分按该服务的形态拼进请求体 `body`。
+///
+/// 不支持的 MIME 或超过数量上阳时报错（由调用方转成 error 结果，不发请求）。
+fn add_images(model: &ModelConfig, images: &[ImageContent], body: &mut Value) -> Result<()> {
+    let images: Vec<(&str, &str)> = images
+        .iter()
+        .filter_map(|image| match image {
+            ImageContent::Image { data, mime_type } => Some((data.as_str(), mime_type.as_str())),
+            ImageContent::Text { .. } => None,
+        })
+        .collect();
+    if images.is_empty() {
+        return Ok(());
+    }
+
+    match image_input_mode(model) {
+        IMAGE_INPUT_IMAGES => {
+            if images.len() > MAX_DATA_URL_IMAGES {
+                return Err(Error::msg(format!(
+                    "{LABEL} accepts at most {MAX_DATA_URL_IMAGES} images for {}, got {}",
+                    model.model_id,
+                    images.len()
+                )));
+            }
+            let urls: Vec<String> = images
+                .iter()
+                .map(|(data, mime)| match *mime {
+                    "image/png" | "image/jpeg" | "image/webp" => {
+                        Ok(format!("data:{mime};base64,{data}"))
+                    }
+                    other => Err(Error::msg(format!(
+                        "{LABEL} accepts PNG, JPEG, and WebP images for {}, got {other}",
+                        model.model_id
+                    ))),
+                })
+                .collect::<Result<_>>()?;
+            body["images"] = json!(urls);
+        }
+        IMAGE_INPUT_STATE_IMAGE_URLS => {
+            let parts: Vec<Value> = images
+                .iter()
+                .map(|(data, mime)| {
+                    json!({"type": "image_url", "image_url": {"url": format!("data:{mime};base64,{data}")}})
+                })
+                .collect();
+            prepend_state(body, parts);
+        }
+        _ => {
+            let mut assets = Map::new();
+            for (index, (data, mime)) in images.iter().enumerate() {
+                let format = match *mime {
+                    "image/png" => "png",
+                    "image/jpeg" => "jpeg",
+                    other => {
+                        return Err(Error::msg(format!(
+                            "{LABEL} accepts PNG and JPEG images for {}, got {other}",
+                            model.model_id
+                        )));
+                    }
+                };
+                assets.insert(
+                    format!("<image-{}>", index + 1),
+                    json!({"type": "image", "format": format, "data_base64": data}),
+                );
+            }
+            let names: Vec<Value> = assets.keys().map(|name| json!(name)).collect();
+            body["assets"] = Value::Object(assets);
+            prepend_state(body, names);
+        }
+    }
+    Ok(())
+}
+
+/// 把 `prefix` 插到请求体 `state` 之前（`state` 变数组，原内容跟在后面）。
+///
+/// 每个 asset 都必须被 `state` 引用才能生效，因此名字列表也放在这里。
+fn prepend_state(body: &mut Value, prefix: Vec<Value>) {
+    let Some(obj) = body.as_object_mut() else {
+        return;
+    };
+    let state = obj.remove("state").unwrap_or(Value::Null);
+    let rest = match state {
+        Value::Array(items) => items,
+        other => vec![other],
+    };
+    obj.insert(
+        "state".to_string(),
+        Value::Array(prefix.into_iter().chain(rest).collect()),
+    );
 }
 
 /// 单个问题的线上表示：公开契约的 `bool` 在这里变成 TypeSafe 的 `noul`。
@@ -756,7 +893,7 @@ mod tests {
     }
 
     /// 2.8：模型不支持图片输入时在发请求前就给错误结果
-    /// （对齐 pi `assertClassifierInputSupported()`），支持图片的模型再交给协议自己判。
+    /// （对齐 pi `assertClassifierInputSupported()`）。
     #[test]
     fn image_input_requires_a_model_that_accepts_images() {
         run_net_test(|| {
@@ -764,7 +901,7 @@ mod tests {
             rt.block_on(async {
                 let mut model = classifier_model("http://127.0.0.1:1");
                 // 要验证的是「模型不接受图片时在发请求前就拦住」，与目录当前的输入能力无关：
-                // 目录里的 typesafe 分类器声明随 pi 目录同步变化（已声明支持图片），故显式固定为纯文本。
+                // 目录里的分类器条目声明随目录同步变化，故显式固定为纯文本。
                 model.input = vec!["text".to_string()];
                 let mut with_images = context();
                 with_images.images = Some(vec![ImageContent::Image {
@@ -779,17 +916,80 @@ mod tests {
                 );
                 assert_eq!(result.stop_reason, "error");
                 assert_eq!(result.error_message.as_deref(), Some(expected.as_str()));
-
-                // 模型声明支持图片后不再被入口拦，改由协议自己拒（它只吃文本）
-                model.input.push("image".into());
-                let result = super::super::classify(&model, &with_images).await;
-                assert_eq!(result.stop_reason, "error");
-                assert_eq!(
-                    result.error_message.as_deref(),
-                    Some("System One API does not support image input")
-                );
             });
         });
+    }
+
+    /// 图片按 `compat.imageInput` 拼：OpenRouter 前置 `image_url`、TypeSafe 走 `assets`、
+    /// Clef 走 data URL 列表；opt-in 头只随 TypeSafe 形态发。
+    #[test]
+    fn image_input_follows_the_model_compat() {
+        let images = [
+            ImageContent::Image {
+                data: "AAAA".into(),
+                mime_type: "image/png".into(),
+            },
+            ImageContent::Image {
+                data: "BBBB".into(),
+                mime_type: "image/jpeg".into(),
+            },
+        ];
+        let mut with_images = context();
+        with_images.images = Some(images.to_vec());
+
+        // 目录里 openrouter 的分类器条目已声明 state-image-urls / 不发 opt-in 头
+        let openrouter = classifier_model("http://127.0.0.1:1");
+        assert_eq!(image_input_mode(&openrouter), IMAGE_INPUT_STATE_IMAGE_URLS);
+        assert!(!sends_image_opt_in_header(&openrouter));
+        let mut body = build_body(&openrouter, &with_images);
+        add_images(&openrouter, &images, &mut body).unwrap();
+        assert_eq!(body["state"][0]["type"], "image_url");
+        assert_eq!(
+            body["state"][0]["image_url"]["url"],
+            "data:image/png;base64,AAAA"
+        );
+        assert_eq!(
+            body["state"][2]["text"],
+            "The deployment succeeded, thank you."
+        );
+        assert!(body.get("assets").is_none());
+
+        // TypeSafe：`assets` 映射 + 名字前置到 `state`
+        let mut typesafe = openrouter.clone();
+        typesafe.provider = "typesafe".into();
+        typesafe.image_input = Some(IMAGE_INPUT_ASSETS.into());
+        typesafe.send_image_opt_in_header = Some(true);
+        assert!(sends_image_opt_in_header(&typesafe));
+        let mut body = build_body(&typesafe, &with_images);
+        add_images(&typesafe, &images, &mut body).unwrap();
+        assert_eq!(body["assets"]["<image-1>"]["format"], "png");
+        assert_eq!(body["assets"]["<image-2>"]["data_base64"], "BBBB");
+        assert_eq!(body["state"][0], "<image-1>");
+        assert_eq!(
+            body["state"][2]["text"],
+            "The deployment succeeded, thank you."
+        );
+
+        // Clef：data URL 列表，超过 4 张直接报错
+        let mut clef = typesafe.clone();
+        clef.image_input = Some(IMAGE_INPUT_IMAGES.into());
+        let mut body = build_body(&clef, &with_images);
+        add_images(&clef, &images, &mut body).unwrap();
+        assert_eq!(body["images"][1], "data:image/jpeg;base64,BBBB");
+        let too_many = vec![images[0].clone(); MAX_DATA_URL_IMAGES + 1];
+        let mut body = build_body(&clef, &with_images);
+        assert!(add_images(&clef, &too_many, &mut body).is_err());
+
+        // 未声明 compat 时按 provider / baseUrl 探测
+        let mut bare = openrouter.clone();
+        bare.image_input = None;
+        bare.send_image_opt_in_header = None;
+        assert_eq!(image_input_mode(&bare), IMAGE_INPUT_STATE_IMAGE_URLS);
+        assert!(!sends_image_opt_in_header(&bare));
+        bare.base_url = "https://systemone.example.com".into();
+        bare.provider = "typesafe".into();
+        assert_eq!(image_input_mode(&bare), IMAGE_INPUT_ASSETS);
+        assert!(sends_image_opt_in_header(&bare));
     }
 
     /// 请求体形状（不含信封、无 temperature）与 URL 拼接。
@@ -798,7 +998,7 @@ mod tests {
         let model = classifier_model("http://127.0.0.1:1/");
         assert_eq!(system_one_url(&model), "http://127.0.0.1:1/systemone");
 
-        let body: Value = serde_json::from_str(&build_body(&model, &context())).unwrap();
+        let body = build_body(&model, &context());
         assert_eq!(body["model"], "~typesafe/jev-latest");
         assert_eq!(body["questions"]["category"]["type"], "choice");
         assert_eq!(body["questions"]["satisfaction"]["type"], "score");

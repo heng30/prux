@@ -691,6 +691,8 @@ mod tests {
             supports_strict_mode: false,
             send_session_affinity_headers: None,
             session_affinity_format: None,
+            image_input: None,
+            send_image_opt_in_header: None,
             allowed_fallback_models: Vec::new(),
         }
     }

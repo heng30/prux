@@ -1700,6 +1700,8 @@ mod tests {
             supports_strict_mode: false,
             send_session_affinity_headers: None,
             session_affinity_format: None,
+            image_input: None,
+            send_image_opt_in_header: None,
             max_tokens_field: "max_tokens".into(),
             cost: None,
             session_id: None,
@@ -2059,10 +2061,15 @@ mod tests {
             Some("GitHubCopilotChat/0.35.0")
         );
         assert!(h.get("Copilot-Integration-Id").is_some());
-        // 未定义 headers 的 provider：空
+        // 未定义 headers 的 provider：只有身份头 UA
         let m2 = model(false, None);
         let h2 = crate::core::provider::provider_extra_headers(&m2);
-        assert!(h2.is_empty());
+        assert!(
+            h2.get("User-Agent")
+                .and_then(|v| v.to_str().ok())
+                .is_some_and(|ua| ua.starts_with("prux/"))
+        );
+        assert_eq!(h2.len(), 1);
     }
 
     fn model(supports_image: bool, cost: Option<Value>) -> ModelConfig {
@@ -2103,6 +2110,8 @@ mod tests {
             supports_strict_mode: false,
             send_session_affinity_headers: None,
             session_affinity_format: None,
+            image_input: None,
+            send_image_opt_in_header: None,
             cost,
             session_id: None,
             max_retry_delay_ms: None,

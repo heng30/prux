@@ -33,7 +33,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODELS_DIR = os.path.join(ROOT, "assets", "models")
 PROVIDERS_DIR = os.path.join(MODELS_DIR, "providers")
 RESOLVER = os.path.join(ROOT, "src", "core", "model_resolver.rs")
-SYNC_MARK = os.path.join(ROOT, "sync.md")
+SYNC_MARK = os.path.join(ROOT, "migrations", "sync.md")
 
 # pi 的模型类型；其他取值（将来新增的操作）不属于本次同步范围，整条丢弃
 MODEL_TYPES = ("chat", "image", "classifier")

@@ -70,6 +70,26 @@
   becomes a grey centered subtitle, and block quotes become tinted rounded boxes.
   Parameters: `content` and an optional `path` (`output.pdf`).
 
+- **Classifier models can take images**: a classifier model whose catalog entry declares
+  `input: ["text", "image"]` now receives pictures in the form its service expects —
+  TypeSafe's `assets` map (PNG/JPEG, referenced from the state by `<image-N>`, with the
+  experimental `TypeSafe-Danger-Zone-Images` opt-in header), Clef's `images` list of data
+  URLs (at most four, PNG/JPEG/WebP), or OpenRouter's `image_url` parts placed ahead of the
+  state. `compat.imageInput` picks the form and `compat.sendImageOptInHeader` decides on the
+  opt-in header; without them the provider and `baseUrl` decide. A provider-level `compat` in
+  `models.json` now also reaches classifier entries, not just chat ones, so a proxy that
+  hides which service it fronts can be configured instead of guessed.
+
+- **Every request identifies itself**: providers now get
+  `User-Agent: prux/<version> (<platform>; <arch>)`, and OpenRouter and NVIDIA NIM requests
+  add their attribution headers (`HTTP-Referer`, `X-OpenRouter-Title`,
+  `X-OpenRouter-Categories`, and `X-BILLING-INVOKE-ORIGIN` respectively). They are the base
+  layer: catalog headers, session headers and `models.json` configuration still override them.
+
+- **Rex is a known terminal**: with `TERM_PROGRAM=rex`, inline images use the kitty protocol
+  (instead of halfblocks) and the palette is treated as truecolor, so hyperlinks and pictures
+  render instead of degrading to `text (url)`.
+
 ### Fixed
 
 - **Left/Right now reach the panel**: the TUI key translation never mapped `←`/`→`, so every
@@ -110,6 +130,10 @@
   now active.
 - **HTML export renders CJK emphasis**: bold and italic next to CJK punctuation no longer show
   up as literal asterisks.
+- **A second overlay no longer replaces the first**: when two extensions ask for input at the
+  same time, the second one used to take over and the first was simply gone. The covered overlay
+  is now kept on a stack and comes back as soon as the one above it closes; switching sessions
+  still closes all of them.
 
 ## 中文
 
@@ -164,7 +188,24 @@
   列表里的下一个家族。排版上：一级标题居中，紧跟其后的整段斜体排成灰色居中副标题，引用块排成
   灰底圆角框。参数：`content` 与可选的 `path`（默认 `output.pdf`）。
 
-### 修复
+- **分类器也能收图片了**：目录条目声明 `input: ["text", "image"]` 的分类器模型，现在会按所用服务的
+  形态收到图片——TypeSafe 的 `assets` 映射（PNG / JPEG，文件名 `<image-N>` 在 `state` 之前引用，
+  并带实验性的 `TypeSafe-Danger-Zone-Images` opt-in 头）、Clef 的 `images` data URL 列表（最多四张，
+  PNG / JPEG / WebP），或 OpenRouter 排在 `state` 之前的 `image_url` 片段。形态由
+  `compat.imageInput` 决定、opt-in 头由 `compat.sendImageOptInHeader` 决定，两者都缺时按 provider
+  与 `baseUrl` 判断；`models.json` 的 provider 级 `compat` 也从只作用于 chat 条目扩展到分类器条目，
+  藏在代理后面、看不出是哪家服务的端点因此可以配置而不是靠猜。
+
+- **每个请求都标明自己是谁**：请求带 `User-Agent: prux/<版本> (<平台>; <架构>)`；OpenRouter 与
+  NVIDIA NIM 另带归因头（`HTTP-Referer`、`X-OpenRouter-Title`、`X-OpenRouter-Categories`，
+  以及 `X-BILLING-INVOKE-ORIGIN`）。这些头是最底层，目录自带头、会话头和 `models.json`
+  配置仍然会覆盖同名项。
+
+- **Rex 终端被认出来了**：`TERM_PROGRAM=rex` 下内联图片走 kitty 协议（不再退化成半块字符），
+  配色按 truecolor 处理，超链接与图片都能正常显示，而不是退成 `text (url)`。
+
+
+## 修复
 
 - **`←` / `→` 现在能送到面板**：TUI 的按键翻译从来没映射左右方向键，所有覆盖层都把这两个键当成
   「其它键」——`ask-user-question` 的标签页只有 `Tab` 能翻，扩展也无法绑定横向导航。现在两个方向键
@@ -193,3 +234,5 @@
 - **会话开始后才注册的工具保持激活**：恢复会话、切换分支原来只装回记录的名单，后来注册的扩展工具
   永远是非激活态；分支既没加过也没删过的已注册工具现在默认激活。
 - **HTML 导出的 CJK 强调正常了**：CJK 标点紧邻 `**` / `*` 时不再显示字面星号。
+- **第二个覆盖层不再顶掉第一个**：两个扩展同时要输入时，第二个会把第一个挤掉、前者直接消失；
+  现在被盖住的覆盖层挂在栈上，上面的关掉就露回来，切换会话仍然会一次关掉全部。

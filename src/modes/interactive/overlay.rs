@@ -178,20 +178,54 @@ impl OverlayState {
 }
 
 /// 打开（或替换）覆盖层。
+///
+/// 已有**另一个**覆盖层时把它挂起到 [`App::overlay_stack`]（不发 `Closed`，扩展状态保留），
+/// 关闭当前这个会把它露回来；同 id 重复打开则只是刷新它的快照。
 pub fn open(st: &mut App, id: u64, view: OverlayView) {
-    // 换主：先告知旧覆盖层"已被替换"，否则它的状态永远等不到 Closed
-    if let Some(old) = st.overlay.as_ref().map(|o| o.id)
-        && old != id
+    if let Some(old) = st.overlay.take()
+        && old.id != id
     {
-        extensions::overlay_event(old, OverlayEvent::Closed);
+        st.overlay_stack.push(old);
     }
     st.overlay = Some(OverlayState::new(id, view));
     st.dirty = true;
 }
 
-/// 关闭覆盖层（回传 [`OverlayEvent::Closed`]）。
+/// 关闭可见覆盖层（回传 [`OverlayEvent::Closed`]），栈里有挂起的就恢复一个。
 pub fn close(st: &mut App) {
-    if let Some(o) = st.overlay.take() {
+    let Some(o) = st.overlay.take() else {
+        return;
+    };
+    extensions::overlay_event(o.id, OverlayEvent::Closed);
+    st.overlay = st.overlay_stack.pop();
+    st.dirty = true;
+}
+
+/// 关闭指定 id 的覆盖层：可见的走 [`close`]，挂起在栈里的直接移除并回传 `Closed`。
+///
+/// 返回是否找到了它（扩展想在状态已清过后重复 `HideOverlay` 时靠这个幂等）。
+pub fn hide(st: &mut App, id: u64) -> bool {
+    if st.overlay.as_ref().is_some_and(|o| o.id == id) {
+        close(st);
+        return true;
+    }
+    let Some(pos) = st.overlay_stack.iter().position(|o| o.id == id) else {
+        return false;
+    };
+    let o = st.overlay_stack.remove(pos);
+    extensions::overlay_event(o.id, OverlayEvent::Closed);
+    st.dirty = true;
+    true
+}
+
+/// 关闭全部覆盖层（会话切换）：可见的与挂起的一并回传 `Closed`。
+pub fn close_all(st: &mut App) {
+    let visible = st
+        .overlay
+        .take()
+        .into_iter()
+        .chain(st.overlay_stack.drain(..));
+    for o in visible {
         extensions::overlay_event(o.id, OverlayEvent::Closed);
         st.dirty = true;
     }
@@ -794,6 +828,41 @@ mod tests {
             input_focus: false,
             ..OverlayView::inline("x", Vec::new(), 6)
         }
+    }
+
+    /// 后打开的覆盖层不吞掉前一个：关闭可见的会把前一个露回来，栈清空后为 None。
+    #[test]
+    fn opening_a_second_overlay_keeps_the_first_underneath() {
+        let mut st = App::new();
+        open(&mut st, 1, view(1, None));
+        open(&mut st, 2, view(1, None));
+        assert_eq!(st.overlay.as_ref().map(|o| o.id), Some(2));
+        assert_eq!(
+            st.overlay_stack.iter().map(|o| o.id).collect::<Vec<_>>(),
+            vec![1]
+        );
+
+        close(&mut st);
+        assert_eq!(
+            st.overlay.as_ref().map(|o| o.id),
+            Some(1),
+            "关闭后应露出前一个"
+        );
+        close(&mut st);
+        assert!(st.overlay.is_none());
+        assert!(st.overlay_stack.is_empty());
+    }
+
+    /// 挂起中的覆盖层也能被自己的扩展关掉，且重复关闭是幂等的。
+    #[test]
+    fn hide_removes_a_suspended_overlay() {
+        let mut st = App::new();
+        open(&mut st, 1, view(1, None));
+        open(&mut st, 2, view(1, None));
+        assert!(hide(&mut st, 1));
+        assert!(st.overlay_stack.is_empty());
+        assert_eq!(st.overlay.as_ref().map(|o| o.id), Some(2));
+        assert!(!hide(&mut st, 1));
     }
 
     fn with_overlay(id: u64, v: OverlayView) -> App {

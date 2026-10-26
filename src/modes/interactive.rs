@@ -1200,9 +1200,7 @@ fn maybe_handle_extension_ui(shared: &Rc<RefCell<App>>) {
             }
         }
         core::extensions::ExtensionUiRequest::HideOverlay { id } => {
-            if st.overlay.as_ref().is_some_and(|o| o.id == id) {
-                overlay::close(&mut st);
-            }
+            overlay::hide(&mut st, id);
         }
         core::extensions::ExtensionUiRequest::ShowSettings { ext } => {
             st.ext_settings.open(ext);

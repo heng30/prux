@@ -239,6 +239,10 @@ match result.answers.get("approved") {
 - 列可用分类器模型：`list_models_of_type(provider, ModelType::Classifier)`。
 - 扩展也可以在运行时注册分类器模型（`VirtualModelDefinition::operation` + `with_classifier_impl`），
   见 [extensions.md](extensions.md#协议实现图片与分类器)。
+- 模型条目 `input` 含 `image` 时可以带图：`ClassifierContext.images` 传
+  `ImageContent::Image` 列表，图片按 `compat.imageInput` 拼成该服务的形态（`assets` /
+  `images` / `state-image-urls`，见 [custom-provider.md](custom-provider.md#供应商字段compat-与-quirk)）。
+  模型不接受图片时在发请求前就返回错误结果。
 - `probabilities` 只包含服务返回的选项，不保证覆盖 `criteria` 里的全部选项；
   不属于 `criteria` 的键也会原样带回来（服务端行为）。
 - 完整可运行示例：`cargo run --example classify -- --text "..."`。

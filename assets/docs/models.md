@@ -97,6 +97,10 @@ OpenRouter / TypeSafe / Vercel AI Gateway / OpenCode Zen 共用，只是 `baseUr
 `models.json` 里的自定义条目也可以声明 `"type": "classifier"`，
 只要 `api` 是 `typesafe-system-one` 或扩展注册的实现即可走同一条路径。
 
+分类器条目声明 `input: ["text", "image"]` 时可以随请求带图：图片按 `compat.imageInput`
+拼成该服务的形态（`assets` / `images` / `state-image-urls`，缺省按 provider 与 `baseUrl` 判断），
+见 [custom-provider.md](custom-provider.md#供应商字段compat-与-quirk)。
+
 ### 虚拟模型
 
 虚拟模型（`api = prux-virtual`）**不写在 models.json**：它们由扩展/ SDK 注册，
@@ -113,7 +117,7 @@ OpenRouter / TypeSafe / Vercel AI Gateway / OpenCode Zen 共用，只是 `baseUr
 | `apiKey` | API key 配置，支持四类值（见下方「值解析」）。省略时使用 `/login` 凭据、`--api-key` 或内置环境变量 |
 | `headers` | 自定义请求头（同样支持值解析） |
 | `authHeader` | `true` 时自动加 `Authorization: Bearer <apiKey>` |
-| `compat` | provider 兼容性覆盖，合并进该 provider 的 **chat 条目**（已存在的 image / classifier 条目不变；`models` 数组里新声明的条目无差别合并）（如 Ollama 不认 `developer` 角色时设 `supportsDeveloperRole: false`） |
+| `compat` | provider 兼容性覆盖，合并进该 provider 的 **chat 与 classifier 条目**（已存在的 image 条目只有 `baseUrl` 变；`models` 数组里新声明的条目无差别合并）（如 Ollama 不认 `developer` 角色时设 `supportsDeveloperRole: false`） |
 | `models` | 模型定义数组 |
 | `modelOverrides` | 按模型 id 覆盖内置/已合并模型的字段（`name`、`reasoning`、`input`、`cost`、`contextWindow`、`maxTokens`、`samplingParams`、`headers`、`compat` 等） |
 
