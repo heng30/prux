@@ -1,11 +1,18 @@
 //! 侧栏：会话列表（读 `agent_dir()/sessions`），按修改时间分组。
+//!
+//! 列表分两段算：目录列举（[`paths`]，只看 mtime，快）留在主线程，
+//! 逐条解析会话元数据（整文件读，慢）交给 [`ProgressiveMetas`] 的后台线程，
+//! 渲染时只取已就绪的那部分。
 
 use super::components::{dot, ellipsis, section_label};
 use super::theme::Theme;
-use crate::core::session_manager::{default_session_dir, list_sessions, session_meta};
+use super::theme::px;
+use crate::cli::session_picker::ProgressiveMetas;
+use crate::core::session_manager::{default_session_dir, list_sessions};
 use crate::core::settings_manager::agent_dir;
 use crate::modes::interactive::agent_actor::{AgentCommand, CommandTx};
-use gpui::{AnyElement, IntoElement, ParentElement, SharedString, Styled, div, prelude::*, px};
+use gpui::{AnyElement, IntoElement, ParentElement, SharedString, Styled, div, prelude::*};
+use std::path::PathBuf;
 
 /// 会话按最近活动时间分的组。
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -43,13 +50,18 @@ pub struct SessionRow {
     group: Group,
 }
 
-/// 读取当前 cwd 的会话列表（按最近修改倒序）。
-pub fn load(cwd: &str) -> Vec<SessionRow> {
-    let dir = default_session_dir(cwd, &agent_dir());
-    list_sessions(&dir)
-        .into_iter()
-        .filter_map(|path| {
-            let meta = session_meta(&path)?;
+/// 列出当前 cwd 的会话文件（按最近修改倒序，不解析内容）。
+pub fn paths(cwd: &str) -> Vec<PathBuf> {
+    list_sessions(&default_session_dir(cwd, &agent_dir()))
+}
+
+/// 把已解析完的元数据组装成侧栏行（未就绪的会话不出现）。
+pub fn rows(loader: &ProgressiveMetas) -> Vec<SessionRow> {
+    loader
+        .visible()
+        // 没有任何消息的会话不列出：老版本每次启动都会留下一个只有 header 的空文件
+        .filter(|(_, _, meta)| meta.message_count > 0)
+        .map(|(_, path, meta)| {
             let title = meta
                 .name
                 .clone()
@@ -63,13 +75,13 @@ pub fn load(cwd: &str) -> Vec<SessionRow> {
                         .map(|s| truncate(&s.to_string_lossy(), 18))
                         .unwrap_or_default()
                 });
-            Some(SessionRow {
+            SessionRow {
                 path: path.to_string_lossy().to_string(),
                 title,
                 group: group_of(&meta.modified_age),
-                age: meta.modified_age,
+                age: meta.modified_age.clone(),
                 messages: meta.message_count,
-            })
+            }
         })
         .collect()
 }
@@ -97,7 +109,7 @@ pub fn render(
     cwd: &str,
     rows: &[SessionRow],
     current: Option<&str>,
-    selected: usize,
+    loading: bool,
     cmd_tx: CommandTx,
     on_new_session: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
 ) -> AnyElement {
@@ -157,6 +169,8 @@ pub fn render(
         .gap(px(2.))
         .px(px(6.))
         .py(px(4.))
+        // 底部留白：列表最后一行不贴着窗口下沿
+        .pb(px(12.))
         .overflow_y_scroll();
     list = list.child(section_label(theme, "会话"));
     if rows.is_empty() {
@@ -166,7 +180,11 @@ pub fn render(
                 .py(px(6.))
                 .text_size(px(11.5))
                 .text_color(theme.text_ghost)
-                .child(SharedString::from("还没有会话")),
+                .child(SharedString::from(if loading {
+                    "正在加载会话…"
+                } else {
+                    "还没有会话"
+                })),
         );
     }
     let mut last_group: Option<Group> = None;
@@ -187,10 +205,8 @@ pub fn render(
             .flex()
             .flex_col()
             .gap(px(2.))
-            .cursor_pointer();
-        if index == selected && active != Some(index) {
-            entry = entry.bg(theme.overlay);
-        }
+            .cursor_pointer()
+            .hover(|style| style.bg(theme.overlay));
         if active == Some(index) {
             entry = entry.bg(theme.overlay_strong);
         }

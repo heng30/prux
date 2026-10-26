@@ -145,6 +145,8 @@ pub struct Session {
     persist_error: Option<String>,
     /// 会话文件头（id/cwd/创建时间/父会话 id 等）
     header: JsonlV4Header,
+    /// 延迟落盘期间攒下的记录：第一条消息落盘时按原顺序一次性补写，语义与直接写盘一致
+    pending_persist: Vec<SessionMutation>,
 }
 
 /// 抢救行数
@@ -570,6 +572,7 @@ fn finalize_open(
         state,
         persist_error: None,
         header,
+        pending_persist: Vec::new(),
     }))
 }
 
@@ -589,6 +592,9 @@ pub struct SessionCreateOptions {
     pub session_id: Option<String>,
     /// 父会话 id（fork / 子代理会话场景）；None = header 不写 `parentSessionId`
     pub parent_session_id: Option<String>,
+    /// true 时建会话不落盘：等第一次写入（首条消息等）才建目录、写 header 与首行记录。
+    /// 用于「新会话」——空会话不该在磁盘上留下空文件。`persist = false` 时本字段无意义。
+    pub defer_file: bool,
 }
 
 impl Session {
@@ -637,6 +643,7 @@ impl Session {
             None => new_session_id(),
         };
         let persist = opts.persist;
+        let defer_file = opts.persist && opts.defer_file;
         let dir = opts
             .session_dir
             .unwrap_or_else(|| default_session_dir(cwd, &agent_dir()));
@@ -657,8 +664,9 @@ impl Session {
             name: None,
             persist_error: None,
             header: header.clone(),
+            pending_persist: Vec::new(),
         };
-        if persist {
+        if persist && !defer_file {
             std::fs::create_dir_all(&session.session_dir).map_err(|source| Error::Io {
                 context: format!(
                     "Failed to create session directory: {}",
@@ -681,6 +689,17 @@ impl Session {
     /// 父会话 id（fork / 子代理会话；`/resume` 嵌套显示依赖它）。
     pub fn parent_session_id(&self) -> Option<&str> {
         self.header.parent_session_id.as_deref()
+    }
+
+    /// 创建「空会话不落盘」的持久会话：第一次写入时才建文件。
+    pub fn create_deferred(cwd: &str, session_dir: Option<PathBuf>) -> Result<Session> {
+        Self::create_with(SessionCreateOptions {
+            cwd: cwd.to_string(),
+            session_dir,
+            persist: true,
+            defer_file: true,
+            ..Default::default()
+        })
     }
 
     /// 是否持久化模式
@@ -893,6 +912,7 @@ impl Session {
             state,
             persist_error: None,
             header,
+            pending_persist: Vec::new(),
         })
     }
 
@@ -962,9 +982,43 @@ impl Session {
     /// 以追加模式把 mutation 编码成一行写入会话文件；非持久化会话直接返回 `Ok`，
     /// IO 错误原样上抛。
     fn try_persist_mutation(&mut self, mutation: &SessionMutation) -> std::io::Result<()> {
-        if self.persist
-            && let Some(file) = &self.session_file
-        {
+        if !self.persist {
+            return Ok(());
+        }
+
+        // 还没落盘时：只有「第一条消息」才算有内容，其余记录（启动时的模型/工具快照）先攒着，
+        // 等消息来了按原顺序补写。否则每开一次新会话都会留一个没内容却占位的会话文件。
+        if self.session_file.is_none() {
+            let is_message = matches!(
+                mutation,
+                SessionMutation::Entry {
+                    entry: Entry::Message { .. },
+                    ..
+                }
+            );
+
+            if !is_message {
+                self.pending_persist.push(mutation.clone());
+                return Ok(());
+            }
+
+            std::fs::create_dir_all(&self.session_dir)?;
+            let file = self
+                .session_dir
+                .join(session_file_name(self.header.created_at, &self.session_id));
+
+            let mut content = self.header.encode();
+            for pending in self.pending_persist.drain(..) {
+                content.push_str(&session_v4::encode_mutation(&pending));
+            }
+
+            content.push_str(&session_v4::encode_mutation(mutation));
+            std::fs::write(&file, content)?;
+            self.session_file = Some(file);
+            return Ok(());
+        }
+
+        if let Some(file) = &self.session_file {
             let mut f = std::fs::OpenOptions::new().append(true).open(file)?;
             let line = session_v4::encode_mutation(mutation);
             f.write_all(line.as_bytes())?;
@@ -2061,6 +2115,28 @@ mod tests {
     fn session_at(dir: &Path) -> Session {
         let d = dir.join("sessions");
         Session::create(dir.to_str().unwrap(), Some(d.clone()), true).unwrap()
+    }
+
+    /// 延迟落盘的会话：没写入前磁盘上没有文件，写入首条消息后才建文件（空会话不落盘）。
+    #[test]
+    fn deferred_session_creates_file_on_first_write() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("sessions");
+        let mut session =
+            Session::create_deferred(tmp.path().to_str().unwrap(), Some(dir.clone())).unwrap();
+        assert!(session.get_session_file().is_none());
+        assert!(!dir.exists());
+
+        session.append_message(&user("hi"));
+
+        let file = session
+            .get_session_file()
+            .expect("首次写入后应有会话文件")
+            .to_path_buf();
+        assert!(file.is_file());
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(text.contains("\"kind\":\"header\""));
+        assert!(list_sessions(&dir).contains(&file));
     }
 
     /// Windows 上 `canonicalize` 返回 `\\?\...`，`?` 不能进文件名：

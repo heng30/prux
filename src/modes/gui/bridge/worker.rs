@@ -144,7 +144,7 @@ fn new_session(agent: &mut Agent, events: &UnboundedSender<GuiEvent>) {
     let cwd = agent.cwd.clone();
     let dir = session_manager::default_session_dir(&cwd, &settings_manager::agent_dir());
     _ = std::fs::create_dir_all(&dir);
-    match Session::create(&cwd, Some(dir), true) {
+    match Session::create_deferred(&cwd, Some(dir)) {
         Ok(session) => {
             agent.messages.clear();
             agent.session = Some(session);

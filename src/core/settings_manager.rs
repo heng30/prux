@@ -984,6 +984,27 @@ pub fn write_settings_auto_compact(enabled: bool) -> Result<()> {
     write_settings_value("autoCompact", json!(enabled))
 }
 
+/// settings.json: uiScale（GUI 界面缩放系数；非有限值或 <= 0 视为未设置）。
+/// 缺省 1.5：设计稿按 13px 正文画，直接照搬在高分屏上偏小。
+pub fn read_settings_ui_scale() -> f32 {
+    settings_value()
+        .get("uiScale")
+        .and_then(|v| v.as_f64())
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .map(|v| v as f32)
+        .unwrap_or(1.5)
+}
+
+/// 写回 settings.json 的 uiScale；`None` 删除该键（回落 1.5）。
+pub fn write_settings_ui_scale(scale: Option<f32>) -> Result<()> {
+    match scale {
+        Some(scale) => write_settings_value("uiScale", json!(scale)),
+        None => modify_global_settings(|obj| {
+            obj.remove("uiScale");
+        }),
+    }
+}
+
 /// settings.json: exposeSessionEnvironment（默认 true）
 pub fn read_settings_expose_session_environment() -> bool {
     settings_value()

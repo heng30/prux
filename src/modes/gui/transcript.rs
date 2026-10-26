@@ -5,11 +5,21 @@
 
 use super::components::dot;
 use super::markdown;
-use super::theme::Theme;
+use super::theme::{Theme, px};
 use crate::core::provider::{AgentMessage, ContentBlock};
-use gpui::{AnyElement, FontWeight, IntoElement, ParentElement, SharedString, Styled, div, px};
+use gpui::{
+    AnyElement, FontStyle, FontWeight, HighlightStyle, IntoElement, ParentElement, SharedString,
+    Styled, StyledText, div,
+};
 use serde_json::Value;
 use std::collections::HashMap;
+
+/// 工具输出收起时显示的行数。
+const COLLAPSED_OUTPUT_LINES: usize = 6;
+/// 工具输出展开时显示的行数上限。
+const EXPANDED_OUTPUT_LINES: usize = 200;
+/// 工具输出每一行最多保留的字符数。
+const OUTPUT_LINE_CHARS: usize = 160;
 
 /// 工具调用的执行状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,6 +39,50 @@ pub struct Assistant {
     pub text: String,
     /// 思考内容（流式追加，默认折叠显示首行）
     pub thinking: String,
+    /// 正文的解析结果缓存
+    body: Body,
+}
+
+/// 助手正文的渲染缓存：解析 + 语法高亮只在正文或明暗主题变化时重做。
+///
+/// 每帧都把整段正文重新喂给 pulldown-cmark / syntect 会让「敲一个字」变成 O(整段对话)，
+/// 这是输入卡顿的主因，故缓存成预解析的行。
+#[derive(Debug, Default)]
+struct Body {
+    /// 解析时的正文字节长度（正文只追加，长度变了就重解析）
+    len: usize,
+    /// 解析时的明暗主题：换主题要按新配色重算代码高亮
+    dark: bool,
+    /// 预解析好的行
+    rows: Vec<Row>,
+}
+
+/// 预解析的一行。
+#[derive(Debug)]
+enum Row {
+    /// 普通 Markdown 行（段落/标题/列表/引用）
+    Line(markdown::Line),
+    /// 围栏代码块，已按主题高亮成 `(颜色, 文本)` 片段
+    Code {
+        /// 语言标签（None 显示 `text`）
+        lang: Option<String>,
+        /// 每行的着色片段
+        lines: Vec<Vec<(Option<crate::utils::color::Rgb>, String)>>,
+    },
+    /// 分隔线
+    Rule,
+}
+
+impl Body {
+    /// 取（必要时重建）预解析结果。
+    fn rows(&mut self, text: &str, theme: &Theme) -> &[Row] {
+        if self.len != text.len() || self.dark != theme.is_dark {
+            self.len = text.len();
+            self.dark = theme.is_dark;
+            self.rows = parse_rows(text, theme);
+        }
+        &self.rows
+    }
 }
 
 /// 一次工具调用。
@@ -88,6 +142,11 @@ impl Transcript {
     /// 当前块列表。
     pub fn blocks(&self) -> &[Block] {
         &self.blocks
+    }
+
+    /// 当前块列表（可变：渲染时会顺手刷新每块的解析缓存）。
+    pub fn blocks_mut(&mut self) -> &mut [Block] {
+        &mut self.blocks
     }
 
     /// 追加一条用户消息（本地回显，agent 自己也会发 user 消息但不重复渲染）。
@@ -345,6 +404,19 @@ fn tool_result_text(content: &[ContentBlock]) -> String {
         .join("\n")
 }
 
+/// 取前 `max` 行，每行再按字符截断，还有更多行时末尾补省略号。
+fn first_lines(text: &str, max: usize) -> String {
+    let mut out: Vec<String> = text
+        .lines()
+        .take(max)
+        .map(|line| truncate(line, OUTPUT_LINE_CHARS))
+        .collect();
+    if text.lines().nth(max).is_some() {
+        out.push("…".to_string());
+    }
+    out.join("\n")
+}
+
 /// 按字符截断，超出补省略号。
 fn truncate(text: &str, max: usize) -> String {
     if text.chars().count() <= max {
@@ -356,7 +428,7 @@ fn truncate(text: &str, max: usize) -> String {
 }
 
 /// 单个块的渲染。
-pub fn render_block(block: &Block, theme: &Theme, expand_tools: bool) -> AnyElement {
+pub fn render_block(block: &mut Block, theme: &Theme, expand_tools: bool) -> AnyElement {
     match block {
         // 用户消息：右对齐气泡，与助手正文拉开层级
         Block::User(text) => div()
@@ -390,9 +462,8 @@ pub fn render_block(block: &Block, theme: &Theme, expand_tools: bool) -> AnyElem
                         .child(SharedString::from(truncate(assistant.thinking.trim(), 300))),
                 );
             }
-            column
-                .child(render_markdown(&assistant.text, theme))
-                .into_any_element()
+            let rows = assistant.body.rows(&assistant.text, theme);
+            column.child(render_rows(rows, theme)).into_any_element()
         }
         // 工具调用：带描边的小卡片，状态用圆点表示
         Block::Tool(tool) => {
@@ -442,18 +513,19 @@ pub fn render_block(block: &Block, theme: &Theme, expand_tools: bool) -> AnyElem
                     ),
             );
             if !tool.output.trim().is_empty() {
-                let (max_h, limit) = if expand_tools {
-                    (1200., 20000)
+                // 按行截断而不是靠 `max_h` 裁剪：被裁掉的那部分不计入布局高度，
+                // 会盖在输入卡片上，也会让钉底算错。
+                let lines = if expand_tools {
+                    EXPANDED_OUTPUT_LINES
                 } else {
-                    (150., 900)
+                    COLLAPSED_OUTPUT_LINES
                 };
                 card = card.child(
                     div()
-                        .max_h(px(max_h))
                         .overflow_hidden()
                         .text_size(px(11.5))
                         .text_color(theme.text_secondary)
-                        .child(SharedString::from(truncate(tool.output.trim(), limit))),
+                        .child(SharedString::from(first_lines(tool.output.trim(), lines))),
                 );
             }
             card.into_any_element()
@@ -486,14 +558,30 @@ pub fn render_block(block: &Block, theme: &Theme, expand_tools: bool) -> AnyElem
     }
 }
 
-/// Markdown 文本 → 元素（行内样式、代码块高亮、标题字号）。
-pub fn render_markdown(text: &str, theme: &Theme) -> AnyElement {
+/// Markdown 文本 → 预解析行（代码块的高亮只在解析时做一次）。
+fn parse_rows(text: &str, theme: &Theme) -> Vec<Row> {
+    let syntect_theme = theme.syntect();
+    markdown::parse(text)
+        .into_iter()
+        .map(|block| match block {
+            markdown::Block::Line(line) => Row::Line(line),
+            markdown::Block::Code { lang, code } => Row::Code {
+                lines: super::code::highlight(&code, lang.as_deref(), &syntect_theme),
+                lang,
+            },
+            markdown::Block::Rule => Row::Rule,
+        })
+        .collect()
+}
+
+/// 预解析行 → 元素（行内样式、标题字号、代码块的逐行着色）。
+fn render_rows(rows: &[Row], theme: &Theme) -> AnyElement {
     let mut column = div().w_full().flex().flex_col().gap(px(4.));
-    for block in markdown::parse(text) {
-        let element: AnyElement = match block {
-            markdown::Block::Line(line) => {
-                let mut row = div().w_full().text_size(px(13.5)).text_color(theme.text);
-                match line.kind {
+    for row in rows {
+        let element: AnyElement = match row {
+            Row::Line(line) => {
+                let mut element = div().w_full().text_size(px(13.5)).text_color(theme.text);
+                let marker = match line.kind {
                     markdown::LineKind::Heading(level) => {
                         let size = match level {
                             1 => 19.,
@@ -501,43 +589,36 @@ pub fn render_markdown(text: &str, theme: &Theme) -> AnyElement {
                             3 => 15.5,
                             _ => 14.,
                         };
-                        row = row
+                        element = element
                             .mt(px(6.))
                             .text_size(px(size))
                             .font_weight(FontWeight::BOLD)
                             .text_color(theme.text);
+                        None
                     }
                     markdown::LineKind::Bullet(depth) => {
-                        row = row.pl(px(14. * (depth as f32 + 1.))).child(
-                            div()
-                                .pr(px(6.))
-                                .text_color(theme.text_tertiary)
-                                .child(SharedString::from("•")),
-                        );
+                        element = element.pl(px(14. * (depth as f32 + 1.)));
+                        Some("• ".to_string())
                     }
                     markdown::LineKind::Numbered(index) => {
-                        row = row.pl(px(14.)).child(
-                            div()
-                                .pr(px(6.))
-                                .text_color(theme.text_tertiary)
-                                .child(SharedString::from(format!("{index}."))),
-                        );
+                        element = element.pl(px(14.));
+                        Some(format!("{index}. "))
                     }
                     markdown::LineKind::Quote => {
-                        row = row
+                        element = element
                             .pl(px(10.))
                             .border_l_2()
                             .border_color(theme.border_strong)
                             .text_color(theme.text_secondary);
+                        None
                     }
-                    markdown::LineKind::Text => {}
-                }
-                for span in line.spans {
-                    row = row.child(render_span(&span, theme));
-                }
-                row.into_any_element()
+                    markdown::LineKind::Text => None,
+                };
+                element
+                    .child(inline_text(marker.as_deref(), &line.spans, theme))
+                    .into_any_element()
             }
-            markdown::Block::Code { lang, code } => {
+            Row::Code { lang, lines } => {
                 let mut card = div()
                     .w_full()
                     .my(px(4.))
@@ -567,26 +648,25 @@ pub fn render_markdown(text: &str, theme: &Theme) -> AnyElement {
                     .px(px(10.))
                     .py(px(8.))
                     .font_family("monospace");
-                let syntect_theme = theme.syntect();
-                for line in super::code::highlight(&code, lang.as_deref(), &syntect_theme) {
-                    let mut row = div()
+                for line in lines {
+                    let mut element = div()
                         .w_full()
                         .flex()
                         .text_size(px(11.5))
                         .text_color(theme.text);
                     for (color, text) in line {
-                        row = row.child(match color {
+                        element = element.child(match color {
                             Some(rgb) => div()
-                                .text_color(theme.rgb(rgb))
-                                .child(SharedString::from(text)),
-                            None => div().child(SharedString::from(text)),
+                                .text_color(theme.rgb(*rgb))
+                                .child(SharedString::from(text.clone())),
+                            None => div().child(SharedString::from(text.clone())),
                         });
                     }
-                    body = body.child(row);
+                    body = body.child(element);
                 }
                 card.child(body).into_any_element()
             }
-            markdown::Block::Rule => div()
+            Row::Rule => div()
                 .w_full()
                 .h(px(1.))
                 .my(px(8.))
@@ -598,23 +678,72 @@ pub fn render_markdown(text: &str, theme: &Theme) -> AnyElement {
     column.into_any_element()
 }
 
-/// 行内片段 → 元素。
-fn render_span(span: &markdown::Span, theme: &Theme) -> AnyElement {
-    let mut element = div().child(SharedString::from(span.text.clone()));
-    if span.style.bold {
-        element = element.font_weight(FontWeight::BOLD);
+/// 一行的行内片段 → 单个文本元素。
+///
+/// 一个片段一个 `div` 是不行的：每个 `div` 都是独立的块，行内代码会被排成
+/// 单独一行并撑满宽度，正文也就断在半句上。行内样式只能靠 `StyledText` 的
+/// 分段高亮表达，标记（`•` / `1.`）也拼进同一段文本里才能跟着首行缩进。
+fn inline_text(marker: Option<&str>, spans: &[markdown::Span], theme: &Theme) -> StyledText {
+    let mut text = String::new();
+    let mut highlights: Vec<(std::ops::Range<usize>, HighlightStyle)> = Vec::new();
+    let mut push = |text: &mut String, body: &str, style: HighlightStyle| {
+        let start = text.len();
+        text.push_str(body);
+        if style != HighlightStyle::default() {
+            highlights.push((start..text.len(), style));
+        }
+    };
+    if let Some(marker) = marker {
+        push(
+            &mut text,
+            marker,
+            HighlightStyle {
+                color: Some(theme.text_tertiary),
+                ..Default::default()
+            },
+        );
     }
-    if span.style.italic {
-        element = element.italic();
+    for span in spans {
+        push(&mut text, &span.text, span_highlight(&span.style, theme));
     }
-    if span.style.code {
-        element = element
-            .px(px(4.))
-            .rounded(px(4.))
-            .bg(theme.code_wash)
-            .text_color(theme.code_text);
-    } else if span.style.link {
-        element = element.text_color(theme.link);
+    StyledText::new(text).with_highlights(highlights)
+}
+
+/// 行内片段样式 → 文本高亮；默认前景色留给外层容器的文字样式。
+fn span_highlight(style: &markdown::SpanStyle, theme: &Theme) -> HighlightStyle {
+    let (color, background_color) = if style.code {
+        (Some(theme.code_text), Some(theme.code_wash))
+    } else if style.link {
+        (Some(theme.link), None)
+    } else {
+        (None, None)
+    };
+    HighlightStyle {
+        color,
+        background_color,
+        font_weight: style.bold.then_some(FontWeight::BOLD),
+        font_style: style.italic.then_some(FontStyle::Italic),
+        ..Default::default()
     }
-    element.into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 超出行数时截断并补省略号，行内过长的部分也截断。
+    #[test]
+    fn first_lines_caps_rows_and_chars() {
+        let text = format!("a\nb\n{}", "x".repeat(OUTPUT_LINE_CHARS + 5));
+        let lines = first_lines(&text, 2);
+        let rows: Vec<&str> = lines.lines().collect();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0], "a");
+        assert_eq!(rows[1], "b");
+        assert_eq!(rows[2], "…");
+
+        let long = first_lines("x".repeat(OUTPUT_LINE_CHARS + 5).as_str(), 6);
+        assert_eq!(long.chars().count(), OUTPUT_LINE_CHARS + 1);
+        assert!(long.ends_with('…'));
+    }
 }

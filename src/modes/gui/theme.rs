@@ -3,7 +3,35 @@
 //! 颜色只用来表达含义（状态、强调），结构一律靠中性层级与描边区分；
 //! 这是 GUI 侧唯一的配色来源，不跟随 TUI 的多主题体系。
 
-use gpui::{Hsla, rgb, rgba};
+use gpui::{Hsla, Pixels, rgb, rgba};
+use std::sync::atomic::{AtomicU32, Ordering};
+
+/// 界面缩放系数的下限：再小中文就糊了。
+pub const UI_SCALE_MIN: f32 = 0.8;
+/// 界面缩放系数的上限：再大侧栏与输入框会被挤出窗口。
+pub const UI_SCALE_MAX: f32 = 2.0;
+/// 每档缩放的步进（Ctrl+= / Ctrl+- 一次调多少）。
+pub const UI_SCALE_STEP: f32 = 0.1;
+
+/// 当前界面缩放系数，存千分比整数（1000 = 1.0）：全局唯一，渲染时由 [`px`] 读取。
+static UI_SCALE_PERMILLE: AtomicU32 = AtomicU32::new(1000);
+
+/// 当前界面缩放系数（1.0 = 设计稿尺寸）。
+pub fn ui_scale() -> f32 {
+    UI_SCALE_PERMILLE.load(Ordering::Relaxed) as f32 / 1000.0
+}
+
+/// 设置界面缩放系数，返回夹到 [`UI_SCALE_MIN`]..=[`UI_SCALE_MAX`] 后的生效值。
+pub fn set_ui_scale(scale: f32) -> f32 {
+    let clamped = scale.clamp(UI_SCALE_MIN, UI_SCALE_MAX);
+    UI_SCALE_PERMILLE.store((clamped * 1000.0).round() as u32, Ordering::Relaxed);
+    clamped
+}
+
+/// 按当前界面缩放系数换算设计稿像素：GUI 里所有尺寸都走它，字号与间距才会一起缩放。
+pub fn px(value: f32) -> Pixels {
+    gpui::px(value * ui_scale())
+}
 
 /// 界面配色。
 #[derive(Clone)]

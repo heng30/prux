@@ -1,7 +1,7 @@
 //! 共享小部件：小标签、圆点、分节标题、空状态。全部只负责样式，交互由调用方挂。
 
-use super::theme::Theme;
-use gpui::{AnyElement, FontWeight, IntoElement, ParentElement, SharedString, Styled, div, px};
+use super::theme::{Theme, px};
+use gpui::{AnyElement, FontWeight, IntoElement, ParentElement, SharedString, Styled, div};
 
 /// 圆角标签：`active` 为真时用强调描边与主文本色。
 pub fn chip(theme: &Theme, text: impl Into<SharedString>, active: bool) -> AnyElement {

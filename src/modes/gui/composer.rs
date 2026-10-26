@@ -1,8 +1,8 @@
 //! 输入行（composer）：把 [`Editor`] 状态渲染成多行文本，带光标与选区。
 
 use super::text_edit::Editor;
-use super::theme::Theme;
-use gpui::{AnyElement, IntoElement, ParentElement, SharedString, Styled, div, px};
+use super::theme::{Theme, px};
+use gpui::{AnyElement, IntoElement, ParentElement, SharedString, Styled, div};
 
 /// 输入行最多显示的行数（超出部分靠滚动，避免占满整屏）。
 const MAX_VISIBLE_LINES: usize = 8;

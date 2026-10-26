@@ -19,6 +19,7 @@ mod transcript;
 
 use crate::APP_NAME;
 use crate::cli::startup::Startup;
+use crate::core::settings_manager;
 use gpui::{
     App, AppContext, Application, Bounds, TitlebarOptions, WindowBackgroundAppearance,
     WindowBounds, WindowOptions, px, size,
@@ -29,15 +30,17 @@ use tokio::sync::Mutex;
 use tokio::sync::mpsc::unbounded_channel;
 
 /// 默认窗口尺寸（逻辑像素）。
-const DEFAULT_WINDOW_SIZE: (f32, f32) = (960.0, 700.0);
+const DEFAULT_WINDOW_SIZE: (f32, f32) = (1180.0, 780.0);
 /// 窗口最小尺寸（逻辑像素）：再小侧栏与输入框会挤在一起。
-const MIN_WINDOW_SIZE: (f32, f32) = (720.0, 520.0);
+const MIN_WINDOW_SIZE: (f32, f32) = (760.0, 560.0);
 
 /// GUI 入口。**必须由主线程调用**（gpui 独占主线程事件循环）。
 ///
 /// `rt` 是调用方持有的 tokio runtime：agent worker 跑在它上面，
 /// 调用方必须在 `run` 返回前保持 runtime 存活。
 pub fn run(startup: Startup, rt: &Handle) {
+    // 界面缩放先落地：首帧就按用户上次选的档位渲染，不然先小后大，闪一下
+    theme::set_ui_scale(settings_manager::read_settings_ui_scale());
     let theme = theme::Theme::new(is_dark_theme(startup.theme_override.as_deref()));
 
     let (event_tx, event_rx) = unbounded_channel();

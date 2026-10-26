@@ -1,9 +1,12 @@
 //! 覆盖层面板：可过滤列表（命令面板 / 模型 / 会话 / 思考级别 / 主题）与只读信息页。
 
 use super::text_edit::Editor;
-use super::theme::Theme;
+use super::theme::{Theme, px};
 use crate::modes::interactive::agent_actor::AgentCommand;
-use gpui::{AnyElement, IntoElement, ParentElement, SharedString, Styled, div, px};
+use gpui::{
+    AnyElement, InteractiveElement, IntoElement, ParentElement, ScrollHandle, SharedString,
+    StatefulInteractiveElement, Styled, div,
+};
 
 /// 列表项被选中后要做的事。
 pub enum Action {
@@ -23,6 +26,8 @@ pub enum Action {
     Info(InfoKind),
     /// 刷新会话列表
     RefreshSessions,
+    /// 设置界面缩放系数（1.0 = 设计稿尺寸）
+    Scale(f32),
     /// 退出
     Quit,
 }
@@ -77,6 +82,8 @@ pub struct List {
     pub entries: Vec<Entry>,
     /// 当前高亮项（在过滤后的列表里的下标）
     pub selected: usize,
+    /// 列表视口（键盘移动选中项时要把它滚进视野）
+    scroll: ScrollHandle,
 }
 
 impl List {
@@ -87,6 +94,7 @@ impl List {
             query: Editor::new(),
             entries,
             selected: 0,
+            scroll: ScrollHandle::new(),
         }
     }
 
@@ -108,7 +116,7 @@ impl List {
             .collect()
     }
 
-    /// 上/下移动高亮项。
+    /// 上/下移动高亮项，并把新选中项滚进视口。
     pub fn move_selection(&mut self, delta: i32) {
         let len = self.filtered().len();
         if len == 0 {
@@ -117,6 +125,7 @@ impl List {
         }
         let current = self.selected.min(len - 1) as i32 + delta;
         self.selected = current.clamp(0, len as i32 - 1) as usize;
+        self.scroll.scroll_to_item(self.selected);
     }
 
     /// 当前选中的动作（没有条目时为 None）。
@@ -164,15 +173,23 @@ pub enum Overlay {
 }
 
 /// 渲染覆盖层（居中卡片 + 半透明遮罩由调用方提供）。
-pub fn render(overlay: &Overlay, theme: &Theme) -> AnyElement {
+pub fn render(
+    overlay: &Overlay,
+    theme: &Theme,
+    cx: &mut gpui::Context<super::app::GuiApp>,
+) -> AnyElement {
     match overlay {
-        Overlay::List(list) => render_list(list, theme),
+        Overlay::List(list) => render_list(list, theme, cx),
         Overlay::Info(info) => render_info(info, theme),
     }
 }
 
 /// 列表卡片。
-fn render_list(list: &List, theme: &Theme) -> AnyElement {
+fn render_list(
+    list: &List,
+    theme: &Theme,
+    cx: &mut gpui::Context<super::app::GuiApp>,
+) -> AnyElement {
     let filtered = list.filtered();
     let mut column = div()
         .w(px(560.))
@@ -216,14 +233,34 @@ fn render_list(list: &List, theme: &Theme) -> AnyElement {
             } else {
                 theme.text
             })
-            .child(SharedString::from(if list.query.is_empty() {
-                "搜索…".to_string()
-            } else {
-                list.query.text()
-            })),
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .child(SharedString::from(if list.query.is_empty() {
+                        "搜索…".to_string()
+                    } else {
+                        list.query.text()
+                    }))
+                    .child(
+                        div()
+                            .w(px(if list.query.is_empty() { 0. } else { 1.5 }))
+                            .h(px(15.))
+                            .ml(px(1.))
+                            .bg(theme.accent),
+                    ),
+            ),
     );
 
-    let mut rows = div().flex().flex_col().gap(px(2.));
+    let mut rows = div()
+        .id("overlay-rows")
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_h_0()
+        .gap(px(2.))
+        .overflow_y_scroll()
+        .track_scroll(&list.scroll);
     if filtered.is_empty() {
         rows = rows.child(
             div()
@@ -234,7 +271,7 @@ fn render_list(list: &List, theme: &Theme) -> AnyElement {
                 .child(SharedString::from("没有匹配项")),
         );
     }
-    for (visible_index, entry_index) in filtered.iter().enumerate().take(10) {
+    for (visible_index, entry_index) in filtered.iter().enumerate() {
         let entry = &list.entries[*entry_index];
         let is_selected = visible_index == list.selected;
         let mut row = div()
@@ -267,7 +304,11 @@ fn render_list(list: &List, theme: &Theme) -> AnyElement {
                     .child(SharedString::from(entry.detail.clone())),
             );
         }
-        rows = rows.child(row);
+        rows = rows.child(
+            row.id(("overlay-row", visible_index))
+                .cursor_pointer()
+                .on_click(cx.listener(move |this, _, _, cx| this.pick_entry(visible_index, cx))),
+        );
     }
     column = column.child(rows);
 

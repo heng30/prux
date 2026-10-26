@@ -847,7 +847,7 @@ fn select_session(parsed: &Args, cwd: &str, default_dir: &Path) -> Option<Sessio
                 }
             };
         }
-        return Session::create(cwd, Some(dir), true).ok();
+        return Session::create_deferred(cwd, Some(dir)).ok();
     }
 
     if parsed.continue_session {
@@ -863,7 +863,7 @@ fn select_session(parsed: &Args, cwd: &str, default_dir: &Path) -> Option<Sessio
     }
 
     _ = std::fs::create_dir_all(default_dir);
-    Session::create(cwd, Some(default_dir.to_path_buf()), true).ok()
+    Session::create_deferred(cwd, Some(default_dir.to_path_buf())).ok()
 }
 
 /// stdin 是否连接到终端（决定能否交互式提问）。

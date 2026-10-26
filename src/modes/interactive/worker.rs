@@ -807,7 +807,7 @@ async fn dispatch_new_session(agent: &Arc<Mutex<Agent>>) -> Option<RoundFuture> 
     let cwd = a.cwd.clone();
     let dir = session_manager::default_session_dir(&cwd, &settings_manager::agent_dir());
     _ = std::fs::create_dir_all(&dir);
-    let payload = match session_manager::Session::create(&cwd, Some(dir), true) {
+    let payload = match session_manager::Session::create_deferred(&cwd, Some(dir)) {
         Ok(s) => {
             let session_id = s.session_id.clone();
             let file = s

@@ -308,6 +308,75 @@ impl Editor {
         out
     }
 
+    /// 光标处的 UTF-16 偏移（IME 上报选区用）。
+    pub fn cursor_utf16(&self) -> usize {
+        byte_to_utf16(&self.text(), self.byte_at(self.cursor))
+    }
+
+    /// 选区的 UTF-16 区间（起点 ≤ 终点）与光标是否落在起点（`reversed`）。
+    pub fn selection_utf16(&self) -> (std::ops::Range<usize>, bool) {
+        let text = self.text();
+        let Some(anchor) = self.anchor else {
+            let cursor = self.cursor_utf16();
+            return (cursor..cursor, false);
+        };
+        let (start, end) = ordered(anchor, self.cursor);
+        let from = byte_to_utf16(&text, self.byte_at(start));
+        let to = byte_to_utf16(&text, self.byte_at(end));
+        (from..to, self.cursor == start && anchor != self.cursor)
+    }
+
+    /// 用 `text` 替换全文字节区间 `range`，光标落到替换内容末尾（IME 组装/提交用）。
+    /// 区间端点不在字符边界时向内收缩。
+    pub fn replace_byte_range(&mut self, range: std::ops::Range<usize>, text: &str) {
+        let mut full = self.text();
+        let mut start = range.start.min(full.len());
+        let mut end = range.end.min(full.len()).max(start);
+        while !full.is_char_boundary(start) {
+            start -= 1;
+        }
+        while !full.is_char_boundary(end) {
+            end -= 1;
+        }
+        self.push_undo();
+        full.replace_range(start..end, text);
+        self.lines = full.split('\n').map(str::to_string).collect();
+        if self.lines.is_empty() {
+            self.lines.push(String::new());
+        }
+        self.cursor = self.pos_at(start + text.len());
+        self.anchor = None;
+    }
+
+    /// 光标位置 → 全文字节偏移。
+    fn byte_at(&self, pos: Pos) -> usize {
+        let mut byte = 0;
+        for (row, line) in self.lines.iter().enumerate() {
+            if row == pos.row {
+                return byte + char_to_byte(line, pos.col);
+            }
+            byte += line.len() + 1;
+        }
+        byte
+    }
+
+    /// 全文字节偏移 → 光标位置（越界取末尾）。
+    fn pos_at(&self, byte: usize) -> Pos {
+        let mut offset = 0;
+        for (row, line) in self.lines.iter().enumerate() {
+            if byte <= offset + line.len() {
+                let col = line[..(byte - offset).min(line.len())].chars().count();
+                return Pos { row, col };
+            }
+            offset += line.len() + 1;
+        }
+        let row = self.lines.len() - 1;
+        Pos {
+            row,
+            col: self.lines[row].chars().count(),
+        }
+    }
+
     /// 复制用：不动光标。
     fn snapshot(&self) -> Snapshot {
         Snapshot {
@@ -375,6 +444,32 @@ fn ordered(a: Pos, b: Pos) -> (Pos, Pos) {
     }
 }
 
+/// 全文的字节偏移 → UTF-16 偏移（不在字符边界时向下取整）。
+pub fn byte_to_utf16(text: &str, offset: usize) -> usize {
+    let mut offset = offset.min(text.len());
+    while !text.is_char_boundary(offset) {
+        offset -= 1;
+    }
+    text[..offset].encode_utf16().count()
+}
+
+/// 全文的 UTF-16 区间 → 字节区间（越界夹到两端，端点落在字符中间时向下取整）。
+pub fn utf16_range_to_bytes(text: &str, range: std::ops::Range<usize>) -> std::ops::Range<usize> {
+    let byte_at = |target: usize| {
+        let mut utf16 = 0;
+        for (byte, ch) in text.char_indices() {
+            if utf16 >= target {
+                return byte;
+            }
+            utf16 += ch.len_utf16();
+        }
+        text.len()
+    };
+    let start = byte_at(range.start);
+    let end = byte_at(range.end).max(start);
+    start..end
+}
+
 /// 字符下标 → 字节下标（越界时取行尾）。
 fn char_to_byte(line: &str, col: usize) -> usize {
     line.char_indices()
@@ -394,6 +489,23 @@ fn slice_chars(line: &str, start: usize, end: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// IME 组装：先替换空区间插入「nih」，再把同一区域换成「你好」。
+    #[test]
+    fn ime_replace_byte_range() {
+        let mut editor = Editor::new();
+        let text = editor.text();
+        let range = utf16_range_to_bytes(&text, 0..0);
+        editor.replace_byte_range(range, "nih");
+        assert_eq!(editor.text(), "nih");
+
+        let text = editor.text();
+        let range = utf16_range_to_bytes(&text, 0..3);
+        editor.replace_byte_range(range, "你好");
+        assert_eq!(editor.text(), "你好");
+        assert_eq!(editor.cursor_utf16(), 2);
+        assert_eq!(editor.selection_utf16().0, 2..2);
+    }
 
     /// 输入文本后光标在末尾，`\n` 会拆行。
     #[test]

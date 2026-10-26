@@ -1,10 +1,12 @@
 //! 右侧面板：文件列表与工作区变更（`git status` / `git diff`）。
 //!
-//! 渲染期间不碰文件系统：内容由 [`RightPanel::reload`] 在切换/刷新时一次性读入。
+//! 渲染期间不碰文件系统，也不在主线程读：内容由 [`RightPanel::load`] 在工作线程算完，
+//! 再经 [`RightPanel::apply`] 一次性换上去。
 
 use super::app::GuiApp;
 use super::theme::Theme;
-use gpui::{AnyElement, IntoElement, ParentElement, SharedString, Styled, div, prelude::*, px};
+use super::theme::px;
+use gpui::{AnyElement, IntoElement, ParentElement, SharedString, Styled, div, prelude::*};
 use std::path::Path;
 use std::process::Command;
 
@@ -35,12 +37,26 @@ pub struct ChangeRow {
     pub path: String,
 }
 
+/// 后台一次读完的面板内容（纯数据，可在工作线程里算）。
+pub struct PanelData {
+    /// 文件列表（仅 [`PanelTab::Files`] 有内容）
+    files: Vec<FileRow>,
+    /// 变更列表（仅 [`PanelTab::Changes`] 有内容）
+    changes: Vec<ChangeRow>,
+    /// 选中变更的 diff：(路径, 文本)
+    diff: Option<(String, String)>,
+    /// 读取失败时的提示
+    error: Option<String>,
+}
+
 /// 右侧面板状态。
 pub struct RightPanel {
     /// 是否可见
     pub visible: bool,
     /// 当前标签页
     pub tab: PanelTab,
+    /// 是否有一轮读盘正在进行
+    pub loading: bool,
     /// 文件列表
     pub files: Vec<FileRow>,
     /// 变更列表
@@ -58,6 +74,7 @@ impl Default for RightPanel {
         Self {
             visible: false,
             tab: PanelTab::Changes,
+            loading: false,
             files: Vec::new(),
             changes: Vec::new(),
             selected: 0,
@@ -71,36 +88,51 @@ impl Default for RightPanel {
 const MAX_FILES: usize = 400;
 
 impl RightPanel {
-    /// 重读面板内容（切换标签/刷新时调用）。
-    pub fn reload(&mut self, cwd: &str) {
-        self.error = None;
-        match self.tab {
-            PanelTab::Files => {
-                self.files = list_files(Path::new(cwd));
-            }
-            PanelTab::Changes => {
-                match git_changes(cwd) {
-                    Ok(changes) => self.changes = changes,
-                    Err(e) => {
-                        self.changes.clear();
-                        self.error = Some(e);
+    /// 纯读盘：按 `tab` 算一份面板内容（不碰自身状态，可在工作线程跑）。
+    /// `selected` 是期望展示 diff 的变更下标，越界时不给 diff。
+    pub fn load(cwd: &str, tab: PanelTab, selected: usize) -> PanelData {
+        match tab {
+            PanelTab::Files => PanelData {
+                files: list_files(Path::new(cwd)),
+                changes: Vec::new(),
+                diff: None,
+                error: None,
+            },
+            PanelTab::Changes => match git_changes(cwd) {
+                Ok(changes) => {
+                    let diff = changes.get(selected).map(|row| {
+                        let path = row.path.clone();
+                        let text =
+                            git_diff(cwd, &path).unwrap_or_else(|e| format!("无法读取 diff：{e}"));
+                        (path, text)
+                    });
+                    PanelData {
+                        files: Vec::new(),
+                        changes,
+                        diff,
+                        error: None,
                     }
                 }
-                self.selected = 0;
-                self.load_diff(cwd);
-            }
+                Err(e) => PanelData {
+                    files: Vec::new(),
+                    changes: Vec::new(),
+                    diff: None,
+                    error: Some(e),
+                },
+            },
         }
     }
 
-    /// 读当前选中变更的 diff。
-    pub fn load_diff(&mut self, cwd: &str) {
-        let Some(row) = self.changes.get(self.selected) else {
-            self.diff = None;
-            return;
-        };
-        let path = row.path.clone();
-        let text = git_diff(cwd, &path).unwrap_or_else(|e| format!("无法读取 diff：{e}"));
-        self.diff = Some((path, text));
+    /// 换上后台算好的内容（变更列表变短时把选中下标收回范围内）。
+    pub fn apply(&mut self, data: PanelData) {
+        self.loading = false;
+        self.error = data.error;
+        self.files = data.files;
+        self.changes = data.changes;
+        self.diff = data.diff;
+        if !self.changes.is_empty() {
+            self.selected = self.selected.min(self.changes.len() - 1);
+        }
     }
 }
 
@@ -203,12 +235,7 @@ fn git_diff(cwd: &str, path: &str) -> Result<String, String> {
 }
 
 /// 渲染右侧面板。
-pub fn render(
-    theme: &Theme,
-    cwd: &str,
-    panel: &RightPanel,
-    cx: &mut gpui::Context<GuiApp>,
-) -> AnyElement {
+pub fn render(theme: &Theme, panel: &RightPanel, cx: &mut gpui::Context<GuiApp>) -> AnyElement {
     let mut column = div()
         .w(px(320.))
         .h_full()
@@ -257,7 +284,19 @@ pub fn render(
             .child(tab(
                 &format!("文件 {}", panel.files.len()),
                 panel.tab == PanelTab::Files,
-            )),
+            ))
+            .child(div().flex_1())
+            .child(
+                div()
+                    .pr(px(6.))
+                    .text_size(px(10.))
+                    .text_color(theme.text_ghost)
+                    .child(SharedString::from(if panel.loading {
+                        "加载中…"
+                    } else {
+                        ""
+                    })),
+            ),
     );
 
     if let Some(error) = &panel.error {
@@ -284,7 +323,6 @@ pub fn render(
                 .overflow_y_scroll();
             for (index, row) in panel.changes.iter().enumerate() {
                 let color = status_color(theme, &row.status);
-                let cwd_click = cwd.to_string();
                 let mut entry = div()
                     .w_full()
                     .h(px(24.))
@@ -313,13 +351,10 @@ pub fn render(
                             .text_color(theme.text_secondary)
                             .child(SharedString::from(row.path.clone())),
                     );
-                body = body.child(entry.id(("change", index)).cursor_pointer().on_click(
-                    cx.listener(move |this, _, _, cx| {
-                        this.panel.selected = index;
-                        this.panel.load_diff(&cwd_click);
-                        cx.notify();
-                    }),
-                ));
+                body =
+                    body.child(entry.id(("change", index)).cursor_pointer().on_click(
+                        cx.listener(move |this, _, _, cx| this.select_change(index, cx)),
+                    ));
             }
             if panel.changes.is_empty() && panel.error.is_none() {
                 body = body.child(
@@ -327,7 +362,11 @@ pub fn render(
                         .px(px(8.))
                         .text_size(px(11.5))
                         .text_color(theme.text_ghost)
-                        .child(SharedString::from("工作区干净")),
+                        .child(SharedString::from(if panel.loading {
+                            "正在读取变更…"
+                        } else {
+                            "工作区干净"
+                        })),
                 );
             }
             column = column.child(body);
