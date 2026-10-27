@@ -4,7 +4,7 @@ use super::theme::{Theme, px};
 use gpui::{AnyElement, FontWeight, IntoElement, ParentElement, SharedString, Styled, div};
 
 /// 圆角标签：`active` 为真时用强调描边与主文本色。
-pub fn chip(theme: &Theme, text: impl Into<SharedString>, active: bool) -> AnyElement {
+pub fn chip(theme: &Theme, text: impl Into<SharedString>, active: bool) -> gpui::Div {
     let text = text.into();
     let mut element = div()
         .h(px(22.))
@@ -28,7 +28,7 @@ pub fn chip(theme: &Theme, text: impl Into<SharedString>, active: bool) -> AnyEl
     if active {
         element = element.bg(theme.overlay);
     }
-    element.into_any_element()
+    element
 }
 
 /// 状态圆点。

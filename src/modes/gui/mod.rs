@@ -13,6 +13,7 @@ mod markdown;
 mod overlay;
 mod panel;
 mod sidebar;
+mod suggest;
 mod text_edit;
 mod theme;
 mod transcript;

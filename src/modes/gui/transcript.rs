@@ -3,13 +3,14 @@
 //! 事件形状与 TUI 消费的完全一致（`message_start` / `message_update` /
 //! `tool_execution_start|update|end` / `agent_settled` …），这里只做 GUI 需要的投影。
 
+use super::app::GuiApp;
 use super::components::dot;
 use super::markdown;
 use super::theme::{Theme, px};
 use crate::core::provider::{AgentMessage, ContentBlock};
 use gpui::{
-    AnyElement, FontStyle, FontWeight, HighlightStyle, IntoElement, ParentElement, SharedString,
-    Styled, StyledText, div,
+    AnyElement, Context, FontStyle, FontWeight, HighlightStyle, Hsla, IntoElement, ParentElement,
+    SharedString, Styled, StyledText, div, prelude::*,
 };
 use serde_json::Value;
 use std::collections::HashMap;
@@ -96,6 +97,8 @@ pub struct Tool {
     pub output: String,
     /// 执行状态
     pub status: ToolStatus,
+    /// 单块展开状态：`None` 跟随全局开关（Ctrl-L），点击卡片切换
+    pub expanded: Option<bool>,
 }
 
 /// 非对话提示。
@@ -358,6 +361,7 @@ impl Transcript {
             args: args.to_string(),
             output: String::new(),
             status: ToolStatus::Running,
+            expanded: None,
         }));
         let index = self.blocks.len() - 1;
         if !id.is_empty() {
@@ -404,19 +408,6 @@ fn tool_result_text(content: &[ContentBlock]) -> String {
         .join("\n")
 }
 
-/// 取前 `max` 行，每行再按字符截断，还有更多行时末尾补省略号。
-fn first_lines(text: &str, max: usize) -> String {
-    let mut out: Vec<String> = text
-        .lines()
-        .take(max)
-        .map(|line| truncate(line, OUTPUT_LINE_CHARS))
-        .collect();
-    if text.lines().nth(max).is_some() {
-        out.push("…".to_string());
-    }
-    out.join("\n")
-}
-
 /// 按字符截断，超出补省略号。
 fn truncate(text: &str, max: usize) -> String {
     if text.chars().count() <= max {
@@ -427,8 +418,65 @@ fn truncate(text: &str, max: usize) -> String {
     out
 }
 
-/// 单个块的渲染。
-pub fn render_block(block: &mut Block, theme: &Theme, expand_tools: bool) -> AnyElement {
+/// 工具调用的入参颜色：shell 类用代码色，其余用次要色。
+fn tool_arg_color(name: &str, theme: &Theme) -> Hsla {
+    match name {
+        "bash" | "shell" | "execute" | "sh" => theme.code_text,
+        _ => theme.text_tertiary,
+    }
+}
+
+/// 工具输出的着色行：diff 的增/删/块头各有颜色，其余用次要色。
+fn line_color(line: &str, theme: &Theme) -> Hsla {
+    if line.starts_with("@@") || line.starts_with("diff ") || line.starts_with("index ") {
+        theme.link
+    } else if line.starts_with('+') && !line.starts_with("+++") {
+        theme.success
+    } else if line.starts_with('-') && !line.starts_with("---") {
+        theme.danger
+    } else {
+        theme.text_secondary
+    }
+}
+
+/// 工具输出正文：逐行着色，超过 `max` 行截断（按行截断而不是裁剪像素，
+/// 被裁掉的部分不计入布局高度，会盖住输入卡片）。
+fn output_body(text: &str, theme: &Theme, max: usize) -> AnyElement {
+    let mut column = div()
+        .w_full()
+        .flex()
+        .flex_col()
+        .overflow_hidden()
+        .text_size(px(11.5));
+    let mut lines = text.trim().lines();
+    for line in lines.by_ref().take(max) {
+        let shown = truncate(line, OUTPUT_LINE_CHARS);
+        column = column.child(
+            div()
+                .w_full()
+                .truncate()
+                .text_color(line_color(line, theme))
+                .child(SharedString::from(shown)),
+        );
+    }
+    if lines.next().is_some() {
+        column = column.child(
+            div()
+                .text_color(theme.text_ghost)
+                .child(SharedString::from("…")),
+        );
+    }
+    column.into_any_element()
+}
+
+/// 单个块的渲染；`index` 是块下标（点击工具卡片切换展开时要回查）。
+pub fn render_block(
+    block: &mut Block,
+    theme: &Theme,
+    expand_tools: bool,
+    index: usize,
+    cx: &mut Context<GuiApp>,
+) -> AnyElement {
     match block {
         // 用户消息：右对齐气泡，与助手正文拉开层级
         Block::User(text) => div()
@@ -472,7 +520,9 @@ pub fn render_block(block: &mut Block, theme: &Theme, expand_tools: bool) -> Any
                 ToolStatus::Ok => (theme.success, "完成"),
                 ToolStatus::Failed => (theme.danger, "失败"),
             };
+            let expanded = tool.expanded.unwrap_or(expand_tools);
             let mut card = div()
+                .id(("tool", index))
                 .w_full()
                 .rounded(px(8.))
                 .border_1()
@@ -482,7 +532,11 @@ pub fn render_block(block: &mut Block, theme: &Theme, expand_tools: bool) -> Any
                 .flex_col()
                 .gap(px(6.))
                 .px(px(12.))
-                .py(px(8.));
+                .py(px(8.))
+                .cursor_pointer()
+                .hover(|style| style.border_color(theme.border_strong))
+                // 点卡片展开/收起这一块的输出
+                .on_click(cx.listener(move |this, _, _, cx| this.toggle_tool(index, cx)));
             card = card.child(
                 div()
                     .flex()
@@ -502,7 +556,8 @@ pub fn render_block(block: &mut Block, theme: &Theme, expand_tools: bool) -> Any
                             .flex_1()
                             .truncate()
                             .text_size(px(11.5))
-                            .text_color(theme.text_tertiary)
+                            // shell 类调用用代码色，跟普通工具区分开
+                            .text_color(tool_arg_color(&tool.name, theme))
                             .child(SharedString::from(tool.args.clone())),
                     )
                     .child(
@@ -515,18 +570,12 @@ pub fn render_block(block: &mut Block, theme: &Theme, expand_tools: bool) -> Any
             if !tool.output.trim().is_empty() {
                 // 按行截断而不是靠 `max_h` 裁剪：被裁掉的那部分不计入布局高度，
                 // 会盖在输入卡片上，也会让钉底算错。
-                let lines = if expand_tools {
+                let lines = if expanded {
                     EXPANDED_OUTPUT_LINES
                 } else {
                     COLLAPSED_OUTPUT_LINES
                 };
-                card = card.child(
-                    div()
-                        .overflow_hidden()
-                        .text_size(px(11.5))
-                        .text_color(theme.text_secondary)
-                        .child(SharedString::from(first_lines(tool.output.trim(), lines))),
-                );
+                card = card.child(output_body(&tool.output, theme, lines));
             }
             card.into_any_element()
         }
@@ -731,19 +780,32 @@ fn span_highlight(style: &markdown::SpanStyle, theme: &Theme) -> HighlightStyle 
 mod tests {
     use super::*;
 
-    /// 超出行数时截断并补省略号，行内过长的部分也截断。
+    /// 单行过长时按字符截断并补省略号。
     #[test]
-    fn first_lines_caps_rows_and_chars() {
-        let text = format!("a\nb\n{}", "x".repeat(OUTPUT_LINE_CHARS + 5));
-        let lines = first_lines(&text, 2);
-        let rows: Vec<&str> = lines.lines().collect();
-        assert_eq!(rows.len(), 3);
-        assert_eq!(rows[0], "a");
-        assert_eq!(rows[1], "b");
-        assert_eq!(rows[2], "…");
-
-        let long = first_lines("x".repeat(OUTPUT_LINE_CHARS + 5).as_str(), 6);
+    fn truncate_caps_long_lines() {
+        let long = truncate(&"x".repeat(OUTPUT_LINE_CHARS + 5), OUTPUT_LINE_CHARS);
         assert_eq!(long.chars().count(), OUTPUT_LINE_CHARS + 1);
         assert!(long.ends_with('…'));
+    }
+
+    /// diff 行按增/删/块头着色，普通行用次要色。
+    #[test]
+    fn diff_lines_get_their_own_colors() {
+        let theme = Theme::dark();
+        assert_eq!(line_color("+新增", &theme), theme.success);
+        assert_eq!(line_color("-删除", &theme), theme.danger);
+        assert_eq!(line_color("@@ -1,2 +1,3 @@", &theme), theme.link);
+        assert_eq!(line_color(" 上下文", &theme), theme.text_secondary);
+        // `+++` / `---` 是文件头，不算增删行
+        assert_eq!(line_color("+++ b/a.rs", &theme), theme.text_secondary);
+        assert_eq!(line_color("--- a/a.rs", &theme), theme.text_secondary);
+    }
+
+    /// shell 类工具的入参用代码色高亮。
+    #[test]
+    fn shell_calls_use_code_color() {
+        let theme = Theme::dark();
+        assert_eq!(tool_arg_color("bash", &theme), theme.code_text);
+        assert_eq!(tool_arg_color("edit", &theme), theme.text_tertiary);
     }
 }

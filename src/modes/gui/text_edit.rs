@@ -308,6 +308,18 @@ impl Editor {
         out
     }
 
+    /// 光标在全文中的字节偏移。
+    pub fn cursor_byte(&self) -> usize {
+        self.byte_at(self.cursor)
+    }
+
+    /// 光标之前的全部文本（补全触发词识别用，不含选区）。
+    pub fn text_before_cursor(&self) -> String {
+        let text = self.text();
+        let end = self.cursor_byte().min(text.len());
+        text[..end].to_string()
+    }
+
     /// 光标处的 UTF-16 偏移（IME 上报选区用）。
     pub fn cursor_utf16(&self) -> usize {
         byte_to_utf16(&self.text(), self.byte_at(self.cursor))

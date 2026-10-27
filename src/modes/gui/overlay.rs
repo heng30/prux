@@ -30,6 +30,11 @@ pub enum Action {
     Scale(f32),
     /// 退出
     Quit,
+    /// 插入附件引用（`@路径`）：`images` 为真时补全只列图片
+    Attach {
+        /// 是否只列图片
+        images: bool,
+    },
 }
 
 /// 可打开的列表面板种类。
@@ -286,7 +291,9 @@ fn render_list(
         if is_selected {
             row = row.bg(theme.overlay_strong).text_color(theme.text);
         } else {
-            row = row.text_color(theme.text_secondary);
+            row = row
+                .text_color(theme.text_secondary)
+                .hover(|style| style.bg(theme.overlay).text_color(theme.text));
         }
         row = row.child(
             div()

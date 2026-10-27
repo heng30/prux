@@ -105,7 +105,7 @@ fn edit_via_external_editor(text: &str) -> Option<String> {
 }
 
 /// 执行 shell 命令并捕获输出（!cmd / !!cmd）
-pub(super) fn run_shell_command(cmd: &str) -> String {
+pub(crate) fn run_shell_command(cmd: &str) -> String {
     let output = std::process::Command::new("sh").arg("-c").arg(cmd).output();
     match output {
         Ok(o) => {

@@ -41,8 +41,9 @@ mod settings;
 mod skills;
 mod steer;
 mod suggest;
-mod tools;
 mod trust;
+
+pub(crate) mod tools;
 
 pub(crate) mod confirms;
 pub(crate) mod events;

@@ -11,8 +11,12 @@ use crate::cli::session_picker::ProgressiveMetas;
 use crate::core::session_manager::{default_session_dir, list_sessions};
 use crate::core::settings_manager::agent_dir;
 use crate::modes::interactive::agent_actor::{AgentCommand, CommandTx};
-use gpui::{AnyElement, IntoElement, ParentElement, SharedString, Styled, div, prelude::*};
+use gpui::{
+    AnyElement, IntoElement, MouseButton, ParentElement, ScrollHandle, SharedString, Styled, div,
+    prelude::*,
+};
 use std::path::PathBuf;
+use std::rc::Rc;
 
 /// 会话按最近活动时间分的组。
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -103,16 +107,53 @@ pub fn current_index(rows: &[SessionRow], current: Option<&str>) -> Option<usize
     rows.iter().position(|row| row.path == current)
 }
 
+/// 点击类回调（视图层挂事件用）。
+type ClickHandler = Box<dyn Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App)>;
+
+/// 会话行右键回调：参数是会话文件路径。
+type ContextHandler = Rc<dyn Fn(&str, &gpui::MouseDownEvent, &mut gpui::Window, &mut gpui::App)>;
+
+/// 侧栏渲染入参：列表数据、滚动句柄与交互回调。
+///
+/// 滚动条由调用方按 [`ScrollHandle`] 生成后传进来，这样拖动事件与滚动句柄待在
+/// 同一处（视图层），侧栏本身只负责摆位置。
+pub struct SidebarCtx<'a> {
+    /// 设计令牌
+    pub theme: &'a Theme,
+    /// 当前工作目录（底部展示）
+    pub cwd: &'a str,
+    /// 会话行
+    pub rows: &'a [SessionRow],
+    /// 当前会话文件路径
+    pub current: Option<&'a str>,
+    /// 是否还有会话元数据在读
+    pub loading: bool,
+    /// 列表滚动句柄
+    pub scroll: &'a ScrollHandle,
+    /// 列表滚动条元素
+    pub scrollbar: AnyElement,
+    /// 命令下发端（点行切会话用）
+    pub cmd_tx: CommandTx,
+    /// 点「+ 新会话」
+    pub new_session: ClickHandler,
+    /// 会话行右键：参数是会话文件路径
+    pub context_menu: ContextHandler,
+}
+
 /// 渲染侧栏。
-pub fn render(
-    theme: &Theme,
-    cwd: &str,
-    rows: &[SessionRow],
-    current: Option<&str>,
-    loading: bool,
-    cmd_tx: CommandTx,
-    on_new_session: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
-) -> AnyElement {
+pub fn render(ctx: SidebarCtx<'_>) -> AnyElement {
+    let SidebarCtx {
+        theme,
+        cwd,
+        rows,
+        current,
+        loading,
+        scroll,
+        scrollbar,
+        cmd_tx,
+        new_session,
+        context_menu,
+    } = ctx;
     let active = current_index(rows, current);
     let mut column = div()
         .w(px(252.))
@@ -154,7 +195,7 @@ pub fn render(
                     .text_color(theme.text_secondary)
                     .cursor_pointer()
                     .hover(|style| style.bg(theme.overlay_strong).text_color(theme.text))
-                    .on_click(on_new_session)
+                    .on_click(new_session)
                     .child(SharedString::from("+ 新会话")),
             ),
     );
@@ -165,13 +206,18 @@ pub fn render(
         .flex()
         .flex_col()
         .flex_1()
+        // 高度必须被父容器定死：否则列表按内容高度撑开（比窗口还高），
+        // 悬浮/滚动判定范围跟着一起变大
+        .h_full()
+        .w_full()
         .min_h_0()
         .gap(px(2.))
         .px(px(6.))
         .py(px(4.))
         // 底部留白：列表最后一行不贴着窗口下沿
         .pb(px(12.))
-        .overflow_y_scroll();
+        .overflow_y_scroll()
+        .track_scroll(scroll);
     list = list.child(section_label(theme, "会话"));
     if rows.is_empty() {
         list = list.child(
@@ -234,11 +280,30 @@ pub fn render(
             );
         let tx = cmd_tx.clone();
         let path = row.path.clone();
-        list = list.child(entry.id(("session", index)).on_click(move |_, _, _| {
-            let _ = tx.send(AgentCommand::ResumeSession { path: path.clone() });
-        }));
+        let menu = context_menu.clone();
+        let menu_path = row.path.clone();
+        list = list.child(
+            entry
+                .id(("session", index))
+                .on_mouse_down(MouseButton::Right, move |event, window, cx| {
+                    menu(&menu_path, event, window, cx);
+                })
+                .on_click(move |_, _, _| {
+                    let _ = tx.send(AgentCommand::ResumeSession { path: path.clone() });
+                }),
+        );
     }
-    column = column.child(list);
+    // 列表与滚动条同放一层相对容器：滚动条盖在列表右侧，不占布局宽度
+    column = column.child(
+        div()
+            .relative()
+            .flex()
+            .flex_1()
+            .min_h_0()
+            .w_full()
+            .child(list)
+            .child(scrollbar),
+    );
 
     // 底部：当前工作目录
     column = column.child(
