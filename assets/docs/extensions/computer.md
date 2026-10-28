@@ -9,10 +9,10 @@
 本扩展只在 Dev / Creator / 全部模式下出现在 `/extension` 面板；极简模式（Minimal）里看不到它，
 需要在 `/extension` 面板用 Tab 切到 Dev / Creator / 全部，或改 `settings.json` 的 `extensionMode`。
 
-14 个工具全部是**延迟工具**：它们的描述与参数 schema 平时不占上下文，模型先用 `tool_search` 检索
+15 个工具全部是**延迟工具**：它们的描述与参数 schema 平时不占上下文，模型先用 `tool_search` 检索
 （例如查 `screenshot` / `desktop` / `click`），命中后**下一轮**才拿到完整声明，之后一直可用。
 整族工具的暴露方式一致（都是延迟），不会出现“只能截图、拿不到点击”的混合状态；
-单次检索默认最多激活 15 个命中，一次就能拿完这 14 个工具。
+单次检索默认最多激活 15 个命中，通常一次就能拿完这 15 个工具。
 
 关闭 = 在 `/extension` 面板里禁用本扩展（或 `Ctrl+S` 保存后的下次启动不启用），它只影响本机 prux 进程，
 不会动你的应用或桌面。
@@ -26,6 +26,7 @@
 | 工具 | 用途 |
 |---|---|
 | `computer_screenshot` | 截屏（整屏 / 指定显示器 / 区域 / 单个窗口），可缩放、选 PNG/JPEG；返回图片 + 几何 + `frame` id |
+| `computer_crop` | 裁剪磁盘上的图片文件（如上一张截图的 `file:` 路径），按图像像素给 `region`，保留原始像素细节 |
 | `computer_actions` | 一次调用执行多步（click / type / key / drag / scroll / wait / paste / clipboard / focus / 无障碍动作），可选末尾截图 |
 | `computer_click` | 绝对坐标点击（左/右/中键、双击三击、修饰键） |
 | `computer_drag` | 拖拽，可用 `path` 给途经点；`from_last` / `continue_from` 接着上一笔 |

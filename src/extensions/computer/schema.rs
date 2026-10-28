@@ -1,4 +1,4 @@
-//! 14 个 `computer_*` 工具的定义（描述、参数 schema、snippet）。
+//! 15 个 `computer_*` 工具的定义（描述、参数 schema、snippet）。
 //!
 //! 描述里刻意写清能力边界（Wayland 没有全局窗口枚举、窗口截图受遮挡影响、无障碍取决于应用），
 //! 因为模型读到的是这些字，而不是平台的错误消息。
@@ -65,12 +65,13 @@ pub const READ_ONLY_UI_ACTIONS: &[&str] = &["get_value", "get_text", "locate_tex
 
 /// 构造全部工具定义。
 ///
-/// 14 个工具**统一**声明为 [`ToolExposure::Deferred`]：描述与参数 schema 平时不进模型上下文，
+/// 15 个工具**统一**声明为 [`ToolExposure::Deferred`]：描述与参数 schema 平时不进模型上下文，
 /// 由 `tool_search` 检索命中后才在下一轮进入工具表。这一族必须**一起出现、一起消失**——
 /// 只放出其中一部分会让模型按半套能力规划动作（例如能截图却拿不到点击）。
 pub fn tools() -> Vec<ExtensionTool> {
     vec![
         screenshot(),
+        crop(),
         actions(),
         click(),
         drag(),
@@ -121,6 +122,31 @@ fn screenshot() -> ExtensionTool {
             }
         }),
         "Capture the screen (or one window/region) and get the image plus a frame id for coordinate projection.",
+    )
+    .with_annotations(ToolAnnotations { read_only: true, destructive: false, idempotent: true })
+}
+
+/// `computer_crop`。
+fn crop() -> ExtensionTool {
+    ExtensionTool::simple(
+        "computer_crop",
+        "Crop an image file on disk to a rectangle and get the cropped image back. Use it on the `file:` path a previous screenshot printed to zoom into a region without capturing the screen again — the crop keeps the source pixels, so text stays sharp even when the screenshot was delivered downscaled. Coordinates are pixels *in that image*, not desktop pixels.",
+        json!({
+            "type": "object",
+            "required": ["path", "region"],
+            "properties": {
+                "path": { "type": "string", "description": "Absolute path of the image to crop (for example the `file:` line of a computer_screenshot reply)." },
+                "region": {
+                    "type": "array",
+                    "items": { "type": "integer" },
+                    "minItems": 4,
+                    "maxItems": 4,
+                    "description": "Rectangle to keep as [x, y, width, height] in pixels of the source image; it must fit inside the image."
+                },
+                "format": { "type": "string", "enum": ["png", "jpeg"], "description": "Output format; png (default) keeps text crisp, jpeg shrinks the bytes." }
+            }
+        }),
+        "Crop an image file to a rectangle and return the cropped image.",
     )
     .with_annotations(ToolAnnotations { read_only: true, destructive: false, idempotent: true })
 }
@@ -441,11 +467,11 @@ mod tests {
     use std::collections::HashSet;
 
     #[test]
-    fn all_fourteen_tools_are_declared_once() {
+    fn all_fifteen_tools_are_declared_once() {
         let tools = tools();
-        assert_eq!(tools.len(), 14);
+        assert_eq!(tools.len(), 15);
         let names: HashSet<&str> = tools.iter().map(|t| t.name.as_str()).collect();
-        assert_eq!(names.len(), 14);
+        assert_eq!(names.len(), 15);
         assert!(names.iter().all(|name| name.starts_with("computer_")));
     }
 

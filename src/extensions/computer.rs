@@ -4,7 +4,7 @@
 //!
 //! - **默认不启用**，在 `/extension` 面板里打开本扩展就是授权（持久化）；
 //!   扩展被禁用时立即释放仍按住的键与鼠标键，并清掉帧。
-//! - **14 个工具全部是延迟工具**（`ToolExposure::Deferred`，见 `schema::tools`）：描述与参数 schema
+//! - **15 个工具全部是延迟工具**（`ToolExposure::Deferred`，见 `schema::tools`）：描述与参数 schema
 //!   平时不进上下文，模型先经 `tool_search` 检索到 `computer_*`，**下一轮**才拿到完整声明。
 //!   授权门仍在：未启用的扩展根本不在 `registered()` 里，工具名解析不到（“Tool not found”）。
 //!   因此本扩展隐式依赖 `tool-search` 扩展：本扩展没声明 `modes()`（仅 `All` 模式可用），

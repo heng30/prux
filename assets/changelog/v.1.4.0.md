@@ -87,6 +87,14 @@
   `X-OpenRouter-Categories`, and `X-BILLING-INVOKE-ORIGIN` respectively). They are the base
   layer: catalog headers, session headers and `models.json` configuration still override them.
 
+- **`computer_crop` zooms into an image you already have**: the `computer` extension gains a
+  fifteenth tool that crops an image file on disk to a `[x, y, width, height]` rectangle and
+  returns the result, so a screenshot no longer has to be recaptured just to look closer at one
+  part of it. The pixels come from the saved file, so text stays sharp even when what was
+  delivered to the model was downscaled; a rectangle that does not fit inside the image is
+  refused with its real size, and the reply names the offset so a cropped point can be mapped
+  back to a desktop coordinate.
+
 - **Rex is a known terminal**: with `TERM_PROGRAM=rex`, inline images use the kitty protocol
   (instead of halfblocks) and the palette is treated as truecolor, so hyperlinks and pictures
   render instead of degrading to `text (url)`.
@@ -201,6 +209,11 @@
   NVIDIA NIM 另带归因头（`HTTP-Referer`、`X-OpenRouter-Title`、`X-OpenRouter-Categories`，
   以及 `X-BILLING-INVOKE-ORIGIN`）。这些头是最底层，目录自带头、会话头和 `models.json`
   配置仍然会覆盖同名项。
+
+- **`computer_crop` 放大已有的图**：`computer` 扩展新增第 15 个工具，把磁盘上的图片文件按
+  `[x, y, width, height]` 裁出来返回——想看清截图里的某一块不必重新截屏。像素取自落盘的原图，
+  所以即便交付给模型的那张图被缩过，文字依旧清晰；矩形超出图片范围会连真实尺寸一起报错并拒绝，
+  回执里给出偏移量，裁出来的点可以换算回桌面坐标。
 
 - **Rex 终端被认出来了**：`TERM_PROGRAM=rex` 下内联图片走 kitty 协议（不再退化成半块字符），
   配色按 truecolor 处理，超链接与图片都能正常显示，而不是退成 `text (url)`。

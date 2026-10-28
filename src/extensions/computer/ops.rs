@@ -1,4 +1,4 @@
-//! 工具实现：14 个 `computer_*` 工具的执行体。
+//! 工具实现：15 个 `computer_*` 工具的执行体。
 //!
 //! 阻塞动作（截图、窗口枚举、输入注入、剪贴板命令）全部放进 `spawn_blocking`，
 //! 不在异步运行时的工作线程上做；每个动作执行前都重新读一遍当前窗口，
@@ -883,6 +883,107 @@ fn describe(node: &NodeId) -> String {
     }
 }
 
+/// 读矩形参数 `[x, y, width, height]`（裁剪用，图像像素）。
+fn arg_rect(args: &Value, key: &str) -> Result<[u32; 4], ToolError> {
+    let values = args
+        .get(key)
+        .and_then(Value::as_array)
+        .filter(|values| values.len() == 4)
+        .ok_or_else(|| {
+            ToolError(format!(
+                "computer: `{key}` must be [x, y, width, height] as integers"
+            ))
+        })?;
+    let mut rect = [0u32; 4];
+    for (slot, value) in rect.iter_mut().zip(values) {
+        let n = value.as_i64().filter(|n| *n >= 0).ok_or_else(|| {
+            ToolError(format!(
+                "computer: `{key}` must be [x, y, width, height] as non-negative integers"
+            ))
+        })?;
+        *slot = n.min(u32::MAX as i64) as u32;
+    }
+    if rect[2] == 0 || rect[3] == 0 {
+        return Err(ToolError(format!(
+            "computer: `{key}` width and height must be positive"
+        )));
+    }
+    Ok(rect)
+}
+
+/// 裁好的图：编码后的字节、输出格式、裁后像素尺寸（宽、高）。
+type Cropped = (Vec<u8>, ShotFormat, (u32, u32));
+
+/// 裁磁盘上的一张图片，返回裁后字节、输出格式与裁后尺寸。
+fn crop_file(path: &str, region: [u32; 4], format: Option<ShotFormat>) -> Result<Cropped, String> {
+    let raw = std::fs::read(path).map_err(|e| format!("could not read {path:?}: {e}"))?;
+    let img = image::load_from_memory(&raw)
+        .map_err(|e| format!("{path:?} is not a decodable image: {e}"))?;
+    let [x, y, width, height] = region;
+    let fits = x
+        .checked_add(width)
+        .is_some_and(|right| right <= img.width())
+        && y.checked_add(height)
+            .is_some_and(|bottom| bottom <= img.height());
+    if !fits {
+        return Err(format!(
+            "region {region:?} does not fit inside {path:?} ({}x{} px)",
+            img.width(),
+            img.height()
+        ));
+    }
+
+    let cropped = img.crop_imm(x, y, width, height);
+    let format = format.unwrap_or(ShotFormat::Png);
+    let mut bytes = Vec::new();
+    match format {
+        ShotFormat::Png => cropped.write_to(
+            &mut std::io::Cursor::new(&mut bytes),
+            image::ImageFormat::Png,
+        ),
+        // JPEG 不支持 alpha：先转 RGB8
+        ShotFormat::Jpeg => cropped.to_rgb8().write_with_encoder(
+            image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, 80),
+        ),
+    }
+    .map_err(|e| format!("could not encode the crop as {}: {e}", format.mime()))?;
+    Ok((bytes, format, (width, height)))
+}
+
+/// `computer_crop`。
+pub async fn crop(args: &Value) -> Result<ToolResult, ToolError> {
+    let path = arg_str(args, "path")?.to_string();
+    let region = arg_rect(args, "region")?;
+    let format = opt_str(args, "format").and_then(ShotFormat::parse);
+    let source = path.clone();
+    let (bytes, format, (width, height)) =
+        blocking(move || crop_file(&source, region, format)).await?;
+    let file = save_image(&bytes, format);
+
+    let [x, y, ..] = region;
+    let mut text = String::from("<image_crop>\n");
+    text.push_str(&format!("source: {path}\n"));
+    text.push_str(&format!(
+        "region: [{x}, {y}, {}x{}] -> {width}x{height} px ({}); x,y are offsets into the source image\n",
+        region[2],
+        region[3],
+        match format {
+            ShotFormat::Png => "png",
+            ShotFormat::Jpeg => "jpeg",
+        }
+    ));
+    text.push_str(&format!("file: {file}\n"));
+    text.push_str(
+        "coordinates: these are pixels of the source image, not desktop pixels; add the region offset (and undo the source's scale) to get a desktop coordinate for computer_click.\n</image_crop>",
+    );
+
+    let mut out = ToolResult::text(text);
+    if let Some(attachment) = attachment(&bytes, format.mime()) {
+        out = out.with_attachment(attachment);
+    }
+    Ok(out)
+}
+
 /// `computer_actions`：顺序执行多步。
 pub async fn batch(args: &Value) -> Result<ToolResult, ToolError> {
     let steps = args
@@ -985,6 +1086,7 @@ fn one_line(result: Result<ToolResult, ToolError>) -> Result<String, ToolError> 
 pub async fn dispatch(name: &str, args: &Value) -> Result<ToolResult, ToolError> {
     match name {
         "computer_screenshot" => screenshot(args).await,
+        "computer_crop" => crop(args).await,
         "computer_actions" => batch(args).await,
         "computer_click" => click(args).await,
         "computer_drag" => drag(args).await,
@@ -1005,6 +1107,43 @@ pub async fn dispatch(name: &str, args: &Value) -> Result<ToolResult, ToolError>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `region` 只接受非负整数且宽高不为零。
+    #[test]
+    fn arg_rect_rejects_zero_and_negative_extents() {
+        let ok = serde_json::json!({ "region": [1, 2, 3, 4] });
+        assert_eq!(arg_rect(&ok, "region").unwrap(), [1, 2, 3, 4]);
+        for bad in [
+            serde_json::json!({ "region": [0, 0, 0, 4] }),
+            serde_json::json!({ "region": [-1, 0, 3, 4] }),
+            serde_json::json!({ "region": [0, 0, 3] }),
+            serde_json::json!({}),
+        ] {
+            assert!(arg_rect(&bad, "region").is_err(), "{bad} 应被拒绝");
+        }
+    }
+
+    /// 裁剪：尺寸与像素正确、越界被拒、非图片文件报为不可解码。
+    #[test]
+    fn crop_file_keeps_the_requested_rectangle() {
+        let img = image::RgbImage::from_fn(40, 20, |x, y| image::Rgb([x as u8, y as u8, 0]));
+        let mut png = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let path = output_files::write_output_file("computer-test", ".png", &png).unwrap();
+        let path = path.display().to_string();
+
+        let (bytes, format, (w, h)) = crop_file(&path, [10, 5, 8, 6], None).unwrap();
+        assert_eq!(format, ShotFormat::Png);
+        assert_eq!((w, h), (8, 6));
+        let out = image::load_from_memory(&bytes).unwrap();
+        assert_eq!((out.width(), out.height()), (8, 6));
+        assert_eq!(out.to_rgb8().get_pixel(0, 0), &image::Rgb([10, 5, 0]));
+
+        assert!(crop_file(&path, [35, 0, 8, 6], None).is_err());
+        let not_image = output_files::write_output_file("computer-test", ".txt", b"nope").unwrap();
+        assert!(crop_file(&not_image.display().to_string(), [0, 0, 1, 1], None).is_err());
+    }
 
     /// 日志尾部回执：只取末段，空文件与缺失路径都当没有内容。
     #[test]
