@@ -33,7 +33,15 @@ use super::{
     sidebar::{self, SessionRow},
     suggest::{self, Suggest, Trigger},
     text_edit::{self, Editor},
-    theme::{self, SPACE_MD, Theme, px},
+    theme::{
+        self, CHROME_HEIGHT, COMPOSER_H_PADDING, CONTENT_MAX_WIDTH, DROPDOWN_MAX_HEIGHT,
+        DROPDOWN_ROW_HEIGHT, FLOW_PADDING_BOTTOM, FLOW_PADDING_TOP, HISTORY_LABEL_WIDTH,
+        MENU_EDGE_MARGIN, PANEL_DEFAULT_WIDTH, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH,
+        SCROLLBAR_HIT_WIDTH, SCROLLBAR_WIDTH, SIDEBAR_DEFAULT_WIDTH, SIDEBAR_HANDLE_WIDTH,
+        SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, SUGGEST_CHROME_HEIGHT, SUGGEST_GAP,
+        SUGGEST_ROW_HEIGHT, SUGGEST_ROWS, TOAST_DURATION, TOAST_MAX, TRANSCRIPT_LINE_HEIGHT, Theme,
+        min_thumb, px,
+    },
     transcript::{self, Note, Transcript},
 };
 use crate::{
@@ -66,70 +74,6 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::sync::mpsc::UnboundedReceiver;
-
-/// 正文列最大宽度：宽屏下不铺满整屏，阅读更稳。
-const CONTENT_MAX_WIDTH: f32 = 760.0;
-/// 标题栏高度。
-const CHROME_HEIGHT: f32 = 32.0;
-/// 对话流顶部留白。
-const FLOW_PADDING_TOP: f32 = 16.0;
-/// 对话流底部留白：滚到底时最后一行不贴输入卡片。
-const FLOW_PADDING_BOTTOM: f32 = 64.0;
-/// 对话流正文的行高（相对字号；默认 φ = 1.618 会让行内高亮背景过高并连成一片）
-const TRANSCRIPT_LINE_HEIGHT: f32 = 1.32;
-/// 输入卡片每侧的内边距（逻辑像素，与卡片的 `px(SPACE_MD)` 保持一致）：算可用折行宽度时两侧各扣一份
-const COMPOSER_H_PADDING: f32 = SPACE_MD;
-/// prompt 历史条目的标签宽度上限（显示宽度，CJK 字符按 2 算）。
-const HISTORY_LABEL_WIDTH: usize = 60;
-
-/// 对话流滚动条宽度（滑块本身比这个热区窄，方便抓取）。
-const SCROLLBAR_WIDTH: f32 = 8.0;
-/// 滚动条热区宽度：滑块附近都算拖动范围，不然 6px 太难点中。
-const SCROLLBAR_HIT_WIDTH: f32 = 16.0;
-/// 滚动条滑块最小高度。
-const SCROLLBAR_MIN_THUMB: f32 = 24.0;
-
-/// 滑块最小高度的物理像素值：[`geometry`] 里的算式只吃 f32，单位换算留在 GUI 这层。
-fn min_thumb() -> f32 {
-    f32::from(px(SCROLLBAR_MIN_THUMB))
-}
-
-/// 下拉菜单离窗口边缘至少留出的距离（逻辑像素）
-const MENU_EDGE_MARGIN: f32 = 16.0;
-/// 下拉菜单每行的高度（逻辑像素，估高度用）
-const DROPDOWN_ROW_HEIGHT: f32 = 24.0;
-/// 下拉菜单的最大高度（超过就滚动）
-const DROPDOWN_MAX_HEIGHT: f32 = 360.0;
-
-/// toast 停留时长
-const TOAST_DURATION: Duration = Duration::from_millis(3600);
-/// 同时最多保留几条 toast
-const TOAST_MAX: usize = 4;
-
-/// 侧栏默认宽度（逻辑像素）
-const SIDEBAR_DEFAULT_WIDTH: f32 = 252.0;
-/// 侧栏最窄：再窄标题就全被截断
-const SIDEBAR_MIN_WIDTH: f32 = 180.0;
-/// 侧栏最宽：留出主区
-const SIDEBAR_MAX_WIDTH: f32 = 460.0;
-/// 拖拽热区宽度（骑在右边框上）
-const SIDEBAR_HANDLE_WIDTH: f32 = 6.0;
-/// 补全面板里除候选行以外的固定高度（输入框 + 内边距，逻辑像素）
-const SUGGEST_CHROME_HEIGHT: f32 = 46.0;
-
-/// 右侧面板默认宽度（逻辑像素）
-const PANEL_DEFAULT_WIDTH: f32 = 320.0;
-/// 右侧面板最窄
-const PANEL_MIN_WIDTH: f32 = 240.0;
-/// 右侧面板最宽
-const PANEL_MAX_WIDTH: f32 = 620.0;
-
-/// 补全面板最多显示几行。
-const SUGGEST_ROWS: usize = 8;
-/// 补全面板单行高度（逻辑像素）。
-const SUGGEST_ROW_HEIGHT: f32 = 24.0;
-/// 补全面板与输入卡片之间的间隙。
-const SUGGEST_GAP: f32 = 8.0;
 
 /// 最近工作目录最多记多少条。
 const RECENT_CWD_LIMIT: usize = 30;
