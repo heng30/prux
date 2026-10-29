@@ -326,9 +326,7 @@ fn write_bug_report(
 /// `--skill`/`--no-context-files` 这类启动参数没有在桌面端留副本，重载后会回到默认。
 fn reload_assets(agent: &mut Agent, events: &UnboundedSender<GuiEvent>) {
     let agent_dir = crate::core::settings_manager::agent_dir();
-    let home_dir = std::env::var("HOME")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| std::path::PathBuf::from("/"));
+    let home_dir = crate::utils::paths::home_dir();
     let cwd = agent.cwd.clone();
     let trusted =
         crate::core::project_trust::is_project_trusted(std::path::Path::new(&cwd), &agent_dir);

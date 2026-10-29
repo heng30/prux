@@ -11,6 +11,7 @@ use crate::cli::session_picker::ProgressiveMetas;
 use crate::core::session_manager::{default_session_dir, list_sessions};
 use crate::core::settings_manager::agent_dir;
 use crate::modes::interactive::agent_actor::{AgentCommand, CommandTx};
+use crate::utils::display::fit_display;
 use gpui::{
     AnyElement, IntoElement, MouseButton, ParentElement, ScrollHandle, SharedString, Styled, div,
     prelude::*,
@@ -73,11 +74,11 @@ pub fn rows(loader: &ProgressiveMetas) -> Vec<SessionRow> {
                 .filter(|n| !n.trim().is_empty())
                 .or_else(|| {
                     let first = meta.first_message.trim();
-                    (!first.is_empty()).then(|| truncate(first, 32))
+                    (!first.is_empty()).then(|| fit_display(first, 32))
                 })
                 .unwrap_or_else(|| {
                     path.file_stem()
-                        .map(|s| truncate(&s.to_string_lossy(), 18))
+                        .map(|s| fit_display(&s.to_string_lossy(), 18))
                         .unwrap_or_default()
                 });
             SessionRow {
@@ -378,14 +379,4 @@ pub fn render(ctx: SidebarCtx<'_>) -> AnyElement {
             .child(footer),
     );
     column.into_any_element()
-}
-
-/// 按字符截断并补省略号。
-fn truncate(text: &str, max: usize) -> String {
-    if text.chars().count() <= max {
-        return text.to_string();
-    }
-    let mut out: String = text.chars().take(max).collect();
-    out.push('…');
-    out
 }

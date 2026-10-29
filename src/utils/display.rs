@@ -425,6 +425,18 @@ mod tests {
         assert_eq!(format_rate(0.0), "0 B/s");
     }
 
+    /// 超出宽度才截断并补省略号；宽度按显示格子算（CJK 占 2）。
+    #[test]
+    fn fit_display_appends_ellipsis_only_when_cut() {
+        assert_eq!(fit_display("abc", 3), "abc");
+        let long = "x".repeat(200);
+        let cut = fit_display(&long, 160);
+        assert_eq!(cut.chars().count(), 160);
+        assert!(cut.ends_with('…'));
+        assert_eq!(fit_display("中文", 4), "中文");
+        assert_eq!(fit_display("中文", 3), "中…");
+    }
+
     #[test]
     fn format_cost_trims_trailing_zeros() {
         assert_eq!(format_cost(0.123456), "0.123456");

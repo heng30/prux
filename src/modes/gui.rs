@@ -18,7 +18,21 @@ mod text_edit;
 mod theme;
 mod transcript;
 
-use std::collections::HashSet;
+use crate::{
+    APP_NAME,
+    cli::startup::Startup,
+    core::{self, settings_manager},
+    embedded_bytes, extensions,
+    modes::interactive::agent_actor,
+    utils::paths::{cwd, home_dir},
+};
+use gpui::{
+    App, AppContext, Application, Bounds, TitlebarOptions, WindowBackgroundAppearance,
+    WindowBounds, WindowOptions, px, size,
+};
+use std::{borrow::Cow, collections::HashSet, sync::Arc};
+use theme::Theme;
+use tokio::{runtime::Handle, sync::Mutex, sync::mpsc::unbounded_channel};
 
 /// 扫描全部技能并算出给定过滤规则下的启用集合（`/skills` 面板用）。
 ///
@@ -30,99 +44,26 @@ pub(crate) type SkillRow = (String, String, String, bool, String);
 /// `/skills` 面板需要的数据：全部技能行 + 当前规则下启用的技能名。
 pub(crate) type SkillsSnapshot = (Vec<SkillRow>, HashSet<String>);
 
-/// 扫描技能并返回快照（`rules` 是未落盘的草稿规则，启用态按它实算）。
-pub(crate) fn skills_snapshot(rules: &[String]) -> SkillsSnapshot {
-    let agent_dir = settings_manager::agent_dir();
-    let home_dir = std::env::var("HOME")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| std::path::PathBuf::from("/"));
-    let cwd = std::env::current_dir()
-        .map(|path| path.to_string_lossy().to_string())
-        .unwrap_or_default();
-    let bundled = crate::extensions::skills::bundled_skill_names();
-    let load = |filter: &[String]| {
-        crate::core::skills::load_skills(
-            &cwd,
-            &agent_dir,
-            &home_dir,
-            &[],
-            &bundled,
-            true,
-            true,
-            filter,
-        )
-    };
-    let all = load(&[]);
-    let enabled: std::collections::HashSet<String> =
-        load(rules).into_iter().map(|skill| skill.name).collect();
-    let rows = all
-        .into_iter()
-        .map(|skill| {
-            (
-                skill.name,
-                skill.description,
-                skill.source,
-                skill.disable_model_invocation,
-                skill.path.to_string_lossy().to_string(),
-            )
-        })
-        .collect();
-    (rows, enabled)
-}
-
-/// `/skills` 详情页（Tab）的行：启用态 + SKILL.md 头信息 + 来源 + 路径。
-///
-/// 技能不存在时返回空（调用方据此不打开详情页）。
-pub(crate) fn skill_detail_lines(rules: &[String], name: &str) -> Vec<String> {
-    let (all, enabled) = skills_snapshot(rules);
-    let Some(row) = all.iter().find(|row| row.0 == name) else {
-        return Vec::new();
-    };
-    vec![
-        format!("  name: {name}"),
-        format!("  enabled: {}", enabled.contains(name)),
-        format!("  disable-model-invocation: {}", row.3),
-        format!("  source: {}", row.2),
-        format!("  path: {}", row.4),
-        String::new(),
-        format!("  description: {}", row.1),
-    ]
-}
-
-use crate::APP_NAME;
-use crate::cli::startup::Startup;
-use crate::core::settings_manager;
-use gpui::{
-    App, AppContext, Application, Bounds, TitlebarOptions, WindowBackgroundAppearance,
-    WindowBounds, WindowOptions, px, size,
-};
-use std::sync::Arc;
-use tokio::runtime::Handle;
-use tokio::sync::Mutex;
-use tokio::sync::mpsc::unbounded_channel;
-
 /// 默认窗口尺寸（逻辑像素）。
 const DEFAULT_WINDOW_SIZE: (f32, f32) = (1180.0, 780.0);
+
 /// 窗口最小尺寸（逻辑像素）：再小侧栏与输入框会挤在一起。
 const MIN_WINDOW_SIZE: (f32, f32) = (760.0, 560.0);
+
+/// 内嵌字体：思源黑体 CN（默认界面字体，随二进制发布，不依赖系统装字体）。
+const UI_FONT_BYTES: &[u8] = embedded_bytes!("fonts/SourceHanSansCN.otf");
 
 /// GUI 入口。**必须由主线程调用**（gpui 独占主线程事件循环）。
 ///
 /// `rt` 是调用方持有的 tokio runtime：agent worker 跑在它上面，
 /// 调用方必须在 `run` 返回前保持 runtime 存活。
-/// 内嵌字体：思源黑体 CN（默认界面字体，随二进制发布，不依赖系统装字体）。
-const UI_FONT_BYTES: &[u8] = include_bytes!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/assets/fonts/SourceHanSansCN.otf"
-));
-
 pub fn run(startup: Startup, rt: &Handle) {
-    // 界面缩放先落地：首帧就按用户上次选的档位渲染，不然先小后大，闪一下
     theme::set_ui_scale(settings_manager::read_settings_ui_scale());
-    let theme = theme::Theme::new(is_dark_theme(startup.theme_override.as_deref()));
 
+    let theme = Theme::new(is_dark_theme(startup.theme_override.as_deref()));
     let (event_tx, event_rx) = unbounded_channel();
-    let (cmd_tx, cmd_rx) = crate::modes::interactive::agent_actor::channels();
+    let (cmd_tx, cmd_rx) = agent_actor::channels();
+
     rt.spawn(bridge::worker::run(
         Arc::new(Mutex::new(startup.agent)),
         cmd_rx,
@@ -132,10 +73,10 @@ pub fn run(startup: Startup, rt: &Handle) {
     let initial_messages = startup.initial_messages;
 
     Application::new().run(move |cx: &mut App| {
-        // 先把内嵌字体交给排版器，首帧就能用上
         _ = cx
             .text_system()
-            .add_fonts(vec![std::borrow::Cow::Borrowed(UI_FONT_BYTES)]);
+            .add_fonts(vec![Cow::Borrowed(UI_FONT_BYTES)]);
+
         let bounds = Bounds::centered(
             None,
             size(px(DEFAULT_WINDOW_SIZE.0), px(DEFAULT_WINDOW_SIZE.1)),
@@ -171,4 +112,60 @@ fn is_dark_theme(name: Option<&str>) -> bool {
         Some(name) => !name.to_lowercase().contains("light"),
         None => true,
     }
+}
+
+/// 扫描技能并返回快照（`rules` 是未落盘的草稿规则，启用态按它实算）。
+pub(crate) fn skills_snapshot(rules: &[String]) -> SkillsSnapshot {
+    let home_dir = home_dir();
+    let cwd = cwd().to_string_lossy().to_string();
+    let agent_dir = settings_manager::agent_dir();
+    let bundled = extensions::skills::bundled_skill_names();
+
+    let load = |filter: &[String]| {
+        core::skills::load_skills(
+            &cwd,
+            &agent_dir,
+            &home_dir,
+            &[],
+            &bundled,
+            true,
+            true,
+            filter,
+        )
+    };
+
+    let all = load(&[]);
+    let enabled: HashSet<String> = load(rules).into_iter().map(|skill| skill.name).collect();
+    let rows = all
+        .into_iter()
+        .map(|skill| {
+            (
+                skill.name,
+                skill.description,
+                skill.source,
+                skill.disable_model_invocation,
+                skill.path.to_string_lossy().to_string(),
+            )
+        })
+        .collect();
+    (rows, enabled)
+}
+
+/// `/skills` 详情页（Tab）的行：启用态 + SKILL.md 头信息 + 来源 + 路径。
+///
+/// 技能不存在时返回空（调用方据此不打开详情页）。
+pub(crate) fn skill_detail_lines(rules: &[String], name: &str) -> Vec<String> {
+    let (all, enabled) = skills_snapshot(rules);
+    let Some(row) = all.iter().find(|row| row.0 == name) else {
+        return Vec::new();
+    };
+    vec![
+        format!("  name: {name}"),
+        format!("  enabled: {}", enabled.contains(name)),
+        format!("  disable-model-invocation: {}", row.3),
+        format!("  source: {}", row.2),
+        format!("  path: {}", row.4),
+        String::new(),
+        format!("  description: {}", row.1),
+    ]
 }

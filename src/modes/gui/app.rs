@@ -107,8 +107,8 @@ const TRANSCRIPT_LINE_HEIGHT: f32 = 1.32;
 /// 输入卡片每侧的内边距（逻辑像素，对应卡片的 `px(12.)`）：算可用折行宽度时两侧各扣一份
 const COMPOSER_H_PADDING: f32 = 12.0;
 
-/// `/history` 面板里每条标签最多显示几个字符
-const HISTORY_LABEL_CHARS: usize = 60;
+/// prompt 历史条目的标签宽度上限（显示宽度，CJK 字符按 2 算）。
+const HISTORY_LABEL_WIDTH: usize = 60;
 
 /// toast 停留时长
 const TOAST_DURATION: std::time::Duration = std::time::Duration::from_millis(3600);
@@ -1585,7 +1585,7 @@ impl GuiApp {
             }
             SessionDialog::Import { editor } => {
                 let raw = editor.text().trim().to_string();
-                let path = resolve_user_path(&raw, &self.cwd());
+                let path = crate::utils::paths::resolve_path(&raw, &self.cwd());
                 if !path.is_file() {
                     self.transcript.push_note(Note::Error(format!(
                         "Import failed: no such file {}",
@@ -2602,12 +2602,7 @@ impl GuiApp {
         self.snapshot
             .as_ref()
             .map(|s| s.cwd.clone())
-            .or_else(|| {
-                std::env::current_dir()
-                    .ok()
-                    .map(|p| p.to_string_lossy().to_string())
-            })
-            .unwrap_or_default()
+            .unwrap_or_else(|| crate::utils::paths::cwd().to_string_lossy().to_string())
     }
 
     /// 命令面板。
@@ -3749,7 +3744,7 @@ fn remember_cwd(path: &str) {
     }
 }
 
-/// prompt 历史 → 面板条目：最新的在前，标签取首行并夹到 60 字。
+/// prompt 历史 → 面板条目：最新的在前，标签取首行并夹到 [`HISTORY_LABEL_WIDTH`]。
 fn history_entries(history: Vec<crate::core::prompt_history::HistoryEntry>) -> Vec<Entry> {
     let mut entries: Vec<Entry> = history
         .into_iter()
@@ -3761,11 +3756,7 @@ fn history_entries(history: Vec<crate::core::prompt_history::HistoryEntry>) -> V
                 .lines()
                 .find(|line| !line.trim().is_empty())
                 .unwrap_or_default();
-            let label = if first.chars().count() > HISTORY_LABEL_CHARS {
-                first.chars().take(HISTORY_LABEL_CHARS).collect::<String>() + "…"
-            } else {
-                first.to_string()
-            };
+            let label = crate::utils::display::fit_display(first, HISTORY_LABEL_WIDTH);
             Entry {
                 label: if label.is_empty() {
                     item.text.clone()
@@ -3841,22 +3832,6 @@ fn ignore_repeat_toggle(
 /// 补全面板该不该自动弹出：手动关掉（Esc / 退格删空）过的同一次触发不再弹回。
 fn suggest_allowed(dismissed: Option<usize>, start: usize) -> bool {
     dismissed != Some(start)
-}
-
-/// 解析用户输入的路径：展开 `~`，相对路径按 `cwd` 解析。
-fn resolve_user_path(raw: &str, cwd: &str) -> std::path::PathBuf {
-    let expanded = if let Some(rest) = raw.strip_prefix("~/") {
-        std::env::var("HOME")
-            .map(|home| std::path::PathBuf::from(home).join(rest))
-            .unwrap_or_else(|_| std::path::PathBuf::from(raw))
-    } else {
-        std::path::PathBuf::from(raw)
-    };
-    if expanded.is_absolute() {
-        expanded
-    } else {
-        std::path::Path::new(cwd).join(expanded)
-    }
 }
 
 /// 遍历动作需要所有权：把借来的动作深拷一份（只有 String/命令两种载荷）。

@@ -22,7 +22,7 @@ use std::rc::Rc;
 const COLLAPSED_OUTPUT_LINES: usize = 6;
 /// 工具输出展开时显示的行数上限。
 const EXPANDED_OUTPUT_LINES: usize = 200;
-/// 工具输出每一行最多保留的字符数。
+/// 工具输出每一行最多保留的显示宽度（CJK 字符按 2 算）。
 const OUTPUT_LINE_CHARS: usize = 160;
 
 /// 工具调用的执行状态。
@@ -596,7 +596,7 @@ fn summarize_args(args: &Value) -> String {
         Value::Null => String::new(),
         other => other.to_string(),
     };
-    truncate(&text, 120)
+    crate::utils::display::fit_display(&text, 120)
 }
 
 /// 工具结果内容 → 纯文本。
@@ -609,16 +609,6 @@ fn tool_result_text(content: &[ContentBlock]) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-/// 按字符截断，超出补省略号。
-fn truncate(text: &str, max: usize) -> String {
-    if text.chars().count() <= max {
-        return text.to_string();
-    }
-    let mut out: String = text.chars().take(max).collect();
-    out.push('…');
-    out
 }
 
 /// 工具调用的入参颜色：shell 类用代码色，其余用次要色。
@@ -654,7 +644,7 @@ fn output_body(text: &str, theme: &Theme, max: usize, expanded: bool) -> AnyElem
     let lines = text.trim().lines();
     let total = lines.clone().count();
     for line in lines.take(max) {
-        let shown = truncate(line, OUTPUT_LINE_CHARS);
+        let shown = crate::utils::display::fit_display(line, OUTPUT_LINE_CHARS);
         column = column.child(
             div()
                 .w_full()
@@ -725,17 +715,7 @@ fn image_refs(text: &str, cwd: &str) -> Vec<std::path::PathBuf> {
         .filter_map(|token| token.strip_prefix('@'))
         .map(|raw| {
             let raw = raw.trim_matches(|c: char| c == '，' || c == ',');
-            let expanded = match raw.strip_prefix("~/") {
-                Some(rest) => std::env::var("HOME")
-                    .map(|home| std::path::PathBuf::from(home).join(rest))
-                    .unwrap_or_else(|_| std::path::PathBuf::from(raw)),
-                None => std::path::PathBuf::from(raw),
-            };
-            if expanded.is_absolute() {
-                expanded
-            } else {
-                std::path::Path::new(cwd).join(expanded)
-            }
+            crate::utils::paths::resolve_path(raw, cwd)
         })
         .filter(|path| path.is_file() && is_image_path(path))
         .collect()
@@ -856,7 +836,10 @@ pub fn render_block(
                         .border_color(theme.border_strong)
                         .text_size(px(12.))
                         .text_color(theme.text_tertiary)
-                        .child(SharedString::from(truncate(assistant.thinking.trim(), 300))),
+                        .child(SharedString::from(crate::utils::display::fit_display(
+                            assistant.thinking.trim(),
+                            300,
+                        ))),
                 );
             }
             let rows = assistant.body.rows(&assistant.text, theme);
@@ -1379,14 +1362,6 @@ mod tests {
     }
 
     use super::*;
-
-    /// 单行过长时按字符截断并补省略号。
-    #[test]
-    fn truncate_caps_long_lines() {
-        let long = truncate(&"x".repeat(OUTPUT_LINE_CHARS + 5), OUTPUT_LINE_CHARS);
-        assert_eq!(long.chars().count(), OUTPUT_LINE_CHARS + 1);
-        assert!(long.ends_with('…'));
-    }
 
     /// 工具返回的图片：base64 解不开或 MIME 不认识时不落盘。
     #[test]

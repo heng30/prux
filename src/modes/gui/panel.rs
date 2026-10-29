@@ -6,6 +6,7 @@
 use super::app::GuiApp;
 use super::theme::Theme;
 use super::theme::px;
+use crate::utils::process::run_stdout;
 use gpui::{AnyElement, IntoElement, ParentElement, SharedString, Styled, div, prelude::*};
 use std::path::Path;
 use std::process::Command;
@@ -189,16 +190,10 @@ fn list_files(cwd: &Path) -> Vec<FileRow> {
 
 /// `git status --porcelain` → 变更列表。
 fn git_changes(cwd: &str) -> Result<Vec<ChangeRow>, String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(cwd)
-        .args(["status", "--porcelain"])
-        .output()
-        .map_err(|e| format!("Cannot run git: {e}"))?;
-    if !output.status.success() {
-        return Err("Not a git work tree, or git failed".to_string());
-    }
-    Ok(parse_status(&String::from_utf8_lossy(&output.stdout)))
+    let mut cmd = Command::new("git");
+    cmd.arg("-C").arg(cwd).args(["status", "--porcelain"]);
+    let stdout = run_stdout(cmd, "git status")?;
+    Ok(parse_status(&String::from_utf8_lossy(&stdout)))
 }
 
 /// `git status --porcelain` 文本 → 变更列表（重命名只保留新路径）。
@@ -226,16 +221,12 @@ fn parse_status(text: &str) -> Vec<ChangeRow> {
 
 /// 单个文件的 diff（未跟踪文件没有 diff 内容）。
 fn git_diff(cwd: &str, path: &str) -> Result<String, String> {
-    let output = Command::new("git")
-        .arg("-C")
+    let mut cmd = Command::new("git");
+    cmd.arg("-C")
         .arg(cwd)
-        .args(["diff", "--no-color", "--", path])
-        .output()
-        .map_err(|e| format!("Cannot run git: {e}"))?;
-    if !output.status.success() {
-        return Err("git diff failed".to_string());
-    }
-    let text = String::from_utf8_lossy(&output.stdout).to_string();
+        .args(["diff", "--no-color", "--", path]);
+    let stdout = run_stdout(cmd, "git diff")?;
+    let text = String::from_utf8_lossy(&stdout).to_string();
     if text.trim().is_empty() {
         return Ok("(no staged diff; new files need `git add` first)".to_string());
     }
