@@ -440,15 +440,13 @@ impl GuiApp {
             .hover(|style| style.opacity(0.86))
             .on_click(cx.listener(move |this, _, _, cx| {
                 if this.busy {
-                    _ = this.cmd_tx.send(AgentCommand::Abort);
-                    this.queued = 0;
+                    this.abort_turn(cx);
                 } else {
                     this.submit(cx);
+                    cx.notify();
                 }
-                cx.notify();
             }))
             .child(if busy {
-                // 忙碌只换形状：播放器的停止方块（颜色仍是反色）
                 icon::stop(&theme)
             } else {
                 SharedString::from("Send").into_any_element()
@@ -550,7 +548,7 @@ impl GuiApp {
                                         .text_size(px(FONT_SMALL))
                                         .text_color(theme.text_tertiary)
                                         .child(SharedString::from(
-                                            "Ctrl-M for commands · Ctrl-, for settings",
+                                            "Ctrl+M for commands · Ctrl+, for settings",
                                         )),
                                 ),
                         )
@@ -564,7 +562,7 @@ impl GuiApp {
                                 .text_size(px(FONT_CAPTION))
                                 .text_color(theme.text_ghost)
                                 .child(SharedString::from(
-                                    "Enter send · Shift+Enter new line · Ctrl-P cycle model · Shift-Tab cycle thinking",
+                                    "Enter send · Shift+Enter new line · Ctrl+P cycle model · Shift+Tab cycle thinking",
                                 )),
                         ),
                 )

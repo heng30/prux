@@ -18,7 +18,7 @@ impl GuiApp {
             return;
         }
         let before = self.editor.text_before_cursor();
-        let Some((trigger, start, query)) = suggest::detect(&before) else {
+        let Some((trigger, start, query)) = suggest_engine::detect(&before) else {
             self.suggest = None;
             self.suggest_dismissed = None;
             self.attach_images = false;
@@ -76,7 +76,7 @@ impl GuiApp {
                 }
                 // 执行入口还挂在 TUI 层，这里先按现状列出；有 GUI 面板入口的命令不重复列
                 for command in crate::core::extensions::registered_commands() {
-                    if suggest::PANEL_COMMANDS.contains(&command.name.as_str()) {
+                    if suggest_engine::PANEL_COMMANDS.contains(&command.name.as_str()) {
                         continue;
                     }
                     extra.push((
@@ -84,11 +84,11 @@ impl GuiApp {
                         format!("{} (extension)", command.description),
                     ));
                 }
-                suggest::commands_with(&extra, &query)
+                suggest_engine::commands_with(&extra, &query)
             }
             Trigger::File => {
                 self.ensure_files(cx);
-                suggest::files(&self.files_cache.paths, &query, self.attach_images)
+                suggest_engine::files(&self.files_cache.paths, &query, self.attach_images)
             }
         };
         // 同一触发词 + 同一前缀：保留选中项，避免每敲一个字符跳回第一行

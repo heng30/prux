@@ -10,7 +10,7 @@
 //! - [`input`]：光标、选区与 IME；
 //! - [`menus`]：下拉菜单、会话菜单与拖拽；
 //! - [`panels`]：右侧面板与列表选择页；
-//! - [`suggest_ui`]：输入补全面板；
+//! - [`suggest`]：输入补全面板；
 //! - [`status`]：状态栏文案与驱动它的计时/速率采样。
 
 mod actions;
@@ -21,7 +21,7 @@ mod menus;
 mod panels;
 mod render;
 mod status;
-mod suggest_ui;
+mod suggest;
 
 #[cfg(test)]
 mod tests;
@@ -37,7 +37,7 @@ use super::{
         TABLE_SOURCE_W, TABLE_VALUE_W,
     },
     sidebar::{self, SessionRow},
-    suggest::{self, Suggest, Trigger},
+    suggest::{self as suggest_engine, Suggest, Trigger},
     text_edit::{self, Editor},
     theme::{
         self, COMPOSER_H_PADDING, CONTENT_MAX_WIDTH, DROPDOWN_MAX_HEIGHT, DROPDOWN_ROW_HEIGHT,
@@ -800,7 +800,7 @@ fn cycle_index(current: Option<usize>, len: usize, dir: i32) -> usize {
     ((current as i32 + dir).rem_euclid(len as i32)) as usize
 }
 
-/// `Ctrl+P` 循环的候选模型：`scoped` 非空时严格按 scope 顺序、跳过目录里不可用的；
+/// `Ctrl-P` 循环的候选模型：`scoped` 非空时严格按 scope 顺序、跳过目录里不可用的；
 /// 为空时才退回全部已配置模型（与 TUI 的模型循环一致）。
 fn cycle_models(scoped: &[ScopedModel], all: &[(String, String)]) -> Vec<(String, String)> {
     if scoped.is_empty() {

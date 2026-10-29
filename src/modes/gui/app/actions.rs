@@ -397,6 +397,20 @@ impl GuiApp {
         }
         cx.notify();
     }
+
+    /// 中止当前回合（Esc 与停止按钮共用）。
+    ///
+    /// worker 直接 drop 回合 future，agent 不会再发 `agent_settled`，忙状态只能
+    /// 本地复位，中断提示也只能自己补（同 TUI 的硬中止）。
+    pub(super) fn abort_turn(&mut self, cx: &mut Context<Self>) {
+        _ = self.cmd_tx.send(AgentCommand::Abort);
+        self.queued = 0;
+        self.busy = false;
+        self.transcript.abort();
+        self.scroll_to_bottom();
+        cx.notify();
+    }
+
     /// 提交输入框内容。
     pub(super) fn submit(&mut self, cx: &mut Context<Self>) {
         let Some(text) = self.editor.trimmed() else {

@@ -483,13 +483,7 @@ impl GuiApp {
             }
             "escape" => {
                 if self.busy {
-                    // worker 直接 drop 回合 future，agent 不会再发 `agent_settled`，
-                    // 忙状态只能在本地复位，中断提示也只能自己补（同 TUI 的硬中止）
-                    _ = self.cmd_tx.send(AgentCommand::Abort);
-                    self.queued = 0;
-                    self.busy = false;
-                    self.transcript.abort();
-                    self.scroll_to_bottom();
+                    self.abort_turn(cx);
                 } else if self.panel.visible {
                     // 空闲时 Esc 先收右侧面板（giff 等）——之前面板没有关闭途径
                     self.panel.visible = false;

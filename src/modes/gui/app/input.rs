@@ -266,7 +266,9 @@ impl EntityInputHandler for GuiApp {
         {
             let before = self.editor.text_before_cursor();
             let probe = format!("{before}/");
-            if suggest::detect(&probe).is_some_and(|(trigger, _, _)| trigger == Trigger::Command) {
+            if suggest_engine::detect(&probe)
+                .is_some_and(|(trigger, _, _)| trigger == Trigger::Command)
+            {
                 self.suggest_input = Editor::new();
                 let start = self.editor.cursor_byte();
                 self.rebuild_suggest(Trigger::Command, start, String::new(), cx);
