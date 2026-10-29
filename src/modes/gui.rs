@@ -46,7 +46,11 @@ const UI_FONT_BYTES: &[u8] = embedded_bytes!("fonts/SourceHanSansCN.otf");
 pub fn run(startup: Startup, rt: &Handle) {
     theme::set_ui_scale(settings_manager::read_settings_ui_scale());
 
-    let theme = Theme::new(Theme::is_dark_theme(startup.theme_override.as_deref()));
+    // GUI 自己记住的明暗优先；没存过才用 --theme / settings.theme，最后回落暗色
+    let gui_theme = settings_manager::read_settings_theme_gui();
+    let theme = Theme::new(Theme::is_dark_theme(
+        gui_theme.as_deref().or(startup.theme_override.as_deref()),
+    ));
     let (event_tx, event_rx) = unbounded_channel();
     let (cmd_tx, cmd_rx) = agent_actor::channels();
 

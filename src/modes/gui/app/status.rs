@@ -8,7 +8,7 @@
 
 use super::GuiApp;
 use crate::{
-    extensions::footer::format_tokens,
+    extensions::{footer::format_tokens, goal, plan_mode},
     modes::gui::transcript::Block,
     utils::tokens::{self, TokenMeter},
 };
@@ -142,6 +142,7 @@ impl GuiApp {
         let messages = self.snapshot.as_ref().map(|s| s.messages).unwrap_or(0);
         let mut left = format!("{messages} messages");
         let mut right = String::new();
+
         if let Some(u) = self.snapshot.as_ref().map(|s| &s.usage) {
             if u.context_window > 0 && u.context_tokens > 0 {
                 let pct = u.context_tokens as f64 / u.context_window as f64 * 100.0;
@@ -162,16 +163,20 @@ impl GuiApp {
                 right.push_str(&format!(" · ${:.4}", u.cost));
             }
         }
+
         let mut tail = format!(
             "{}t/s",
             format_tokens(self.meter.tok_per_sec.round() as u64)
         );
-        if crate::extensions::goal::is_active() {
+
+        if goal::is_active() {
             tail.push_str(" · 🎯 goal");
         }
-        if crate::extensions::plan_mode::is_enabled() {
+
+        if plan_mode::is_enabled() {
             tail.push_str(" · 📋 plan");
         }
+
         let interactions = self
             .transcript
             .blocks()
@@ -180,9 +185,11 @@ impl GuiApp {
             .count();
         tail.push_str(&format!(" · 💬 {interactions}"));
         tail.push_str(&format!(" · ⌛ {}", self.meter.elapsed_text()));
+
         if !right.is_empty() {
             right.push_str(" · ");
         }
+
         right.push_str(&tail);
         (left, right)
     }
@@ -206,6 +213,7 @@ impl GuiApp {
                 cx.background_executor()
                     .timer(Duration::from_millis(BLINK_INTERVAL_MS))
                     .await;
+
                 let alive = this
                     .update(cx, |app, cx| {
                         if !app.busy {
@@ -213,8 +221,8 @@ impl GuiApp {
                             app.blink = false;
                             return false;
                         }
+
                         app.blink = !app.blink;
-                        // 顺手采一个速率点：长时间没有输出时 t/s 才能归零
                         let usage_out =
                             app.snapshot.as_ref().map(|s| s.usage.output).unwrap_or(0) as f64;
                         app.meter.sample_rate(usage_out);
@@ -222,6 +230,7 @@ impl GuiApp {
                         true
                     })
                     .unwrap_or(false);
+
                 if !alive {
                     break;
                 }

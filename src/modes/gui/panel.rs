@@ -3,15 +3,19 @@
 //! 渲染期间不碰文件系统，也不在主线程读：内容由 [`RightPanel::load`] 在工作线程算完，
 //! 再经 [`RightPanel::apply`] 一次性换上去。
 
-use super::app::GuiApp;
-use super::theme::{
-    CONTROL_H_MD, CONTROL_H_SM, DIFF_GUTTER_W, FONT_CAPTION, FONT_SMALL, HEADER_H, ICON_SIZE,
-    RADIUS_MD, RADIUS_SM, SPACE_MD, SPACE_SM, SPACE_XS, SPACE_XXS, Theme, px,
+use super::{
+    app::GuiApp,
+    theme::{
+        CONTROL_H_MD, CONTROL_H_SM, DIFF_GUTTER_W, FONT_CAPTION, FONT_SMALL, HEADER_H, ICON_SIZE,
+        RADIUS_MD, RADIUS_SM, SPACE_MD, SPACE_SM, SPACE_XS, SPACE_XXS, Theme, px,
+    },
 };
 use crate::utils::process::run_stdout;
 use gpui::{AnyElement, IntoElement, ParentElement, SharedString, Styled, div, prelude::*};
-use std::path::Path;
-use std::process::Command;
+use std::{path::Path, process::Command};
+
+/// 文件列表最多展示多少条（再多的仓库里靠搜索，而不是滚一年）。
+const MAX_FILES: usize = 400;
 
 /// 面板标签页。
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -86,9 +90,6 @@ impl Default for RightPanel {
         }
     }
 }
-
-/// 文件列表最多展示多少条（再多的仓库里靠搜索，而不是滚一年）。
-const MAX_FILES: usize = 400;
 
 impl RightPanel {
     /// 纯读盘：按 `tab` 算一份面板内容（不碰自身状态，可在工作线程跑）。
@@ -369,9 +370,11 @@ fn changes_body(theme: &Theme, panel: &RightPanel, cx: &mut gpui::Context<GuiApp
             .items_center()
             .gap(px(SPACE_SM))
             .text_size(px(FONT_SMALL));
+
         if index == panel.selected {
             entry = entry.bg(theme.overlay_strong);
         }
+
         entry = entry
             .child(
                 div()
@@ -395,6 +398,7 @@ fn changes_body(theme: &Theme, panel: &RightPanel, cx: &mut gpui::Context<GuiApp
                 .on_click(cx.listener(move |this, _, _, cx| this.select_change(index, cx))),
         );
     }
+
     if panel.changes.is_empty() && panel.error.is_none() {
         body = body.child(
             div()
@@ -425,8 +429,10 @@ fn diff_view(theme: &Theme, diff: &str) -> AnyElement {
         .flex()
         .flex_col()
         .overflow_y_scroll();
+
     let (mut old_no, mut new_no) = (0, 0);
     let mut in_hunk = false;
+
     for line in diff.lines().take(400) {
         if line.starts_with("@@") {
             let mut fields = line.split(' ').skip(1);
@@ -435,10 +441,12 @@ fn diff_view(theme: &Theme, diff: &str) -> AnyElement {
             in_hunk = true;
             continue;
         }
+
         // 首个 hunk 头之前全是 `diff --git` / `index` / `---` / `+++` 之类的文件头
         if !in_hunk {
             continue;
         }
+
         // 标记已经并到行号里，正文剥掉 diff 前缀
         let (label, body, color) = match line.as_bytes().first() {
             Some(b'+') => {
@@ -456,6 +464,7 @@ fn diff_view(theme: &Theme, diff: &str) -> AnyElement {
             }
             _ => (String::new(), line, theme.text_ghost),
         };
+
         diff_box = diff_box.child(
             div()
                 .flex()
@@ -503,6 +512,7 @@ fn files_body(theme: &Theme, panel: &RightPanel) -> AnyElement {
         .gap(px(SPACE_XXS))
         .p(px(SPACE_SM))
         .overflow_y_scroll();
+
     for row in &panel.files {
         body = body.child(
             div()

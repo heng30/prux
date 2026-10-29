@@ -36,6 +36,7 @@ prux 只有全局一个配置入口，项目级 `.prux/settings.json` 用于覆�
 | 设置 | 类型 | 默认 | 说明 |
 |------|------|------|------|
 | `theme` | string | `"system"` | 主题名：内置 `"system"`（默认，按终端上报的配色推导）、`"dark"`/`"light"`、`"auto"`（按终端背景在 dark/light 间选择）或自定义主题。主题来源见 [themes.md](themes.md) |
+| `theme-gui` | string | 无 | 桌面窗口的明暗主题（`"dark"`/`"light"`）：在 GUI 的外观面板或 `Shift+T` 切换时自动写回，与终端里的 `theme` 互不影响。未设置时沿用 `--theme`，再回落暗色 |
 | `hideThinkingBlock` | boolean | `false` | 隐藏输出中的思考块（`/settings` → Hide thinking） |
 | `syntaxHighlight` | boolean | `true` | 代码块语法高亮（syntect）开关（`/settings` → Syntax highlight） |
 | `mermaid` | boolean | `true` | Mermaid 代码块渲染为 Unicode 流程图；关闭时按普通代码块展示（`/settings` → Mermaid） |

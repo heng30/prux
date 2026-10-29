@@ -189,9 +189,7 @@ impl GuiApp {
             Action::LoadSession(path) => {
                 _ = self.cmd_tx.send(AgentCommand::ResumeSession { path });
             }
-            Action::SetDark(is_dark) => {
-                self.theme = Theme::new(is_dark);
-            }
+            Action::SetDark(is_dark) => self.set_dark(is_dark),
             Action::NewSession => {
                 _ = self.cmd_tx.send(AgentCommand::NewSession);
                 self.transcript.clear();

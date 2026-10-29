@@ -358,7 +358,11 @@ impl GuiApp {
                 ..Entry::default()
             });
         }
-        self.replace_list("Extensions", entries, DetailSource::Extension);
+        self.replace_list(
+            "Extensions (Ctrl-S saves)",
+            entries,
+            DetailSource::Extension,
+        );
         cx.notify();
     }
     /// `/skills`：按 TUI 的技能管理面板实现——列出全部可发现的技能并显示启用态，

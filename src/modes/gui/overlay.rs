@@ -1,5 +1,18 @@
 //! 覆盖层面板：可过滤列表（命令面板 / 模型 / 会话 / 思考级别 / 主题）与只读信息页。
 
+use super::{
+    text_edit::Editor,
+    theme::{
+        CONTROL_H_LG, FONT_BODY, FONT_CAPTION, FONT_SMALL, ICON_SIZE, RADIUS_LG, RADIUS_MD,
+        RADIUS_SM, SPACE_MD, SPACE_SM, SPACE_XS, SPACE_XXS, Theme, px,
+    },
+};
+use crate::modes::interactive::agent_actor::AgentCommand;
+use gpui::{
+    AnyElement, InteractiveElement, IntoElement, ParentElement, ScrollHandle, SharedString,
+    StatefulInteractiveElement, Styled, div,
+};
+
 /// 列表弹层宽度（命令面板 / 模型 / 会话选择 / 思考级别）。
 const LIST_W: f32 = 560.;
 /// 列表弹层高度上限。
@@ -8,17 +21,6 @@ const LIST_MAX_H: f32 = 460.;
 const INFO_W: f32 = 600.;
 /// 信息卡片高度上限。
 const INFO_MAX_H: f32 = 468.;
-
-use super::text_edit::Editor;
-use super::theme::{
-    CONTROL_H_LG, FONT_BODY, FONT_CAPTION, FONT_SMALL, ICON_SIZE, RADIUS_LG, RADIUS_MD, RADIUS_SM,
-    SPACE_MD, SPACE_SM, SPACE_XS, SPACE_XXS, Theme, px,
-};
-use crate::modes::interactive::agent_actor::AgentCommand;
-use gpui::{
-    AnyElement, InteractiveElement, IntoElement, ParentElement, ScrollHandle, SharedString,
-    StatefulInteractiveElement, Styled, div,
-};
 
 /// 列表项被选中后要做的事。
 #[derive(Clone)]

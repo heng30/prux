@@ -376,7 +376,7 @@ impl GuiApp {
             // TUI 的 app.theme.cycle：GUI 只有明/暗两套，切一次就是换主题
             "t" if shift => {
                 let is_dark = !self.theme.is_dark;
-                self.theme = Theme::new(is_dark);
+                self.set_dark(is_dark);
                 cx.notify();
                 return true;
             }

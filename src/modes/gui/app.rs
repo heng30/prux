@@ -57,6 +57,7 @@ use crate::{
         session_manager::Session,
         settings_manager,
     },
+    extensions::extra_themes,
     modes::interactive::{
         agent_actor::{AgentCommand, CommandTx},
         handlers::tools::run_shell_command,
@@ -594,6 +595,12 @@ impl GuiApp {
             .unwrap_or_else(|| cwd().to_string_lossy().to_string())
     }
 
+    /// 切换明暗主题并写回 `theme-gui`，下次启动恢复。
+    fn set_dark(&mut self, is_dark: bool) {
+        self.theme = Theme::new(is_dark);
+        _ = settings_manager::write_settings_theme_gui(if is_dark { "dark" } else { "light" });
+    }
+
     /// 弹一条 toast（TUI 状态栏那类瞬时提示），几秒后自动消失。
     fn toast(&mut self, text: impl Into<String>, kind: ToastKind, cx: &mut Context<Self>) {
         let text: String = text.into();
@@ -703,11 +710,13 @@ fn keeps_overlay(action: &Action) -> bool {
     )
 }
 
-/// GUI 能配置的扩展：底栏与横幅扩展只影响终端界面渲染，桌面端不列出来（也没法生效）。
+/// GUI 能配置的扩展：底栏与横幅扩展只影响终端界面渲染，桌面端不列出来（也没法生效）；
+/// `extra-themes` 是纯资源同步（把内嵌主题写进 `agent_dir/themes`），也没有可配置项。
 fn configurable_extensions() -> Vec<(String, bool, Vec<ExtensionMode>)> {
     let hidden: Vec<String> = extensions::footer_names()
         .into_iter()
         .chain(extensions::banner_names())
+        .chain([extra_themes::EXT.to_string()])
         .collect();
 
     extensions::panel_entries()

@@ -52,7 +52,7 @@ impl GuiApp {
             .unwrap_or_default()
             .into_iter()
             .map(|level| MenuItem {
-                label: format!("thinking {level}"),
+                label: level.clone(),
                 detail: String::new(),
                 action: Action::Command(Box::new(AgentCommand::SetThinking {
                     level,

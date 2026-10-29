@@ -147,7 +147,15 @@
   button turns into a stop square during a run. Context usage comes from the estimated history
   instead of the last request, so it shows up in a freshly loaded session too.
 
+- **The desktop GUI remembers its own light or dark theme**: `Shift+T` and the appearance panel in
+  `/settings` write the choice to `theme-gui` in `settings.json` and restore it on the next
+  launch, so the window theme no longer follows `--theme` once you have picked one. The terminal's
+  `theme` is a separate key and is left alone.
+
 ### Fixed
+
+- **`uiScale` lands in `settings.json` as one decimal**: writing the float straight through turned
+  `2.1` into `2.0999999046325684`; it is now quantised to one decimal before saving.
 
 - **`!` and `!!` no longer open a completion panel in the desktop GUI**: shell lines run on
   `Enter`, so the panel only appeared to announce itself and then stole `Up` / `Down` from the
@@ -344,7 +352,14 @@
   调用期间没有事件时耗时也照样走；发送按钮在忙碌时变成停止方块。上下文占用改用历史估算而不取
   最后一次请求，刚载入的会话也能看到占用率。
 
+- **桌面 GUI 记住自己选的明暗主题**：`Shift+T` 与 `/settings` 的外观面板把选择写进 `settings.json`
+  的 `theme-gui`，下次启动照样恢复，选过一次之后窗口主题就不再跟着 `--theme` 走；终端里的 `theme`
+  是另一个键，互不影响。
+
 ## 修复
+
+- **`uiScale` 在 `settings.json` 里只留一位小数**：直接把 f32 转过去会写成 `2.0999999046325684`，
+  现在存盘前量化到一位小数。
 
 - **桌面 GUI 里 `!` / `!!` 不再弹出补全面板**：shell 行按 `Enter` 就执行，面板只是自报一句说明，
   却把 `↑` / `↓` 从 shell 命令手里抢走；触发词与那条空面板提示一并去掉。
