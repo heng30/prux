@@ -761,246 +761,278 @@ pub fn render_block(
 ) -> AnyElement {
     match block {
         // 用户消息：右对齐气泡，与助手正文拉开层级
-        Block::User(message) => {
-            let text = &message.text;
-            let expanded = message.expanded.unwrap_or(expand_tools);
-            let (shown, hidden) = user_preview(text, expanded, USER_COLLAPSED_LINES);
-            // 宽度显式给出：带 padding 的盒子里，文本实测用的宽度和绘制用的不一致，
-            // 会少算换行高度、底部被截
-            let bubble_w = ctx.width.min(px(USER_BUBBLE_MAX_WIDTH));
-            let inner_w = bubble_w - px(28.);
-            let mut bubble = div()
-                .id(("user", index))
-                .w(bubble_w)
-                .min_w_0()
-                .px(px(14.))
-                .py(px(10.))
-                .rounded(px(10.))
-                .bg(theme.raised)
-                .flex()
-                .flex_col()
-                .gap(px(8.))
-                .text_size(px(13.5))
-                .text_color(theme.text)
-                .cursor_pointer()
-                .hover(|style| style.bg(theme.overlay_strong))
-                // 点气泡展开/收起长消息
-                .on_click(cx.listener(move |this, _, _, cx| this.toggle_user(index, cx)))
-                .child(
-                    div()
-                        .w(inner_w)
-                        .min_w_0()
-                        .child(SharedString::from(shown.join("\n"))),
-                );
-            if hidden > 0 {
-                bubble = bubble.child(div().text_size(px(11.)).text_color(theme.text_ghost).child(
-                    SharedString::from(if expanded {
-                        "click to collapse".to_string()
-                    } else {
-                        format!("⋯ {hidden} more line(s) · click to expand")
-                    }),
-                ));
-            }
-            // `@图片` 引用直接渲染成缩略图
-            let images = image_refs(text, cwd);
-            for path in images {
-                bubble = bubble.child(
-                    div()
-                        .max_w(px(IMAGE_THUMB))
-                        .max_h(px(IMAGE_THUMB))
-                        .rounded(px(6.))
-                        .overflow_hidden()
-                        .child(
-                            gpui::img(path)
-                                .max_w(px(IMAGE_THUMB))
-                                .max_h(px(IMAGE_THUMB)),
-                        ),
-                );
-            }
-            div()
-                .w_full()
-                .flex()
-                .justify_end()
-                .pt(px(6.))
-                .child(bubble)
-                .into_any_element()
-        }
+        Block::User(message) => user_block(message, theme, expand_tools, index, cwd, ctx.width, cx),
         // 助手回复：不加卡片，直接正文；思考内容单独一段细边框提示
-        Block::Assistant(assistant) => {
-            let mut column = div().w_full().flex().flex_col().gap(px(8.)).pt(px(2.));
-            if !assistant.thinking.trim().is_empty() {
-                column = column.child(
-                    div()
-                        .pl(px(10.))
-                        .border_l_2()
-                        .border_color(theme.border_strong)
-                        .text_size(px(12.))
-                        .text_color(theme.text_tertiary)
-                        .child(SharedString::from(crate::utils::display::fit_display(
-                            assistant.thinking.trim(),
-                            300,
-                        ))),
-                );
-            }
-            let rows = assistant.body.rows(&assistant.text, theme);
-            column
-                .child(render_rows(rows, theme, ctx.lines))
-                .into_any_element()
-        }
+        Block::Assistant(assistant) => assistant_block(assistant, theme, ctx),
         // 工具调用：带描边的小卡片，状态用圆点表示
-        Block::Tool(tool) => {
-            let (color, label) = match tool.status {
-                ToolStatus::Running => (theme.warning, "running"),
-                ToolStatus::Ok => (theme.success, "done"),
-                ToolStatus::Failed => (theme.danger, "failed"),
-            };
-            let expanded = tool.expanded.unwrap_or(expand_tools);
-            let mut card = div()
-                .id(("tool", index))
-                .w_full()
-                .rounded(px(8.))
-                .border_1()
-                .border_color(theme.border)
-                .bg(theme.inset)
-                .flex()
-                .flex_col()
-                .gap(px(6.))
-                .px(px(12.))
-                .py(px(8.))
-                .cursor_pointer()
-                .hover(|style| style.border_color(theme.border_strong))
-                // 点卡片展开/收起这一块的输出
-                .on_click(cx.listener(move |this, _, _, cx| this.toggle_tool(index, cx)));
-            card = card.child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(8.))
-                    .child(dot(color, 6.))
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme.text)
-                            .child(SharedString::from(tool.name.clone())),
-                    )
-                    .child(
-                        div()
-                            .min_w_0()
-                            .flex_1()
-                            .truncate()
-                            .text_size(px(11.5))
-                            // shell 类调用用代码色，跟普通工具区分开
-                            .text_color(tool_arg_color(&tool.name, theme))
-                            .child(SharedString::from(tool.args.clone())),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(10.5))
-                            .text_color(color)
-                            .child(SharedString::from(label)),
-                    ),
-            );
-            if !tool.output.trim().is_empty() {
-                // 按行截断而不是靠 `max_h` 裁剪：被裁掉的那部分不计入布局高度，
-                // 会盖在输入卡片上，也会让钉底算错。
-                let lines = if expanded {
-                    EXPANDED_OUTPUT_LINES
-                } else {
-                    COLLAPSED_OUTPUT_LINES
-                };
-                card = card.child(output_body(&tool.output, theme, lines, expanded));
-            }
-            for image in &tool.images {
-                card = card.child(
-                    div()
-                        .max_w(px(IMAGE_THUMB))
-                        .max_h(px(IMAGE_THUMB))
-                        .rounded(px(6.))
-                        .overflow_hidden()
-                        .child(
-                            gpui::img(image.clone())
-                                .max_w(px(IMAGE_THUMB))
-                                .max_h(px(IMAGE_THUMB)),
-                        ),
-                );
-            }
-            card.into_any_element()
-        }
+        Block::Tool(tool) => tool_block(tool, theme, expand_tools, index, cx),
         // 系统消息：灰底细边框 + 标签，和用户/助手区分开
-        Block::System(text) => div()
-            .w_full()
-            .min_w_0()
-            .overflow_hidden()
-            .rounded(px(8.))
-            .border_1()
-            .border_color(theme.border)
-            .bg(theme.inset)
-            .px(px(12.))
-            .py(px(8.))
+        Block::System(text) => system_block(text, theme, ctx.width),
+        // 提示 / 错误：一行小字 + 记号
+        Block::Note(note) => note_block(note, theme),
+    }
+}
+
+/// 用户消息气泡：右对齐，长消息可点开，`@图片` 引用渲染成缩略图。
+fn user_block(
+    message: &UserMessage,
+    theme: &Theme,
+    expand_tools: bool,
+    index: usize,
+    cwd: &str,
+    width: Pixels,
+    cx: &mut Context<GuiApp>,
+) -> AnyElement {
+    let text = &message.text;
+    let expanded = message.expanded.unwrap_or(expand_tools);
+    let (shown, hidden) = user_preview(text, expanded, USER_COLLAPSED_LINES);
+    // 宽度显式给出：带 padding 的盒子里，文本实测用的宽度和绘制用的不一致，
+    // 会少算换行高度、底部被截
+    let bubble_w = width.min(px(USER_BUBBLE_MAX_WIDTH));
+    let inner_w = bubble_w - px(28.);
+    let mut bubble = div()
+        .id(("user", index))
+        .w(bubble_w)
+        .min_w_0()
+        .px(px(14.))
+        .py(px(10.))
+        .rounded(px(10.))
+        .bg(theme.raised)
+        .flex()
+        .flex_col()
+        .gap(px(8.))
+        .text_size(px(13.5))
+        .text_color(theme.text)
+        .cursor_pointer()
+        .hover(|style| style.bg(theme.overlay_strong))
+        // 点气泡展开/收起长消息
+        .on_click(cx.listener(move |this, _, _, cx| this.toggle_user(index, cx)))
+        .child(
+            div()
+                .w(inner_w)
+                .min_w_0()
+                .child(SharedString::from(shown.join("\n"))),
+        );
+    if hidden > 0 {
+        bubble = bubble.child(div().text_size(px(11.)).text_color(theme.text_ghost).child(
+            SharedString::from(if expanded {
+                "click to collapse".to_string()
+            } else {
+                format!("⋯ {hidden} more line(s) · click to expand")
+            }),
+        ));
+    }
+    // `@图片` 引用直接渲染成缩略图
+    let images = image_refs(text, cwd);
+    for path in images {
+        bubble = bubble.child(
+            div()
+                .max_w(px(IMAGE_THUMB))
+                .max_h(px(IMAGE_THUMB))
+                .rounded(px(6.))
+                .overflow_hidden()
+                .child(
+                    gpui::img(path)
+                        .max_w(px(IMAGE_THUMB))
+                        .max_h(px(IMAGE_THUMB)),
+                ),
+        );
+    }
+    div()
+        .w_full()
+        .flex()
+        .justify_end()
+        .pt(px(6.))
+        .child(bubble)
+        .into_any_element()
+}
+
+/// 助手回复：正文 + 折叠的思考段。
+fn assistant_block(assistant: &mut Assistant, theme: &Theme, ctx: &mut FlowCtx<'_>) -> AnyElement {
+    let mut column = div().w_full().flex().flex_col().gap(px(8.)).pt(px(2.));
+    if !assistant.thinking.trim().is_empty() {
+        column = column.child(
+            div()
+                .pl(px(10.))
+                .border_l_2()
+                .border_color(theme.border_strong)
+                .text_size(px(12.))
+                .text_color(theme.text_tertiary)
+                .child(SharedString::from(crate::utils::display::fit_display(
+                    assistant.thinking.trim(),
+                    300,
+                ))),
+        );
+    }
+    let rows = assistant.body.rows(&assistant.text, theme);
+    column
+        .child(render_rows(rows, theme, ctx.lines))
+        .into_any_element()
+}
+
+/// 工具调用卡片：状态圆点 + 入参 + 可展开的输出与图片。
+fn tool_block(
+    tool: &Tool,
+    theme: &Theme,
+    expand_tools: bool,
+    index: usize,
+    cx: &mut Context<GuiApp>,
+) -> AnyElement {
+    let (color, label) = match tool.status {
+        ToolStatus::Running => (theme.warning, "running"),
+        ToolStatus::Ok => (theme.success, "done"),
+        ToolStatus::Failed => (theme.danger, "failed"),
+    };
+    let expanded = tool.expanded.unwrap_or(expand_tools);
+    let mut card = div()
+        .id(("tool", index))
+        .w_full()
+        .rounded(px(8.))
+        .border_1()
+        .border_color(theme.border)
+        .bg(theme.inset)
+        .flex()
+        .flex_col()
+        .gap(px(6.))
+        .px(px(12.))
+        .py(px(8.))
+        .cursor_pointer()
+        .hover(|style| style.border_color(theme.border_strong))
+        // 点卡片展开/收起这一块的输出
+        .on_click(cx.listener(move |this, _, _, cx| this.toggle_tool(index, cx)));
+    card = card.child(
+        div()
             .flex()
-            .flex_col()
-            .gap(px(4.))
+            .items_center()
+            .gap(px(8.))
+            .child(dot(color, 6.))
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(theme.text)
+                    .child(SharedString::from(tool.name.clone())),
+            )
+            .child(
+                div()
+                    .min_w_0()
+                    .flex_1()
+                    .truncate()
+                    .text_size(px(11.5))
+                    // shell 类调用用代码色，跟普通工具区分开
+                    .text_color(tool_arg_color(&tool.name, theme))
+                    .child(SharedString::from(tool.args.clone())),
+            )
             .child(
                 div()
                     .text_size(px(10.5))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme.text_ghost)
-                    .child(SharedString::from("system")),
-            )
-            .child(
-                div()
-                    .w(ctx.width - px(24.))
-                    .min_w_0()
-                    .flex()
-                    .flex_col()
-                    .gap(px(2.))
-                    .text_size(px(12.))
-                    .text_color(theme.text_tertiary)
-                    .children(text.split('\n').map(|line| {
-                        div()
-                            .w_full()
-                            .min_w_0()
-                            .child(SharedString::from(line.to_string()))
-                    })),
-            )
-            .into_any_element(),
-        Block::Note(note) => {
-            let (text, color, mark) = match note {
-                Note::Info(text) => (text, theme.text_tertiary, "·"),
-                Note::Error(text) => (text, theme.danger, "!"),
-            };
-            // 系统提示常是多行（命令输出、会话树）：逐行成子元素，不能当一个长行挤
-            div()
-                .w_full()
-                .flex()
-                .items_start()
-                .gap(px(8.))
-                .px(px(2.))
-                .child(
-                    div()
-                        .text_size(px(11.5))
-                        .text_color(color)
-                        .child(SharedString::from(mark)),
-                )
-                .child(
-                    div()
-                        .min_w_0()
-                        .flex_1()
-                        .flex()
-                        .flex_col()
-                        .text_size(px(12.))
-                        .text_color(color)
-                        .children(text.split('\n').map(|line| {
-                            div()
-                                .w_full()
-                                .min_w_0()
-                                .child(SharedString::from(line.to_string()))
-                        })),
-                )
-                .into_any_element()
-        }
+                    .text_color(color)
+                    .child(SharedString::from(label)),
+            ),
+    );
+    if !tool.output.trim().is_empty() {
+        // 按行截断而不是靠 `max_h` 裁剪：被裁掉的那部分不计入布局高度，
+        // 会盖在输入卡片上，也会让钉底算错。
+        let lines = if expanded {
+            EXPANDED_OUTPUT_LINES
+        } else {
+            COLLAPSED_OUTPUT_LINES
+        };
+        card = card.child(output_body(&tool.output, theme, lines, expanded));
     }
+    for image in &tool.images {
+        card = card.child(
+            div()
+                .max_w(px(IMAGE_THUMB))
+                .max_h(px(IMAGE_THUMB))
+                .rounded(px(6.))
+                .overflow_hidden()
+                .child(
+                    gpui::img(image.clone())
+                        .max_w(px(IMAGE_THUMB))
+                        .max_h(px(IMAGE_THUMB)),
+                ),
+        );
+    }
+    card.into_any_element()
+}
+
+/// 系统消息：灰底细边框 + `system` 标签，逐行渲染。
+fn system_block(text: &str, theme: &Theme, width: Pixels) -> AnyElement {
+    div()
+        .w_full()
+        .min_w_0()
+        .overflow_hidden()
+        .rounded(px(8.))
+        .border_1()
+        .border_color(theme.border)
+        .bg(theme.inset)
+        .px(px(12.))
+        .py(px(8.))
+        .flex()
+        .flex_col()
+        .gap(px(4.))
+        .child(
+            div()
+                .text_size(px(10.5))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(theme.text_ghost)
+                .child(SharedString::from("system")),
+        )
+        .child(
+            div()
+                .w(width - px(24.))
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(2.))
+                .text_size(px(12.))
+                .text_color(theme.text_tertiary)
+                .children(text.split('\n').map(|line| {
+                    div()
+                        .w_full()
+                        .min_w_0()
+                        .child(SharedString::from(line.to_string()))
+                })),
+        )
+        .into_any_element()
+}
+
+/// 提示 / 错误行：`·` 或 `!` 记号 + 逐行正文。
+fn note_block(note: &Note, theme: &Theme) -> AnyElement {
+    let (text, color, mark) = match note {
+        Note::Info(text) => (text, theme.text_tertiary, "·"),
+        Note::Error(text) => (text, theme.danger, "!"),
+    };
+    // 系统提示常是多行（命令输出、会话树）：逐行成子元素，不能当一个长行挤
+    div()
+        .w_full()
+        .flex()
+        .items_start()
+        .gap(px(8.))
+        .px(px(2.))
+        .child(
+            div()
+                .text_size(px(11.5))
+                .text_color(color)
+                .child(SharedString::from(mark)),
+        )
+        .child(
+            div()
+                .min_w_0()
+                .flex_1()
+                .flex()
+                .flex_col()
+                .text_size(px(12.))
+                .text_color(color)
+                .children(text.split('\n').map(|line| {
+                    div()
+                        .w_full()
+                        .min_w_0()
+                        .child(SharedString::from(line.to_string()))
+                })),
+        )
+        .into_any_element()
 }
 
 /// Markdown 文本 → 预解析行（代码块的高亮只在解析时做一次）。

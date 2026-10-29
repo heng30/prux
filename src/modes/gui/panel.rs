@@ -250,6 +250,46 @@ pub fn render(
         .border_l_1()
         .border_color(theme.border);
 
+    column = column.child(tab_bar(theme, panel));
+
+    if let Some(error) = &panel.error {
+        column = column.child(
+            div()
+                .px(px(10.))
+                .py(px(8.))
+                .text_size(px(11.5))
+                .text_color(theme.text_tertiary)
+                .child(SharedString::from(error.clone())),
+        );
+    }
+
+    match panel.tab {
+        PanelTab::Changes => {
+            column = column.child(changes_body(theme, panel, cx));
+
+            if let Some((path, diff)) = &panel.diff {
+                column = column.child(
+                    div().px(px(12.)).py(px(4.)).child(
+                        div()
+                            .text_size(px(10.5))
+                            .text_color(theme.text_ghost)
+                            .truncate()
+                            .child(SharedString::from(path.clone())),
+                    ),
+                );
+                column = column.child(diff_view(theme, diff));
+            }
+        }
+        PanelTab::Files => {
+            column = column.child(files_body(theme, panel));
+        }
+    }
+
+    column.into_any_element()
+}
+
+/// 顶部标签栏：变更 / 文件两个页签 + 加载提示。
+fn tab_bar(theme: &Theme, panel: &RightPanel) -> AnyElement {
     // 标签栏
     let tab = |label: &str, active: bool| -> AnyElement {
         let mut element = div()
@@ -271,193 +311,175 @@ pub fn render(
             .child(SharedString::from(label.to_string()))
             .into_any_element()
     };
-    column = column.child(
-        div()
-            .flex_none()
+    let bar = div()
+        .flex_none()
+        .flex()
+        .items_center()
+        .gap(px(4.))
+        .px(px(8.))
+        .h(px(38.))
+        .border_b_1()
+        .border_color(theme.border)
+        .child(tab(
+            &format!("Changes {}", panel.changes.len()),
+            panel.tab == PanelTab::Changes,
+        ))
+        .child(tab(
+            &format!("files {}", panel.files.len()),
+            panel.tab == PanelTab::Files,
+        ))
+        .child(div().flex_1())
+        .child(
+            div()
+                .pr(px(6.))
+                .text_size(px(10.))
+                .text_color(theme.text_ghost)
+                .child(SharedString::from(if panel.loading {
+                    "Loading…"
+                } else {
+                    ""
+                })),
+        );
+    bar.into_any_element()
+}
+
+/// `Changes` 页的文件列表：git 状态字母 + 路径。
+fn changes_body(theme: &Theme, panel: &RightPanel, cx: &mut gpui::Context<GuiApp>) -> AnyElement {
+    let mut body = div()
+        .id("changes")
+        .flex()
+        .flex_col()
+        .flex_none()
+        .max_h(px(220.))
+        .gap(px(2.))
+        .p(px(8.))
+        .overflow_y_scroll();
+    for (index, row) in panel.changes.iter().enumerate() {
+        let color = status_color(theme, &row.status);
+        let mut entry = div()
+            .w_full()
+            .h(px(24.))
+            .px(px(8.))
+            .rounded(px(5.))
             .flex()
             .items_center()
-            .gap(px(4.))
-            .px(px(8.))
-            .h(px(38.))
-            .border_b_1()
-            .border_color(theme.border)
-            .child(tab(
-                &format!("Changes {}", panel.changes.len()),
-                panel.tab == PanelTab::Changes,
-            ))
-            .child(tab(
-                &format!("files {}", panel.files.len()),
-                panel.tab == PanelTab::Files,
-            ))
-            .child(div().flex_1())
+            .gap(px(8.))
+            .text_size(px(11.5));
+        if index == panel.selected {
+            entry = entry.bg(theme.overlay_strong);
+        }
+        entry = entry
             .child(
                 div()
-                    .pr(px(6.))
-                    .text_size(px(10.))
-                    .text_color(theme.text_ghost)
-                    .child(SharedString::from(if panel.loading {
-                        "Loading…"
-                    } else {
-                        ""
-                    })),
-            ),
-    );
-
-    if let Some(error) = &panel.error {
-        column = column.child(
-            div()
-                .px(px(10.))
-                .py(px(8.))
-                .text_size(px(11.5))
-                .text_color(theme.text_tertiary)
-                .child(SharedString::from(error.clone())),
+                    .w(px(16.))
+                    .flex_none()
+                    .text_color(color)
+                    .child(SharedString::from(row.status.clone())),
+            )
+            .child(
+                div()
+                    .min_w_0()
+                    .flex_1()
+                    .truncate()
+                    .text_color(theme.text_secondary)
+                    .child(SharedString::from(row.path.clone())),
+            );
+        body = body.child(
+            entry
+                .id(("change", index))
+                .cursor_pointer()
+                .on_click(cx.listener(move |this, _, _, cx| this.select_change(index, cx))),
         );
     }
-
-    match panel.tab {
-        PanelTab::Changes => {
-            let mut body = div()
-                .id("changes")
-                .flex()
-                .flex_col()
-                .flex_none()
-                .max_h(px(220.))
-                .gap(px(2.))
-                .p(px(8.))
-                .overflow_y_scroll();
-            for (index, row) in panel.changes.iter().enumerate() {
-                let color = status_color(theme, &row.status);
-                let mut entry = div()
-                    .w_full()
-                    .h(px(24.))
-                    .px(px(8.))
-                    .rounded(px(5.))
-                    .flex()
-                    .items_center()
-                    .gap(px(8.))
-                    .text_size(px(11.5));
-                if index == panel.selected {
-                    entry = entry.bg(theme.overlay_strong);
-                }
-                entry = entry
-                    .child(
-                        div()
-                            .w(px(16.))
-                            .flex_none()
-                            .text_color(color)
-                            .child(SharedString::from(row.status.clone())),
-                    )
-                    .child(
-                        div()
-                            .min_w_0()
-                            .flex_1()
-                            .truncate()
-                            .text_color(theme.text_secondary)
-                            .child(SharedString::from(row.path.clone())),
-                    );
-                body =
-                    body.child(entry.id(("change", index)).cursor_pointer().on_click(
-                        cx.listener(move |this, _, _, cx| this.select_change(index, cx)),
-                    ));
-            }
-            if panel.changes.is_empty() && panel.error.is_none() {
-                body = body.child(
-                    div()
-                        .px(px(8.))
-                        .text_size(px(11.5))
-                        .text_color(theme.text_ghost)
-                        .child(SharedString::from(if panel.loading {
-                            "Reading changes…"
-                        } else {
-                            "Working tree clean"
-                        })),
-                );
-            }
-            column = column.child(body);
-
-            if let Some((path, diff)) = &panel.diff {
-                column = column.child(
-                    div().px(px(12.)).py(px(4.)).child(
-                        div()
-                            .text_size(px(10.5))
-                            .text_color(theme.text_ghost)
-                            .truncate()
-                            .child(SharedString::from(path.clone())),
-                    ),
-                );
-                let mut diff_box = div()
-                    .id("diff")
-                    .flex_1()
-                    .min_h_0()
-                    .mx(px(8.))
-                    .mb(px(8.))
-                    .p(px(8.))
-                    .rounded(px(8.))
-                    .bg(theme.inset)
-                    .flex()
-                    .flex_col()
-                    .overflow_y_scroll();
-                for line in diff.lines().take(400) {
-                    let color = if line.starts_with('+') && !line.starts_with("+++") {
-                        theme.success
-                    } else if line.starts_with('-') && !line.starts_with("---") {
-                        theme.danger
-                    } else {
-                        theme.text_secondary
-                    };
-                    diff_box = diff_box.child(
-                        div()
-                            .text_size(px(10.5))
-                            .text_color(color)
-                            .child(SharedString::from(line.to_string())),
-                    );
-                }
-                column = column.child(diff_box);
-            }
-        }
-        PanelTab::Files => {
-            let mut body = div()
-                .id("files")
-                .flex()
-                .flex_col()
-                .flex_1()
-                .min_h_0()
-                .gap(px(1.))
-                .p(px(8.))
-                .overflow_y_scroll();
-            for row in &panel.files {
-                body = body.child(
-                    div()
-                        .w_full()
-                        .h(px(22.))
-                        .px(px(6.))
-                        .rounded(px(4.))
-                        .flex()
-                        .items_center()
-                        .gap(px(6.))
-                        .hover(|style| style.bg(theme.overlay))
-                        .child(
-                            div()
-                                .flex_none()
-                                .text_size(px(11.))
-                                .text_color(theme.text_tertiary)
-                                .child(SharedString::from(row.name.clone())),
-                        )
-                        .child(
-                            div()
-                                .min_w_0()
-                                .flex_1()
-                                .truncate()
-                                .text_size(px(10.))
-                                .text_color(theme.text_ghost)
-                                .child(SharedString::from(row.dir.clone())),
-                        ),
-                );
-            }
-        }
+    if panel.changes.is_empty() && panel.error.is_none() {
+        body = body.child(
+            div()
+                .px(px(8.))
+                .text_size(px(11.5))
+                .text_color(theme.text_ghost)
+                .child(SharedString::from(if panel.loading {
+                    "Reading changes…"
+                } else {
+                    "Working tree clean"
+                })),
+        );
     }
+    body.into_any_element()
+}
 
-    column.into_any_element()
+/// diff 正文：逐行染色（新增绿 / 删除红），最多 400 行。
+fn diff_view(theme: &Theme, diff: &str) -> AnyElement {
+    let mut diff_box = div()
+        .id("diff")
+        .flex_1()
+        .min_h_0()
+        .mx(px(8.))
+        .mb(px(8.))
+        .p(px(8.))
+        .rounded(px(8.))
+        .bg(theme.inset)
+        .flex()
+        .flex_col()
+        .overflow_y_scroll();
+    for line in diff.lines().take(400) {
+        let color = if line.starts_with('+') && !line.starts_with("+++") {
+            theme.success
+        } else if line.starts_with('-') && !line.starts_with("---") {
+            theme.danger
+        } else {
+            theme.text_secondary
+        };
+        diff_box = diff_box.child(
+            div()
+                .text_size(px(10.5))
+                .text_color(color)
+                .child(SharedString::from(line.to_string())),
+        );
+    }
+    diff_box.into_any_element()
+}
+
+/// `Files` 页的目录列表。
+fn files_body(theme: &Theme, panel: &RightPanel) -> AnyElement {
+    let mut body = div()
+        .id("files")
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_h_0()
+        .gap(px(1.))
+        .p(px(8.))
+        .overflow_y_scroll();
+    for row in &panel.files {
+        body = body.child(
+            div()
+                .w_full()
+                .h(px(22.))
+                .px(px(6.))
+                .rounded(px(4.))
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .hover(|style| style.bg(theme.overlay))
+                .child(
+                    div()
+                        .flex_none()
+                        .text_size(px(11.))
+                        .text_color(theme.text_tertiary)
+                        .child(SharedString::from(row.name.clone())),
+                )
+                .child(
+                    div()
+                        .min_w_0()
+                        .flex_1()
+                        .truncate()
+                        .text_size(px(10.))
+                        .text_color(theme.text_ghost)
+                        .child(SharedString::from(row.dir.clone())),
+                ),
+        );
+    }
+    body.into_any_element()
 }
 
 /// git 状态字母 → 颜色。

@@ -177,41 +177,80 @@ pub fn render(ctx: SidebarCtx<'_>) -> AnyElement {
         .border_color(theme.border);
 
     // 品牌行
+    column = column.child(brand_row(theme, new_session));
+
+    // 会话列表：与滚动条同放一层相对容器，滚动条盖在列表右侧、不占布局宽度
     column = column.child(
         div()
+            .relative()
             .flex()
-            .items_center()
-            .gap(px(8.))
-            .h(px(40.))
-            .px(px(12.))
-            .child(dot(theme.accent, 7.))
-            .child(
-                div()
-                    .text_size(px(12.5))
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .text_color(theme.text)
-                    .child(SharedString::from("prux")),
-            )
-            .child(div().flex_1())
-            .child(
-                div()
-                    .id("new-session")
-                    .h(px(20.))
-                    .px(px(7.))
-                    .rounded(px(5.))
-                    .flex()
-                    .items_center()
-                    .text_size(px(11.))
-                    .bg(theme.overlay)
-                    .text_color(theme.text_secondary)
-                    .cursor_pointer()
-                    .hover(|style| style.bg(theme.overlay_strong).text_color(theme.text))
-                    .on_click(new_session)
-                    .child(SharedString::from("+ New session")),
-            ),
+            .flex_1()
+            .min_h_0()
+            .w_full()
+            .child(session_list(
+                theme,
+                rows,
+                active,
+                loading,
+                scroll,
+                cmd_tx,
+                context_menu,
+            ))
+            .child(scrollbar),
     );
 
-    // 会话列表
+    // 底部：工作目录 + git 分支（点击弹系统目录选择器）
+    column = column.child(footer_block(theme, cwd, branch, change_cwd));
+
+    column.into_any_element()
+}
+
+/// 品牌行：产品名 + 「+ New session」按钮。
+fn brand_row(theme: &Theme, new_session: ClickHandler) -> AnyElement {
+    let bar = div()
+        .flex()
+        .items_center()
+        .gap(px(8.))
+        .h(px(40.))
+        .px(px(12.))
+        .child(dot(theme.accent, 7.))
+        .child(
+            div()
+                .text_size(px(12.5))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(theme.text)
+                .child(SharedString::from("prux")),
+        )
+        .child(div().flex_1())
+        .child(
+            div()
+                .id("new-session")
+                .h(px(20.))
+                .px(px(7.))
+                .rounded(px(5.))
+                .flex()
+                .items_center()
+                .text_size(px(11.))
+                .bg(theme.overlay)
+                .text_color(theme.text_secondary)
+                .cursor_pointer()
+                .hover(|style| style.bg(theme.overlay_strong).text_color(theme.text))
+                .on_click(new_session)
+                .child(SharedString::from("+ New session")),
+        );
+    bar.into_any_element()
+}
+
+/// 会话列表：按时间分组，点击切会话、右键弹行菜单。
+fn session_list(
+    theme: &Theme,
+    rows: &[SessionRow],
+    active: Option<usize>,
+    loading: bool,
+    scroll: &ScrollHandle,
+    cmd_tx: CommandTx,
+    context_menu: ContextHandler,
+) -> AnyElement {
     let mut list = div()
         .id("sessions")
         .flex()
@@ -304,19 +343,16 @@ pub fn render(ctx: SidebarCtx<'_>) -> AnyElement {
                 }),
         );
     }
-    // 列表与滚动条同放一层相对容器：滚动条盖在列表右侧，不占布局宽度
-    column = column.child(
-        div()
-            .relative()
-            .flex()
-            .flex_1()
-            .min_h_0()
-            .w_full()
-            .child(list)
-            .child(scrollbar),
-    );
+    list.into_any_element()
+}
 
-    // 底部：工作目录 + git 分支（点击弹系统目录选择器）
+/// 底部：git 分支与工作目录，整块可点（弹目录选择器）。
+fn footer_block(
+    theme: &Theme,
+    cwd: &str,
+    branch: Option<&str>,
+    change_cwd: ClickHandler,
+) -> AnyElement {
     let mut footer = div()
         .id("cwd")
         .w_full()
@@ -371,12 +407,5 @@ pub fn render(ctx: SidebarCtx<'_>) -> AnyElement {
                     .child(SharedString::from(cwd.to_string())),
             ),
     );
-    column = column.child(
-        div()
-            .border_t_1()
-            .border_color(theme.border)
-            .p(px(6.))
-            .child(footer),
-    );
-    column.into_any_element()
+    footer.into_any_element()
 }

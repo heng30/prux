@@ -1,0 +1,1282 @@
+//! GUI 渲染：自绘标题栏、对话流、输入卡片、覆盖层与滚动条。
+//!
+//! 拆自 [`super::app`]：只搬渲染代码，状态与按键分发仍在父模块。
+
+use super::*;
+
+impl GuiApp {
+    /// 补全面板：贴在输入卡片上沿的覆盖层（不占布局空间）。
+    pub(super) fn suggest_panel(
+        &self,
+        suggest: &Suggest,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let mut column = div()
+            .w_full()
+            .rounded(px(10.))
+            .bg(theme.composer)
+            .border_1()
+            .border_color(theme.border_strong)
+            .p(px(4.))
+            .flex()
+            .flex_col()
+            .text_size(px(12.5));
+        column = column.child(
+            div()
+                .w_full()
+                .rounded(px(6.))
+                .bg(theme.canvas)
+                .border_1()
+                .border_color(theme.border)
+                .px(px(8.))
+                .py(px(5.))
+                .text_size(px(12.5))
+                .text_color(theme.text)
+                .child(composer::render(&self.suggest_input, theme)),
+        );
+        if suggest.items.is_empty() {
+            column = column.child(
+                div()
+                    .px(px(8.))
+                    .py(px(6.))
+                    .text_size(px(11.5))
+                    .text_color(theme.text_ghost)
+                    .child(SharedString::from(if suggest.trigger == Trigger::Shell {
+                        "Runs locally; output goes into the context"
+                    } else {
+                        "No matches"
+                    })),
+            );
+        }
+        // 候选区与 Ctrl-K 面板同一套行渲染 + 可滚动容器：条目多时滚轮能翻到
+        let mut rows = overlay::rows_container(
+            "suggest-rows",
+            &self.suggest_scroll,
+            SUGGEST_ROW_HEIGHT * SUGGEST_ROWS as f32,
+        );
+        for (index, item) in suggest.items.iter().enumerate() {
+            rows = rows.child(overlay::list_row(
+                theme,
+                overlay::RowSpec {
+                    label: &item.label,
+                    detail: &item.detail,
+                    checked: None,
+                    selected: index == suggest.selected,
+                    height: SUGGEST_ROW_HEIGHT,
+                },
+                ("suggest-row", index),
+                cx.listener(move |this, _, _, cx| this.pick_suggestion(index, cx)),
+            ));
+        }
+        column = column.child(rows);
+        column.into_any_element()
+    }
+}
+
+impl GuiApp {
+    /// IME（中文/日文组字）只在绘制阶段能挂到窗口：这里放一层透明画布，
+    /// 命中区域就是当前输入框，候选窗会贴着它弹。
+    pub(super) fn ime_layer(&self, cx: &mut Context<Self>) -> AnyElement {
+        let focus = self.focus.clone();
+        let view = cx.entity();
+        canvas(
+            |_, _, _| (),
+            move |bounds, _, window, cx| {
+                window.handle_input(&focus, ElementInputHandler::new(bounds, view.clone()), cx);
+            },
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+        .into_any_element()
+    }
+}
+
+impl GuiApp {
+    /// 滚动条：滑块位置按上一帧的滚动状态算，拖动时把鼠标位移换算成内容位移。
+    pub(super) fn scrollbar(
+        &self,
+        area: ScrollArea,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        if !self.scrollbar_visible(area) {
+            return div().into_any_element();
+        }
+        let scroll = self.scroll_of(area);
+        let viewport = f32::from(scroll.bounds().size.height);
+        let max = f32::from(scroll.max_offset().height);
+        if max <= 0. || viewport <= 0. {
+            return div().into_any_element();
+        }
+        let height = thumb_height(viewport, max);
+        let top = thumb_top(
+            f32::from(scroll.offset().y),
+            max,
+            thumb_travel(viewport, max),
+        );
+        div()
+            .id(("scrollbar", area.index()))
+            .absolute()
+            .top_0()
+            .right_0()
+            .h_full()
+            .w(px(SCROLLBAR_HIT_WIDTH))
+            .cursor_pointer()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
+                    let offset = this.scroll_of(area).offset().y;
+                    let _ = event;
+                    this.scroll_drag = Some(ScrollDrag {
+                        area,
+                        anchor_y: None,
+                        offset,
+                    });
+                    cx.notify();
+                }),
+            )
+            .on_mouse_move(
+                cx.listener(move |this, event: &gpui::MouseMoveEvent, _, cx| {
+                    if this.scroll_drag.is_some_and(|drag| drag.area == area) {
+                        this.drag_scrollbar(event.position, cx);
+                    }
+                }),
+            )
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    this.scroll_drag = None;
+                    cx.notify();
+                }),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    this.scroll_drag = None;
+                    cx.notify();
+                }),
+            )
+            .child(
+                div()
+                    .absolute()
+                    // 尺寸来自上一帧实测的像素值，不能再过一次界面缩放
+                    .top(gpui::px(top))
+                    .right(px(1.))
+                    .w(px(SCROLLBAR_WIDTH))
+                    .h(gpui::px(height))
+                    .rounded(px(4.))
+                    .bg(theme.text_ghost),
+            )
+            .into_any_element()
+    }
+}
+
+impl GuiApp {
+    /// toast 的堆叠渲染（右上角，不挡输入卡片）。
+    pub(super) fn toast_layer(&self, theme: &Theme) -> AnyElement {
+        let mut column = div()
+            .absolute()
+            .top(px(48.))
+            .right(px(20.))
+            .w(px(320.))
+            .flex()
+            .flex_col()
+            .items_end()
+            .gap(px(6.));
+        for toast in &self.toasts {
+            let (base, text_color) = match toast.kind {
+                ToastKind::Info => (theme.raised, theme.text),
+                ToastKind::Success => (theme.raised, theme.success),
+                ToastKind::Error => (theme.raised, theme.danger),
+            };
+            column = column.child(
+                div()
+                    .w_full()
+                    .px(px(12.))
+                    .py(px(8.))
+                    .rounded(px(8.))
+                    .bg(base)
+                    .border_1()
+                    .border_color(theme.border_strong)
+                    .text_size(px(12.))
+                    .text_color(text_color)
+                    .child(SharedString::from(toast.text.clone())),
+            );
+        }
+        column.into_any_element()
+    }
+}
+
+impl Render for GuiApp {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let chrome = self.render_chrome(cx);
+        let transcript = self.render_transcript(cx);
+        let composer = self.render_composer(window, cx);
+        let main = self.render_main(transcript, composer);
+        let body = self.render_body(main, cx);
+        let root = self.render_root(chrome, body, cx);
+        self.render_overlays(root, window, cx)
+    }
+}
+
+impl GuiApp {
+    /// 标题栏：项目名 › 会话名，右侧模型 / 思考 / 命令面板标签。
+    fn render_chrome(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = self.theme.clone();
+
+        let cwd = self
+            .snapshot
+            .as_ref()
+            .map(|s| s.cwd.clone())
+            .unwrap_or_default();
+        let project = basename(&cwd);
+        let session_title = self
+            .snapshot
+            .as_ref()
+            .and_then(|s| s.session_name.clone())
+            .unwrap_or_else(|| "New session".to_string());
+        let model = self
+            .snapshot
+            .as_ref()
+            .map(|s| format!("{}/{}", s.provider, s.model))
+            .unwrap_or_else(|| "No model selected".to_string());
+        let thinking = self
+            .snapshot
+            .as_ref()
+            .and_then(|s| s.thinking.clone())
+            .filter(|t| t != "off");
+
+        let mut chrome_right = div().flex().items_center().gap(px(6.));
+        chrome_right = chrome_right.child(
+            chip(&theme, model.clone(), false)
+                .id("model-chip")
+                .cursor_pointer()
+                .hover(|style| style.bg(theme.overlay).text_color(theme.text))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
+                        this.open_model_menu(event.position, cx);
+                    }),
+                ),
+        );
+        chrome_right = chrome_right.child(
+            chip(
+                &theme,
+                match &thinking {
+                    Some(level) => format!("thinking {level}"),
+                    None => "thinking off".to_string(),
+                },
+                false,
+            )
+            .id("thinking-chip")
+            .cursor_pointer()
+            .hover(|style| style.bg(theme.overlay).text_color(theme.text))
+            .on_click(cx.listener(|this, event: &gpui::ClickEvent, _, cx| {
+                this.open_thinking_menu(event.position(), cx);
+            })),
+        );
+        chrome_right = chrome_right.child(
+            div()
+                .id("command-palette-button")
+                .h(px(20.))
+                .px(px(8.))
+                .rounded(px(5.))
+                .flex()
+                .items_center()
+                .bg(theme.overlay)
+                .border_1()
+                .border_color(theme.border)
+                .text_size(px(10.5))
+                .text_color(theme.text_secondary)
+                .cursor_pointer()
+                .hover(|style| style.bg(theme.overlay_strong).text_color(theme.text))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.open_command_palette(cx);
+                    cx.notify();
+                }))
+                .child(SharedString::from("Ctrl-K commands")),
+        );
+
+        let chrome = div()
+            .flex_none()
+            .h(px(CHROME_HEIGHT))
+            .w_full()
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .px(px(14.))
+            .bg(theme.canvas)
+            .border_b_1()
+            .border_color(theme.border)
+            .child(dot(theme.accent, 7.))
+            .child(
+                div()
+                    .text_size(px(12.5))
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(theme.text)
+                    .child(SharedString::from(project)),
+            )
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(theme.text_ghost)
+                    .child(SharedString::from("›")),
+            )
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(12.))
+                    .text_color(theme.text_secondary)
+                    .child(SharedString::from(session_title)),
+            )
+            .child(div().flex_1())
+            .child(chrome_right);
+
+        chrome.into_any_element()
+    }
+
+    /// 对话流：逐块渲染 + 钉底滚动 + 滚动条。
+    fn render_transcript(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = self.theme.clone();
+        let cwd = self.cwd();
+
+        let pane_width = self.pane_width.get();
+        // 内容的可用内宽：对话区宽度减去左右内边距（首帧还没量到时按最大宽度估）
+        let flow_width = if pane_width > px(0.) {
+            (pane_width - px(56.)).min(px(CONTENT_MAX_WIDTH))
+        } else {
+            px(CONTENT_MAX_WIDTH)
+        };
+        let expand_tools = self.expand_tools;
+        // 行登记每帧重建：行序号/边界/文本必须与本帧渲染结果一致
+        self.line_bounds.borrow_mut().clear();
+        self.line_text_bounds.borrow_mut().clear();
+        self.line_rows.borrow_mut().clear();
+        let mut lines = transcript::TextLines {
+            next: 0,
+            selection: self.text_sel,
+            bounds: self.line_bounds.clone(),
+            text_bounds: self.line_text_bounds.clone(),
+            rows: self.line_rows.clone(),
+        };
+        let mut flow_ctx = transcript::FlowCtx {
+            width: flow_width,
+            lines: &mut lines,
+        };
+        // 默认行高是 φ（1.618em），行内代码/高亮背景会又高又连在一起，
+        // 文字也不在背景里居中；正文统一用更紧的行高
+        let mut flow = div().w_full().flex().flex_col().gap(px(14.));
+        for (index, block) in self.transcript.blocks_mut().iter_mut().enumerate() {
+            flow = flow.child(transcript::render_block(
+                block,
+                &theme,
+                expand_tools,
+                index,
+                &cwd,
+                &mut flow_ctx,
+                cx,
+            ));
+        }
+
+        let measured_height = self.flow_height.clone();
+        let mut content = flow
+            .flex_shrink_0()
+            .max_w(px(CONTENT_MAX_WIDTH))
+            .mx_auto()
+            .px(px(28.))
+            .pt(px(FLOW_PADDING_TOP))
+            .pb(px(FLOW_PADDING_BOTTOM));
+        // 滚动容器里的内容会被按「无限宽」测量，之后又按实际宽度换行画出来：
+        // 长文本的实测高度偏小，往下压到后一个块上、展开时底部还会被截。
+        // 用上一帧实测到的对话区宽度把内容定宽，测量和绘制就用同一个换行宽度。
+        content = if pane_width > px(0.) {
+            content.w(pane_width)
+        } else {
+            content.w_full()
+        };
+        // 同一处测量误差也在高度上：内容盒的实测高度会比子块实际占据的还小，
+        // 滚到底仍有最后几行被裁掉。按上一帧子块实际的跨度补 min-height。
+        if let Some(height) = measured_height.get() {
+            content = content.min_h(height);
+        }
+        content =
+            content.on_children_prepainted(move |children: Vec<Bounds<Pixels>>, window, _| {
+                let (Some(first), Some(last)) = (children.first(), children.last()) else {
+                    return;
+                };
+                let needed =
+                    last.bottom() - first.top() + px(FLOW_PADDING_TOP + FLOW_PADDING_BOTTOM);
+                if measured_height.get() != Some(needed) {
+                    measured_height.set(Some(needed));
+                    window.request_animation_frame();
+                }
+            });
+
+        // 钉底：事件里那次 `scroll_to_bottom` 会停在旧的底（内容高度还会被二次测量改掉），
+        // 这里在布局结束后按实际内容底边对一次；只在意内容变高变矮，用户自己滚开就不管了。
+        let scroll = self.scroll.clone();
+        let pinned = self.pinned_bottom.clone();
+        let pane_width = self.pane_width.clone();
+        let pin_bottom = move |_: Vec<Bounds<Pixels>>, window: &mut Window, _: &mut App| {
+            let viewport_bounds = scroll.bounds();
+            if (pane_width.get() - viewport_bounds.size.width).abs() > px(0.5) {
+                pane_width.set(viewport_bounds.size.width);
+                window.request_animation_frame();
+            }
+            let (Some(content), viewport) = (scroll.bounds_for_item(0), scroll.bounds()) else {
+                return;
+            };
+            let target = viewport.bottom() - content.bottom();
+            let offset = scroll.offset().y;
+            // 「上次钉底的偏移」还在原位 = 这仍是我们的地盘；否则是用户滚轮/拖滚动条动过了
+            let owned = pinned.get().filter(|last| (*last - offset).abs() <= px(1.));
+            // 用户自己滚回底部时重新接管，这样新内容来了还会继续跟
+            let following = owned.is_some() || (offset - target).abs() <= px(1.);
+            if following && owned != Some(target) {
+                scroll.set_offset(gpui::point(px(0.), target));
+                window.request_animation_frame();
+            }
+            let next = following.then_some(target);
+            if next != pinned.get() {
+                pinned.set(next);
+            }
+        };
+
+        let transcript_area = div()
+            .on_children_prepainted(pin_bottom)
+            .id("transcript")
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .w_full()
+            .overflow_y_scroll()
+            .track_scroll(&self.scroll)
+            // 滚轮滚动不会通知视图，这里补一次重绘，滚动条滑块才跟得上
+            .on_scroll_wheel(cx.listener(|_, _, _, cx| cx.notify()))
+            // 悬浮探测走全局鼠标监听（见 `hover_probe`）：滚动容器的 hitbox 判定偏宽
+            .child(content);
+        let transcript = div()
+            .relative()
+            .flex()
+            .flex_1()
+            .min_h_0()
+            .w_full()
+            .child(transcript_area)
+            .child(self.scrollbar(ScrollArea::Transcript, &theme, cx));
+
+        transcript.into_any_element()
+    }
+
+    /// 输入卡片：文本框 + 一行提示与动作。
+    fn render_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::Div {
+        let theme = self.theme.clone();
+
+        let tokens = self
+            .snapshot
+            .as_ref()
+            .map(|s| s.usage.context_tokens)
+            .unwrap_or(0);
+        let mut hint = div().flex().items_center().gap(px(8.));
+        hint = hint.child(
+            div()
+                .id("attach")
+                .h(px(20.))
+                .px(px(8.))
+                .rounded(px(5.))
+                .flex()
+                .items_center()
+                .border_1()
+                .border_color(theme.border)
+                .text_size(px(11.))
+                .text_color(theme.text_secondary)
+                .cursor_pointer()
+                .hover(|style| style.bg(theme.overlay).text_color(theme.text))
+                .on_click(cx.listener(|this, event: &gpui::ClickEvent, _, cx| {
+                    this.open_attach_menu(event.position(), cx);
+                }))
+                .child(SharedString::from("+ Attach")),
+        );
+        if tokens > 0 {
+            hint = hint.child(
+                div()
+                    .text_size(px(10.5))
+                    .text_color(theme.text_ghost)
+                    .child(SharedString::from(format!("context {tokens} tok"))),
+            );
+        }
+        hint = hint.child(div().flex_1());
+        let busy = self.busy;
+        hint = hint.child(
+            div()
+                .id("send")
+                .h(px(26.))
+                .px(px(14.))
+                .rounded(px(7.))
+                .flex()
+                .items_center()
+                .text_size(px(11.5))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .bg(theme.inverse)
+                .text_color(theme.on_inverse)
+                .cursor_pointer()
+                .hover(|style| style.opacity(0.86))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if this.busy {
+                        _ = this.cmd_tx.send(AgentCommand::Abort);
+                        this.queued = 0;
+                    } else {
+                        this.submit(cx);
+                    }
+                    cx.notify();
+                }))
+                .child(SharedString::from(if busy { "Stop" } else { "Send" })),
+        );
+
+        let ime_layer = self.ime_layer(cx);
+        // 输入框可用内宽：上一帧实测的卡片宽减左右内边距（首帧还没量到时按窗口估算）
+        let composer_wrap_width = self
+            .composer_bounds
+            .get()
+            .map(|bounds| bounds.size.width - px(COMPOSER_H_PADDING * 2.))
+            .filter(|width| *width > px(0.))
+            .unwrap_or_else(|| px(600.));
+
+        div()
+            .relative()
+            .w_full()
+            .max_w(px(CONTENT_MAX_WIDTH))
+            .mx_auto()
+            .rounded(px(12.))
+            .bg(theme.composer)
+            .border_1()
+            .border_color(theme.border_strong)
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .px(px(12.))
+            .pt(px(10.))
+            .pb(px(8.))
+            .child(composer::render_wrapped(
+                &self.editor,
+                &theme,
+                {
+                    let app = cx.entity();
+                    std::rc::Rc::new(move |event, row, col, _, cx| {
+                        app.update(cx, |this, cx| {
+                            this.set_cursor_at(row, col, event.modifiers.shift, cx);
+                        });
+                    })
+                },
+                {
+                    let app = cx.entity();
+                    std::rc::Rc::new(move |_, row, col, _, cx| {
+                        // 拖动选区：锚点留在按下处，光标跟着走
+                        app.update(cx, |this, cx| this.set_cursor_at(row, col, true, cx));
+                    })
+                },
+                composer_wrap_width,
+                &self.composer_scroll,
+                &self.composer_cursor,
+                window,
+            ))
+            .child(hint)
+            .child(ime_layer)
+    }
+
+    /// 主区：空态欢迎页，或对话流 + 输入卡片 + 底部状态。
+    fn render_main(&mut self, transcript: AnyElement, composer_card: gpui::Div) -> AnyElement {
+        let theme = self.theme.clone();
+        let empty = self.transcript.blocks().is_empty();
+        let footer_status = self.status_text();
+
+        let main = if empty {
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_w_0()
+                .min_h_0()
+                .bg(theme.canvas)
+                .justify_center()
+                .child(
+                    div()
+                        .w_full()
+                        .max_w(px(CONTENT_MAX_WIDTH))
+                        .mx_auto()
+                        .px(px(28.))
+                        .flex()
+                        .flex_col()
+                        .gap(px(16.))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(4.))
+                                .child(
+                                    div()
+                                        .text_size(px(22.))
+                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                        .text_color(theme.text)
+                                        .child(SharedString::from("What should we build today?")),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(12.5))
+                                        .text_color(theme.text_tertiary)
+                                        .child(SharedString::from(
+                                            "Enter to send · Ctrl-K for commands · Ctrl-O to switch sessions",
+                                        )),
+                                ),
+                        )
+                        .child(measured_composer(composer_card, self.composer_bounds.clone()))
+                        .child(
+                            div()
+                                .px(px(13.))
+                                .text_size(px(10.5))
+                                .text_color(theme.text_ghost)
+                                .child(SharedString::from(
+                                    "Shift+Enter new line · Ctrl-G appearance · Ctrl-Q quit",
+                                )),
+                        ),
+                )
+        } else {
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_w_0()
+                .min_h_0()
+                .bg(theme.canvas)
+                .child(transcript)
+                .child(measured_composer(
+                    div()
+                        .flex_none()
+                        .w_full()
+                        .px(px(28.))
+                        .pb(px(6.))
+                        .child(composer_card),
+                    self.composer_bounds.clone(),
+                ))
+                .child(
+                    div().flex_none().w_full().px(px(28.)).pb(px(6.)).child(
+                        div()
+                            .max_w(px(CONTENT_MAX_WIDTH))
+                            .mx_auto()
+                            .px(px(13.))
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .text_size(px(10.5))
+                            .text_color(theme.text_ghost)
+                            .child(SharedString::from(footer_status))
+                            .child(SharedString::from(
+                                "Enter to send · Shift+Enter for a new line · Ctrl-K commands · Ctrl-Q quit",
+                            )),
+                    ),
+                )
+        };
+
+        main.into_any_element()
+    }
+
+    /// 整行布局：侧栏 + 主区 + 右侧面板，两侧带拖拽热区。
+    fn render_body(&mut self, main: AnyElement, cx: &mut Context<Self>) -> AnyElement {
+        let theme = self.theme.clone();
+        let cwd = self.cwd();
+
+        let mut body = div().flex().flex_1().min_h_0().w_full();
+        if self.show_sidebar {
+            body = body.child(
+                div()
+                    .relative()
+                    .h_full()
+                    .flex_none()
+                    .child(sidebar::render(sidebar::SidebarCtx {
+                        theme: &theme,
+                        cwd: &cwd,
+                        branch: self.branch.as_deref(),
+                        width: self.sidebar_width,
+                        rows: &self.sessions,
+                        current: self
+                            .snapshot
+                            .as_ref()
+                            .and_then(|s| s.session_path.as_deref()),
+                        loading: self.sessions_loading,
+                        scroll: &self.sessions_scroll,
+                        scrollbar: self.scrollbar(ScrollArea::Sidebar, &theme, cx),
+                        cmd_tx: self.cmd_tx.clone(),
+                        new_session: Box::new(cx.listener(|this, _, _, cx| {
+                            _ = this.cmd_tx.send(AgentCommand::NewSession);
+                            this.transcript.clear();
+                            this.flow_height.set(None);
+                            this.reload_sessions(cx);
+                            cx.notify();
+                        })),
+                        change_cwd: Box::new(cx.listener(|this, _, _, cx| this.open_cwd_menu(cx))),
+                        context_menu: {
+                            let app = cx.entity();
+                            std::rc::Rc::new(
+                                move |path: &str, event: &gpui::MouseDownEvent, _, cx| {
+                                    let path = path.to_string();
+                                    let position = event.position;
+                                    app.update(cx, |this, cx| {
+                                        this.open_session_menu(&path, position, cx)
+                                    });
+                                },
+                            )
+                        },
+                    }))
+                    .child(
+                        // 右边框拖拽热区：骑在边框上，指针变左右缩放
+                        div()
+                            .id("sidebar-resize")
+                            .absolute()
+                            .top_0()
+                            .right(px(-SIDEBAR_HANDLE_WIDTH / 2.))
+                            .h_full()
+                            .w(px(SIDEBAR_HANDLE_WIDTH))
+                            .cursor(gpui::CursorStyle::ResizeLeftRight)
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _: &gpui::MouseDownEvent, _, cx| {
+                                    this.resize_drag = Some(ResizeDrag {
+                                        anchor_x: None,
+                                        width: this.sidebar_width,
+                                    });
+                                    cx.stop_propagation();
+                                    cx.notify();
+                                }),
+                            ),
+                    ),
+            );
+        }
+        body = body.child(main);
+        if self.panel.visible {
+            body = body.child(
+                div()
+                    .relative()
+                    .h_full()
+                    .flex_none()
+                    .child(panel::render(&theme, &self.panel, self.panel_width, cx))
+                    .child(
+                        // 左边框拖拽热区：往左拉变宽，指针变左右缩放
+                        div()
+                            .id("panel-resize")
+                            .absolute()
+                            .top_0()
+                            .left(px(-SIDEBAR_HANDLE_WIDTH / 2.))
+                            .h_full()
+                            .w(px(SIDEBAR_HANDLE_WIDTH))
+                            .cursor(gpui::CursorStyle::ResizeLeftRight)
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _: &gpui::MouseDownEvent, _, cx| {
+                                    this.panel_resize = Some(ResizeDrag {
+                                        anchor_x: None,
+                                        width: this.panel_width,
+                                    });
+                                    cx.stop_propagation();
+                                    cx.notify();
+                                }),
+                            ),
+                    ),
+            );
+        }
+
+        body.into_any_element()
+    }
+
+    /// 根节点：竖排标题栏 + 内容，挂焦点与键盘监听。
+    fn render_root(
+        &mut self,
+        chrome: AnyElement,
+        body: AnyElement,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let theme = self.theme.clone();
+
+        div()
+            .relative()
+            .flex()
+            .flex_col()
+            .size_full()
+            .bg(theme.canvas)
+            .text_color(theme.text)
+            .text_size(px(13.))
+            .font_family(theme::UI_FONT_FAMILY)
+            .track_focus(&self.focus)
+            .on_key_down(cx.listener(Self::on_key_down))
+            .child(chrome)
+            .child(body)
+    }
+
+    /// 盖在根节点上的浮层：模态、toast、下拉菜单、补全面板、会话菜单、对话框。
+    fn render_overlays(
+        &mut self,
+        root: gpui::Div,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let theme = self.theme.clone();
+        let empty = self.transcript.blocks().is_empty();
+
+        let root = self.render_modal(root, &theme, cx);
+        let root = root.child(self.toast_layer(&theme));
+        let root = root.child(self.hover_probe(!empty, cx));
+        let root = self.render_dropdown(root, &theme, window, cx);
+        let root = self.render_suggest_overlay(root, &theme, cx);
+        let root = self.render_session_menu(root, &theme, cx);
+        self.render_dialog(root, &theme, cx)
+    }
+
+    /// 模态覆盖层（命令面板 / 设置 / 列表选择页）：遮罩 + 卡片。
+    fn render_modal(
+        &mut self,
+        root: gpui::Div,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        if let Some(overlay) = &self.overlay {
+            return root.child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .w_full()
+                    .h_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .bg(gpui::rgba(0x00000066))
+                    .occlude()
+                    // 点遮罩（卡片外）关闭；卡片自己拦下事件，点里面不关
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _, cx| {
+                            this.overlay = None;
+                            this.skills_draft = None;
+                            this.extensions_draft = None;
+                            cx.notify();
+                        }),
+                    )
+                    .child(
+                        div()
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|_, _, _, cx| cx.stop_propagation()),
+                            )
+                            .child(overlay::render(overlay, theme, cx)),
+                    ),
+            );
+        }
+        root
+    }
+
+    /// 标题栏 / 输入区的下拉菜单（模型、思考级别、附件）。
+    fn render_dropdown(
+        &mut self,
+        root: gpui::Div,
+        theme: &Theme,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        if let Some(dropdown) = &self.dropdown {
+            let (anchor, width, scroll) = (dropdown.anchor, dropdown.width, dropdown.scroll);
+            // 锚点来自鼠标事件，是窗口的物理像素；尺寸按 px() 走的是「逻辑像素 ×ui_scale」。
+            // 统一换到物理像素再算位置，否则菜单会被缩放顶到窗口外（曾整块看不见）。
+            let scale = theme::ui_scale();
+            let width_px = width * scale;
+            let left = clamp_menu_left(
+                f32::from(anchor.x),
+                width_px,
+                f32::from(window.viewport_size().width),
+            );
+            // 菜单比窗口还高时也别顶出去：按行数估个高度，底部同样让出边距
+            let estimate = ((dropdown.items.len() as f32 * DROPDOWN_ROW_HEIGHT + 8.)
+                .min(DROPDOWN_MAX_HEIGHT))
+                * scale;
+            let top = clamp_menu_top(
+                f32::from(anchor.y) + 4. * scale,
+                estimate,
+                f32::from(window.viewport_size().height),
+            );
+            let mut card = div()
+                .id("dropdown-menu")
+                .absolute()
+                .left(gpui::px(left))
+                .top(gpui::px(top))
+                .w(gpui::px(width_px))
+                .p(px(4.))
+                .rounded(px(8.))
+                .bg(theme.composer)
+                .border_1()
+                .border_color(theme.border_strong)
+                .flex()
+                .flex_col()
+                .occlude()
+                // 同会话菜单：按下菜单不能冒泡给遮罩，否则菜单先关、click 不触发
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|_, _, _, cx| cx.stop_propagation()),
+                );
+            if scroll {
+                card = card.max_h(px(DROPDOWN_MAX_HEIGHT)).overflow_y_scroll();
+            }
+            for (index, item) in dropdown.items.iter().enumerate() {
+                let action = clone_action(&item.action);
+                let mut row = div()
+                    .id(("dropdown", index))
+                    .min_h(px(24.))
+                    .px(px(8.))
+                    .rounded(px(6.))
+                    .flex()
+                    .items_center()
+                    .gap(px(10.))
+                    .text_size(px(12.))
+                    .text_color(theme.text_secondary)
+                    .cursor_pointer()
+                    .hover(|style| style.bg(theme.overlay).text_color(theme.text))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .flex_1()
+                            .truncate()
+                            .child(SharedString::from(item.label.clone())),
+                    );
+                if !item.detail.is_empty() {
+                    row = row.child(
+                        div()
+                            .flex_none()
+                            .text_size(px(10.5))
+                            .text_color(theme.text_ghost)
+                            .child(SharedString::from(item.detail.clone())),
+                    );
+                }
+                card = card.child(row.on_click(cx.listener(move |this, _, _, cx| {
+                    this.dropdown = None;
+                    let action = clone_action(&action);
+                    this.run_action(action, cx);
+                    cx.notify();
+                })));
+            }
+            return root.child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full()
+                    .occlude()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _, cx| {
+                            this.dropdown = None;
+                            cx.notify();
+                        }),
+                    )
+                    .child(card),
+            );
+        }
+        root
+    }
+
+    /// 输入补全面板：贴在输入卡片上沿的浮层。
+    fn render_suggest_overlay(
+        &mut self,
+        root: gpui::Div,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        if let (Some(suggest), Some(card)) = (self.suggest.clone(), self.composer_bounds.get()) {
+            let rows = suggest.items.len().clamp(1, SUGGEST_ROWS) as f32;
+            // 面板高度 = 输入框 + 行区（行数超上限时只按上限算，其余靠滚动）
+            let height = px(SUGGEST_ROW_HEIGHT * rows) + px(SUGGEST_CHROME_HEIGHT);
+            let top = (card.origin.y - height - px(SUGGEST_GAP)).max(px(0.));
+            return root.child(
+                div()
+                    .absolute()
+                    .left(card.origin.x)
+                    .w(card.size.width)
+                    .top(top)
+                    // 挡住下层：否则点在面板上的鼠标事件会穿到对话流/输入框
+                    .occlude()
+                    .child(self.suggest_panel(&suggest, theme, cx)),
+            );
+        }
+        root
+    }
+
+    /// 会话行右键菜单（重命名 / 删除）。
+    fn render_session_menu(
+        &mut self,
+        root: gpui::Div,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        if let Some(menu) = &self.session_menu {
+            let anchor = menu.position;
+            let path = menu.path.clone();
+            let rename_path = path.clone();
+            return root.child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full()
+                    .occlude()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _, cx| this.close_session_menu(cx)),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .left(anchor.x)
+                            .top(anchor.y)
+                            .w(px(132.))
+                            .p(px(4.))
+                            .rounded(px(8.))
+                            .bg(theme.composer)
+                            .border_1()
+                            .border_color(theme.border_strong)
+                            .flex()
+                            .flex_col()
+                            // 按下菜单本身不能冒泡到遮罩：遮罩会先关菜单，随后的 click 就落不到条目上
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|_, _, _, cx| cx.stop_propagation()),
+                            )
+                            .child(
+                                div()
+                                    .id("session-menu-rename")
+                                    .h(px(26.))
+                                    .px(px(8.))
+                                    .rounded(px(6.))
+                                    .flex()
+                                    .items_center()
+                                    .text_size(px(12.))
+                                    .text_color(theme.text_secondary)
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(theme.overlay).text_color(theme.text))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.start_rename(&rename_path, cx);
+                                    }))
+                                    .child(SharedString::from("Rename")),
+                            )
+                            .child(
+                                div()
+                                    .id("session-menu-delete")
+                                    .h(px(26.))
+                                    .px(px(8.))
+                                    .rounded(px(6.))
+                                    .flex()
+                                    .items_center()
+                                    .text_size(px(12.))
+                                    .text_color(theme.text_secondary)
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(theme.overlay).text_color(theme.danger))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.ask_delete(&path, cx);
+                                    }))
+                                    .child(SharedString::from("Delete")),
+                            ),
+                    ),
+            );
+        }
+        root
+    }
+
+    /// 重命名 / 删除确认 / 报表单：居中对话框 + IME 层。
+    fn render_dialog(
+        &mut self,
+        root: gpui::Div,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        if self.dialog.is_some() {
+            let (title, body, field) = match &self.dialog {
+                Some(SessionDialog::Rename { editor, .. }) => (
+                    "Rename session",
+                    String::new(),
+                    Some(composer::render(editor, theme)),
+                ),
+                Some(SessionDialog::BugHint { editor }) => (
+                    "Report a bug",
+                    "Describe what happened (bundled with redacted metadata)".to_string(),
+                    Some(composer::render(editor, theme)),
+                ),
+                Some(SessionDialog::Label { editor }) => (
+                    "Set label",
+                    "Leave empty to clear the label on this branch".to_string(),
+                    Some(composer::render(editor, theme)),
+                ),
+                Some(SessionDialog::Import { editor }) => (
+                    "Import session",
+                    "Path to a jsonl session (~ and relative paths work)".to_string(),
+                    Some(composer::render(editor, theme)),
+                ),
+                Some(SessionDialog::ApiKey { provider, editor }) => (
+                    "Set API key",
+                    format!("{provider} key is written to the auth file in the config directory"),
+                    Some(composer::render(editor, theme)),
+                ),
+                Some(SessionDialog::Number { editor, .. }) => (
+                    "Edit setting",
+                    String::new(),
+                    Some(composer::render(editor, theme)),
+                ),
+                Some(SessionDialog::Delete { title, .. }) => (
+                    "Delete session",
+                    format!("Delete \"{title}\"? This cannot be undone."),
+                    None,
+                ),
+                None => ("", String::new(), None),
+            };
+            let ime = self.ime_layer(cx);
+            let danger = matches!(self.dialog, Some(SessionDialog::Delete { .. }));
+            let mut card = div()
+                .relative()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|_, _, _, cx| cx.stop_propagation()),
+                )
+                .w(px(380.))
+                .rounded(px(12.))
+                .bg(theme.composer)
+                .border_1()
+                .border_color(theme.border_strong)
+                .p(px(16.))
+                .flex()
+                .flex_col()
+                .gap(px(10.))
+                .child(
+                    div()
+                        .text_size(px(13.))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(theme.text)
+                        .child(SharedString::from(title)),
+                );
+            if let Some(field) = field {
+                card = card.child(
+                    div()
+                        .w_full()
+                        .rounded(px(8.))
+                        .bg(theme.canvas)
+                        .border_1()
+                        .border_color(theme.border)
+                        .px(px(10.))
+                        .py(px(8.))
+                        .child(field),
+                );
+            } else {
+                card = card.child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(theme.text_secondary)
+                        .child(SharedString::from(body)),
+                );
+            }
+            card = card
+                .child(
+                    div()
+                        .text_size(px(10.5))
+                        .text_color(theme.text_ghost)
+                        .child(SharedString::from(if danger {
+                            "Enter to delete · Esc cancel"
+                        } else {
+                            "Enter confirm · Esc cancel"
+                        })),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_end()
+                        .gap(px(8.))
+                        .child(
+                            div()
+                                .id("dialog-cancel")
+                                .h(px(26.))
+                                .px(px(12.))
+                                .rounded(px(7.))
+                                .flex()
+                                .items_center()
+                                .text_size(px(11.5))
+                                .bg(theme.overlay)
+                                .text_color(theme.text_secondary)
+                                .cursor_pointer()
+                                .hover(|style| style.bg(theme.overlay_strong))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.dialog = None;
+                                    cx.notify();
+                                }))
+                                .child(SharedString::from("Cancel")),
+                        )
+                        .child(
+                            div()
+                                .id("dialog-confirm")
+                                .h(px(26.))
+                                .px(px(12.))
+                                .rounded(px(7.))
+                                .flex()
+                                .items_center()
+                                .text_size(px(11.5))
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .bg(theme.inverse)
+                                .text_color(theme.on_inverse)
+                                .cursor_pointer()
+                                .hover(|style| style.opacity(0.86))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.confirm_dialog(cx);
+                                }))
+                                .child(SharedString::from(if danger {
+                                    "Delete"
+                                } else {
+                                    "Confirm"
+                                })),
+                        ),
+                )
+                .child(ime);
+            return root.child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .bg(gpui::rgba(0x00000066))
+                    .occlude()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _, cx| {
+                            this.dialog = None;
+                            cx.notify();
+                        }),
+                    )
+                    .child(card),
+            );
+        }
+        root
+    }
+}
+
+/// 给输入卡片的外层挂位置实测：补全面板要贴着它上沿弹出来。
+pub(super) fn measured_composer(
+    wrapper: gpui::Div,
+    cell: Rc<Cell<Option<Bounds<Pixels>>>>,
+) -> gpui::Div {
+    wrapper.on_children_prepainted(move |bounds: Vec<Bounds<Pixels>>, window, _| {
+        if let Some(card) = bounds.first()
+            && cell.get() != Some(*card)
+        {
+            cell.set(Some(*card));
+            window.request_animation_frame();
+        }
+    })
+}
