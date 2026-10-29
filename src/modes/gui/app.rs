@@ -18,118 +18,86 @@ mod menus;
 mod panels;
 mod render;
 mod suggest_ui;
+
 #[cfg(test)]
 mod tests;
 
-use super::bridge::{GuiEvent, Snapshot};
-use super::components::{chip, dot};
-use super::composer;
-use super::overlay::{
-    self, Action, DetailSource, Entry, Info, InfoKind, List, ListKind, Overlay, SettingKey,
+use super::{
+    bridge::{GuiEvent, Snapshot},
+    components::{chip, dot},
+    composer,
+    overlay::{
+        self, Action, DetailSource, Entry, Info, InfoKind, List, ListKind, Overlay, SettingKey,
+    },
+    panel::{self, PanelTab, RightPanel},
+    sidebar::{self, SessionRow},
+    suggest::{self, Suggest, Trigger},
+    text_edit::{self, Editor},
+    theme::{self, Theme, px},
+    transcript::{self, Note, Transcript},
 };
-use super::panel::{self, PanelTab, RightPanel};
-use super::sidebar::{self, SessionRow};
-use super::suggest::{self, Suggest, Trigger};
-use super::text_edit::{self, Editor};
-use super::theme::{self, Theme, px};
-use super::transcript::{self, Note, Transcript};
-use crate::cli::session_picker::ProgressiveMetas;
-use crate::core::provider::AgentMessage;
-use crate::core::settings_manager;
-use crate::modes::interactive::agent_actor::{AgentCommand, CommandTx};
+use crate::{
+    cli::session_picker::ProgressiveMetas,
+    core::{
+        extensions::{self, ExtensionMode, git_branch},
+        model_scope::ScopedModel,
+        prompt_history::HistoryEntry,
+        provider::AgentMessage,
+        session_manager::Session,
+        settings_manager,
+    },
+    modes::interactive::{
+        agent_actor::{AgentCommand, CommandTx},
+        handlers::tools::run_shell_command,
+    },
+    utils::{display, paths::cwd},
+};
 use gpui::{
     AnyElement, App, Bounds, Context, ElementInputHandler, EntityInputHandler, FocusHandle,
     IntoElement, KeyDownEvent, MouseButton, Pixels, Render, ScrollHandle, SharedString, Task,
     UTF16Selection, Window, canvas, div, prelude::*,
 };
-use std::cell::Cell;
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::ops::Range;
-use std::rc::Rc;
-use std::time::Duration;
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashMap,
+    ops::Range,
+    path::PathBuf,
+    rc::Rc,
+    time::{Duration, Instant},
+};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 /// 正文列最大宽度：宽屏下不铺满整屏，阅读更稳。
 const CONTENT_MAX_WIDTH: f32 = 760.0;
 /// 标题栏高度。
-const CHROME_HEIGHT: f32 = 40.0;
+const CHROME_HEIGHT: f32 = 32.0;
 /// 对话流顶部留白。
-const FLOW_PADDING_TOP: f32 = 20.0;
+const FLOW_PADDING_TOP: f32 = 16.0;
 /// 对话流底部留白：滚到底时最后一行不贴输入卡片。
-const FLOW_PADDING_BOTTOM: f32 = 72.0;
-/// 对话流滚动条宽度（滑块本身比这个热区窄，方便抓取）。
-const SCROLLBAR_WIDTH: f32 = 8.0;
-/// 滚动条热区宽度：滑块附近都算拖动范围，不然 6px 太难点中。
-const SCROLLBAR_HIT_WIDTH: f32 = 14.0;
-/// 右侧面板默认宽度（逻辑像素）
-const PANEL_DEFAULT_WIDTH: f32 = 320.0;
-/// 右侧面板最窄
-const PANEL_MIN_WIDTH: f32 = 240.0;
-/// 右侧面板最宽
-const PANEL_MAX_WIDTH: f32 = 620.0;
-
-/// 下拉菜单离窗口边缘至少留出的距离（逻辑像素）
-const MENU_EDGE_MARGIN: f32 = 12.0;
-
-/// 下拉菜单每行的高度（逻辑像素，估高度用）
-const DROPDOWN_ROW_HEIGHT: f32 = 24.0;
-
-/// 下拉菜单的最大高度（超过就滚动）
-const DROPDOWN_MAX_HEIGHT: f32 = 360.0;
-
-/// 循环取下一个下标：`dir` 为 ±1，`current` 未知（还没对上号）时取第一个。
-///
-/// `len` 必须非空：调用方都先判过空列表。
-fn cycle_index(current: Option<usize>, len: usize, dir: i32) -> usize {
-    let Some(current) = current else {
-        return 0;
-    };
-    ((current as i32 + dir).rem_euclid(len as i32)) as usize
-}
-
-/// `Ctrl+P` 循环的候选模型：`scoped` 非空时严格按 scope 顺序、跳过目录里不可用的；
-/// 为空时才退回全部已配置模型（与 TUI 的模型循环一致）。
-fn cycle_models(
-    scoped: &[crate::core::model_scope::ScopedModel],
-    all: &[(String, String)],
-) -> Vec<(String, String)> {
-    if scoped.is_empty() {
-        return all.to_vec();
-    }
-    scoped
-        .iter()
-        .filter_map(|scoped| {
-            all.iter()
-                .find(|(provider, id)| provider == &scoped.provider && id == &scoped.id)
-                .cloned()
-        })
-        .collect()
-}
-
-/// 下拉菜单上边距：贴按钮下方，但不许越过窗口底部（底部留 `MENU_EDGE_MARGIN`）。
-fn clamp_menu_top(anchor_y: f32, height: f32, viewport_height: f32) -> f32 {
-    let max_top = (viewport_height - height - MENU_EDGE_MARGIN).max(MENU_EDGE_MARGIN);
-    anchor_y.clamp(MENU_EDGE_MARGIN, max_top)
-}
-
-/// 下拉菜单左边距：贴着按钮，但不许越过窗口右侧（右侧留 `MENU_EDGE_MARGIN`）。
-fn clamp_menu_left(anchor_x: f32, width: f32, viewport_width: f32) -> f32 {
-    let max_left = (viewport_width - width - MENU_EDGE_MARGIN).max(MENU_EDGE_MARGIN);
-    anchor_x.clamp(MENU_EDGE_MARGIN, max_left)
-}
-
+const FLOW_PADDING_BOTTOM: f32 = 64.0;
 /// 对话流正文的行高（相对字号；默认 φ = 1.618 会让行内高亮背景过高并连成一片）
 const TRANSCRIPT_LINE_HEIGHT: f32 = 1.32;
-
 /// 输入卡片每侧的内边距（逻辑像素，对应卡片的 `px(12.)`）：算可用折行宽度时两侧各扣一份
 const COMPOSER_H_PADDING: f32 = 12.0;
-
 /// prompt 历史条目的标签宽度上限（显示宽度，CJK 字符按 2 算）。
 const HISTORY_LABEL_WIDTH: usize = 60;
 
+/// 对话流滚动条宽度（滑块本身比这个热区窄，方便抓取）。
+const SCROLLBAR_WIDTH: f32 = 8.0;
+/// 滚动条热区宽度：滑块附近都算拖动范围，不然 6px 太难点中。
+const SCROLLBAR_HIT_WIDTH: f32 = 16.0;
+/// 滚动条滑块最小高度。
+const SCROLLBAR_MIN_THUMB: f32 = 24.0;
+
+/// 下拉菜单离窗口边缘至少留出的距离（逻辑像素）
+const MENU_EDGE_MARGIN: f32 = 16.0;
+/// 下拉菜单每行的高度（逻辑像素，估高度用）
+const DROPDOWN_ROW_HEIGHT: f32 = 24.0;
+/// 下拉菜单的最大高度（超过就滚动）
+const DROPDOWN_MAX_HEIGHT: f32 = 360.0;
+
 /// toast 停留时长
-const TOAST_DURATION: std::time::Duration = std::time::Duration::from_millis(3600);
+const TOAST_DURATION: Duration = Duration::from_millis(3600);
 /// 同时最多保留几条 toast
 const TOAST_MAX: usize = 4;
 
@@ -144,32 +112,39 @@ const SIDEBAR_HANDLE_WIDTH: f32 = 6.0;
 /// 补全面板里除候选行以外的固定高度（输入框 + 内边距，逻辑像素）
 const SUGGEST_CHROME_HEIGHT: f32 = 46.0;
 
+/// 右侧面板默认宽度（逻辑像素）
+const PANEL_DEFAULT_WIDTH: f32 = 320.0;
+/// 右侧面板最窄
+const PANEL_MIN_WIDTH: f32 = 240.0;
+/// 右侧面板最宽
+const PANEL_MAX_WIDTH: f32 = 620.0;
+
 /// 补全面板最多显示几行。
 const SUGGEST_ROWS: usize = 8;
 /// 补全面板单行高度（逻辑像素）。
-const SUGGEST_ROW_HEIGHT: f32 = 26.0;
+const SUGGEST_ROW_HEIGHT: f32 = 24.0;
 /// 补全面板与输入卡片之间的间隙。
 const SUGGEST_GAP: f32 = 8.0;
 
-/// 滚动条滑块最小高度。
-const SCROLLBAR_MIN_THUMB: f32 = 24.0;
+/// 最近工作目录最多记多少条。
+const RECENT_CWD_LIMIT: usize = 30;
+
+/// 同一行两次切换要间隔多久才算两次操作（长按重建后会再弹一次 click）。
+const TOGGLE_DEBOUNCE: Duration = Duration::from_millis(250);
 
 /// 可拖拽滚动条所在的滚动区。
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ScrollArea {
     /// 对话流
-    Transcript,
+    Transcript = 0,
     /// 侧栏会话列表
-    Sidebar,
+    Sidebar = 1,
 }
 
 impl ScrollArea {
     /// 元素 id 用的编号（同一帧里两个滚动条不能撞 id）。
     fn index(self) -> usize {
-        match self {
-            ScrollArea::Transcript => 0,
-            ScrollArea::Sidebar => 1,
-        }
+        self as usize
     }
 }
 
@@ -370,7 +345,7 @@ pub struct GuiApp {
     /// 当前工作目录的 git 分支（非仓库为 None）
     branch: Option<String>,
     /// 上一次切换的条目与时间（面板重建后鼠标抬起会再触发一次 click，挡掉重复）
-    last_toggle: Option<(String, std::time::Instant)>,
+    last_toggle: Option<(String, Instant)>,
     /// 扩展面板的草稿：`(名称, 期望启用)`，None = 面板没开
     extensions_draft: Option<Vec<(String, bool)>>,
     /// `/skills` 面板的草稿规则（None = 面板没开，改动丢弃）
@@ -633,7 +608,7 @@ impl GuiApp {
         self.snapshot
             .as_ref()
             .map(|s| s.cwd.clone())
-            .unwrap_or_else(|| crate::utils::paths::cwd().to_string_lossy().to_string())
+            .unwrap_or_else(|| cwd().to_string_lossy().to_string())
     }
 
     /// 弹一条 toast（TUI 状态栏那类瞬时提示），几秒后自动消失。
@@ -645,6 +620,7 @@ impl GuiApp {
         while self.toasts.len() > TOAST_MAX {
             self.toasts.remove(0);
         }
+
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(TOAST_DURATION).await;
             _ = this.update(cx, |app, cx| {
@@ -658,7 +634,7 @@ impl GuiApp {
 
     /// 读当前工作目录的 git 分支（侧栏底部展示）。
     fn refresh_branch(&mut self) {
-        self.branch = crate::core::extensions::git_branch(&self.cwd());
+        self.branch = git_branch(&self.cwd());
     }
 
     /// 简单重绘（`confirm_dialog` 里提前返回时用）。
@@ -682,11 +658,8 @@ impl GuiApp {
     }
 }
 
-/// 最近工作目录最多记多少条。
-const RECENT_CWD_LIMIT: usize = 20;
-
 /// 最近工作目录清单文件（放在 agent 目录，不动用户的 settings.json）。
-fn recent_cwds_path() -> std::path::PathBuf {
+fn recent_cwds_path() -> PathBuf {
     settings_manager::agent_dir().join("recent-cwds.json")
 }
 
@@ -706,16 +679,18 @@ fn remember_cwd(path: &str) {
     list.retain(|item| item != path);
     list.insert(0, path.to_string());
     list.truncate(RECENT_CWD_LIMIT);
+
     if let Some(dir) = recent_cwds_path().parent() {
-        let _ = std::fs::create_dir_all(dir);
+        _ = std::fs::create_dir_all(dir);
     }
+
     if let Ok(text) = serde_json::to_string_pretty(&list) {
-        let _ = std::fs::write(recent_cwds_path(), text);
+        _ = std::fs::write(recent_cwds_path(), text);
     }
 }
 
 /// prompt 历史 → 面板条目：最新的在前，标签取首行并夹到 [`HISTORY_LABEL_WIDTH`]。
-fn history_entries(history: Vec<crate::core::prompt_history::HistoryEntry>) -> Vec<Entry> {
+fn history_entries(history: Vec<HistoryEntry>) -> Vec<Entry> {
     let mut entries: Vec<Entry> = history
         .into_iter()
         .rev()
@@ -726,7 +701,8 @@ fn history_entries(history: Vec<crate::core::prompt_history::HistoryEntry>) -> V
                 .lines()
                 .find(|line| !line.trim().is_empty())
                 .unwrap_or_default();
-            let label = crate::utils::display::fit_display(first, HISTORY_LABEL_WIDTH);
+            let label = display::fit_display(first, HISTORY_LABEL_WIDTH);
+
             Entry {
                 label: if label.is_empty() {
                     item.text.clone()
@@ -739,6 +715,7 @@ fn history_entries(history: Vec<crate::core::prompt_history::HistoryEntry>) -> V
             }
         })
         .collect();
+
     if entries.is_empty() {
         entries.push(Entry {
             label: "No prompts in history yet".into(),
@@ -759,12 +736,13 @@ fn keeps_overlay(action: &Action) -> bool {
 }
 
 /// GUI 能配置的扩展：底栏与横幅扩展只影响终端界面渲染，桌面端不列出来（也没法生效）。
-fn configurable_extensions() -> Vec<(String, bool, Vec<crate::core::extensions::ExtensionMode>)> {
-    let hidden: Vec<String> = crate::core::extensions::footer_names()
+fn configurable_extensions() -> Vec<(String, bool, Vec<ExtensionMode>)> {
+    let hidden: Vec<String> = extensions::footer_names()
         .into_iter()
-        .chain(crate::core::extensions::banner_names())
+        .chain(extensions::banner_names())
         .collect();
-    crate::core::extensions::panel_entries()
+
+    extensions::panel_entries()
         .into_iter()
         .filter(|(name, _, _)| !hidden.contains(name))
         .collect()
@@ -786,15 +764,12 @@ fn skill_rules_with(rules: &[String], name: &str, enable: bool) -> Vec<String> {
     next
 }
 
-/// 同一行两次切换要间隔多久才算两次操作（长按重建后会再弹一次 click）。
-const TOGGLE_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(250);
-
 /// 该不该忽略这次切换：同一条目、且距上次不到 `window` 就丢弃。
 fn ignore_repeat_toggle(
-    last: Option<(&str, std::time::Instant)>,
+    last: Option<(&str, Instant)>,
     name: &str,
-    now: std::time::Instant,
-    window: std::time::Duration,
+    now: Instant,
+    window: Duration,
 ) -> bool {
     last.is_some_and(|(last_name, at)| last_name == name && now.duration_since(at) < window)
 }
@@ -888,7 +863,7 @@ fn thumb_top(offset: f32, max: f32, travel: f32) -> f32 {
 
 /// 跑一条 shell 命令并把输出（已截断）当文本返回；GUI 里 `!` `!!` 用。
 fn run_shell(command: &str) -> String {
-    crate::modes::interactive::handlers::tools::run_shell_command(command)
+    run_shell_command(command)
 }
 
 /// 重命名输入 → 最终名字：去掉首尾空白，空输入当作取消。
@@ -899,7 +874,7 @@ fn renamed_name(input: &str) -> Option<&str> {
 
 /// 把会话名写进会话文件（`name` fact），失败时静默——侧栏下次加载自然反映结果。
 fn rename_session(path: &str, name: &str) {
-    if let Ok(mut session) = crate::core::session_manager::Session::open(path) {
+    if let Ok(mut session) = Session::open(path) {
         session.append_session_info(name);
     }
 }
@@ -928,4 +903,42 @@ fn basename(path: &str) -> String {
         .find(|part| !part.is_empty())
         .unwrap_or(path)
         .to_string()
+}
+
+/// 循环取下一个下标：`dir` 为 ±1，`current` 未知（还没对上号）时取第一个。
+///
+/// `len` 必须非空：调用方都先判过空列表。
+fn cycle_index(current: Option<usize>, len: usize, dir: i32) -> usize {
+    let Some(current) = current else {
+        return 0;
+    };
+    ((current as i32 + dir).rem_euclid(len as i32)) as usize
+}
+
+/// `Ctrl+P` 循环的候选模型：`scoped` 非空时严格按 scope 顺序、跳过目录里不可用的；
+/// 为空时才退回全部已配置模型（与 TUI 的模型循环一致）。
+fn cycle_models(scoped: &[ScopedModel], all: &[(String, String)]) -> Vec<(String, String)> {
+    if scoped.is_empty() {
+        return all.to_vec();
+    }
+    scoped
+        .iter()
+        .filter_map(|scoped| {
+            all.iter()
+                .find(|(provider, id)| provider == &scoped.provider && id == &scoped.id)
+                .cloned()
+        })
+        .collect()
+}
+
+/// 下拉菜单上边距：贴按钮下方，但不许越过窗口底部（底部留 `MENU_EDGE_MARGIN`）。
+fn clamp_menu_top(anchor_y: f32, height: f32, viewport_height: f32) -> f32 {
+    let max_top = (viewport_height - height - MENU_EDGE_MARGIN).max(MENU_EDGE_MARGIN);
+    anchor_y.clamp(MENU_EDGE_MARGIN, max_top)
+}
+
+/// 下拉菜单左边距：贴着按钮，但不许越过窗口右侧（右侧留 `MENU_EDGE_MARGIN`）。
+fn clamp_menu_left(anchor_x: f32, width: f32, viewport_width: f32) -> f32 {
+    let max_left = (viewport_width - width - MENU_EDGE_MARGIN).max(MENU_EDGE_MARGIN);
+    anchor_x.clamp(MENU_EDGE_MARGIN, max_left)
 }
