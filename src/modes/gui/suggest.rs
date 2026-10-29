@@ -4,7 +4,11 @@
 //! 匹配规则与 TUI 一致：`/` 按字符顺序模糊匹配（[`crate::utils::fuzzy`]），
 //! `@` 按路径打分（[`crate::utils::fuzzy::path_score`]），都不是简单前缀。
 
-use crate::utils::fuzzy::{fuzzy_filter, path_score};
+use crate::utils::{
+    fuzzy::{fuzzy_filter, path_score},
+    mime::is_image_path,
+};
+use std::path::Path;
 
 /// 候选面板最多显示几条。
 pub const MAX_ITEMS: usize = 30;
@@ -55,7 +59,6 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("fork", "Fork current session"),
     ("label", "Label current branch"),
     ("tree", "Session tree"),
-    ("sidebar", "Toggle session sidebar"),
     ("import", "Import session file"),
     ("history", "Search prompt history"),
     ("share", "Share session (gist)"),
@@ -63,6 +66,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("copy", "Copy last reply"),
     ("rewind", "Rewind last input"),
     ("giff", "Review uncommitted changes"),
+    ("sidebar", "Toggle session sidebar"),
     ("quit", "Quit"),
 ];
 
@@ -131,9 +135,7 @@ pub fn files(paths: &[String], query: &str, images_only: bool) -> Vec<Item> {
     let query = query.trim();
     let mut scored: Vec<(i32, &String)> = paths
         .iter()
-        .filter(|path| {
-            !images_only || crate::utils::mime::is_image_path(std::path::Path::new(path))
-        })
+        .filter(|path| !images_only || is_image_path(Path::new(path)))
         .map(|path| {
             let score = if query.is_empty() {
                 1

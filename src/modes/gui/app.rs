@@ -24,7 +24,7 @@ mod tests;
 
 use super::{
     bridge::{GuiEvent, Snapshot},
-    components::{chip, dot},
+    components::chip,
     composer,
     overlay::{
         self, Action, DetailSource, Entry, Info, InfoKind, List, ListKind, Overlay, SettingKey,

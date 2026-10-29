@@ -3,8 +3,8 @@
 //! 拆自 [`super::app`]：只搬渲染代码，状态与按键分发仍在父模块。
 
 use super::theme::{
-    CONTROL_H_MD, CONTROL_H_SM, DOT_SIZE, FONT_BODY, FONT_CAPTION, FONT_HERO, FONT_SMALL,
-    RADIUS_LG, RADIUS_MD, RADIUS_SM, SPACE_LG, SPACE_MD, SPACE_SM, SPACE_XL, SPACE_XS,
+    CONTROL_H_MD, CONTROL_H_SM, FONT_BODY, FONT_CAPTION, FONT_HERO, FONT_SMALL, RADIUS_LG,
+    RADIUS_MD, RADIUS_SM, SPACE_LG, SPACE_MD, SPACE_SM, SPACE_XL, SPACE_XS,
 };
 use super::*;
 
@@ -217,7 +217,8 @@ impl Render for GuiApp {
         let composer = self.render_composer(window, cx);
         let main = self.render_main(transcript, composer);
         let body = self.render_body(main, cx);
-        let root = self.render_root(chrome, body, cx);
+        let sidebar = self.render_sidebar(cx);
+        let root = self.render_root(sidebar, chrome, body, cx);
         self.render_overlays(root, window, cx)
     }
 }
@@ -227,18 +228,6 @@ impl GuiApp {
     fn render_chrome(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.theme.clone();
 
-        let cwd = self
-            .snapshot
-            .as_ref()
-            .map(|s| s.cwd.clone())
-            .unwrap_or_default();
-        let project = crate::utils::paths::file_name_of(std::path::Path::new(&cwd))
-            .unwrap_or_else(|_| cwd.clone());
-        let session_title = self
-            .snapshot
-            .as_ref()
-            .and_then(|s| s.session_name.clone())
-            .unwrap_or_else(|| "New session".to_string());
         let model = self
             .snapshot
             .as_ref()
@@ -312,28 +301,6 @@ impl GuiApp {
             .bg(theme.canvas)
             .border_b_1()
             .border_color(theme.border)
-            .child(dot(theme.accent, DOT_SIZE))
-            .child(
-                div()
-                    .text_size(px(FONT_SMALL))
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .text_color(theme.text)
-                    .child(SharedString::from(project)),
-            )
-            .child(
-                div()
-                    .text_size(px(FONT_SMALL))
-                    .text_color(theme.text_ghost)
-                    .child(SharedString::from("›")),
-            )
-            .child(
-                div()
-                    .min_w_0()
-                    .truncate()
-                    .text_size(px(FONT_SMALL))
-                    .text_color(theme.text_secondary)
-                    .child(SharedString::from(session_title)),
-            )
             .child(div().flex_1())
             .child(chrome_right);
 
@@ -687,76 +654,78 @@ impl GuiApp {
     }
 
     /// 整行布局：侧栏 + 主区 + 右侧面板，两侧带拖拽热区。
-    fn render_body(&mut self, main: AnyElement, cx: &mut Context<Self>) -> AnyElement {
+    /// 侧边栏（全高）：会话列表 + 底部工作目录，右侧带拖拽热区。
+    fn render_sidebar(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        if !self.show_sidebar {
+            return gpui::Empty.into_any_element();
+        }
         let theme = self.theme.clone();
         let cwd = self.cwd();
+        div()
+            .relative()
+            .h_full()
+            .flex_none()
+            .child(sidebar::render(sidebar::SidebarCtx {
+                theme: &theme,
+                cwd: &cwd,
+                branch: self.branch.as_deref(),
+                width: self.sidebar_width,
+                rows: &self.sessions,
+                current: self
+                    .snapshot
+                    .as_ref()
+                    .and_then(|s| s.session_path.as_deref()),
+                loading: self.sessions_loading,
+                scroll: &self.sessions_scroll,
+                scrollbar: self.scrollbar(ScrollArea::Sidebar, &theme, cx),
+                cmd_tx: self.cmd_tx.clone(),
+                new_session: Box::new(cx.listener(|this, _, _, cx| {
+                    _ = this.cmd_tx.send(AgentCommand::NewSession);
+                    this.transcript.clear();
+                    this.flow_height.set(None);
+                    this.reload_sessions(cx);
+                    cx.notify();
+                })),
+                change_cwd: Box::new(cx.listener(|this, _, _, cx| this.open_cwd_menu(cx))),
+                context_menu: {
+                    let app = cx.entity();
+                    std::rc::Rc::new(move |path: &str, event: &gpui::MouseDownEvent, _, cx| {
+                        let path = path.to_string();
+                        let position = event.position;
+                        app.update(cx, |this, cx| this.open_session_menu(&path, position, cx));
+                    })
+                },
+            }))
+            .child(
+                // 右边框拖拽热区：骑在边框上，指针变左右缩放
+                div()
+                    .id("sidebar-resize")
+                    .absolute()
+                    .top_0()
+                    .right(px(-SIDEBAR_HANDLE_WIDTH / 2.))
+                    .h_full()
+                    .w(px(SIDEBAR_HANDLE_WIDTH))
+                    .cursor(gpui::CursorStyle::ResizeLeftRight)
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _: &gpui::MouseDownEvent, _, cx| {
+                            this.resize_drag = Some(ResizeDrag {
+                                anchor_x: None,
+                                width: this.sidebar_width,
+                            });
+                            cx.stop_propagation();
+                            cx.notify();
+                        }),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    /// 主区行：对话/输入 + 右侧面板，面板左边带拖拽热区。
+    fn render_body(&mut self, main: AnyElement, cx: &mut Context<Self>) -> AnyElement {
+        let theme = self.theme.clone();
 
         let mut body = div().flex().flex_1().min_h_0().w_full();
-        if self.show_sidebar {
-            body = body.child(
-                div()
-                    .relative()
-                    .h_full()
-                    .flex_none()
-                    .child(sidebar::render(sidebar::SidebarCtx {
-                        theme: &theme,
-                        cwd: &cwd,
-                        branch: self.branch.as_deref(),
-                        width: self.sidebar_width,
-                        rows: &self.sessions,
-                        current: self
-                            .snapshot
-                            .as_ref()
-                            .and_then(|s| s.session_path.as_deref()),
-                        loading: self.sessions_loading,
-                        scroll: &self.sessions_scroll,
-                        scrollbar: self.scrollbar(ScrollArea::Sidebar, &theme, cx),
-                        cmd_tx: self.cmd_tx.clone(),
-                        new_session: Box::new(cx.listener(|this, _, _, cx| {
-                            _ = this.cmd_tx.send(AgentCommand::NewSession);
-                            this.transcript.clear();
-                            this.flow_height.set(None);
-                            this.reload_sessions(cx);
-                            cx.notify();
-                        })),
-                        change_cwd: Box::new(cx.listener(|this, _, _, cx| this.open_cwd_menu(cx))),
-                        context_menu: {
-                            let app = cx.entity();
-                            std::rc::Rc::new(
-                                move |path: &str, event: &gpui::MouseDownEvent, _, cx| {
-                                    let path = path.to_string();
-                                    let position = event.position;
-                                    app.update(cx, |this, cx| {
-                                        this.open_session_menu(&path, position, cx)
-                                    });
-                                },
-                            )
-                        },
-                    }))
-                    .child(
-                        // 右边框拖拽热区：骑在边框上，指针变左右缩放
-                        div()
-                            .id("sidebar-resize")
-                            .absolute()
-                            .top_0()
-                            .right(px(-SIDEBAR_HANDLE_WIDTH / 2.))
-                            .h_full()
-                            .w(px(SIDEBAR_HANDLE_WIDTH))
-                            .cursor(gpui::CursorStyle::ResizeLeftRight)
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _: &gpui::MouseDownEvent, _, cx| {
-                                    this.resize_drag = Some(ResizeDrag {
-                                        anchor_x: None,
-                                        width: this.sidebar_width,
-                                    });
-                                    cx.stop_propagation();
-                                    cx.notify();
-                                }),
-                            ),
-                    ),
-            );
-        }
         body = body.child(main);
         if self.panel.visible {
             body = body.child(
@@ -793,9 +762,10 @@ impl GuiApp {
         body.into_any_element()
     }
 
-    /// 根节点：竖排标题栏 + 内容，挂焦点与键盘监听。
+    /// 根节点：侧栏 +（标题栏下接主区）的竖排，挂焦点与键盘监听。
     fn render_root(
         &mut self,
+        sidebar: AnyElement,
         chrome: AnyElement,
         body: AnyElement,
         cx: &mut Context<Self>,
@@ -805,7 +775,6 @@ impl GuiApp {
         div()
             .relative()
             .flex()
-            .flex_col()
             .size_full()
             .bg(theme.canvas)
             .text_color(theme.text)
@@ -813,8 +782,18 @@ impl GuiApp {
             .font_family(theme::UI_FONT_FAMILY)
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::on_key_down))
-            .child(chrome)
-            .child(body)
+            .child(sidebar)
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_w_0()
+                    .min_h_0()
+                    .h_full()
+                    .child(chrome)
+                    .child(body),
+            )
     }
 
     /// 盖在根节点上的浮层：模态、toast、下拉菜单、补全面板、会话菜单、对话框。

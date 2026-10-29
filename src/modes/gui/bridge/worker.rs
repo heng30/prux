@@ -525,7 +525,6 @@ fn snapshot(agent: &Agent) -> Snapshot {
             .map(str::to_string)
             .collect(),
         model_cycle: agent.model_cycle.clone(),
-        session_name: agent.session.as_ref().and_then(|s| s.name.clone()),
         session_path: agent
             .session
             .as_ref()

@@ -4,22 +4,33 @@
 //! 逐条解析会话元数据（整文件读，慢）交给 [`ProgressiveMetas`] 的后台线程，
 //! 渲染时只取已就绪的那部分。
 
-use super::components::{dot, section_label};
-use super::theme::{
-    CONTROL_H_SM, DOT_SIZE, FONT_CAPTION, FONT_SMALL, HEADER_H, RADIUS_MD, RADIUS_SM, SPACE_MD,
-    SPACE_SM, SPACE_XS, SPACE_XXS, Theme, px,
+use super::{
+    components::{dot, section_label},
+    theme::{
+        CONTROL_H_SM, DOT_SIZE, FONT_CAPTION, FONT_SMALL, HEADER_H, RADIUS_MD, RADIUS_SM, SPACE_MD,
+        SPACE_SM, SPACE_XS, SPACE_XXS, Theme, px,
+    },
 };
-use crate::cli::session_picker::ProgressiveMetas;
-use crate::core::session_manager::{default_session_dir, list_sessions};
-use crate::core::settings_manager::agent_dir;
-use crate::modes::interactive::agent_actor::{AgentCommand, CommandTx};
-use crate::utils::display::fit_display;
+use crate::{
+    cli::session_picker::ProgressiveMetas,
+    core::{
+        session_manager::{default_session_dir, list_sessions},
+        settings_manager::agent_dir,
+    },
+    modes::interactive::agent_actor::{AgentCommand, CommandTx},
+    utils::display::fit_display,
+};
 use gpui::{
     AnyElement, IntoElement, MouseButton, ParentElement, ScrollHandle, SharedString, Styled, div,
     prelude::*,
 };
-use std::path::PathBuf;
-use std::rc::Rc;
+use std::{path::PathBuf, rc::Rc};
+
+/// 点击类回调（视图层挂事件用）。
+type ClickHandler = Box<dyn Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App)>;
+
+/// 会话行右键回调：参数是会话文件路径。
+type ContextHandler = Rc<dyn Fn(&str, &gpui::MouseDownEvent, &mut gpui::Window, &mut gpui::App)>;
 
 /// 会话按最近活动时间分的组。
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -110,12 +121,6 @@ pub fn current_index(rows: &[SessionRow], current: Option<&str>) -> Option<usize
     let current = current?;
     rows.iter().position(|row| row.path == current)
 }
-
-/// 点击类回调（视图层挂事件用）。
-type ClickHandler = Box<dyn Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App)>;
-
-/// 会话行右键回调：参数是会话文件路径。
-type ContextHandler = Rc<dyn Fn(&str, &gpui::MouseDownEvent, &mut gpui::Window, &mut gpui::App)>;
 
 /// 侧栏渲染入参：列表数据、滚动句柄与交互回调。
 ///
@@ -267,7 +272,9 @@ fn session_list(
         .pb(px(SPACE_MD))
         .overflow_y_scroll()
         .track_scroll(scroll);
+
     list = list.child(section_label(theme, "Sessions"));
+
     if rows.is_empty() {
         list = list.child(
             div()
@@ -282,6 +289,7 @@ fn session_list(
                 })),
         );
     }
+
     let mut last_group: Option<Group> = None;
     for (index, row) in rows.iter().enumerate() {
         if last_group != Some(row.group) {
@@ -292,6 +300,7 @@ fn session_list(
                     .child(section_label(theme, row.group.label())),
             );
         }
+
         let mut entry = div()
             .w_full()
             .px(px(SPACE_SM))
@@ -302,9 +311,11 @@ fn session_list(
             .gap(px(SPACE_XXS))
             .cursor_pointer()
             .hover(|style| style.bg(theme.overlay));
+
         if active == Some(index) {
             entry = entry.bg(theme.overlay_strong);
         }
+
         entry = entry
             .child(
                 div()
@@ -327,10 +338,12 @@ fn session_list(
                     .child(SharedString::from(row.age.clone()))
                     .child(SharedString::from(format!("· {} messages", row.messages))),
             );
+
         let tx = cmd_tx.clone();
         let path = row.path.clone();
         let menu = context_menu.clone();
         let menu_path = row.path.clone();
+
         list = list.child(
             entry
                 .id(("session", index))
@@ -338,7 +351,7 @@ fn session_list(
                     menu(&menu_path, event, window, cx);
                 })
                 .on_click(move |_, _, _| {
-                    let _ = tx.send(AgentCommand::ResumeSession { path: path.clone() });
+                    _ = tx.send(AgentCommand::ResumeSession { path: path.clone() });
                 }),
         );
     }

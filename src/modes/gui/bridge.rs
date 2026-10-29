@@ -32,8 +32,6 @@ pub struct Snapshot {
     /// `--models` / `settings.enabledModels` 解析出的 scope（有序，可带 thinking）；
     /// 非空时 `Ctrl+P` 只在其中循环，空则退回全部已配置模型。
     pub model_cycle: Vec<crate::core::model_scope::ScopedModel>,
-    /// 会话名；未命名为 None。
-    pub session_name: Option<String>,
     /// 会话文件路径；内存会话（`--no-session`）为 None。
     pub session_path: Option<String>,
     /// 会话中的消息条数。

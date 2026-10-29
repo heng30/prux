@@ -126,6 +126,11 @@
   gaps between adjacent rows) instead of per-call pixel literals, so a button, its neighbours and
   the panel it sits in no longer each pick their own 6, 7, 13 or 15.
 
+- **The desktop GUI's session list spans the whole window**: the sidebar now starts at the top
+  edge, and the title bar sits beside it over the transcript instead of above everything. The bar
+  no longer repeats the project and session name the sidebar already shows; the model, thinking
+  and command-palette chips stay.
+
 ### Fixed
 
 - **`!` and `!!` no longer open a completion panel in the desktop GUI**: shell lines run on
@@ -307,6 +312,10 @@
 - **桌面 GUI 的间距统一成一套刻度**：padding、gap、圆角、字号与控件高度改用 GUI 主题里命名的
   阶梯值（4 的倍数，只给相邻行之间的细缝留了 2px 一档），不再各处自己写像素字面量——按钮、
   它旁边的元素和所在面板不会再各自取 6、7、13、15。
+
+- **桌面 GUI 的会话列表占满整列**：侧栏从窗口顶端开始，标题栏挪到它右侧、压在对话流上方，
+  不再横跨整个窗口。标题栏里删掉了侧栏已经显示的 `prux › 会话名`，模型、思考与命令面板
+  三个入口保留。
 
 ## 修复
 
