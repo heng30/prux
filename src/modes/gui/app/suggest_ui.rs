@@ -142,6 +142,8 @@ impl GuiApp {
     }
     /// 上下移动补全选中项（越界回绕）。
     pub(super) fn move_suggestion(&mut self, delta: i32) {
+        // 句柄先克隆：`suggest` 借着自己，滚动跟随还要用另一个字段
+        let scroll = self.suggest_scroll.clone();
         let Some(suggest) = self.suggest.as_mut() else {
             return;
         };
@@ -151,6 +153,8 @@ impl GuiApp {
         }
         let next = suggest.selected as i32 + delta;
         suggest.selected = next.clamp(0, len as i32 - 1) as usize;
+        // 选中行超出面板时跟着滚，保证它始终在视口里
+        overlay::reveal_row(&scroll, suggest.selected);
     }
     /// 把选中候选写进输入框（命令/文件补全）。
     pub(super) fn apply_suggestion(&mut self, cx: &mut Context<Self>) {

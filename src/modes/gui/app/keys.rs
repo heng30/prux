@@ -729,6 +729,8 @@ impl GuiApp {
             }
             _ => return false,
         }
+        // 选中行超出菜单高度时跟着滚
+        overlay::reveal_row(&dropdown.handle, dropdown.selected);
         if run.is_some() || key == "escape" {
             self.dropdown = None;
         }

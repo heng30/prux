@@ -109,8 +109,9 @@
 - **Every list in the desktop GUI answers to the keyboard**: overlays, the model / thinking /
   attachment dropdowns, `@` completions and the session right-click menu all move with
   `Ctrl+K` / `Ctrl+J` (or the arrows), jump with `Home` / `End`, page with `PageUp` / `PageDown`
-  and close with `Ctrl+C`. The session list also answers `Ctrl+R` (rename), `Ctrl+D` (delete) and
-  `Ctrl+G` (next session) as it does in the terminal.
+  and close with `Ctrl+C`. The list scrolls to keep the selected row in view, so a tall panel never
+  leaves the highlight off screen. The session list also answers `Ctrl+R` (rename), `Ctrl+D`
+  (delete) and `Ctrl+G` (next session) as it does in the terminal.
 
 ### Fixed
 
@@ -268,7 +269,8 @@
 
 - **桌面 GUI 的每个列表都认键盘**：覆盖层、模型/思考级别/附件下拉菜单、`@` 补全候选、会话右键菜单
   都能用 `Ctrl+K` / `Ctrl+J`（或方向键）上下移动、`Home` / `End` 跳首尾、`PageUp` / `PageDown` 翻页、
-  `Ctrl+C` 关闭；会话列表还原了终端里的 `Ctrl+R`（改名）、`Ctrl+D`（删除）、`Ctrl+G`（下一个会话）。
+  `Ctrl+C` 关闭；选中行超出视口时列表会跟着滚，高面板里高亮不会跑到屏幕外。会话列表还原了
+  终端里的 `Ctrl+R`（改名）、`Ctrl+D`（删除）、`Ctrl+G`（下一个会话）。
 
 ## 修复
 

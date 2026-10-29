@@ -894,6 +894,7 @@ impl GuiApp {
                 dropdown.scroll,
                 dropdown.selected,
             );
+            let handle = dropdown.handle.clone();
             // 锚点来自鼠标事件，是窗口的物理像素；尺寸按 px() 走的是「逻辑像素 ×ui_scale」。
             // 统一换到物理像素再算位置，否则菜单会被缩放顶到窗口外（曾整块看不见）。
             let scale = theme::ui_scale();
@@ -934,7 +935,10 @@ impl GuiApp {
                     cx.listener(|_, _, _, cx| cx.stop_propagation()),
                 );
             if scroll {
-                card = card.max_h(px(DROPDOWN_MAX_HEIGHT)).overflow_y_scroll();
+                card = card
+                    .max_h(px(DROPDOWN_MAX_HEIGHT))
+                    .overflow_y_scroll()
+                    .track_scroll(&handle);
             }
             for (index, item) in dropdown.items.iter().enumerate() {
                 let action = clone_action(&item.action);

@@ -34,6 +34,7 @@ impl GuiApp {
             anchor,
             width: 280.,
             scroll: true,
+            handle: ScrollHandle::new(),
             selected: 0,
         });
         cx.notify();
@@ -73,6 +74,7 @@ impl GuiApp {
             anchor,
             width: 180.,
             scroll: false,
+            handle: ScrollHandle::new(),
             selected: 0,
         });
         cx.notify();
@@ -96,6 +98,7 @@ impl GuiApp {
             anchor,
             width: 160.,
             scroll: false,
+            handle: ScrollHandle::new(),
             selected: 0,
         });
         cx.notify();

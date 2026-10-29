@@ -173,6 +173,8 @@ struct Dropdown {
     width: f32,
     /// 内容超高时滚动（模型列表很长）
     scroll: bool,
+    /// 菜单内容区的滚动句柄（键盘上下移动时跟着滚）
+    handle: ScrollHandle,
     /// 键盘高亮的行（打开时从第一行算起）
     selected: usize,
 }

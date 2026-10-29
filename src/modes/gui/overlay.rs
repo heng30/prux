@@ -159,6 +159,12 @@ pub enum InfoKind {
     Help,
 }
 
+/// 列表面板的行高（逻辑像素，行内容高度）。
+const ROW_HEIGHT: f32 = 30.0;
+
+/// 列表面板的行间距（[`rows_container`] 的 `gap`，补全面板也用同一个值）。
+pub(crate) const ROW_GAP: f32 = 2.0;
+
 /// 行尾说明文字的最大宽度（逻辑像素）：技能/扩展描述很长，超了就截断。
 const DETAIL_MAX_WIDTH: f32 = 260.0;
 
@@ -270,7 +276,7 @@ impl List {
         }
         let current = self.selected.min(len - 1) as i32 + delta;
         self.selected = current.clamp(0, len as i32 - 1) as usize;
-        self.scroll.scroll_to_item(self.selected);
+        reveal_row(&self.scroll, self.selected);
     }
 
     /// 直接跳到第 `index` 行（`tui.select.first/last`：home/end），并把它滚进视口。
@@ -281,7 +287,7 @@ impl List {
             return;
         }
         self.selected = index.min(len - 1);
-        self.scroll.scroll_to_item(self.selected);
+        reveal_row(&self.scroll, self.selected);
     }
 
     /// 当前选中的动作（没有条目时为 None）。
@@ -449,9 +455,31 @@ pub(crate) fn rows_container(
         .w_full()
         .min_h_0()
         .max_h(px(max_h))
-        .gap(px(2.))
+        .gap(px(ROW_GAP))
         .overflow_y_scroll()
         .track_scroll(scroll)
+}
+
+/// 把第 `index` 行滚进视口：键盘移动选中项后调用，保证选中行始终可见。
+///
+/// 行位置取容器的真实子元素边界（`bounds_for_item`），不按「行高 × 行号」推算：
+/// 列表面板是 flex 容器，行会被压缩到内容最小高度，推算出来的位置会比实际偏低，
+/// 往上游标时就滚过头、把选中行顶出视口。
+///
+/// 容器还没登记子元素边界（面板刚打开的那一帧）时什么也不做，下一帧自然会跟上。
+pub(crate) fn reveal_row(scroll: &ScrollHandle, index: usize) {
+    let (Some(row), area) = (scroll.bounds_for_item(index), scroll.bounds()) else {
+        return;
+    };
+    let viewport = f32::from(area.size.height);
+    let max = f32::from(scroll.max_offset().height);
+    let offset = f32::from(scroll.offset().y);
+    let top = f32::from(row.top() - area.top());
+    let height = f32::from(row.size.height);
+    let next = crate::utils::geometry::offset_revealing(offset, top, height, viewport, max);
+    if next != offset {
+        scroll.set_offset(gpui::point(gpui::px(0.), gpui::px(next)));
+    }
 }
 
 /// 列表卡片。
@@ -546,7 +574,7 @@ fn render_list(
                 detail: &entry.detail,
                 checked: entry.checked,
                 selected: index == list.selected,
-                height: 30.,
+                height: ROW_HEIGHT,
             },
             ("overlay-row", index),
             cx.listener(move |this, _, _, cx| this.pick_entry(index, cx)),

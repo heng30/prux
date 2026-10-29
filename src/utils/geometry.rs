@@ -35,6 +35,26 @@ pub fn clamp_within(anchor: f32, size: f32, viewport: f32, margin: f32) -> f32 {
     anchor.clamp(margin, max)
 }
 
+/// 让内容里 `[top, top + height)` 这一段完整落在视口里所需的滚动偏移。
+///
+/// `offset` 与返回值都取 `[-max, 0]`（负数为向下滚动），`viewport` 是可视高度，
+/// `max` 是最大可滚动距离。这一段已在视口内时原样返回，所以连按方向键不会来回拖。
+pub fn offset_revealing(offset: f32, top: f32, height: f32, viewport: f32, max: f32) -> f32 {
+    if viewport <= 0. || max <= 0. || height <= 0. {
+        return offset;
+    }
+
+    let mut next = offset;
+    if top + next < 0. {
+        // 在视口上方：滚到顶上对齐
+        next = -top;
+    } else if top + height + next > viewport {
+        // 在视口下方：滚到底上对齐
+        next = viewport - top - height;
+    }
+    next.clamp(-max, 0.)
+}
+
 /// 拖拽分隔条后的宽度：`press` 是按下时的宽度，`dx` 是鼠标位移（往变宽的方向为正），
 /// `scale` 是界面缩放系数，`limits` 是宽度上下限。
 ///
@@ -79,6 +99,26 @@ mod tests {
         // 越界偏移不会把滑块甩出轨道
         assert_eq!(thumb_top(-max * 2., max, travel), travel);
         assert_eq!(thumb_top(max, max, travel), 0.);
+    }
+
+    /// 选中行移出视口才滚，滚动后选中行正好贴在视口边上。
+    #[test]
+    fn offset_revealing_keeps_selection_in_view() {
+        // 20 行 × 32 步长，视口 320 → 可滚 320
+        let (step, viewport, max) = (32., 320., 20. * 32. - 320.);
+        let reveal = |offset: f32, index: usize| {
+            offset_revealing(offset, index as f32 * step, step, viewport, max)
+        };
+        // 视口内的行不动
+        assert_eq!(reveal(0., 3), 0.);
+        // 第 10 行在下方：滚到它贴视口底部
+        assert_eq!(reveal(0., 10), 320. - 352.);
+        // 贴着底部再往上走一行不需要动
+        assert_eq!(reveal(-32., 9), -32.);
+        // 回到第 2 行：滚到它贴视口顶部
+        assert_eq!(reveal(-320., 2), -64.);
+        // 未测量到视口高度时不乱滚
+        assert_eq!(offset_revealing(-64., 64., step, 0., max), -64.);
     }
 
     /// 浮层贴锚点，但不越过窗口边缘；尺寸超过窗口时退到边距。
