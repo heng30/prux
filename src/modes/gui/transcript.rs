@@ -717,20 +717,8 @@ fn image_refs(text: &str, cwd: &str) -> Vec<std::path::PathBuf> {
             let raw = raw.trim_matches(|c: char| c == '，' || c == ',');
             crate::utils::paths::resolve_path(raw, cwd)
         })
-        .filter(|path| path.is_file() && is_image_path(path))
+        .filter(|path| path.is_file() && crate::utils::mime::is_image_path(path))
         .collect()
-}
-
-/// 按扩展名判断是不是图片（与补全面板的图片过滤保持一致）。
-fn is_image_path(path: &std::path::Path) -> bool {
-    path.extension()
-        .map(|ext| ext.to_string_lossy().to_lowercase())
-        .is_some_and(|ext| {
-            matches!(
-                ext.as_str(),
-                "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "svg" | "tif" | "tiff"
-            )
-        })
 }
 
 /// 用户消息该显示哪些行：收起时只留前 `max` 行，展开时给全部行。
@@ -749,21 +737,23 @@ fn user_preview(text: &str, expanded: bool, max: usize) -> (Vec<&str>, usize) {
     (shown, hidden)
 }
 
-/// 单个块的渲染；`index` 是块下标（点击工具卡片切换展开时要回查）。
+/// 单个块的渲染；`index` 是块下标（点击工具卡片切换展开时要回查），
+/// `flags` 里的 `(expand_tools, show_thinking)` 对应全局 Ctrl-O / Ctrl-T 开关。
 pub fn render_block(
     block: &mut Block,
     theme: &Theme,
-    expand_tools: bool,
+    flags: (bool, bool),
     index: usize,
     cwd: &str,
     ctx: &mut FlowCtx<'_>,
     cx: &mut Context<GuiApp>,
 ) -> AnyElement {
+    let (expand_tools, show_thinking) = flags;
     match block {
         // 用户消息：右对齐气泡，与助手正文拉开层级
         Block::User(message) => user_block(message, theme, expand_tools, index, cwd, ctx.width, cx),
-        // 助手回复：不加卡片，直接正文；思考内容单独一段细边框提示
-        Block::Assistant(assistant) => assistant_block(assistant, theme, ctx),
+        // 助手回复：不加卡片，直接正文；思考内容单独一段细边框提示（Ctrl-T 收起）
+        Block::Assistant(assistant) => assistant_block(assistant, theme, show_thinking, ctx),
         // 工具调用：带描边的小卡片，状态用圆点表示
         Block::Tool(tool) => tool_block(tool, theme, expand_tools, index, cx),
         // 系统消息：灰底细边框 + 标签，和用户/助手区分开
@@ -847,10 +837,15 @@ fn user_block(
         .into_any_element()
 }
 
-/// 助手回复：正文 + 折叠的思考段。
-fn assistant_block(assistant: &mut Assistant, theme: &Theme, ctx: &mut FlowCtx<'_>) -> AnyElement {
+/// 助手回复：正文 + 折叠的思考段（`show_thinking` 为假时整段不渲染，同 TUI 的 Ctrl-T）。
+fn assistant_block(
+    assistant: &mut Assistant,
+    theme: &Theme,
+    show_thinking: bool,
+    ctx: &mut FlowCtx<'_>,
+) -> AnyElement {
     let mut column = div().w_full().flex().flex_col().gap(px(8.)).pt(px(2.));
-    if !assistant.thinking.trim().is_empty() {
+    if show_thinking && !assistant.thinking.trim().is_empty() {
         column = column.child(
             div()
                 .pl(px(10.))

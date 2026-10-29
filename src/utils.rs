@@ -11,6 +11,7 @@ pub mod env;
 pub mod file_lock;
 pub mod find;
 pub mod fuzzy;
+pub mod geometry;
 pub mod glyphs;
 pub mod http;
 pub mod ignore;

@@ -34,6 +34,7 @@ impl GuiApp {
             anchor,
             width: 280.,
             scroll: true,
+            selected: 0,
         });
         cx.notify();
     }
@@ -72,6 +73,7 @@ impl GuiApp {
             anchor,
             width: 180.,
             scroll: false,
+            selected: 0,
         });
         cx.notify();
     }
@@ -94,6 +96,7 @@ impl GuiApp {
             anchor,
             width: 160.,
             scroll: false,
+            selected: 0,
         });
         cx.notify();
     }
@@ -177,7 +180,12 @@ impl GuiApp {
             self.panel_resize = Some(drag);
             return;
         };
-        let width = resized_panel_width(drag.width, f32::from(position.x - anchor_x));
+        let width = geometry::resized_width(
+            drag.width,
+            -f32::from(position.x - anchor_x),
+            theme::ui_scale(),
+            (PANEL_MIN_WIDTH, PANEL_MAX_WIDTH),
+        );
         if width != self.panel_width {
             self.panel_width = width;
             cx.notify();
@@ -203,9 +211,9 @@ impl GuiApp {
             return;
         }
         // 滑块要跟着鼠标走：轨道上的位移按「内容高 / 轨道高」放大成偏移
-        let travel = thumb_travel(viewport, max);
+        let travel = geometry::thumb_travel(viewport, max, min_thumb());
         let dy = f32::from(position.y - anchor_y);
-        let target = drag_offset(f32::from(drag.offset), dy, max, travel);
+        let target = geometry::drag_offset(f32::from(drag.offset), dy, max, travel);
         self.scroll_of_mut(area)
             .set_offset(gpui::point(px(0.), gpui::px(target)));
         cx.notify();
@@ -231,7 +239,12 @@ impl GuiApp {
             self.resize_drag = Some(drag);
             return;
         };
-        let width = resized_width(drag.width, f32::from(position.x - anchor_x));
+        let width = geometry::resized_width(
+            drag.width,
+            f32::from(position.x - anchor_x),
+            theme::ui_scale(),
+            (SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH),
+        );
         if width != self.sidebar_width {
             self.sidebar_width = width;
             cx.notify();
@@ -269,6 +282,7 @@ impl GuiApp {
         self.session_menu = Some(SessionMenu {
             path: path.to_string(),
             position,
+            selected: 0,
         });
         cx.notify();
     }
@@ -302,7 +316,9 @@ impl GuiApp {
             .iter()
             .find(|row| row.path == path)
             .map(|row| row.title.clone())
-            .unwrap_or_else(|| basename(path));
+            .unwrap_or_else(|| {
+                crate::utils::paths::file_name_of(std::path::Path::new(path)).unwrap_or_default()
+            });
         self.session_menu = None;
         self.dialog = Some(SessionDialog::Delete {
             path: path.to_string(),

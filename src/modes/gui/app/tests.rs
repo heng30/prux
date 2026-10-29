@@ -47,25 +47,6 @@ fn cycle_index_wraps_both_ways() {
     assert_eq!(cycle_index(None, 3, -1), 0);
 }
 
-/// 菜单高度超窗口时也要收进来，别顶出底部。
-#[test]
-fn menu_top_stays_inside_the_window() {
-    assert_eq!(clamp_menu_top(100., 300., 1150.), 100.);
-    assert_eq!(clamp_menu_top(1000., 300., 1150.), 1150. - 300. - 12.);
-    assert_eq!(clamp_menu_top(0., 300., 200.), 12.);
-}
-
-/// 右侧按钮的菜单要往左让，不能顶出窗口；窄窗口下也不越过左边距。
-#[test]
-fn menu_left_stays_inside_the_window() {
-    // 按钮在右边：让到只剩右边距
-    assert_eq!(clamp_menu_left(1800., 280., 1940.), 1940. - 280. - 12.);
-    // 正常位置：贴着按钮
-    assert_eq!(clamp_menu_left(300., 280., 1940.), 300.);
-    // 窗口比菜单还窄：左边界兜底
-    assert_eq!(clamp_menu_left(10., 280., 200.), 12.);
-}
-
 /// 列定位的原点是文字盒自己的左上角，缩进行的 padding 不参与换算。
 #[test]
 fn text_local_is_relative_to_the_text_box() {
@@ -138,20 +119,6 @@ fn remember_cwd_dedupes_and_caps() {
     assert_eq!(list.iter().filter(|item| *item == "/work/5").count(), 1);
 }
 
-/// 右侧面板：左边框往左拖变宽，宽度夹在上下限。
-#[test]
-fn resized_panel_width_grows_when_dragging_left() {
-    assert_eq!(resized_panel_width(PANEL_DEFAULT_WIDTH, -40.), 360.);
-    assert_eq!(
-        resized_panel_width(PANEL_DEFAULT_WIDTH, 999.),
-        PANEL_MIN_WIDTH
-    );
-    assert_eq!(
-        resized_panel_width(PANEL_DEFAULT_WIDTH, -999.),
-        PANEL_MAX_WIDTH
-    );
-}
-
 /// toast 只留在最近 TOAST_MAX 条里，级别决定颜色（这里只测裁剪逻辑）。
 #[test]
 fn toast_queue_keeps_latest_only() {
@@ -172,58 +139,6 @@ fn dismissed_suggest_stays_closed_until_trigger_moves() {
     assert!(!suggest_allowed(Some(0), 0));
     assert!(suggest_allowed(None, 0));
     assert!(suggest_allowed(Some(0), 3));
-}
-
-/// 拖侧栏：按位移加宽/收窄，越界夹到上下限。
-#[test]
-fn resized_width_clamps_to_limits() {
-    assert_eq!(resized_width(SIDEBAR_DEFAULT_WIDTH, 40.), 292.);
-    assert_eq!(
-        resized_width(SIDEBAR_DEFAULT_WIDTH, -999.),
-        SIDEBAR_MIN_WIDTH
-    );
-    assert_eq!(
-        resized_width(SIDEBAR_DEFAULT_WIDTH, 999.),
-        SIDEBAR_MAX_WIDTH
-    );
-}
-
-/// 拖满整条轨道 = 滚到另一端，且滑块位移与内容偏移严格成比例。
-#[test]
-fn drag_offset_follows_the_thumb() {
-    let (viewport, max) = (1000., 9000.);
-    let travel = thumb_travel(viewport, max);
-    assert_eq!(thumb_height(viewport, max), 100.);
-
-    // 抓在顶部往下拖满轨道 → 滚到底
-    assert_eq!(drag_offset(0., travel, max, travel), -max);
-    // 拖一半 → 滚一半
-    assert_eq!(drag_offset(0., travel / 2., max, travel), -max / 2.);
-    // 往上拖回一半 → 偏移跟着回来
-    assert_eq!(drag_offset(-max, -travel / 2., max, travel), -max / 2.);
-}
-
-/// 内容越长滑块越短，但不会短过最小高度。
-#[test]
-fn thumb_height_shrinks_with_content() {
-    assert_eq!(thumb_height(1000., 9000.), 100.);
-    assert!(thumb_height(1000., 90_000.) < 100.);
-    assert_eq!(
-        thumb_height(1000., 90_000.),
-        f32::from(px(SCROLLBAR_MIN_THUMB))
-    );
-}
-
-/// 偏移区间线性映射到轨道区间。
-#[test]
-fn thumb_top_maps_offset_range() {
-    let (max, travel) = (9000., 900.);
-    assert_eq!(thumb_top(0., max, travel), 0.);
-    assert_eq!(thumb_top(-max, max, travel), travel);
-    assert_eq!(thumb_top(-max / 2., max, travel), travel / 2.);
-    // 越界偏移不会把滑块甩出轨道
-    assert_eq!(thumb_top(-max * 2., max, travel), travel);
-    assert_eq!(thumb_top(max, max, travel), 0.);
 }
 
 /// 重命名输入：首尾空白去掉，全空白等于取消。

@@ -96,9 +96,27 @@
   to every configured model only when the scope is empty, keeping the scope's order and skipping
   entries the catalog no longer has); a scoped entry that carries a thinking level sets that level
   before switching. `Shift+Tab` cycles the current model's thinking levels. Both follow the TUI
-  bindings, and `Ctrl+K` is still the command palette.
+  bindings.
+
+- **The desktop GUI now shares the TUI's keymap**: the command palette moved to `Ctrl+M`, so `Ctrl+K`
+  is free to delete to the end of the line the way it does in the terminal. Every key the two
+  interfaces have in common now means the same thing: `Ctrl+O` expands tool output, `Ctrl+L` opens
+  the model picker, `Ctrl+T` shows or hides thinking blocks, `Ctrl+Shift+T` toggles light/dark, and
+  desktop-only panels moved to `Shift` combinations (`Ctrl+Shift+O` sessions, `Ctrl+Shift+G`
+  appearance). `Ctrl+X` copies the last reply, `Alt+C` copies the input, `Ctrl+Home` / `Ctrl+End`
+  jump the transcript to either end and `Shift+PageUp` / `Shift+PageDown` page it.
+
+- **Every list in the desktop GUI answers to the keyboard**: overlays, the model / thinking /
+  attachment dropdowns, `@` completions and the session right-click menu all move with
+  `Ctrl+K` / `Ctrl+J` (or the arrows), jump with `Home` / `End`, page with `PageUp` / `PageDown`
+  and close with `Ctrl+C`. The session list also answers `Ctrl+R` (rename), `Ctrl+D` (delete) and
+  `Ctrl+G` (next session) as it does in the terminal.
 
 ### Fixed
+
+- **Dragging a sidebar edge no longer overshoots**: sidebar and right-panel widths were stored in
+  scaled design pixels but mouse movement arrives in physical pixels, so at any zoom other than
+  100% the panel grew faster than the pointer. The delta is now converted before it is applied.
 
 - **Left/Right now reach the panel**: the TUI key translation never mapped `←`/`→`, so every
   overlay saw them as "some other key" — the `ask-user-question` tabs only moved on `Tab`, and
@@ -240,9 +258,22 @@
 - **桌面 GUI 也能只用键盘切模型与思考级别**：`Ctrl+P` / `Ctrl+Shift+P` 在模型 scope 里前后循环
   （scope 来自 `--models` / `settings.enabledModels`，为空时才退回全部已配置模型；顺序跟 scope、
   跳过目录里已经没有的条目，条目带 thinking 时先设思考级别再换模型）；`Shift+Tab` 循环当前模型
-  支持的思考级别。两个键都与 TUI 的默认绑定一致，命令面板仍是 `Ctrl+K`。
+  支持的思考级别。两个键都与 TUI 的默认绑定一致。
+
+- **桌面 GUI 的键位与 TUI 统一了**：命令面板改到 `Ctrl+M`，`Ctrl+K` 因此回到「删到行尾」。两边共有的
+  键含义一律对齐：`Ctrl+O` 展开工具输出、`Ctrl+L` 打开模型选择、`Ctrl+T` 显隐思考块、`Ctrl+Shift+T`
+  切明暗；桌面独有面板挪到 `Shift` 组合（`Ctrl+Shift+O` 会话、`Ctrl+Shift+G` 外观）。新增 `Ctrl+X`
+  复制最后一条回复、`Alt+C` 复制输入框、`Ctrl+Home` / `Ctrl+End` 跳到对话流首尾、
+  `Shift+PageUp` / `Shift+PageDown` 翻页。
+
+- **桌面 GUI 的每个列表都认键盘**：覆盖层、模型/思考级别/附件下拉菜单、`@` 补全候选、会话右键菜单
+  都能用 `Ctrl+K` / `Ctrl+J`（或方向键）上下移动、`Home` / `End` 跳首尾、`PageUp` / `PageDown` 翻页、
+  `Ctrl+C` 关闭；会话列表还原了终端里的 `Ctrl+R`（改名）、`Ctrl+D`（删除）、`Ctrl+G`（下一个会话）。
 
 ## 修复
+
+- **拖侧栏边框不再跑偏**：侧栏与右侧面板的宽度按「设计像素 × 缩放」存，鼠标位移却是物理像素，
+  缩放不是 100% 时面板比指针长得快。现在位移先折回宽度单位再相加。
 
 - **`←` / `→` 现在能送到面板**：TUI 的按键翻译从来没映射左右方向键，所有覆盖层都把这两个键当成
   「其它键」——`ask-user-question` 的标签页只有 `Tab` 能翻，扩展也无法绑定横向导航。现在两个方向键

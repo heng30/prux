@@ -49,7 +49,7 @@ impl GuiApp {
                     })),
             );
         }
-        // 候选区与 Ctrl-K 面板同一套行渲染 + 可滚动容器：条目多时滚轮能翻到
+        // 候选区与 Ctrl-M 面板同一套行渲染 + 可滚动容器：条目多时滚轮能翻到
         let mut rows = overlay::rows_container(
             "suggest-rows",
             &self.suggest_scroll,
@@ -111,11 +111,11 @@ impl GuiApp {
         if max <= 0. || viewport <= 0. {
             return div().into_any_element();
         }
-        let height = thumb_height(viewport, max);
-        let top = thumb_top(
+        let height = geometry::thumb_height(viewport, max, min_thumb());
+        let top = geometry::thumb_top(
             f32::from(scroll.offset().y),
             max,
-            thumb_travel(viewport, max),
+            geometry::thumb_travel(viewport, max, min_thumb()),
         );
         div()
             .id(("scrollbar", area.index()))
@@ -232,7 +232,8 @@ impl GuiApp {
             .as_ref()
             .map(|s| s.cwd.clone())
             .unwrap_or_default();
-        let project = basename(&cwd);
+        let project = crate::utils::paths::file_name_of(std::path::Path::new(&cwd))
+            .unwrap_or_else(|_| cwd.clone());
         let session_title = self
             .snapshot
             .as_ref()
@@ -297,7 +298,7 @@ impl GuiApp {
                     this.open_command_palette(cx);
                     cx.notify();
                 }))
-                .child(SharedString::from("Ctrl-K commands")),
+                .child(SharedString::from("Ctrl-M commands")),
         );
 
         let chrome = div()
@@ -352,6 +353,7 @@ impl GuiApp {
             px(CONTENT_MAX_WIDTH)
         };
         let expand_tools = self.expand_tools;
+        let show_thinking = self.show_thinking;
         // 行登记每帧重建：行序号/边界/文本必须与本帧渲染结果一致
         self.line_bounds.borrow_mut().clear();
         self.line_text_bounds.borrow_mut().clear();
@@ -374,7 +376,7 @@ impl GuiApp {
             flow = flow.child(transcript::render_block(
                 block,
                 &theme,
-                expand_tools,
+                (expand_tools, show_thinking),
                 index,
                 &cwd,
                 &mut flow_ctx,
@@ -629,7 +631,7 @@ impl GuiApp {
                                         .text_size(px(12.5))
                                         .text_color(theme.text_tertiary)
                                         .child(SharedString::from(
-                                            "Enter to send · Ctrl-K for commands · Ctrl-O to switch sessions",
+                                            "Enter to send · Ctrl-M for commands · Ctrl-Shift-O to switch sessions",
                                         )),
                                 ),
                         )
@@ -640,7 +642,7 @@ impl GuiApp {
                                 .text_size(px(10.5))
                                 .text_color(theme.text_ghost)
                                 .child(SharedString::from(
-                                    "Shift+Enter new line · Ctrl-G appearance · Ctrl-Q quit",
+                                    "Shift+Enter new line · Ctrl-L model · Ctrl-Q quit",
                                 )),
                         ),
                 )
@@ -675,7 +677,7 @@ impl GuiApp {
                             .text_color(theme.text_ghost)
                             .child(SharedString::from(footer_status))
                             .child(SharedString::from(
-                                "Enter to send · Shift+Enter for a new line · Ctrl-K commands · Ctrl-Q quit",
+                                "Enter to send · Shift+Enter for a new line · Ctrl-M commands · Ctrl-Q quit",
                             )),
                     ),
                 )
@@ -886,24 +888,31 @@ impl GuiApp {
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         if let Some(dropdown) = &self.dropdown {
-            let (anchor, width, scroll) = (dropdown.anchor, dropdown.width, dropdown.scroll);
+            let (anchor, width, scroll, selected) = (
+                dropdown.anchor,
+                dropdown.width,
+                dropdown.scroll,
+                dropdown.selected,
+            );
             // 锚点来自鼠标事件，是窗口的物理像素；尺寸按 px() 走的是「逻辑像素 ×ui_scale」。
             // 统一换到物理像素再算位置，否则菜单会被缩放顶到窗口外（曾整块看不见）。
             let scale = theme::ui_scale();
             let width_px = width * scale;
-            let left = clamp_menu_left(
+            let left = geometry::clamp_within(
                 f32::from(anchor.x),
                 width_px,
                 f32::from(window.viewport_size().width),
+                MENU_EDGE_MARGIN * scale,
             );
             // 菜单比窗口还高时也别顶出去：按行数估个高度，底部同样让出边距
             let estimate = ((dropdown.items.len() as f32 * DROPDOWN_ROW_HEIGHT + 8.)
                 .min(DROPDOWN_MAX_HEIGHT))
                 * scale;
-            let top = clamp_menu_top(
+            let top = geometry::clamp_within(
                 f32::from(anchor.y) + 4. * scale,
                 estimate,
                 f32::from(window.viewport_size().height),
+                MENU_EDGE_MARGIN * scale,
             );
             let mut card = div()
                 .id("dropdown-menu")
@@ -948,6 +957,10 @@ impl GuiApp {
                             .truncate()
                             .child(SharedString::from(item.label.clone())),
                     );
+                // 键盘高亮的行（Ctrl-J/K 与方向键移动）
+                if index == selected {
+                    row = row.bg(theme.overlay).text_color(theme.text);
+                }
                 if !item.detail.is_empty() {
                     row = row.child(
                         div()
@@ -1021,6 +1034,7 @@ impl GuiApp {
             let anchor = menu.position;
             let path = menu.path.clone();
             let rename_path = path.clone();
+            let selected = menu.selected;
             return root.child(
                 div()
                     .absolute()
@@ -1062,6 +1076,10 @@ impl GuiApp {
                                     .text_color(theme.text_secondary)
                                     .cursor_pointer()
                                     .hover(|style| style.bg(theme.overlay).text_color(theme.text))
+                                    // 键盘高亮（上下 / Ctrl-J、Ctrl-K）
+                                    .when(selected == 0, |row| {
+                                        row.bg(theme.overlay).text_color(theme.text)
+                                    })
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.start_rename(&rename_path, cx);
                                     }))
@@ -1079,6 +1097,7 @@ impl GuiApp {
                                     .text_color(theme.text_secondary)
                                     .cursor_pointer()
                                     .hover(|style| style.bg(theme.overlay).text_color(theme.danger))
+                                    .when(selected == 1, |row| row.bg(theme.overlay))
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.ask_delete(&path, cx);
                                     }))

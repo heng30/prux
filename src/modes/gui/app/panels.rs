@@ -372,7 +372,7 @@ impl GuiApp {
     /// 用当前草稿重算技能行并重新打开面板。
     pub(super) fn rebuild_skills_panel(&mut self, cx: &mut Context<Self>) {
         let rules = self.skills_draft.clone().unwrap_or_default();
-        let (all, enabled) = crate::modes::gui::skills_snapshot(&rules);
+        let (all, enabled) = skills_snapshot(&rules);
         let mut entries: Vec<Entry> = all
             .into_iter()
             .map(|(name, description, source, model_off, _path)| {
@@ -441,10 +441,9 @@ impl GuiApp {
         let lines = match list.detail_source {
             DetailSource::None => return,
             DetailSource::Extension => crate::core::extensions::extension_detail_lines(&name),
-            DetailSource::Skill => crate::modes::gui::skill_detail_lines(
-                self.skills_draft.as_deref().unwrap_or_default(),
-                &name,
-            ),
+            DetailSource::Skill => {
+                skill_detail_lines(self.skills_draft.as_deref().unwrap_or_default(), &name)
+            }
         };
         if lines.is_empty() {
             return;
@@ -753,12 +752,16 @@ impl GuiApp {
                     "Arrows move · Ctrl-B / Ctrl-F by char · Alt-←/→ or Alt-B/F by word".to_string(),
                     "Home / Ctrl-A line start · End / Ctrl-E line end".to_string(),
                     "Ctrl-W / Alt-Backspace delete word back · Alt-D delete word forward".to_string(),
-                    "Ctrl-U delete to line start · Ctrl-Shift-K to line end · Ctrl-- undo".to_string(),
-                    "Ctrl-Shift-C copy · Ctrl-V paste".to_string(),
-                    "Ctrl-K commands · Ctrl-P / Ctrl-/ model · Shift-Tab / Ctrl-T thinking level".to_string(),
-                    "Ctrl-O sessions · Ctrl-Shift-B sidebar · Ctrl-Shift-E right panel".to_string(),
+                    "Ctrl-U delete to line start · Ctrl-K delete to line end · Ctrl-- undo".to_string(),
+                    "Ctrl-Shift-C copy selection · Alt-C copy input · Ctrl-V paste".to_string(),
+                    "Ctrl-M commands · Ctrl-L model · Ctrl-P / Ctrl-Shift-P cycle model".to_string(),
+                    "Ctrl-T show/hide thinking · Shift-Tab cycle thinking level".to_string(),
+                    "Ctrl-O expand tools · Ctrl-Shift-T toggle light/dark · Ctrl-Shift-G appearance".to_string(),
+                    "Ctrl-Shift-O sessions · Ctrl-Shift-B sidebar · Ctrl-Shift-E right panel".to_string(),
                     "Ctrl-Shift-U usage · Ctrl-I skills · Ctrl-, settings · Ctrl-Shift-A select all".to_string(),
-                    "Ctrl-N new session · Ctrl-Z undo · Ctrl-Y redo".to_string(),
+                    "Ctrl-N new session · Ctrl-Z undo · Ctrl-Y redo · Ctrl-X copy last reply".to_string(),
+                    "Lists: ↑/↓ or Ctrl-K/Ctrl-J move · Home/End first/last · PgUp/PgDn · Ctrl-C close".to_string(),
+                    "Session list: Ctrl-R rename · Ctrl-D delete · Ctrl-G next session".to_string(),
                     "Ctrl+= zoom in · Ctrl-Shift+- zoom out · Ctrl+0 reset to 100%".to_string(),
                     "Ctrl-Q quit".to_string(),
                 ],
@@ -766,4 +769,71 @@ impl GuiApp {
         };
         self.overlay = Some(Overlay::Info(info));
     }
+}
+
+/// 扫描全部技能并算出给定过滤规则下的启用集合（`/skills` 面板用）。
+///
+/// 返回全部技能行与启用集合；两条路径都用
+/// `skills::load_skills`，所以「勾选框说开着」和「实际加载到」必然一致。
+/// 技能行：`(名称, 描述, 来源, 是否禁模型调用, SKILL.md 路径)`。
+type SkillRow = (String, String, String, bool, String);
+
+/// `/skills` 面板需要的数据：全部技能行 + 当前规则下启用的技能名。
+type SkillsSnapshot = (Vec<SkillRow>, std::collections::HashSet<String>);
+
+/// 扫描技能并返回快照（`rules` 是未落盘的草稿规则，启用态按它实算）。
+fn skills_snapshot(rules: &[String]) -> SkillsSnapshot {
+    let home_dir = crate::utils::paths::home_dir();
+    let cwd = crate::utils::paths::cwd().to_string_lossy().to_string();
+    let agent_dir = settings_manager::agent_dir();
+    let bundled = crate::extensions::skills::bundled_skill_names();
+
+    let load = |filter: &[String]| {
+        crate::core::skills::load_skills(
+            &cwd,
+            &agent_dir,
+            &home_dir,
+            &[],
+            &bundled,
+            true,
+            true,
+            filter,
+        )
+    };
+
+    let all = load(&[]);
+    let enabled: std::collections::HashSet<String> =
+        load(rules).into_iter().map(|skill| skill.name).collect();
+    let rows = all
+        .into_iter()
+        .map(|skill| {
+            (
+                skill.name,
+                skill.description,
+                skill.source,
+                skill.disable_model_invocation,
+                skill.path.to_string_lossy().to_string(),
+            )
+        })
+        .collect();
+    (rows, enabled)
+}
+
+/// `/skills` 详情页（Tab）的行：启用态 + SKILL.md 头信息 + 来源 + 路径。
+///
+/// 技能不存在时返回空（调用方据此不打开详情页）。
+fn skill_detail_lines(rules: &[String], name: &str) -> Vec<String> {
+    let (all, enabled) = skills_snapshot(rules);
+    let Some(row) = all.iter().find(|row| row.0 == name) else {
+        return Vec::new();
+    };
+    vec![
+        format!("  name: {name}"),
+        format!("  enabled: {}", enabled.contains(name)),
+        format!("  disable-model-invocation: {}", row.3),
+        format!("  source: {}", row.2),
+        format!("  path: {}", row.4),
+        String::new(),
+        format!("  description: {}", row.1),
+    ]
 }

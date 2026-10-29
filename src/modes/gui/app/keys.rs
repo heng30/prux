@@ -31,22 +31,41 @@ impl GuiApp {
         }
 
         if self.dialog.is_some() {
-            if keystroke.key == "enter" {
+            // Ctrl-C 等同 Esc 取消（同 TUI 的 tui.select.cancel）
+            let key = if primary && keystroke.key == "c" {
+                "escape"
+            } else {
+                keystroke.key.as_str()
+            };
+            if key == "enter" {
                 self.confirm_dialog(cx);
             } else {
-                self.handle_dialog_key(&keystroke.key, shift);
+                self.handle_dialog_key(key, shift);
             }
             cx.notify();
             return;
         }
 
         if self.session_menu.is_some() {
-            // 菜单只认 Esc，其余键先收菜单再照常处理
+            if self.dispatch_session_menu_key(&keystroke, cx) {
+                cx.notify();
+                return;
+            }
+            // 其余键：先收菜单再照常处理
             self.session_menu = None;
             if keystroke.key == "escape" {
                 cx.notify();
                 return;
             }
+        }
+
+        if self.dropdown.is_some() {
+            if self.dispatch_dropdown_key(&keystroke, cx) {
+                cx.notify();
+                return;
+            }
+            // 同上：其它键先收菜单
+            self.dropdown = None;
         }
 
         // Shift+Tab：循环 thinking 级别（同 TUI 的 `app.thinking.cycle`）；
@@ -57,7 +76,7 @@ impl GuiApp {
             return;
         }
 
-        if self.suggest.is_some() && self.dispatch_suggest_key(&keystroke, shift, cx) {
+        if self.suggest.is_some() && self.dispatch_suggest_key(&keystroke, primary, shift, cx) {
             cx.notify();
             return;
         }
@@ -69,7 +88,15 @@ impl GuiApp {
         }
 
         if self.overlay.is_some() {
-            self.handle_overlay_key(&keystroke.key, shift, cx);
+            if primary
+                && !shift
+                && matches!(keystroke.key.as_str(), "r" | "d" | "g")
+                && self.dispatch_session_list_key(&keystroke.key, cx)
+            {
+                cx.notify();
+                return;
+            }
+            self.handle_overlay_key(&keystroke, shift, cx);
             cx.notify();
             return;
         }
@@ -90,10 +117,15 @@ impl GuiApp {
     pub(super) fn dispatch_suggest_key(
         &mut self,
         keystroke: &gpui::Keystroke,
+        primary: bool,
         shift: bool,
         cx: &mut Context<Self>,
     ) -> bool {
         if let Some(suggest) = self.suggest.clone() {
+            // Ctrl-J / Ctrl-K 也是列表上下（`tui.select.up/down` 的别名）；
+            // 无修饰的 j / k 是普通字符，必须留给面板输入框。
+            let ctrl_j = primary && !shift && keystroke.key == "j";
+            let ctrl_k = primary && !shift && keystroke.key == "k";
             match keystroke.key.as_str() {
                 "escape" => {
                     self.suggest_dismissed = Some(suggest.start);
@@ -107,6 +139,16 @@ impl GuiApp {
                     return true;
                 }
                 "down" => {
+                    self.move_suggestion(1);
+                    cx.notify();
+                    return true;
+                }
+                _ if ctrl_k => {
+                    self.move_suggestion(-1);
+                    cx.notify();
+                    return true;
+                }
+                _ if ctrl_j => {
                     self.move_suggestion(1);
                     cx.notify();
                     return true;
@@ -198,7 +240,7 @@ impl GuiApp {
             cx.notify();
             return true;
         }
-        if primary && shift && key == "k" {
+        if primary && !shift && key == "k" {
             self.editor.delete_to_line_end();
             cx.notify();
             return true;
@@ -246,6 +288,36 @@ impl GuiApp {
             cx.notify();
             return true;
         }
+        if alt && key == "c" {
+            // TUI 的 app.editor.copy：复制输入框全文
+            let text = self.editor.text();
+            if !text.is_empty() {
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                self.toast("Copied input", ToastKind::Info, cx);
+            }
+            return true;
+        }
+        if primary && !shift && key == "x" {
+            // TUI 的 app.message.copy：复制最后一条助手回复
+            self.copy_last_reply(cx);
+            return true;
+        }
+        if primary && key == "home" {
+            self.scroll.set_offset(gpui::point(px(0.), px(0.)));
+            self.pinned_bottom.set(None);
+            cx.notify();
+            return true;
+        }
+        if primary && key == "end" {
+            self.scroll_to_bottom();
+            cx.notify();
+            return true;
+        }
+        if shift && (key == "pageup" || key == "pagedown") {
+            self.page_transcript(if key == "pageup" { -1. } else { 1. });
+            cx.notify();
+            return true;
+        }
         if primary && !shift && key == "d" && self.editor.is_empty() {
             cx.quit();
             return true;
@@ -254,6 +326,10 @@ impl GuiApp {
     }
 
     /// Ctrl 组合键：打开面板 / 切换窗口部件。`true` 表示已消费。
+    ///
+    /// TUI 已有含义的键一律跟随 TUI（`app.model.select` = Ctrl-L、`app.tools.expand` = Ctrl-O、
+    /// `app.thinking.toggle` = Ctrl-T、`app.theme.cycle` = Ctrl-Shift-T）；GUI 独有的面板挤在
+    /// TUI 没绑定的键上，Shift 组合是它们的后缀。
     pub(super) fn dispatch_panel_shortcut(
         &mut self,
         keystroke: &gpui::Keystroke,
@@ -261,7 +337,8 @@ impl GuiApp {
         cx: &mut Context<Self>,
     ) -> bool {
         match keystroke.key.as_str() {
-            "k" => {
+            // GUI 独有的命令面板：Ctrl-K 已经归 TUI 的 deleteToLineEnd
+            "m" => {
                 self.open_command_palette(cx);
                 return true;
             }
@@ -270,19 +347,40 @@ impl GuiApp {
                 self.cycle_model(if shift { -1 } else { 1 }, cx);
                 return true;
             }
+            // TUI 的 app.model.select
+            "l" => {
+                self.open_model_picker(cx);
+                return true;
+            }
+            // GUI 旧键位，TUI 未绑定，留作别名
             "/" => {
                 self.open_model_picker(cx);
                 return true;
             }
-            "t" => {
-                self.open_thinking_picker(cx);
+            // TUI 的 app.tools.expand
+            "o" if !shift => {
+                self.expand_tools = !self.expand_tools;
+                cx.notify();
                 return true;
             }
-            "o" => {
+            "o" if shift => {
                 self.open_session_picker(cx);
                 return true;
             }
-            "g" => {
+            // TUI 的 app.thinking.toggle
+            "t" if !shift => {
+                self.show_thinking = !self.show_thinking;
+                cx.notify();
+                return true;
+            }
+            // TUI 的 app.theme.cycle：GUI 只有明/暗两套，切一次就是换主题
+            "t" if shift => {
+                let is_dark = !self.theme.is_dark;
+                self.theme = Theme::new(is_dark);
+                cx.notify();
+                return true;
+            }
+            "g" if shift => {
                 self.open_appearance_picker(cx);
                 return true;
             }
@@ -305,11 +403,6 @@ impl GuiApp {
             }
             "e" if shift => {
                 self.toggle_panel(None, cx);
-                cx.notify();
-                return true;
-            }
-            "l" => {
-                self.expand_tools = !self.expand_tools;
                 cx.notify();
                 return true;
             }
@@ -471,9 +564,18 @@ impl GuiApp {
             _ => {}
         }
     }
-    /// 覆盖层按键。
-    pub(super) fn handle_overlay_key(&mut self, key: &str, _shift: bool, cx: &mut Context<Self>) {
-        if key == "escape" {
+    /// 覆盖层按键。列表类面板统一支持 `tui.select.*`：
+    /// 上下（含 Ctrl-J / Ctrl-K）、首页/末页、翻页、Ctrl-C 取消。
+    pub(super) fn handle_overlay_key(
+        &mut self,
+        keystroke: &gpui::Keystroke,
+        shift: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let key = keystroke.key.as_str();
+        let primary = keystroke.modifiers.control || keystroke.modifiers.platform;
+        // Ctrl+C 是 tui.select.cancel；Ctrl-J / Ctrl-K 是列表上的上下移动
+        if (primary && !shift && key == "c") || key == "escape" {
             // 详情页先退回列表（草稿还在），再按一次才关面板丢草稿
             if let Some(Overlay::List(list)) = self.overlay.as_mut()
                 && list.detail.take().is_some()
@@ -486,6 +588,8 @@ impl GuiApp {
             self.extensions_draft = None;
             return;
         }
+        let up = key == "up" || (primary && !shift && key == "k");
+        let down = key == "down" || (primary && !shift && key == "j");
         // 详情页只吃 Tab（回列表）与滚动键
         if let Some(Overlay::List(list)) = self.overlay.as_mut()
             && list.detail.is_some()
@@ -494,10 +598,12 @@ impl GuiApp {
                 list.detail = None;
             } else if let Some(detail) = list.detail.as_mut() {
                 match key {
-                    "up" => detail.scroll_by(-1, 18),
-                    "down" => detail.scroll_by(1, 18),
                     "pageup" => detail.scroll_by(-12, 18),
                     "pagedown" => detail.scroll_by(12, 18),
+                    "home" => detail.scroll_by(-(detail.lines.len() as i32), 18),
+                    "end" => detail.scroll_by(detail.lines.len() as i32, 18),
+                    _ if up => detail.scroll_by(-1, 18),
+                    _ if down => detail.scroll_by(1, 18),
                     _ => {}
                 }
             }
@@ -508,35 +614,159 @@ impl GuiApp {
             return;
         };
         match overlay {
-            Overlay::List(list) => match key {
-                "enter" => {
-                    let action = list.take_action().map(clone_action);
-                    if let Some(action) = action {
-                        // 同上：勾选类动作要保留面板
-                        if !keeps_overlay(&action) {
-                            self.overlay = None;
+            Overlay::List(list) => {
+                let len = list.filtered().len();
+                match key {
+                    "enter" => {
+                        let action = list.take_action().map(clone_action);
+                        if let Some(action) = action {
+                            // 同上：勾选类动作要保留面板
+                            if !keeps_overlay(&action) {
+                                self.overlay = None;
+                            }
+                            self.run_action(action, cx);
                         }
-                        self.run_action(action, cx);
                     }
+                    "tab" => self.open_list_detail(),
+                    "pageup" => list.move_selection(-12),
+                    "pagedown" => list.move_selection(12),
+                    "home" => list.select_index(0),
+                    "end" => list.select_index(len.saturating_sub(1)),
+                    "backspace" => {
+                        list.query.backspace();
+                        list.selected = 0;
+                    }
+                    _ if up => list.move_selection(-1),
+                    _ if down => list.move_selection(1),
+                    // 可打印字符由 IME 句柄写进过滤框（见 `ime_target`），
+                    // 这里再插一次就会「敲一个 a 出现 aa」。
+                    _ => {}
                 }
-                "tab" => self.open_list_detail(),
-                "up" => list.move_selection(-1),
-                "down" => list.move_selection(1),
-                "backspace" => {
-                    list.query.backspace();
-                    list.selected = 0;
-                }
-                // 可打印字符由 IME 句柄写进过滤框（见 `ime_target`），
-                // 这里再插一次就会「敲一个 a 出现 aa」。
-                _ => {}
-            },
+            }
             Overlay::Info(info) => match key {
-                "up" => info.scroll_by(-1, 18),
-                "down" => info.scroll_by(1, 18),
                 "pageup" => info.scroll_by(-12, 18),
                 "pagedown" => info.scroll_by(12, 18),
+                "home" => info.scroll_by(-(info.lines.len() as i32), 18),
+                "end" => info.scroll_by(info.lines.len() as i32, 18),
+                _ if up => info.scroll_by(-1, 18),
+                _ if down => info.scroll_by(1, 18),
                 _ => {}
             },
         }
+    }
+
+    /// 会话列表面板里的 TUI 专用键（`app.session.rename` / `delete` / `next`）：
+    /// 只有选中项是会话时才吃键，`true` 表示已消费。
+    pub(super) fn dispatch_session_list_key(&mut self, key: &str, cx: &mut Context<Self>) -> bool {
+        let path = match self.overlay.as_ref() {
+            Some(Overlay::List(list)) => match list.take_action() {
+                Some(Action::LoadSession(path)) => path.clone(),
+                _ => return false,
+            },
+            _ => return false,
+        };
+        match key {
+            "r" => {
+                self.overlay = None;
+                self.start_rename(&path, cx);
+            }
+            "d" => {
+                self.overlay = None;
+                self.ask_delete(&path, cx);
+            }
+            // app.session.next：按列表顺序跳到当前会话的下一个
+            _ => {
+                if self.sessions.is_empty() {
+                    return true;
+                }
+                let current = self.sessions.iter().position(|row| row.path == path);
+                let next = self.sessions[cycle_index(current, self.sessions.len(), 1)]
+                    .path
+                    .clone();
+                self.overlay = None;
+                _ = self.cmd_tx.send(AgentCommand::ResumeSession { path: next });
+            }
+        }
+        true
+    }
+
+    /// 下拉菜单按键：`true` 表示已消费（未消费时调用方会收起菜单）。
+    pub(super) fn dispatch_dropdown_key(
+        &mut self,
+        keystroke: &gpui::Keystroke,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        // 选完后执行的动作（先取出来，避免下拉菜单占着 &mut self）
+        let mut run: Option<Action> = None;
+        let key = keystroke.key.as_str();
+        let primary = keystroke.modifiers.control || keystroke.modifiers.platform;
+        let Some(dropdown) = self.dropdown.as_mut() else {
+            return false;
+        };
+        let len = dropdown.items.len();
+        match key {
+            "escape" => {}
+            "enter" => {
+                if let Some(item) = dropdown.items.get(dropdown.selected) {
+                    run = Some(clone_action(&item.action));
+                }
+            }
+            "pageup" => dropdown.selected = dropdown.selected.saturating_sub(12),
+            "pagedown" => {
+                if len > 0 {
+                    dropdown.selected = (dropdown.selected + 12).min(len - 1);
+                }
+            }
+            "home" => dropdown.selected = 0,
+            "end" => dropdown.selected = len.saturating_sub(1),
+            "up" => dropdown.selected = dropdown.selected.saturating_sub(1),
+            "down" if len > 0 => dropdown.selected = (dropdown.selected + 1).min(len - 1),
+            _ if primary && !keystroke.modifiers.shift && key == "k" => {
+                dropdown.selected = dropdown.selected.saturating_sub(1);
+            }
+            _ if primary && !keystroke.modifiers.shift && key == "j" && len > 0 => {
+                dropdown.selected = (dropdown.selected + 1).min(len - 1);
+            }
+            _ => return false,
+        }
+        if run.is_some() || key == "escape" {
+            self.dropdown = None;
+        }
+        if let Some(action) = run {
+            self.run_action(action, cx);
+        }
+        true
+    }
+
+    /// 会话行右键菜单按键：`true` 表示已消费（未消费时调用方会收起菜单）。
+    pub(super) fn dispatch_session_menu_key(
+        &mut self,
+        keystroke: &gpui::Keystroke,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let key = keystroke.key.as_str();
+        let primary = keystroke.modifiers.control || keystroke.modifiers.platform;
+        let Some(menu) = self.session_menu.as_mut() else {
+            return false;
+        };
+        let path = menu.path.clone();
+        match key {
+            "escape" => {
+                self.close_session_menu(cx);
+            }
+            "enter" => {
+                if menu.selected == 0 {
+                    self.start_rename(&path, cx);
+                } else {
+                    self.ask_delete(&path, cx);
+                }
+            }
+            "up" | "home" => menu.selected = 0,
+            "down" | "end" => menu.selected = 1,
+            _ if primary && !keystroke.modifiers.shift && key == "k" => menu.selected = 0,
+            _ if primary && !keystroke.modifiers.shift && key == "j" => menu.selected = 1,
+            _ => return false,
+        }
+        true
     }
 }

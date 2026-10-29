@@ -30,7 +30,7 @@ pub enum Action {
     Scale(f32),
     /// 退出
     Quit,
-    /// 执行一条配置类斜杠命令（只从 Ctrl-K 面板进）
+    /// 执行一条配置类斜杠命令（只从 Ctrl-M 面板进）
     ConfigCommand(String),
     /// 把一段文本写回输入框（历史面板）
     InsertText(String),
@@ -273,6 +273,17 @@ impl List {
         self.scroll.scroll_to_item(self.selected);
     }
 
+    /// 直接跳到第 `index` 行（`tui.select.first/last`：home/end），并把它滚进视口。
+    pub fn select_index(&mut self, index: usize) {
+        let len = self.filtered().len();
+        if len == 0 {
+            self.selected = 0;
+            return;
+        }
+        self.selected = index.min(len - 1);
+        self.scroll.scroll_to_item(self.selected);
+    }
+
     /// 当前选中的动作（没有条目时为 None）。
     pub fn take_action(&self) -> Option<&Action> {
         let filtered = self.filtered();
@@ -511,7 +522,7 @@ fn render_list(
             ),
     );
 
-    // 和搜索框之间留一道空隙：所有列表面板（Ctrl-K、/history、模型、会话…）共用同一个版式
+    // 和搜索框之间留一道空隙：所有列表面板（Ctrl-M、/history、模型、会话…）共用同一个版式
     let mut rows = rows_container("overlay-rows", &list.scroll, 340.)
         .flex_1()
         .mt(px(6.));

@@ -50,7 +50,7 @@ use crate::{
         agent_actor::{AgentCommand, CommandTx},
         handlers::tools::run_shell_command,
     },
-    utils::{display, paths::cwd},
+    utils::{display, geometry, paths::cwd},
 };
 use gpui::{
     AnyElement, App, Bounds, Context, ElementInputHandler, EntityInputHandler, FocusHandle,
@@ -88,6 +88,11 @@ const SCROLLBAR_WIDTH: f32 = 8.0;
 const SCROLLBAR_HIT_WIDTH: f32 = 16.0;
 /// 滚动条滑块最小高度。
 const SCROLLBAR_MIN_THUMB: f32 = 24.0;
+
+/// 滑块最小高度的物理像素值：[`geometry`] 里的算式只吃 f32，单位换算留在 GUI 这层。
+fn min_thumb() -> f32 {
+    f32::from(px(SCROLLBAR_MIN_THUMB))
+}
 
 /// 下拉菜单离窗口边缘至少留出的距离（逻辑像素）
 const MENU_EDGE_MARGIN: f32 = 16.0;
@@ -168,6 +173,8 @@ struct Dropdown {
     width: f32,
     /// 内容超高时滚动（模型列表很长）
     scroll: bool,
+    /// 键盘高亮的行（打开时从第一行算起）
+    selected: usize,
 }
 
 /// `@` 补全的文件路径缓存。
@@ -187,6 +194,8 @@ struct SessionMenu {
     path: String,
     /// 菜单锚点（右键位置，窗口坐标）
     position: gpui::Point<Pixels>,
+    /// 键盘高亮项：0 = 重命名，1 = 删除
+    selected: usize,
 }
 
 /// 会话对话框：重命名 / 删除确认。
@@ -278,16 +287,6 @@ struct ResizeDrag {
     width: f32,
 }
 
-/// 按鼠标位移算新宽度（夹到上下限）：左边框往左拖变宽，所以位移取反。
-fn resized_panel_width(press_width: f32, dx: f32) -> f32 {
-    (press_width - dx).clamp(PANEL_MIN_WIDTH, PANEL_MAX_WIDTH)
-}
-
-/// 按鼠标位移算新宽度（夹到上下限）。
-fn resized_width(press_width: f32, dx: f32) -> f32 {
-    (press_width + dx).clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH)
-}
-
 /// GUI 根视图。
 pub struct GuiApp {
     /// 设计令牌（明/暗两套）
@@ -328,6 +327,8 @@ pub struct GuiApp {
     pub(super) panel: RightPanel,
     /// 是否展开全部工具输出
     expand_tools: bool,
+    /// 是否显示思考块（Ctrl-T 切换，同 TUI 的 `app.thinking.toggle`）
+    show_thinking: bool,
     /// IME 正在组字的区间（UTF-16，`None` 表示没有在组字）
     marked_range: Option<Range<usize>>,
     /// 对话区实测宽度（上一帧）：滚动内容按它定宽，换行宽度才和实测宽度一致
@@ -445,6 +446,7 @@ impl GuiApp {
             overlay: None,
             panel: RightPanel::default(),
             expand_tools: false,
+            show_thinking: true,
             marked_range: None,
             pane_width: Rc::new(Cell::new(px(0.))),
             pinned_bottom: Rc::new(Cell::new(None)),
@@ -546,6 +548,20 @@ impl GuiApp {
     /// 让 transcript 跟随最新内容。
     fn scroll_to_bottom(&mut self) {
         self.scroll.scroll_to_bottom();
+    }
+
+    /// 对话流翻页：`dir` 为 -1 向上、1 向下，步长取滚动区高度（同 TUI 的 shift+pageUp/Down）。
+    fn page_transcript(&mut self, dir: f32) {
+        let viewport = f32::from(self.scroll.bounds().size.height);
+        let max = f32::from(self.scroll.max_offset().height);
+        if viewport <= 0. || max <= 0. {
+            return;
+        }
+        let current = f32::from(self.scroll.offset().y);
+        let next = (current + dir * viewport).clamp(-max, 0.);
+        // 偏移是物理像素，这里不能再走 `px()`（那是「设计像素 × 缩放」）
+        self.scroll
+            .set_offset(gpui::point(gpui::px(0.), gpui::px(next)));
     }
 
     /// 新内容来了才跟随到底：用户滚上去看历史时不能每来一条事件就把他拽回底部。
@@ -843,29 +859,6 @@ fn clone_command(command: &AgentCommand) -> AgentCommand {
     }
 }
 
-impl GuiApp {}
-
-/// 滑块高度：可视高在内容高里的占比 × 可视高，不低于 [`SCROLLBAR_MIN_THUMB`]。
-fn thumb_height(viewport: f32, max: f32) -> f32 {
-    let min_thumb = f32::from(px(SCROLLBAR_MIN_THUMB));
-    (viewport * viewport / (viewport + max)).max(min_thumb)
-}
-
-/// 滑块能移动的像素长度（轨道高减滑块高）。
-fn thumb_travel(viewport: f32, max: f32) -> f32 {
-    (viewport - thumb_height(viewport, max)).max(1.)
-}
-
-/// 滑块顶端位置：`offset` 取 `[-max, 0]`。
-fn thumb_top(offset: f32, max: f32, travel: f32) -> f32 {
-    (-offset / max).clamp(0., 1.) * travel
-}
-
-/// 跑一条 shell 命令并把输出（已截断）当文本返回；GUI 里 `!` `!!` 用。
-fn run_shell(command: &str) -> String {
-    run_shell_command(command)
-}
-
 /// 重命名输入 → 最终名字：去掉首尾空白，空输入当作取消。
 fn renamed_name(input: &str) -> Option<&str> {
     let name = input.trim();
@@ -884,25 +877,12 @@ fn scrollbar_visible(drag: Option<ScrollArea>, area: ScrollArea, hovered: bool) 
     drag == Some(area) || hovered
 }
 
-/// 拖动换算：抓取点位移 `dy`（鼠标向下为正）→ 新滚动偏移，保证滑块跟着鼠标走。
-fn drag_offset(start: f32, dy: f32, max: f32, travel: f32) -> f32 {
-    start - dy * max / travel
-}
-
 /// 鼠标窗口坐标 → 文本元素内的局部坐标（列定位用）。
 ///
 /// 必须用文字元素自己的原点：外层行盒含 `padding-left` 与列表缩进，
 /// 拿它的左边界换算，点选落点会整体偏右。
 fn text_local(position: gpui::Point<Pixels>, text: Bounds<Pixels>) -> gpui::Point<Pixels> {
     gpui::point(position.x - text.left(), position.y - text.top())
-}
-
-/// 路径最后一段（项目名）。
-fn basename(path: &str) -> String {
-    path.rsplit(['/', '\\'])
-        .find(|part| !part.is_empty())
-        .unwrap_or(path)
-        .to_string()
 }
 
 /// 循环取下一个下标：`dir` 为 ±1，`current` 未知（还没对上号）时取第一个。
@@ -929,16 +909,4 @@ fn cycle_models(scoped: &[ScopedModel], all: &[(String, String)]) -> Vec<(String
                 .cloned()
         })
         .collect()
-}
-
-/// 下拉菜单上边距：贴按钮下方，但不许越过窗口底部（底部留 `MENU_EDGE_MARGIN`）。
-fn clamp_menu_top(anchor_y: f32, height: f32, viewport_height: f32) -> f32 {
-    let max_top = (viewport_height - height - MENU_EDGE_MARGIN).max(MENU_EDGE_MARGIN);
-    anchor_y.clamp(MENU_EDGE_MARGIN, max_top)
-}
-
-/// 下拉菜单左边距：贴着按钮，但不许越过窗口右侧（右侧留 `MENU_EDGE_MARGIN`）。
-fn clamp_menu_left(anchor_x: f32, width: f32, viewport_width: f32) -> f32 {
-    let max_left = (viewport_width - width - MENU_EDGE_MARGIN).max(MENU_EDGE_MARGIN);
-    anchor_x.clamp(MENU_EDGE_MARGIN, max_left)
 }

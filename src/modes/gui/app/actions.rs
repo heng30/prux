@@ -88,15 +88,7 @@ impl GuiApp {
                 self.toast(format!("Project trusted: {cwd}"), ToastKind::Success, cx);
             }
             "name" => self.rename_current_session(cx),
-            "copy" => {
-                let text = self.transcript.last_assistant_text();
-                if text.is_empty() {
-                    self.toast("No reply to copy", ToastKind::Info, cx);
-                } else {
-                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
-                    self.toast("Copied the last reply", ToastKind::Success, cx);
-                }
-            }
+            "copy" => self.copy_last_reply(cx),
             "compact" => {
                 _ = self
                     .cmd_tx
@@ -150,6 +142,16 @@ impl GuiApp {
                 // 不认识的命令：原样还给输入框，别悄悄吞掉
                 self.editor.insert(&format!("/{other}"));
             }
+        }
+    }
+    /// 复制最后一条助手回复（`/copy` 与 TUI 的 `app.message.copy` = Ctrl-X 共用）。
+    pub(super) fn copy_last_reply(&mut self, cx: &mut Context<Self>) {
+        let text = self.transcript.last_assistant_text();
+        if text.is_empty() {
+            self.toast("No reply to copy", ToastKind::Info, cx);
+        } else {
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+            self.toast("Copied the last reply", ToastKind::Success, cx);
         }
     }
     /// 点击覆盖层列表的第 `visible` 行：先把该行设为选中（后续重建不跳回第一行），再执行。
@@ -398,7 +400,7 @@ impl GuiApp {
 
         // `!!cmd`：本地执行，输出只显示、不进对话上下文
         if let Some(command) = text.strip_prefix("!!") {
-            let output = run_shell(command.trim());
+            let output = run_shell_command(command.trim());
             self.transcript
                 .push_note(Note::Info(format!("$ {}\n{output}", command.trim())));
             self.scroll_to_bottom();
@@ -407,7 +409,7 @@ impl GuiApp {
         }
         // `!cmd`：本地执行，输出作为用户消息进入上下文
         if let Some(command) = text.strip_prefix('!') {
-            let output = run_shell(command.trim());
+            let output = run_shell_command(command.trim());
             let message = format!("$ {}\n{output}", command.trim());
             self.transcript.push_user(message.clone());
             _ = self.cmd_tx.send(AgentCommand::Prompt(message));
@@ -486,25 +488,25 @@ impl GuiApp {
             },
             Entry {
                 label: "Switch session…".into(),
-                detail: "Ctrl-O".into(),
+                detail: "Ctrl-Shift-O".into(),
                 action: Action::Open(ListKind::Session),
                 ..Entry::default()
             },
             Entry {
                 label: "Select model…".into(),
-                detail: "Ctrl-/".into(),
+                detail: "Ctrl-L".into(),
                 action: Action::Open(ListKind::Model),
                 ..Entry::default()
             },
             Entry {
                 label: "Thinking level…".into(),
-                detail: "Ctrl-T".into(),
+                detail: "Shift-Tab".into(),
                 action: Action::Open(ListKind::Thinking),
                 ..Entry::default()
             },
             Entry {
                 label: "Switch appearance…".into(),
-                detail: "Ctrl-G".into(),
+                detail: "Ctrl-Shift-G".into(),
                 action: Action::Open(ListKind::Appearance),
                 ..Entry::default()
             },
@@ -636,7 +638,7 @@ impl GuiApp {
             },
             Entry {
                 label: "Workspace changes…".into(),
-                detail: "Ctrl-E".into(),
+                detail: "Ctrl-Shift-E".into(),
                 action: Action::Open(ListKind::PanelChanges),
                 ..Entry::default()
             },

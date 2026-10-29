@@ -146,6 +146,14 @@ impl Theme {
         }
     }
 
+    /// GUI 只有明暗两套令牌：`--theme light`（或 settings 里的亮色主题名）走亮色，其余暗色。
+    pub fn is_dark_theme(name: Option<&str>) -> bool {
+        match name {
+            Some(name) => !name.to_lowercase().contains("light"),
+            None => true,
+        }
+    }
+
     /// 按明暗选择。
     pub fn new(is_dark: bool) -> Self {
         if is_dark { Self::dark() } else { Self::light() }

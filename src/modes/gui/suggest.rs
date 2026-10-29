@@ -41,7 +41,7 @@ pub struct Suggest {
 }
 
 /// GUI 支持的斜杠命令：名字（不含 `/`）+ 说明。
-/// `/` 面板里列出的命令：只放对话相关动作，配置类留给 Ctrl-K 命令面板。
+/// `/` 面板里列出的命令：只放对话相关动作，配置类留给 Ctrl-M 命令面板。
 pub const COMMANDS: &[(&str, &str)] = &[
     ("new", "New session"),
     ("resume", "Switch session"),
@@ -107,18 +107,6 @@ pub fn commands(query: &str) -> Vec<Item> {
         .collect()
 }
 
-/// 图片扩展名：附件按钮选「图片」时只列这些。
-const IMAGE_EXTENSIONS: &[&str] = &[
-    "png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "tif", "tiff",
-];
-
-/// 判断路径是不是图片（按扩展名）。
-fn is_image(path: &str) -> bool {
-    path.rsplit('.')
-        .next()
-        .is_some_and(|ext| IMAGE_EXTENSIONS.contains(&ext.to_lowercase().as_str()))
-}
-
 /// 文件候选：路径子串匹配（`@src/mo` 这种逐段输入最好用），文件名命中的排前面。
 ///
 /// `images_only` 为真时只列图片（附件按钮选「图片」后）。
@@ -126,7 +114,9 @@ pub fn files(paths: &[String], query: &str, images_only: bool) -> Vec<Item> {
     let query = query.trim().to_lowercase();
     let mut matched: Vec<&String> = paths
         .iter()
-        .filter(|path| !images_only || is_image(path))
+        .filter(|path| {
+            !images_only || crate::utils::mime::is_image_path(std::path::Path::new(path))
+        })
         .filter(|path| query.is_empty() || path.to_lowercase().contains(&query))
         .collect();
     matched.sort_by_key(|path| {
@@ -188,7 +178,7 @@ mod tests {
         assert!(some.iter().all(|item| item.label.starts_with("/re")));
         assert!(some.iter().any(|item| item.label == "/resume"));
         assert!(commands("zzz").is_empty());
-        // 配置类命令不在 `/` 里（走 Ctrl-K 命令面板）
+        // 配置类命令不在 `/` 里（走 Ctrl-M 命令面板）
         assert!(commands("settings").is_empty());
     }
 
