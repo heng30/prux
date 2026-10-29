@@ -5,10 +5,10 @@
 
 use crate::utils::color::Rgb;
 use std::sync::OnceLock;
-use syntect::easy::HighlightLines;
-use syntect::highlighting::Theme as SynTheme;
-use syntect::parsing::SyntaxSet;
-use syntect::util::LinesWithEndings;
+use syntect::{
+    easy::HighlightLines, highlighting::Theme as SynTheme, parsing::SyntaxSet,
+    util::LinesWithEndings,
+};
 
 /// 语法定义集（首次使用时构建一次）。
 fn syntaxes() -> &'static SyntaxSet {
@@ -34,18 +34,22 @@ pub fn highlight(
             out.push(vec![(None, line.trim_end_matches('\n').to_string())]);
             continue;
         };
+
         let mut spans = Vec::new();
         for (style, text) in ranges {
             let text = text.trim_end_matches('\n');
             if text.is_empty() {
                 continue;
             }
+
             let color = style.foreground;
             spans.push((Some(Rgb::new(color.r, color.g, color.b)), text.to_string()));
         }
+
         if spans.is_empty() {
             spans.push((None, String::new()));
         }
+
         out.push(spans);
     }
     out

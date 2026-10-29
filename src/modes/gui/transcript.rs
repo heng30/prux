@@ -3,23 +3,27 @@
 //! 事件形状与 TUI 消费的完全一致（`message_start` / `message_update` /
 //! `tool_execution_start|update|end` / `agent_settled` …），这里只做 GUI 需要的投影。
 
-use super::app::GuiApp;
-use super::components::dot;
-use super::markdown;
-use super::theme::{
-    DOT_SIZE, FONT_BODY, FONT_CAPTION, FONT_SMALL, RADIUS_MD, SPACE_LG, SPACE_MD, SPACE_SM,
-    SPACE_XS, SPACE_XXS, Theme, px,
+use super::{
+    app::GuiApp,
+    code,
+    components::dot,
+    markdown,
+    theme::{
+        DOT_SIZE, FONT_BODY, FONT_CAPTION, FONT_SMALL, RADIUS_MD, SPACE_LG, SPACE_MD, SPACE_SM,
+        SPACE_XS, SPACE_XXS, Theme, px,
+    },
 };
-use crate::core::provider::{AgentMessage, ContentBlock};
+use crate::{
+    core::provider::{AgentMessage, ContentBlock},
+    utils::{color::Rgb, display::fit_display, mime, paths},
+};
+use base64::Engine as _;
 use gpui::{
     AnyElement, Bounds, Context, FontStyle, FontWeight, HighlightStyle, Hsla, IntoElement,
     ParentElement, Pixels, SharedString, Styled, StyledText, div, prelude::*,
 };
 use serde_json::Value;
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::ops::Range;
-use std::rc::Rc;
+use std::{cell::RefCell, collections::HashMap, ops::Range, path::PathBuf, rc::Rc};
 
 /// 工具输出收起时显示的行数。
 const COLLAPSED_OUTPUT_LINES: usize = 6;
@@ -27,6 +31,12 @@ const COLLAPSED_OUTPUT_LINES: usize = 6;
 const EXPANDED_OUTPUT_LINES: usize = 200;
 /// 工具输出每一行最多保留的显示宽度（CJK 字符按 2 算）。
 const OUTPUT_LINE_CHARS: usize = 160;
+/// 用户气泡的最大宽度（逻辑像素）
+const USER_BUBBLE_MAX_WIDTH: f32 = 560.;
+/// 用户消息折叠时显示的行数（超过就截断，点击气泡展开）
+const USER_COLLAPSED_LINES: usize = 6;
+/// 缩略图最大边长（逻辑像素）
+const IMAGE_THUMB: f32 = 180.0;
 
 /// 工具调用的执行状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,7 +84,7 @@ enum Row {
         /// 语言标签（None 显示 `text`）
         lang: Option<String>,
         /// 每行的着色片段
-        lines: Vec<Vec<(Option<crate::utils::color::Rgb>, String)>>,
+        lines: Vec<Vec<(Option<Rgb>, String)>>,
     },
     /// 分隔线
     Rule,
@@ -106,7 +116,7 @@ pub struct Tool {
     /// 单块展开状态：`None` 跟随全局开关（Ctrl-L），点击卡片切换
     pub expanded: Option<bool>,
     /// 工具返回的图片（落成临时文件后的路径，按返回顺序）
-    pub images: Vec<std::path::PathBuf>,
+    pub images: Vec<PathBuf>,
 }
 
 /// 非对话提示。
@@ -211,12 +221,6 @@ pub struct UserMessage {
     /// 单块展开态：`None` 跟随全局开关
     pub expanded: Option<bool>,
 }
-
-/// 用户气泡的最大宽度（逻辑像素）
-const USER_BUBBLE_MAX_WIDTH: f32 = 560.;
-
-/// 用户消息折叠时显示的行数（超过就截断，点击气泡展开）
-const USER_COLLAPSED_LINES: usize = 6;
 
 /// transcript 里的一块。
 #[derive(Debug)]
@@ -393,6 +397,7 @@ impl Transcript {
                     .and_then(|m| m.get("role"))
                     .and_then(Value::as_str)
                     .unwrap_or("");
+
                 if role == "assistant" {
                     self.blocks.push(Block::Assistant(Assistant::default()));
                     self.open_assistant = Some(self.blocks.len() - 1);
@@ -599,7 +604,7 @@ fn summarize_args(args: &Value) -> String {
         Value::Null => String::new(),
         other => other.to_string(),
     };
-    crate::utils::display::fit_display(&text, 120)
+    fit_display(&text, 120)
 }
 
 /// 工具结果内容 → 纯文本。
@@ -656,6 +661,7 @@ fn output_body(text: &str, theme: &Theme, max: usize, expanded: bool) -> AnyElem
                 .child(SharedString::from(shown)),
         );
     }
+
     if let Some(hint) = output_hint(total.saturating_sub(max), expanded) {
         column = column.child(
             div()
@@ -680,12 +686,8 @@ fn output_hint(hidden: usize, expanded: bool) -> Option<String> {
     })
 }
 
-/// 缩略图最大边长（逻辑像素）
-const IMAGE_THUMB: f32 = 180.0;
-
 /// 把 base64 图片写成临时文件，供 `gpui::img` 读取；解码失败返回 None。
-fn save_tool_image(data: &str, mime_type: &str) -> Option<std::path::PathBuf> {
-    use base64::Engine as _;
+fn save_tool_image(data: &str, mime_type: &str) -> Option<PathBuf> {
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(data.trim())
         .ok()?;
@@ -697,30 +699,34 @@ fn save_tool_image(data: &str, mime_type: &str) -> Option<std::path::PathBuf> {
         "bmp" => "bmp",
         _ => return None,
     };
+
     let dir = std::env::temp_dir().join("prux-gui-images");
     std::fs::create_dir_all(&dir).ok()?;
+
     // 名字用内容长度 + 首字节凑合：同一张图重复出现时复用同一个文件
     let name = format!(
         "{}-{:x}.{ext}",
         bytes.len(),
         bytes.first().copied().unwrap_or(0)
     );
+
     let path = dir.join(name);
     if !path.exists() {
         std::fs::write(&path, &bytes).ok()?;
     }
+
     Some(path)
 }
 
 /// 从消息里挑出可显示的图片引用：`@路径` 且扩展名是图片、文件确实存在。
-fn image_refs(text: &str, cwd: &str) -> Vec<std::path::PathBuf> {
+fn image_refs(text: &str, cwd: &str) -> Vec<PathBuf> {
     text.split_whitespace()
         .filter_map(|token| token.strip_prefix('@'))
         .map(|raw| {
             let raw = raw.trim_matches(|c: char| c == '，' || c == ',');
-            crate::utils::paths::resolve_path(raw, cwd)
+            paths::resolve_path(raw, cwd)
         })
-        .filter(|path| path.is_file() && crate::utils::mime::is_image_path(path))
+        .filter(|path| path.is_file() && mime::is_image_path(path))
         .collect()
 }
 
@@ -806,6 +812,7 @@ fn user_block(
                 .min_w_0()
                 .child(SharedString::from(shown.join("\n"))),
         );
+
     if hidden > 0 {
         bubble = bubble.child(
             div()
@@ -818,6 +825,7 @@ fn user_block(
                 })),
         );
     }
+
     // `@图片` 引用直接渲染成缩略图
     let images = image_refs(text, cwd);
     for path in images {
@@ -834,6 +842,7 @@ fn user_block(
                 ),
         );
     }
+
     div()
         .w_full()
         .flex()
@@ -856,6 +865,7 @@ fn assistant_block(
         .flex_col()
         .gap(px(SPACE_SM))
         .pt(px(SPACE_XXS));
+
     if show_thinking && !assistant.thinking.trim().is_empty() {
         column = column.child(
             div()
@@ -870,6 +880,7 @@ fn assistant_block(
                 ))),
         );
     }
+
     let rows = assistant.body.rows(&assistant.text, theme);
     column
         .child(render_rows(rows, theme, ctx.lines))
@@ -889,6 +900,7 @@ fn tool_block(
         ToolStatus::Ok => (theme.success, "done"),
         ToolStatus::Failed => (theme.danger, "failed"),
     };
+
     let expanded = tool.expanded.unwrap_or(expand_tools);
     let mut card = div()
         .id(("tool", index))
@@ -906,6 +918,7 @@ fn tool_block(
         .hover(|style| style.border_color(theme.border_strong))
         // 点卡片展开/收起这一块的输出
         .on_click(cx.listener(move |this, _, _, cx| this.toggle_tool(index, cx)));
+
     card = card.child(
         div()
             .flex()
@@ -936,6 +949,7 @@ fn tool_block(
                     .child(SharedString::from(label)),
             ),
     );
+
     if !tool.output.trim().is_empty() {
         // 按行截断而不是靠 `max_h` 裁剪：被裁掉的那部分不计入布局高度，
         // 会盖在输入卡片上，也会让钉底算错。
@@ -946,6 +960,7 @@ fn tool_block(
         };
         card = card.child(output_body(&tool.output, theme, lines, expanded));
     }
+
     for image in &tool.images {
         card = card.child(
             div()
@@ -1010,6 +1025,7 @@ fn note_block(note: &Note, theme: &Theme) -> AnyElement {
         Note::Info(text) => (text, theme.text_tertiary, "·"),
         Note::Error(text) => (text, theme.danger, "!"),
     };
+
     // 系统提示常是多行（命令输出、会话树）：逐行成子元素，不能当一个长行挤
     div()
         .w_full()
@@ -1049,7 +1065,7 @@ fn parse_rows(text: &str, theme: &Theme) -> Vec<Row> {
         .map(|block| match block {
             markdown::Block::Line(line) => Row::Line(line),
             markdown::Block::Code { lang, code } => Row::Code {
-                lines: super::code::highlight(&code, lang.as_deref(), &syntect_theme),
+                lines: code::highlight(&code, lang.as_deref(), &syntect_theme),
                 lang,
             },
             markdown::Block::Rule => Row::Rule,
@@ -1153,18 +1169,21 @@ fn render_rows(rows: &[Row], theme: &Theme, lines: &mut TextLines) -> AnyElement
                             lang.clone().unwrap_or_else(|| "text".into()),
                         )),
                 );
+
                 let mut body = div()
                     .flex()
                     .flex_col()
                     .px(px(SPACE_SM))
                     .py(px(SPACE_SM))
                     .font_family("monospace");
+
                 for line in code {
                     let mut element = div()
                         .w_full()
                         .flex()
                         .text_size(px(FONT_SMALL))
                         .text_color(theme.text);
+
                     for (color, text) in line {
                         element = element.child(match color {
                             Some(rgb) => div()
@@ -1175,6 +1194,7 @@ fn render_rows(rows: &[Row], theme: &Theme, lines: &mut TextLines) -> AnyElement
                     }
                     body = body.child(element);
                 }
+
                 child_lines.push(None);
                 card.child(body).into_any_element()
             }
@@ -1190,6 +1210,7 @@ fn render_rows(rows: &[Row], theme: &Theme, lines: &mut TextLines) -> AnyElement
         };
         column = column.child(element);
     }
+
     let bounds = lines.bounds.clone();
     column = column.on_children_prepainted(move |children, _, _| {
         let mut map = bounds.borrow_mut();
@@ -1244,6 +1265,7 @@ fn inline_runs(
             highlights.push((start..text.len(), style));
         }
     };
+
     if let Some(marker) = marker {
         push(
             &mut text,
@@ -1254,6 +1276,7 @@ fn inline_runs(
             },
         );
     }
+
     for span in spans {
         push(&mut text, &span.text, span_highlight(&span.style, theme));
     }
@@ -1287,6 +1310,7 @@ fn span_highlight(style: &markdown::SpanStyle, theme: &Theme) -> HighlightStyle 
     } else {
         None
     };
+
     HighlightStyle {
         color,
         font_weight: style.bold.then_some(FontWeight::BOLD),

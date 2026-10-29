@@ -6,16 +6,35 @@
 //! 回合被 `Abort` 打断的方式也与 TUI 一致——直接 drop 底层 prompt future。
 
 use super::{GuiEvent, Snapshot, UsageTotals};
-use crate::core::agent_session::Agent;
-use crate::core::compaction::CompactionReason;
-use crate::core::provider::AgentMessage;
-use crate::core::session_manager::{self, OpenSessionResult, Session};
-use crate::core::settings_manager;
-use crate::modes::interactive::agent_actor::{AgentCommand, CommandRx};
-use std::collections::{HashSet, VecDeque};
-use std::sync::Arc;
-use tokio::sync::Mutex;
-use tokio::sync::mpsc::UnboundedSender;
+
+use crate::{
+    core::{
+        self,
+        agent_session::Agent,
+        bug_report,
+        compaction::{CompactionReason, estimate_context_tokens},
+        crash_log, export_html,
+        extensions::dispatch_exec_ctx,
+        provider::AgentMessage,
+        session_manager::{self, OpenSessionResult, Session},
+        settings_manager, skills,
+    },
+    extensions::skills::bundled_skill_names,
+    modes::interactive::{
+        agent_actor::{AgentCommand, CommandRx},
+        worker::{session_tree_text, share_via_gist},
+    },
+    utils::paths::home_dir,
+};
+use std::{
+    collections::{HashSet, VecDeque},
+    path::{Path, PathBuf},
+    sync::Arc,
+};
+use tokio::sync::{Mutex, mpsc::UnboundedSender};
+
+/// 回合 future：持锁跑完一轮，drop 即取消。
+type RoundFuture = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
 
 /// 一轮要跑的工作（都需要独占 agent，都可被 Abort 打断）。
 enum Task {
@@ -31,9 +50,6 @@ enum Task {
     Navigate { target_id: String, summarize: bool },
 }
 
-/// 回合 future：持锁跑完一轮，drop 即取消。
-type RoundFuture = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
-
 /// worker 主循环：队列化命令，回合中只接受中止。
 pub async fn run(
     agent: Arc<Mutex<Agent>>,
@@ -44,7 +60,7 @@ pub async fn run(
         let mut agent = agent.lock().await;
         let sink = events.clone();
         agent.attach_json_sink(Box::new(move |ev| {
-            let _ = sink.send(GuiEvent::Agent(ev));
+            _ = sink.send(GuiEvent::Agent(ev));
         }));
         publish(&agent, &events);
     }
@@ -85,7 +101,7 @@ pub async fn run(
                 // `/skill:名称` 由技能正文展开成真正的提示词（与 TUI 同一套规则）
                 let text = {
                     let agent = agent.lock().await;
-                    crate::core::skills::expand_skill_command(&text, &agent.skills)
+                    skills::expand_skill_command(&text, &agent.skills)
                 };
                 Task::Text(text)
             }
@@ -118,7 +134,8 @@ pub async fn run(
 async fn hard_abort(agent: &Arc<Mutex<Agent>>, before: Option<HashSet<String>>) {
     let mut agent = agent.lock().await;
     agent.abort_and_detach();
-    crate::core::extensions::dispatch_exec_ctx(&agent.exec_ctx());
+
+    dispatch_exec_ctx(&agent.exec_ctx());
     if let (Some(session), Some(before)) = (agent.session.as_mut(), before) {
         _ = session.interrupt_operations_opened_since(&before);
     }
@@ -143,7 +160,7 @@ async fn apply(agent: &mut Agent, cmd: AgentCommand, events: &UnboundedSender<Gu
             persist,
         } => {
             if let Err(e) = agent.switch_model(&provider, &model_id, persist) {
-                let _ = events.send(GuiEvent::Error(e.to_string()));
+                _ = events.send(GuiEvent::Error(e.to_string()));
             }
         }
         AgentCommand::SetThinking { level, persist } => {
@@ -156,10 +173,10 @@ async fn apply(agent: &mut Agent, cmd: AgentCommand, events: &UnboundedSender<Gu
         AgentCommand::Reload { .. } => reload_assets(agent, events),
         AgentCommand::Tree => {
             let message = match agent.session.as_ref() {
-                Some(session) => crate::modes::interactive::worker::session_tree_text(session),
+                Some(session) => session_tree_text(session),
                 None => "No current session".to_string(),
             };
-            let _ = events.send(GuiEvent::Notice(message));
+            _ = events.send(GuiEvent::Notice(message));
         }
         AgentCommand::DebugInfo => {
             let mut lines = vec![
@@ -170,11 +187,12 @@ async fn apply(agent: &mut Agent, cmd: AgentCommand, events: &UnboundedSender<Gu
                 format!("autoRetry: {}", agent.auto_retry),
                 format!("cwd: {}", agent.cwd),
             ];
+
             if let Some(session) = agent.session.as_ref() {
                 lines.push(format!("session: {}", session.session_id));
                 lines.push(format!("leaf: {:?}", session.get_leaf_id()));
             }
-            let _ = events.send(GuiEvent::Notice(lines.join(" · ")));
+            _ = events.send(GuiEvent::Notice(lines.join(" · ")));
         }
         AgentCommand::BugReport {
             hint,
@@ -188,14 +206,14 @@ async fn apply(agent: &mut Agent, cmd: AgentCommand, events: &UnboundedSender<Gu
                         Some(text) => format!("Labeled {entry_id}: {text}"),
                         None => format!("Cleared label on {entry_id}"),
                     };
-                    let _ = events.send(GuiEvent::Notice(message));
+                    _ = events.send(GuiEvent::Notice(message));
                 }
                 Err(error) => {
-                    let _ = events.send(GuiEvent::Notice(format!("Label failed: {error}")));
+                    _ = events.send(GuiEvent::Notice(format!("Label failed: {error}")));
                 }
             },
             None => {
-                let _ = events.send(GuiEvent::Notice("No current session".into()));
+                _ = events.send(GuiEvent::Notice("No current session".into()));
             }
         },
         AgentCommand::ForkClone => clone_session(agent, events),
@@ -203,11 +221,11 @@ async fn apply(agent: &mut Agent, cmd: AgentCommand, events: &UnboundedSender<Gu
         AgentCommand::Share { theme } => {
             let message = match agent.session.as_ref() {
                 Some(session) => {
-                    match crate::core::settings_manager::read_settings_session_share_destination() {
-                        crate::core::settings_manager::SessionShareDestination::Radius => {
+                    match settings_manager::read_settings_session_share_destination() {
+                        settings_manager::SessionShareDestination::Radius => {
                             "Share failed: Radius upload is not supported; set sessionShareDestination to \"gist\"".to_string()
                         }
-                        _ => crate::modes::interactive::worker::share_via_gist(
+                        _ => share_via_gist(
                             session,
                             theme.as_deref(),
                         ),
@@ -215,27 +233,25 @@ async fn apply(agent: &mut Agent, cmd: AgentCommand, events: &UnboundedSender<Gu
                 }
                 None => "Share failed: no current session".to_string(),
             };
-            let _ = events.send(GuiEvent::Notice(message));
+            _ = events.send(GuiEvent::Notice(message));
         }
         AgentCommand::Export { out, theme } => {
             let message = match agent.session.as_ref() {
-                Some(session) => match crate::core::export_html::export_session(
-                    session,
-                    out.as_deref(),
-                    theme.as_deref(),
-                ) {
-                    Ok(path) => format!("Exported: {path}"),
-                    Err(error) => format!("Export failed: {error}"),
-                },
+                Some(session) => {
+                    match export_html::export_session(session, out.as_deref(), theme.as_deref()) {
+                        Ok(path) => format!("Exported: {path}"),
+                        Err(error) => format!("Export failed: {error}"),
+                    }
+                }
                 None => "No current session to export".to_string(),
             };
-            let _ = events.send(GuiEvent::Notice(message));
+            _ = events.send(GuiEvent::Notice(message));
         }
         AgentCommand::NewSession => new_session(agent, events),
         AgentCommand::ResumeSession { path } => resume_session(agent, &path, events),
         AgentCommand::Rewind => {
             if let Err(e) = agent.rewind_last_user_input() {
-                let _ = events.send(GuiEvent::Error(e.to_string()));
+                _ = events.send(GuiEvent::Error(e.to_string()));
             }
         }
         // 其余命令（登录、导出、分享、bug report、fork、reload…）尚未在 GUI 侧接线
@@ -251,8 +267,6 @@ fn write_bug_report(
     include_summary: bool,
     events: &UnboundedSender<GuiEvent>,
 ) {
-    use crate::core::{bug_report, crash_log};
-
     let hint = (!hint.trim().is_empty()).then_some(hint);
     let crashes = crash_log::read_crash_log();
     let has_crashes = !crashes.is_empty();
@@ -276,6 +290,7 @@ fn write_bug_report(
         model: &agent.model,
         thinking_level: agent.thinking_level.clone(),
     };
+
     let bundle = bug_report::build_bundle(bug_report::BundleInput {
         ctx,
         session: agent.session.as_ref(),
@@ -288,13 +303,15 @@ fn write_bug_report(
         .and_then(|value| value.as_str())
         .unwrap_or("unknown")
         .to_string();
-    let path = std::path::PathBuf::from(&agent.cwd).join(bug_report::archive_file_name(&id));
+
+    let path = PathBuf::from(&agent.cwd).join(bug_report::archive_file_name(&id));
     if let Err(error) = bug_report::write_bug_report_archive(&bundle, &path) {
-        let _ = events.send(GuiEvent::Notice(format!(
+        _ = events.send(GuiEvent::Notice(format!(
             "Cannot write bug report: {error}"
         )));
         return;
     }
+
     if let Some(session) = agent.session.as_mut() {
         session.append_custom_entry(
             bug_report::BUG_REPORT_CUSTOM_ENTRY_TYPE,
@@ -307,10 +324,12 @@ fn write_bug_report(
             })),
         );
     }
+
     if has_crashes {
         crash_log::clear_crash_log();
     }
-    let _ = events.send(GuiEvent::Notice(if include_summary {
+
+    _ = events.send(GuiEvent::Notice(if include_summary {
         format!(
             "Bug report exported (no model summary on desktop): {}",
             path.display()
@@ -325,36 +344,36 @@ fn write_bug_report(
 /// 只覆盖 GUI 能自己决定的部分（默认技能发现、当前信任状态）；命令行给的
 /// `--skill`/`--no-context-files` 这类启动参数没有在桌面端留副本，重载后会回到默认。
 fn reload_assets(agent: &mut Agent, events: &UnboundedSender<GuiEvent>) {
-    let agent_dir = crate::core::settings_manager::agent_dir();
-    let home_dir = crate::utils::paths::home_dir();
+    let agent_dir = core::settings_manager::agent_dir();
+    let home_dir = home_dir();
     let cwd = agent.cwd.clone();
-    let trusted =
-        crate::core::project_trust::is_project_trusted(std::path::Path::new(&cwd), &agent_dir);
+    let trusted = core::project_trust::is_project_trusted(Path::new(&cwd), &agent_dir);
 
-    crate::core::extensions::reload_from_settings();
+    core::extensions::reload_from_settings();
 
-    let settings = crate::core::settings_manager::read_settings();
-    agent.skills = crate::core::skills::load_skills(
+    let settings = settings_manager::read_settings();
+    agent.skills = core::skills::load_skills(
         &cwd,
         &agent_dir,
         &home_dir,
         &[],
-        &crate::extensions::skills::bundled_skill_names(),
+        &bundled_skill_names(),
         true,
         trusted,
         &settings.skills,
     );
-    let files = crate::core::context::load_project_context_files(&cwd, &agent_dir);
+
+    let files = core::context::load_project_context_files(&cwd, &agent_dir);
     agent.rebuild_ctx.context_files = if trusted {
         files
     } else {
         files
             .into_iter()
-            .filter(|(path, _)| std::path::Path::new(path).starts_with(&agent_dir))
+            .filter(|(path, _)| Path::new(path).starts_with(&agent_dir))
             .collect()
     };
     agent.rebuild_tools();
-    let _ = events.send(GuiEvent::Notice(format!(
+    _ = events.send(GuiEvent::Notice(format!(
         "Reloaded: {} skills, {} context files",
         agent.skills.len(),
         agent.rebuild_ctx.context_files.len()
@@ -371,9 +390,9 @@ fn adopt_session(
     agent.messages = session.build_context_messages();
     agent.session = Some(session);
     agent.restore_session_tools();
-    crate::core::extensions::dispatch_exec_ctx(&agent.exec_ctx());
-    let _ = events.send(GuiEvent::Notice(what.to_string()));
-    let _ = events.send(GuiEvent::History(agent.messages.clone()));
+    core::extensions::dispatch_exec_ctx(&agent.exec_ctx());
+    _ = events.send(GuiEvent::Notice(what.to_string()));
+    _ = events.send(GuiEvent::History(agent.messages.clone()));
 }
 
 /// `/clone`：按当前分支叶子复制一份新会话。
@@ -392,14 +411,14 @@ fn clone_session(agent: &mut Agent, events: &UnboundedSender<GuiEvent>) {
         (Some(path), Some(leaf)) => match Session::fork_at(&path, &leaf, &cwd, None) {
             Ok(session) => adopt_session(agent, session, events, "Cloned current branch"),
             Err(error) => {
-                let _ = events.send(GuiEvent::Notice(format!("Clone failed: {error}")));
+                _ = events.send(GuiEvent::Notice(format!("Clone failed: {error}")));
             }
         },
         (Some(_), None) => {
-            let _ = events.send(GuiEvent::Notice("Clone failed: nothing to clone".into()));
+            _ = events.send(GuiEvent::Notice("Clone failed: nothing to clone".into()));
         }
         (None, _) => {
-            let _ = events.send(GuiEvent::Notice("Clone failed: no current session".into()));
+            _ = events.send(GuiEvent::Notice("Clone failed: no current session".into()));
         }
     }
 }
@@ -410,20 +429,21 @@ fn fork_session(agent: &mut Agent, path: &str, events: &UnboundedSender<GuiEvent
     match Session::fork_from(path, &cwd, None) {
         Ok(session) => adopt_session(agent, session, events, "Forked current session"),
         Err(error) => {
-            let _ = events.send(GuiEvent::Notice(format!("Fork failed: {error}")));
+            _ = events.send(GuiEvent::Notice(format!("Fork failed: {error}")));
         }
     }
 }
 
 /// 切工作目录：改 agent 的 cwd、按新目录重建工具与系统提示，并在新目录下开会话。
 fn switch_cwd(agent: &mut Agent, path: &str, events: &UnboundedSender<GuiEvent>) {
-    let dir = std::path::Path::new(path);
+    let dir = Path::new(path);
     if !dir.is_dir() {
-        let _ = events.send(GuiEvent::Error(format!(
+        _ = events.send(GuiEvent::Error(format!(
             "Working directory does not exist: {path}"
         )));
         return;
     }
+
     agent.cwd = path.to_string();
     agent.rebuild_tools();
     new_session(agent, events);
@@ -433,16 +453,18 @@ fn switch_cwd(agent: &mut Agent, path: &str, events: &UnboundedSender<GuiEvent>)
 fn new_session(agent: &mut Agent, events: &UnboundedSender<GuiEvent>) {
     let cwd = agent.cwd.clone();
     let dir = session_manager::default_session_dir(&cwd, &settings_manager::agent_dir());
+
     _ = std::fs::create_dir_all(&dir);
+
     match Session::create_deferred(&cwd, Some(dir)) {
         Ok(session) => {
             agent.messages.clear();
             agent.session = Some(session);
-            crate::core::extensions::dispatch_exec_ctx(&agent.exec_ctx());
-            let _ = events.send(GuiEvent::History(Vec::new()));
+            core::extensions::dispatch_exec_ctx(&agent.exec_ctx());
+            _ = events.send(GuiEvent::History(Vec::new()));
         }
         Err(e) => {
-            let _ = events.send(GuiEvent::Error(e.to_string()));
+            _ = events.send(GuiEvent::Error(e.to_string()));
         }
     }
 }
@@ -454,14 +476,14 @@ fn resume_session(agent: &mut Agent, path: &str, events: &UnboundedSender<GuiEve
             agent.messages = session.build_context_messages();
             agent.session = Some(*session);
             agent.restore_session_tools();
-            crate::core::extensions::dispatch_exec_ctx(&agent.exec_ctx());
-            let _ = events.send(GuiEvent::History(agent.messages.clone()));
+            core::extensions::dispatch_exec_ctx(&agent.exec_ctx());
+            _ = events.send(GuiEvent::History(agent.messages.clone()));
         }
         OpenSessionResult::Invalid(e) => {
-            let _ = events.send(GuiEvent::Error(format!("Cannot open session: {e}")));
+            _ = events.send(GuiEvent::Error(format!("Cannot open session: {e}")));
         }
         OpenSessionResult::Repairable { plan, .. } => {
-            let _ = events.send(GuiEvent::Error(format!(
+            _ = events.send(GuiEvent::Error(format!(
                 "Session has a corrupt entry; needs repair: {}",
                 plan.error
             )));
@@ -473,6 +495,7 @@ fn resume_session(agent: &mut Agent, path: &str, events: &UnboundedSender<GuiEve
 fn start(agent: &Arc<Mutex<Agent>>, task: Task, events: &UnboundedSender<GuiEvent>) -> RoundFuture {
     let agent = agent.clone();
     let events = events.clone();
+
     Box::pin(async move {
         let mut agent = agent.lock().await;
         let result = match task {
@@ -488,8 +511,9 @@ fn start(agent: &Arc<Mutex<Agent>>, task: Task, events: &UnboundedSender<GuiEven
                 summarize,
             } => agent.navigate_tree(&target_id, summarize).await.map(|_| ()),
         };
+
         if let Err(e) = result {
-            let _ = events.send(GuiEvent::Error(e.to_string()));
+            _ = events.send(GuiEvent::Error(e.to_string()));
         }
         publish(&agent, &events);
     })
@@ -497,7 +521,7 @@ fn start(agent: &Arc<Mutex<Agent>>, task: Task, events: &UnboundedSender<GuiEven
 
 /// 推一份状态快照给 GUI。
 fn publish(agent: &Agent, events: &UnboundedSender<GuiEvent>) {
-    let _ = events.send(GuiEvent::Snapshot(Box::new(snapshot(agent))));
+    _ = events.send(GuiEvent::Snapshot(Box::new(snapshot(agent))));
 }
 
 /// 从 agent 采集 GUI 需要的状态。
@@ -511,10 +535,10 @@ fn snapshot(agent: &Agent) -> Snapshot {
         usage.cache_write += u64::from(u.cache_write);
         usage.cost += u.cost.total;
     }
+
     // 上下文占用走历史估算（末条 assistant usage + 其后新增消息），
     // 刚载入的会话还没有 `last_usage`，只有走它状态栏才显示得出占用率
-    usage.context_tokens =
-        u64::from(crate::core::compaction::estimate_context_tokens(&agent.messages).tokens);
+    usage.context_tokens = u64::from(estimate_context_tokens(&agent.messages).tokens);
     usage.context_window = u64::from(agent.model.context_window);
 
     Snapshot {

@@ -2,6 +2,7 @@
 
 pub mod worker;
 
+use crate::core::{model_scope::ScopedModel, provider::AgentMessage};
 use serde_json::Value;
 
 /// worker → GUI 的上行事件。
@@ -14,7 +15,7 @@ pub enum GuiEvent {
     /// 一次性提示（导出路径、命令回执等），GUI 直接显示成一条 note。
     Notice(String),
     /// 会话历史（切换/新建会话后推一次，GUI 据此重建 transcript）
-    History(Vec<crate::core::provider::AgentMessage>),
+    History(Vec<AgentMessage>),
     /// 会话状态快照：每次命令执行后与每个回合结束时推送，GUI 据此刷新顶栏/面板。
     Snapshot(Box<Snapshot>),
 }
@@ -31,7 +32,7 @@ pub struct Snapshot {
     pub thinking_levels: Vec<String>,
     /// `--models` / `settings.enabledModels` 解析出的 scope（有序，可带 thinking）；
     /// 非空时 `Ctrl+P` 只在其中循环，空则退回全部已配置模型。
-    pub model_cycle: Vec<crate::core::model_scope::ScopedModel>,
+    pub model_cycle: Vec<ScopedModel>,
     /// 会话文件路径；内存会话（`--no-session`）为 None。
     pub session_path: Option<String>,
     /// 会话中的消息条数。
