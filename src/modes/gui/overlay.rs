@@ -1,7 +1,19 @@
 //! 覆盖层面板：可过滤列表（命令面板 / 模型 / 会话 / 思考级别 / 主题）与只读信息页。
 
+/// 列表弹层宽度（命令面板 / 模型 / 会话选择 / 思考级别）。
+const LIST_W: f32 = 560.;
+/// 列表弹层高度上限。
+const LIST_MAX_H: f32 = 460.;
+/// 信息卡片宽度（usage / help / about）。
+const INFO_W: f32 = 600.;
+/// 信息卡片高度上限。
+const INFO_MAX_H: f32 = 468.;
+
 use super::text_edit::Editor;
-use super::theme::{Theme, px};
+use super::theme::{
+    CONTROL_H_LG, FONT_BODY, FONT_CAPTION, FONT_SMALL, ICON_SIZE, RADIUS_LG, RADIUS_MD, RADIUS_SM,
+    SPACE_MD, SPACE_SM, SPACE_XS, SPACE_XXS, Theme, px,
+};
 use crate::modes::interactive::agent_actor::AgentCommand;
 use gpui::{
     AnyElement, InteractiveElement, IntoElement, ParentElement, ScrollHandle, SharedString,
@@ -386,20 +398,20 @@ pub(crate) fn list_row(
         .cursor_pointer()
         .w_full()
         .h(px(height))
-        .px(px(10.))
-        .rounded(px(7.))
+        .px(px(SPACE_SM))
+        .rounded(px(RADIUS_MD))
         .flex()
         .items_center()
-        .gap(px(10.))
-        .text_size(px(13.))
+        .gap(px(SPACE_SM))
+        .text_size(px(FONT_BODY))
         .on_click(on_click);
     if let Some(checked) = checked {
         row = row.child(
             div()
                 .flex_none()
-                .w(px(14.))
-                .h(px(14.))
-                .rounded(px(3.))
+                .w(px(ICON_SIZE))
+                .h(px(ICON_SIZE))
+                .rounded(px(RADIUS_SM))
                 .border_1()
                 .border_color(if checked {
                     theme.accent
@@ -410,7 +422,7 @@ pub(crate) fn list_row(
                 .flex()
                 .items_center()
                 .justify_center()
-                .text_size(px(10.))
+                .text_size(px(FONT_CAPTION))
                 .text_color(theme.on_inverse)
                 .child(SharedString::from(if checked { "✓" } else { "" })),
         );
@@ -435,7 +447,7 @@ pub(crate) fn list_row(
                 .max_w(px(DETAIL_MAX_WIDTH))
                 .min_w_0()
                 .truncate()
-                .text_size(px(11.))
+                .text_size(px(FONT_CAPTION))
                 .text_color(theme.text_ghost)
                 .child(SharedString::from(detail.to_string())),
         );
@@ -491,13 +503,13 @@ fn render_list(
 ) -> AnyElement {
     let filtered = list.filtered();
     let mut column = div()
-        .w(px(560.))
-        .max_h(px(460.))
+        .w(px(LIST_W))
+        .max_h(px(LIST_MAX_H))
         .flex()
         .flex_col()
-        .gap(px(10.))
-        .p(px(12.))
-        .rounded(px(12.))
+        .gap(px(SPACE_SM))
+        .p(px(SPACE_MD))
+        .rounded(px(RADIUS_LG))
         .bg(theme.raised)
         .border_1()
         .border_color(theme.border_strong);
@@ -507,8 +519,8 @@ fn render_list(
             .flex()
             .items_center()
             .justify_between()
-            .px(px(2.))
-            .text_size(px(11.5))
+            .px(px(SPACE_XXS))
+            .text_size(px(FONT_SMALL))
             .text_color(theme.text_tertiary)
             .child(SharedString::from(list.title.clone()))
             .child(SharedString::from(format!("{} items", filtered.len()))),
@@ -518,15 +530,15 @@ fn render_list(
     column = column.child(
         div()
             .w_full()
-            .h(px(32.))
-            .px(px(10.))
-            .rounded(px(8.))
+            .h(px(CONTROL_H_LG))
+            .px(px(SPACE_SM))
+            .rounded(px(RADIUS_MD))
             .flex()
             .items_center()
             .bg(theme.inset)
             .border_1()
             .border_color(theme.border)
-            .text_size(px(13.))
+            .text_size(px(FONT_BODY))
             .text_color(if list.query.is_empty() {
                 theme.text_ghost
             } else {
@@ -544,8 +556,8 @@ fn render_list(
                     .child(
                         div()
                             .w(px(if list.query.is_empty() { 0. } else { 1.5 }))
-                            .h(px(15.))
-                            .ml(px(1.))
+                            .h(px(ICON_SIZE))
+                            .ml(px(SPACE_XXS))
                             .bg(theme.accent),
                     ),
             ),
@@ -554,13 +566,13 @@ fn render_list(
     // 和搜索框之间留一道空隙：所有列表面板（Ctrl-M、/history、模型、会话…）共用同一个版式
     let mut rows = rows_container("overlay-rows", &list.scroll, 340.)
         .flex_1()
-        .mt(px(6.));
+        .mt(px(SPACE_XS));
     if filtered.is_empty() {
         rows = rows.child(
             div()
-                .px(px(10.))
-                .py(px(8.))
-                .text_size(px(12.))
+                .px(px(SPACE_SM))
+                .py(px(SPACE_SM))
+                .text_size(px(FONT_SMALL))
                 .text_color(theme.text_ghost)
                 .child(SharedString::from("No matches")),
         );
@@ -590,8 +602,8 @@ fn render_list(
     };
     column = column.child(
         div()
-            .px(px(2.))
-            .text_size(px(10.5))
+            .px(px(SPACE_XXS))
+            .text_size(px(FONT_CAPTION))
             .text_color(theme.text_ghost)
             .child(SharedString::from(hint)),
     );
@@ -601,19 +613,19 @@ fn render_list(
 /// 信息卡片。
 fn render_info(info: &Info, theme: &Theme) -> AnyElement {
     let mut column = div()
-        .w(px(600.))
-        .max_h(px(470.))
+        .w(px(INFO_W))
+        .max_h(px(INFO_MAX_H))
         .flex()
         .flex_col()
-        .gap(px(8.))
-        .p(px(14.))
-        .rounded(px(12.))
+        .gap(px(SPACE_SM))
+        .p(px(SPACE_MD))
+        .rounded(px(RADIUS_LG))
         .bg(theme.raised)
         .border_1()
         .border_color(theme.border_strong)
         .child(
             div()
-                .text_size(px(12.5))
+                .text_size(px(FONT_SMALL))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(theme.text)
                 .child(SharedString::from(info.title.clone())),
@@ -622,7 +634,7 @@ fn render_info(info: &Info, theme: &Theme) -> AnyElement {
     for line in info.lines.iter().skip(info.scroll).take(16) {
         column = column.child(
             div()
-                .text_size(px(12.5))
+                .text_size(px(FONT_SMALL))
                 .text_color(theme.text_secondary)
                 .child(SharedString::from(line.clone())),
         );
@@ -631,8 +643,8 @@ fn render_info(info: &Info, theme: &Theme) -> AnyElement {
     column
         .child(
             div()
-                .mt(px(4.))
-                .text_size(px(10.5))
+                .mt(px(SPACE_XS))
+                .text_size(px(FONT_CAPTION))
                 .text_color(theme.text_ghost)
                 .child(SharedString::from("↑↓ scroll · Esc close")),
         )

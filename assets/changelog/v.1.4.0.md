@@ -113,7 +113,30 @@
   leaves the highlight off screen. The session list also answers `Ctrl+R` (rename), `Ctrl+D`
   (delete) and `Ctrl+G` (next session) as it does in the terminal.
 
+- **The desktop GUI toggles its session list and browses history from the input box**: `/sidebar`
+  shows or hides the left session list (the same state `Ctrl+Shift-B` flips). In the input box
+  `Up` / `Down` now walk a multi-line draft line by line and only switch prompt history once the
+  cursor sits on the first line at column 0 (or the last line at its end) — landing on a line
+  boundary first when it is not there yet — and the draft comes back untouched when you cycle off
+  the oldest entry. Browsing history never opens the completion panel, so recalling `/model`
+  leaves `Up` / `Down` under your control.
+
+- **Desktop GUI spacing follows one scale**: paddings, gaps, corner radii, font sizes and control
+  heights now come from named steps in the GUI theme (multiples of 4, with a 2 px step reserved for
+  gaps between adjacent rows) instead of per-call pixel literals, so a button, its neighbours and
+  the panel it sits in no longer each pick their own 6, 7, 13 or 15.
+
 ### Fixed
+
+- **`!` and `!!` no longer open a completion panel in the desktop GUI**: shell lines run on
+  `Enter`, so the panel only appeared to announce itself and then stole `Up` / `Down` from the
+  shell command; the trigger and its empty-panel hint are gone.
+
+- **Desktop GUI `/` and `@` matching now follows the terminal UI**: `/` ranks commands by
+  order-of-characters matching instead of prefix (skills match by their bare name, so `/idea` no
+  longer hits `skill:deep-research`), and `@` scores paths — file name exact, then file name
+  prefix, then file name substring, then path substring — sorting ties by depth, length and name.
+  Both use the same shared scoring code as the terminal UI.
 
 - **Command palette entries run the command they name**: cloning a list entry mapped any command
   outside a hard-coded handful to `/session` stats, so "Share session (gist)…" only printed the
@@ -276,7 +299,23 @@
   `Ctrl+C` 关闭；选中行超出视口时列表会跟着滚，高面板里高亮不会跑到屏幕外。会话列表还原了
   终端里的 `Ctrl+R`（改名）、`Ctrl+D`（删除）、`Ctrl+G`（下一个会话）。
 
+- **桌面 GUI 能开关会话列表，输入框也能翻历史**：`/sidebar` 显示或收起左侧会话列表（与
+  `Ctrl+Shift-B` 同一状态）。输入框的 `↑` / `↓` 会先逐行走过多行草稿，只有光标在第一行行首
+  （或最后一行行尾，未到位时先归位）才切到提示历史；从最早一条再往上绕回草稿，草稿原样恢复。
+  浏览历史时不弹补全面板，翻出 `/model` 这类历史也不会把 `↑` / `↓` 抢走。
+
+- **桌面 GUI 的间距统一成一套刻度**：padding、gap、圆角、字号与控件高度改用 GUI 主题里命名的
+  阶梯值（4 的倍数，只给相邻行之间的细缝留了 2px 一档），不再各处自己写像素字面量——按钮、
+  它旁边的元素和所在面板不会再各自取 6、7、13、15。
+
 ## 修复
+
+- **桌面 GUI 里 `!` / `!!` 不再弹出补全面板**：shell 行按 `Enter` 就执行，面板只是自报一句说明，
+  却把 `↑` / `↓` 从 shell 命令手里抢走；触发词与那条空面板提示一并去掉。
+
+- **桌面 GUI 的 `/` 与 `@` 匹配规则跟终端对齐**：`/` 改成按字符顺序匹配并排序（技能按裸名参与，
+  `/idea` 不会再命中 `skill:deep-research`），`@` 按路径打分——文件名完全匹配、文件名开头、
+  文件名子串、仅路径子串——同分再按层级、长度、字典序。两边共用同一份打分代码。
 
 - **命令面板执行的就是它写着的那条命令**：拷贝列表项时，硬编码清单之外的命令会被换成 `/session`
   统计，于是「Share session (gist)…」只打印了统计。现在命令原样带过去。

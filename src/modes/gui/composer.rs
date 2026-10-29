@@ -1,7 +1,7 @@
 //! 输入行（composer）：把 [`Editor`] 状态渲染成多行文本，带光标与选区。
 
 use super::text_edit::Editor;
-use super::theme::{Theme, UI_FONT_FAMILY, px};
+use super::theme::{FONT_BODY, SPACE_XXS, Theme, UI_FONT_FAMILY, px};
 use gpui::{
     AnyElement, InteractiveElement, IntoElement, ParentElement, SharedString,
     StatefulInteractiveElement, Styled, div,
@@ -13,8 +13,8 @@ use std::rc::Rc;
 /// 输入行最多显示的行数（超出部分靠滚动，避免占满整屏）。
 const MAX_VISIBLE_LINES: usize = 8;
 
-/// 输入框字号（逻辑像素）。
-const FONT_SIZE: f32 = 13.5;
+/// 输入框字号：与对话流正文同一档（[`FONT_BODY`]）。
+const FONT_SIZE: f32 = FONT_BODY;
 
 /// 输入框行高倍数：gpui 默认是 φ（1.618em），选中/光标背景会比字形高出一截、
 /// 多行时相邻行的背景连成一片，文字也不在背景里垂直居中。
@@ -23,8 +23,8 @@ const LINE_HEIGHT: f32 = 1.3;
 /// 单行高度（逻辑像素），`max_h` 与逐行布局共用。
 const ROW_HEIGHT: f32 = FONT_SIZE * LINE_HEIGHT;
 
-/// 行间空隙（逻辑像素）：多行选中时相邻行的背景不至于连成一整块。
-const LINE_GAP: f32 = 2.0;
+/// 行间空隙：多行选中时相邻行的背景不至于连成一整块。
+const LINE_GAP: f32 = SPACE_XXS;
 
 /// 鼠标点选回调：参数是（事件、行号、行内字符下标）。
 pub type PickHandler =

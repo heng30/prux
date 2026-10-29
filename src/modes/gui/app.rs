@@ -33,7 +33,7 @@ use super::{
     sidebar::{self, SessionRow},
     suggest::{self, Suggest, Trigger},
     text_edit::{self, Editor},
-    theme::{self, Theme, px},
+    theme::{self, SPACE_MD, Theme, px},
     transcript::{self, Note, Transcript},
 };
 use crate::{
@@ -77,8 +77,8 @@ const FLOW_PADDING_TOP: f32 = 16.0;
 const FLOW_PADDING_BOTTOM: f32 = 64.0;
 /// 对话流正文的行高（相对字号；默认 φ = 1.618 会让行内高亮背景过高并连成一片）
 const TRANSCRIPT_LINE_HEIGHT: f32 = 1.32;
-/// 输入卡片每侧的内边距（逻辑像素，对应卡片的 `px(12.)`）：算可用折行宽度时两侧各扣一份
-const COMPOSER_H_PADDING: f32 = 12.0;
+/// 输入卡片每侧的内边距（逻辑像素，与卡片的 `px(SPACE_MD)` 保持一致）：算可用折行宽度时两侧各扣一份
+const COMPOSER_H_PADDING: f32 = SPACE_MD;
 /// prompt 历史条目的标签宽度上限（显示宽度，CJK 字符按 2 算）。
 const HISTORY_LABEL_WIDTH: usize = 60;
 

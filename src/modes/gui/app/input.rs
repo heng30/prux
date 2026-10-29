@@ -167,9 +167,7 @@ impl GuiApp {
         {
             return editor;
         }
-        if let Some(suggest) = &self.suggest
-            && suggest.trigger != Trigger::Shell
-        {
+        if self.suggest.is_some() {
             return &self.suggest_input;
         }
         match &self.overlay {
@@ -193,9 +191,7 @@ impl GuiApp {
         {
             return editor;
         }
-        if let Some(suggest) = &self.suggest
-            && suggest.trigger != Trigger::Shell
-        {
+        if self.suggest.is_some() {
             return &mut self.suggest_input;
         }
         match self.overlay.as_mut() {

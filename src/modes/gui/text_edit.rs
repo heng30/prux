@@ -4,6 +4,11 @@
 //! 列宽按**字符**计（不是字素簇）：中文字符与 emoji 在光标移动上算一个单位，
 //! 与 TUI 的 `line_input` 保持一致；等宽渲染下不会错位。
 
+use std::ops::Range;
+
+/// 撤销栈深度上限：再深就是回忆，不是编辑。
+const UNDO_LIMIT: usize = 200;
+
 /// 光标位置。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Pos {
@@ -24,9 +29,6 @@ struct Snapshot {
     anchor: Option<Pos>,
 }
 
-/// 撤销栈深度上限：再深就是回忆，不是编辑。
-const UNDO_LIMIT: usize = 200;
-
 /// 多行文本编辑器状态。
 pub struct Editor {
     /// 文本按行存储，至少一行
@@ -39,6 +41,12 @@ pub struct Editor {
     undo: Vec<Snapshot>,
     /// 重做栈
     redo: Vec<Snapshot>,
+    /// 本次进程的输入历史（最旧在前），↑/↓ 翻它
+    history: Vec<String>,
+    /// 正在浏览历史时的下标；`None` 表示在底部草稿上
+    history_index: Option<usize>,
+    /// 进入历史浏览前的草稿（首次 ↑ 时保存，回到草稿时恢复）
+    history_draft: Option<Snapshot>,
 }
 
 impl Default for Editor {
@@ -56,6 +64,9 @@ impl Editor {
             anchor: None,
             undo: Vec::new(),
             redo: Vec::new(),
+            history: Vec::new(),
+            history_index: None,
+            history_draft: None,
         }
     }
 
@@ -83,6 +94,8 @@ impl Editor {
         self.anchor = None;
         self.undo.clear();
         self.redo.clear();
+        self.history_index = None;
+        self.history_draft = None;
     }
 
     /// 所有行（渲染用）。
@@ -93,6 +106,11 @@ impl Editor {
     /// 当前光标。
     pub fn cursor(&self) -> Pos {
         self.cursor
+    }
+
+    /// 是否正在浏览历史（↑/↓ 载入的条目尚未被编辑）；此时不该弹补全面板。
+    pub fn browsing_history(&self) -> bool {
+        self.history_index.is_some()
     }
 
     /// 是否有选区（锚点与光标不重合）。
@@ -106,11 +124,13 @@ impl Editor {
         if anchor == self.cursor || row >= self.lines.len() {
             return None;
         }
+
         let (start, end) = ordered(anchor, self.cursor);
         let line_len = self.lines[row].chars().count();
         if row < start.row || row > end.row {
             return None;
         }
+
         let from = if row == start.row { start.col } else { 0 };
         let to = if row == end.row { end.col } else { line_len };
         (from < to).then_some((from, to))
@@ -121,8 +141,11 @@ impl Editor {
         if text.is_empty() {
             return;
         }
+
+        self.leave_history();
         self.push_undo();
         self.delete_selection();
+
         for ch in text.chars() {
             if ch == '\n' {
                 self.split_line();
@@ -141,15 +164,20 @@ impl Editor {
     /// 退格：删选区，否则删光标前一个字符（行首则与上一行合并）。
     pub fn backspace(&mut self) {
         if self.has_selection() {
+            self.leave_history();
             self.push_undo();
             self.delete_selection();
             self.anchor = None;
             return;
         }
+
         if self.cursor == Pos::default() {
             return;
         }
+
+        self.leave_history();
         self.push_undo();
+
         if self.cursor.col == 0 {
             let line = self.lines.remove(self.cursor.row);
             self.cursor.row -= 1;
@@ -168,20 +196,25 @@ impl Editor {
     /// 删除键：删选区，否则删光标处字符（行尾则与下一行合并）。
     pub fn delete_forward(&mut self) {
         if self.has_selection() {
+            self.leave_history();
             self.push_undo();
             self.delete_selection();
             self.anchor = None;
             return;
         }
+
         let line_len = self.lines[self.cursor.row].chars().count();
         if self.cursor.col == line_len {
             if self.cursor.row + 1 < self.lines.len() {
+                self.leave_history();
                 self.push_undo();
                 let next = self.lines.remove(self.cursor.row + 1);
                 self.lines[self.cursor.row].push_str(&next);
             }
             return;
         }
+
+        self.leave_history();
         self.push_undo();
         let col = self.cursor.col;
         let mut line = self.lines[self.cursor.row].clone();
@@ -215,6 +248,7 @@ impl Editor {
             let line_len = self.lines[self.cursor.row].chars().count();
             self.cursor.col = self.cursor.col.min(line_len);
         }
+
         if dx != 0 {
             let line_len = self.lines[self.cursor.row].chars().count();
             if dx < 0 {
@@ -255,6 +289,149 @@ impl Editor {
         self.cursor.col = self.lines[self.cursor.row].chars().count();
     }
 
+    /// ↑：多行内先移光标行；到首行（Shift 未按下）后切上一条历史。
+    /// 多行时已在首行但光标不在行首，先归行首（下一次 ↑ 才切历史），与 TUI 一致。
+    pub fn move_up_or_history(&mut self, extend: bool) {
+        if extend {
+            self.move_cursor(0, -1, true);
+            return;
+        }
+        if self.cursor.row > 0 {
+            self.move_cursor(0, -1, false);
+            return;
+        }
+        if self.lines.len() > 1 && self.cursor.col > 0 {
+            self.home(false);
+            return;
+        }
+        self.history_prev();
+    }
+
+    /// ↓：多行内先移光标行；到末行（Shift 未按下）后切下一条历史。
+    /// 多行时已在末行但光标不在行尾，先归行尾（下一次 ↓ 才切历史）。
+    pub fn move_down_or_history(&mut self, extend: bool) {
+        if extend {
+            self.move_cursor(0, 1, true);
+            return;
+        }
+        if self.cursor.row + 1 < self.lines.len() {
+            self.move_cursor(0, 1, false);
+            return;
+        }
+        if self.lines.len() > 1 && self.cursor.col < self.line_len() {
+            self.end(false);
+            return;
+        }
+        self.history_next();
+    }
+
+    /// 提交后记一条历史（脏文本不进）；超过 `max` 时丢掉最旧的（`max == 0` 不截断）。
+    pub fn push_history(&mut self, text: &str, max: usize) {
+        if text.trim().is_empty() {
+            return;
+        }
+
+        self.history.push(text.to_string());
+        self.history_index = None;
+        self.history_draft = None;
+        if max > 0 && self.history.len() > max {
+            let drop = self.history.len() - max;
+            self.history.drain(..drop);
+        }
+    }
+
+    /// 上一条历史：列表是环形的（草稿 ↔ 最新…最早 ↔ 草稿）。
+    pub fn history_prev(&mut self) {
+        if self.history.is_empty() {
+            return;
+        }
+
+        match self.history_index {
+            // 顶部（最早一条）再向上 → 回绕到底部草稿
+            Some(0) => self.restore_history_draft(),
+            Some(index) => {
+                self.history_index = Some(index - 1);
+                self.load_history(index - 1);
+            }
+            None => {
+                self.save_history_draft();
+                let last = self.history.len() - 1;
+                self.history_index = Some(last);
+                self.load_history(last);
+            }
+        }
+    }
+
+    /// 下一条历史：最新一条再向下回草稿，底部草稿再向下回最早一条。
+    pub fn history_next(&mut self) {
+        if self.history.is_empty() {
+            return;
+        }
+
+        match self.history_index {
+            None => {
+                self.save_history_draft();
+                self.history_index = Some(0);
+                self.load_history(0);
+            }
+            Some(index) if index + 1 < self.history.len() => {
+                self.history_index = Some(index + 1);
+                self.load_history(index + 1);
+            }
+            Some(_) => self.restore_history_draft(),
+        }
+    }
+
+    /// 当前行的字符数。
+    fn line_len(&self) -> usize {
+        self.lines[self.cursor.row].chars().count()
+    }
+
+    /// 退出历史浏览态（任何编辑都使旧下标失效）。
+    fn leave_history(&mut self) {
+        self.history_index = None;
+        self.history_draft = None;
+    }
+
+    /// 首次进入历史浏览时保存草稿；浏览期间不回写。
+    fn save_history_draft(&mut self) {
+        if self.history_draft.is_none() {
+            self.history_draft = Some(self.snapshot());
+        }
+    }
+
+    /// 回到草稿：没有草稿（如 clear 后）就清空。
+    fn restore_history_draft(&mut self) {
+        self.history_index = None;
+        match self.history_draft.take() {
+            Some(draft) => self.restore(draft),
+            None => {
+                self.lines = vec![String::new()];
+                self.cursor = Pos::default();
+                self.anchor = None;
+            }
+        }
+    }
+
+    /// 把第 `index` 条历史载入编辑器，光标放到末尾（`index` 由调用方保证有效）。
+    fn load_history(&mut self, index: usize) {
+        let Some(text) = self.history.get(index).cloned() else {
+            return;
+        };
+
+        self.lines = text.split('\n').map(str::to_string).collect();
+        if self.lines.is_empty() {
+            self.lines.push(String::new());
+        }
+
+        let row = self.lines.len() - 1;
+        self.cursor = Pos {
+            row,
+            col: self.lines[row].chars().count(),
+        };
+        self.anchor = None;
+    }
+
     /// 词左移（`alt+left` / `ctrl+left` / `alt+b`）：按空白断词，与 TUI 的
     /// `move_word_left` 同一套规则（先跳空白，再跳到本词词首）。
     pub fn word_left(&mut self, extend: bool) {
@@ -263,9 +440,11 @@ impl Editor {
         while col > 0 && chars[col - 1].is_whitespace() {
             col -= 1;
         }
+
         while col > 0 && !chars[col - 1].is_whitespace() {
             col -= 1;
         }
+
         if col == 0 && self.cursor.col == 0 && row > 0 {
             // 已在行首：跳到上一行行尾
             if extend {
@@ -285,9 +464,11 @@ impl Editor {
         while col < chars.len() && !chars[col].is_whitespace() {
             col += 1;
         }
+
         while col < chars.len() && chars[col].is_whitespace() {
             col += 1;
         }
+
         if col == chars.len() && self.cursor.col == chars.len() && row + 1 < self.lines.len() {
             // 已在行尾：跳到下一行行首
             if extend {
@@ -308,6 +489,7 @@ impl Editor {
             self.anchor = None;
             return;
         }
+
         let before = self.cursor;
         self.word_left(false);
         let start = self.cursor;
@@ -323,6 +505,7 @@ impl Editor {
             self.anchor = None;
             return;
         }
+
         let start = self.cursor;
         self.word_right(false);
         let end = self.cursor;
@@ -336,6 +519,7 @@ impl Editor {
             row: self.cursor.row,
             col: 0,
         };
+
         if self.cursor.col == 0 {
             if self.cursor.row > 0 {
                 self.push_undo();
@@ -352,11 +536,13 @@ impl Editor {
             row: self.cursor.row,
             col: self.lines[self.cursor.row].chars().count(),
         };
+
         if self.cursor.col == end.col {
             self.push_undo();
             self.delete_forward();
             return;
         }
+
         self.delete_range(self.cursor, end);
     }
 
@@ -365,11 +551,14 @@ impl Editor {
         if start == end {
             return;
         }
+
         let (start, end) = if ordered(start, end) == (start, end) {
             (start, end)
         } else {
             (end, start)
         };
+
+        self.leave_history();
         self.push_undo();
         let head: String = self.lines[start.row].chars().take(start.col).collect();
         let tail: String = self.lines[end.row].chars().skip(end.col).collect();
@@ -382,13 +571,16 @@ impl Editor {
     ///
     /// `extend` 为真时保留锚点（拖选/Shift 点选）；为假时清掉选区。
     pub fn set_cursor(&mut self, row: usize, col: usize, extend: bool) {
+        self.leave_history();
         let row = row.min(self.lines.len().saturating_sub(1));
         let len = self.lines[row].chars().count();
+
         if extend {
             self.anchor.get_or_insert(self.cursor);
         } else {
             self.anchor = None;
         }
+
         self.cursor = Pos {
             row,
             col: col.min(len),
@@ -410,6 +602,7 @@ impl Editor {
         let Some(snapshot) = self.undo.pop() else {
             return false;
         };
+
         self.redo.push(self.snapshot());
         self.restore(snapshot);
         true
@@ -420,6 +613,7 @@ impl Editor {
         let Some(snapshot) = self.redo.pop() else {
             return false;
         };
+
         self.undo.push(self.snapshot());
         self.restore(snapshot);
         true
@@ -430,19 +624,23 @@ impl Editor {
         let Some(anchor) = self.anchor else {
             return self.lines[self.cursor.row].clone();
         };
+
         let (start, end) = ordered(anchor, self.cursor);
         if start == end {
             return String::new();
         }
+
         if start.row == end.row {
             let line = &self.lines[start.row];
             return slice_chars(line, start.col, end.col);
         }
+
         let mut out = slice_chars(&self.lines[start.row], start.col, usize::MAX);
         for row in start.row + 1..end.row {
             out.push('\n');
             out.push_str(&self.lines[row]);
         }
+
         out.push('\n');
         out.push_str(&slice_chars(&self.lines[end.row], 0, end.col));
         out
@@ -466,12 +664,13 @@ impl Editor {
     }
 
     /// 选区的 UTF-16 区间（起点 ≤ 终点）与光标是否落在起点（`reversed`）。
-    pub fn selection_utf16(&self) -> (std::ops::Range<usize>, bool) {
+    pub fn selection_utf16(&self) -> (Range<usize>, bool) {
         let text = self.text();
         let Some(anchor) = self.anchor else {
             let cursor = self.cursor_utf16();
             return (cursor..cursor, false);
         };
+
         let (start, end) = ordered(anchor, self.cursor);
         let from = byte_to_utf16(&text, self.byte_at(start));
         let to = byte_to_utf16(&text, self.byte_at(end));
@@ -480,22 +679,27 @@ impl Editor {
 
     /// 用 `text` 替换全文字节区间 `range`，光标落到替换内容末尾（IME 组装/提交用）。
     /// 区间端点不在字符边界时向内收缩。
-    pub fn replace_byte_range(&mut self, range: std::ops::Range<usize>, text: &str) {
+    pub fn replace_byte_range(&mut self, range: Range<usize>, text: &str) {
         let mut full = self.text();
         let mut start = range.start.min(full.len());
         let mut end = range.end.min(full.len()).max(start);
+
         while !full.is_char_boundary(start) {
             start -= 1;
         }
+
         while !full.is_char_boundary(end) {
             end -= 1;
         }
+
+        self.leave_history();
         self.push_undo();
         full.replace_range(start..end, text);
         self.lines = full.split('\n').map(str::to_string).collect();
         if self.lines.is_empty() {
             self.lines.push(String::new());
         }
+
         self.cursor = self.pos_at(start + text.len());
         self.anchor = None;
     }
@@ -522,6 +726,7 @@ impl Editor {
             }
             offset += line.len() + 1;
         }
+
         let row = self.lines.len() - 1;
         Pos {
             row,
@@ -574,10 +779,12 @@ impl Editor {
         let Some(anchor) = self.anchor else {
             return;
         };
+
         let (start, end) = ordered(anchor, self.cursor);
         if start == end {
             return;
         }
+
         let head = slice_chars(&self.lines[start.row], 0, start.col);
         let tail = slice_chars(&self.lines[end.row], end.col, usize::MAX);
         self.lines.drain(start.row..=end.row);
@@ -606,7 +813,7 @@ pub fn byte_to_utf16(text: &str, offset: usize) -> usize {
 }
 
 /// 全文的 UTF-16 区间 → 字节区间（越界夹到两端，端点落在字符中间时向下取整）。
-pub fn utf16_range_to_bytes(text: &str, range: std::ops::Range<usize>) -> std::ops::Range<usize> {
+pub fn utf16_range_to_bytes(text: &str, range: Range<usize>) -> Range<usize> {
     let byte_at = |target: usize| {
         let mut utf16 = 0;
         for (byte, ch) in text.char_indices() {
@@ -617,6 +824,7 @@ pub fn utf16_range_to_bytes(text: &str, range: std::ops::Range<usize>) -> std::o
         }
         text.len()
     };
+
     let start = byte_at(range.start);
     let end = byte_at(range.end).max(start);
     start..end
@@ -773,5 +981,74 @@ mod tests {
         assert_eq!(editor.cursor(), Pos { row: 1, col: 0 });
         editor.move_cursor(-1, 0, false);
         assert_eq!(editor.cursor(), Pos { row: 0, col: 6 });
+    }
+
+    /// ↑/↓：单行时就是历史环（草稿 ↔ 最新…最早 ↔ 草稿）。
+    #[test]
+    fn arrows_cycle_history_when_single_line() {
+        let mut editor = Editor::new();
+        editor.push_history("first", 0);
+        editor.push_history("second", 0);
+        editor.insert("draft");
+
+        editor.move_up_or_history(false);
+        assert_eq!(editor.text(), "second");
+        editor.move_up_or_history(false);
+        assert_eq!(editor.text(), "first");
+        editor.move_up_or_history(false);
+        assert_eq!(editor.text(), "draft", "顶部再 ↑ 回草稿");
+
+        editor.move_down_or_history(false);
+        assert_eq!(editor.text(), "first", "草稿 ↓ 回绕到最早一条");
+        editor.move_down_or_history(false);
+        assert_eq!(editor.text(), "second");
+        editor.move_down_or_history(false);
+        assert_eq!(editor.text(), "draft");
+        assert!(!editor.browsing_history(), "回到草稿就不是浏览态");
+        editor.move_up_or_history(false);
+        assert!(editor.browsing_history());
+    }
+
+    /// 多行时 ↑/↓ 先走光标行：到边界且不在行首/行尾时先归位，再按才是历史。
+    #[test]
+    fn arrows_move_lines_before_history() {
+        let mut editor = Editor::new();
+        editor.push_history("history-line", 0);
+        editor.insert("ab\ncd");
+
+        editor.move_up_or_history(false);
+        assert_eq!(editor.cursor(), Pos { row: 0, col: 2 });
+        editor.move_up_or_history(false);
+        assert_eq!(editor.cursor(), Pos { row: 0, col: 0 }, "首行非行首先归位");
+        assert_eq!(editor.text(), "ab\ncd", "归位不算切历史");
+        editor.move_up_or_history(false);
+        assert_eq!(editor.text(), "history-line");
+
+        // Shift+↑ 只扩选，不切历史
+        let mut selected = Editor::new();
+        selected.push_history("old", 0);
+        selected.insert("ab\ncd");
+        selected.move_up_or_history(true);
+        assert!(selected.has_selection());
+        assert_eq!(selected.text(), "ab\ncd");
+    }
+
+    /// 浏览历史后再编辑：退出浏览态，下一次 ↑ 从最新一条重新开始。
+    #[test]
+    fn editing_exits_history_browsing() {
+        let mut editor = Editor::new();
+        editor.push_history("old", 0);
+        editor.move_up_or_history(false);
+        assert_eq!(editor.text(), "old");
+        assert!(editor.history_index.is_some());
+
+        editor.insert("!");
+        assert_eq!(editor.history_index, None);
+        assert_eq!(editor.text(), "old!");
+
+        editor.clear();
+        editor.insert("draft");
+        editor.move_up_or_history(false);
+        assert_eq!(editor.text(), "old", "编辑不进历史，↑ 仍是那条");
     }
 }

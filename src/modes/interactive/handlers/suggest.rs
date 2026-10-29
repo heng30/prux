@@ -9,7 +9,7 @@ use crate::{
         app::{App, FileScanResult, SuggestionItem, SuggestionKind},
         run_in_event_loop,
     },
-    utils::fuzzy::fuzzy_filter,
+    utils::fuzzy::{fuzzy_filter, path_score},
 };
 use ignore::WalkState;
 use regex::Regex;
@@ -85,26 +85,6 @@ impl App {
 /// 取路径最后一段（已归一化为 / 分隔）
 fn basename(path: &str) -> &str {
     path.rfind('/').map(|i| &path[i + 1..]).unwrap_or(path)
-}
-
-/// 评分：文件名完全>开头>子串，完整路径子串最低，目录 +10
-fn score_entry(file_path: &str, query: &str, is_dir: bool) -> i32 {
-    let lower_file = basename(file_path).to_lowercase();
-    let lower_query = query.to_lowercase();
-    let mut score = 0;
-    if lower_file == lower_query {
-        score = 100;
-    } else if lower_file.starts_with(&lower_query) {
-        score = 80;
-    } else if lower_file.contains(&lower_query) {
-        score = 50;
-    } else if file_path.to_lowercase().contains(&lower_query) {
-        score = 30;
-    }
-    if is_dir && score > 0 {
-        score += 10;
-    }
-    score
 }
 
 /// 候选排序键：分数高优先，其次浅层、短路径、字典序。
@@ -193,7 +173,7 @@ fn file_suggestions_walk(tail: &str, cwd: &str, cancel: &AtomicBool) -> Vec<Sugg
             let score = if query.is_empty() {
                 1
             } else {
-                score_entry(&rel, &query, is_dir)
+                path_score(&rel, &query, is_dir)
             };
             if score <= 0 {
                 return WalkState::Continue;
@@ -899,18 +879,6 @@ mod tests {
         a.apply_suggestion();
         assert_eq!(a.editor.text(), "/model ", "命令补全后应加空格（对齐 pi）");
         assert!(!a.suggestion.active);
-    }
-
-    #[test]
-    fn score_ranks_filenames_before_paths() {
-        // 文件名完全匹配=100 > 开头=80 > 子串=50 > 仅完整路径子串=30；目录 +10
-        assert_eq!(score_entry("main.rs", "main.rs", false), 100);
-        assert_eq!(score_entry("main.rs", "main", false), 80);
-        assert_eq!(score_entry("xmain.rs", "main", false), 50);
-        assert_eq!(score_entry("src/main", "src", false), 30);
-        assert!(score_entry("main.rs", "main", false) > score_entry("xmain.rs", "main", false));
-        assert!(score_entry("xmain.rs", "main", false) > score_entry("src/main", "src", false));
-        assert_eq!(score_entry("adir", "ad", true), 90);
     }
 
     #[test]

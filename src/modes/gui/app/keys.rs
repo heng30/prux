@@ -158,14 +158,14 @@ impl GuiApp {
                     cx.notify();
                     return true;
                 }
-                // 有候选时 Enter 先采纳；shell 面板没有候选，Enter 直接执行
-                "enter" if suggest.trigger != Trigger::Shell && !suggest.items.is_empty() => {
+                // 有候选时 Enter 先采纳
+                "enter" if !suggest.items.is_empty() => {
                     self.apply_suggestion(cx);
                     cx.notify();
                     return true;
                 }
                 // 退格/方向键改的是面板输入框，不动主输入框
-                "backspace" if suggest.trigger != Trigger::Shell => {
+                "backspace" => {
                     if self.suggest_input.text().is_empty() {
                         // 面板输入已空：收起面板，触发符留在输入框里由用户自己删
                         self.suggest_dismissed = Some(suggest.start);
@@ -177,13 +177,13 @@ impl GuiApp {
                     cx.notify();
                     return true;
                 }
-                "delete" if suggest.trigger != Trigger::Shell => {
+                "delete" => {
                     self.suggest_input.delete_forward();
                     self.refresh_suggest_from_input(cx);
                     cx.notify();
                     return true;
                 }
-                "left" | "right" | "home" | "end" if suggest.trigger != Trigger::Shell => {
+                "left" | "right" | "home" | "end" => {
                     match keystroke.key.as_str() {
                         "left" => self.suggest_input.move_cursor(-1, 0, shift),
                         "right" => self.suggest_input.move_cursor(1, 0, shift),
@@ -508,11 +508,11 @@ impl GuiApp {
                 cx.notify();
             }
             "up" => {
-                self.editor.move_cursor(0, -1, shift);
+                self.editor.move_up_or_history(shift);
                 cx.notify();
             }
             "down" => {
-                self.editor.move_cursor(0, 1, shift);
+                self.editor.move_down_or_history(shift);
                 cx.notify();
             }
             "home" => {

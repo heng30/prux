@@ -2,6 +2,10 @@
 //!
 //! 拆自 [`super::app`]：只搬渲染代码，状态与按键分发仍在父模块。
 
+use super::theme::{
+    CONTROL_H_MD, CONTROL_H_SM, DOT_SIZE, FONT_BODY, FONT_CAPTION, FONT_HERO, FONT_SMALL,
+    RADIUS_LG, RADIUS_MD, RADIUS_SM, SPACE_LG, SPACE_MD, SPACE_SM, SPACE_XL, SPACE_XS,
+};
 use super::*;
 
 impl GuiApp {
@@ -14,39 +18,35 @@ impl GuiApp {
     ) -> AnyElement {
         let mut column = div()
             .w_full()
-            .rounded(px(10.))
+            .rounded(px(RADIUS_MD))
             .bg(theme.composer)
             .border_1()
             .border_color(theme.border_strong)
-            .p(px(4.))
+            .p(px(SPACE_XS))
             .flex()
             .flex_col()
-            .text_size(px(12.5));
+            .text_size(px(FONT_SMALL));
         column = column.child(
             div()
                 .w_full()
-                .rounded(px(6.))
+                .rounded(px(RADIUS_MD))
                 .bg(theme.canvas)
                 .border_1()
                 .border_color(theme.border)
-                .px(px(8.))
-                .py(px(5.))
-                .text_size(px(12.5))
+                .px(px(SPACE_SM))
+                .py(px(SPACE_XS))
+                .text_size(px(FONT_SMALL))
                 .text_color(theme.text)
                 .child(composer::render(&self.suggest_input, theme)),
         );
         if suggest.items.is_empty() {
             column = column.child(
                 div()
-                    .px(px(8.))
-                    .py(px(6.))
-                    .text_size(px(11.5))
+                    .px(px(SPACE_SM))
+                    .py(px(SPACE_XS))
+                    .text_size(px(FONT_SMALL))
                     .text_color(theme.text_ghost)
-                    .child(SharedString::from(if suggest.trigger == Trigger::Shell {
-                        "Runs locally; output goes into the context"
-                    } else {
-                        "No matches"
-                    })),
+                    .child(SharedString::from("No matches")),
             );
         }
         // 候选区与 Ctrl-M 面板同一套行渲染 + 可滚动容器：条目多时滚轮能翻到
@@ -167,7 +167,7 @@ impl GuiApp {
                     .right(px(1.))
                     .w(px(SCROLLBAR_WIDTH))
                     .h(gpui::px(height))
-                    .rounded(px(4.))
+                    .rounded(px(RADIUS_SM))
                     .bg(theme.text_ghost),
             )
             .into_any_element()
@@ -185,7 +185,7 @@ impl GuiApp {
             .flex()
             .flex_col()
             .items_end()
-            .gap(px(6.));
+            .gap(px(SPACE_XS));
         for toast in &self.toasts {
             let (base, text_color) = match toast.kind {
                 ToastKind::Info => (theme.raised, theme.text),
@@ -195,13 +195,13 @@ impl GuiApp {
             column = column.child(
                 div()
                     .w_full()
-                    .px(px(12.))
-                    .py(px(8.))
-                    .rounded(px(8.))
+                    .px(px(SPACE_MD))
+                    .py(px(SPACE_SM))
+                    .rounded(px(RADIUS_MD))
                     .bg(base)
                     .border_1()
                     .border_color(theme.border_strong)
-                    .text_size(px(12.))
+                    .text_size(px(FONT_SMALL))
                     .text_color(text_color)
                     .child(SharedString::from(toast.text.clone())),
             );
@@ -250,7 +250,7 @@ impl GuiApp {
             .and_then(|s| s.thinking.clone())
             .filter(|t| t != "off");
 
-        let mut chrome_right = div().flex().items_center().gap(px(6.));
+        let mut chrome_right = div().flex().items_center().gap(px(SPACE_XS));
         chrome_right = chrome_right.child(
             chip(&theme, model.clone(), false)
                 .id("model-chip")
@@ -282,15 +282,15 @@ impl GuiApp {
         chrome_right = chrome_right.child(
             div()
                 .id("command-palette-button")
-                .h(px(20.))
-                .px(px(8.))
-                .rounded(px(5.))
+                .h(px(CONTROL_H_SM))
+                .px(px(SPACE_SM))
+                .rounded(px(RADIUS_SM))
                 .flex()
                 .items_center()
                 .bg(theme.overlay)
                 .border_1()
                 .border_color(theme.border)
-                .text_size(px(10.5))
+                .text_size(px(FONT_CAPTION))
                 .text_color(theme.text_secondary)
                 .cursor_pointer()
                 .hover(|style| style.bg(theme.overlay_strong).text_color(theme.text))
@@ -307,22 +307,22 @@ impl GuiApp {
             .w_full()
             .flex()
             .items_center()
-            .gap(px(8.))
-            .px(px(14.))
+            .gap(px(SPACE_SM))
+            .px(px(SPACE_MD))
             .bg(theme.canvas)
             .border_b_1()
             .border_color(theme.border)
-            .child(dot(theme.accent, 7.))
+            .child(dot(theme.accent, DOT_SIZE))
             .child(
                 div()
-                    .text_size(px(12.5))
+                    .text_size(px(FONT_SMALL))
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .text_color(theme.text)
                     .child(SharedString::from(project)),
             )
             .child(
                 div()
-                    .text_size(px(12.))
+                    .text_size(px(FONT_SMALL))
                     .text_color(theme.text_ghost)
                     .child(SharedString::from("›")),
             )
@@ -330,7 +330,7 @@ impl GuiApp {
                 div()
                     .min_w_0()
                     .truncate()
-                    .text_size(px(12.))
+                    .text_size(px(FONT_SMALL))
                     .text_color(theme.text_secondary)
                     .child(SharedString::from(session_title)),
             )
@@ -348,7 +348,7 @@ impl GuiApp {
         let pane_width = self.pane_width.get();
         // 内容的可用内宽：对话区宽度减去左右内边距（首帧还没量到时按最大宽度估）
         let flow_width = if pane_width > px(0.) {
-            (pane_width - px(56.)).min(px(CONTENT_MAX_WIDTH))
+            (pane_width - px(SPACE_XL * 2. + SPACE_SM)).min(px(CONTENT_MAX_WIDTH))
         } else {
             px(CONTENT_MAX_WIDTH)
         };
@@ -371,7 +371,7 @@ impl GuiApp {
         };
         // 默认行高是 φ（1.618em），行内代码/高亮背景会又高又连在一起，
         // 文字也不在背景里居中；正文统一用更紧的行高
-        let mut flow = div().w_full().flex().flex_col().gap(px(14.));
+        let mut flow = div().w_full().flex().flex_col().gap(px(SPACE_MD));
         for (index, block) in self.transcript.blocks_mut().iter_mut().enumerate() {
             flow = flow.child(transcript::render_block(
                 block,
@@ -389,7 +389,7 @@ impl GuiApp {
             .flex_shrink_0()
             .max_w(px(CONTENT_MAX_WIDTH))
             .mx_auto()
-            .px(px(28.))
+            .px(px(SPACE_XL))
             .pt(px(FLOW_PADDING_TOP))
             .pb(px(FLOW_PADDING_BOTTOM));
         // 滚动容器里的内容会被按「无限宽」测量，之后又按实际宽度换行画出来：
@@ -483,18 +483,18 @@ impl GuiApp {
             .as_ref()
             .map(|s| s.usage.context_tokens)
             .unwrap_or(0);
-        let mut hint = div().flex().items_center().gap(px(8.));
+        let mut hint = div().flex().items_center().gap(px(SPACE_SM));
         hint = hint.child(
             div()
                 .id("attach")
-                .h(px(20.))
-                .px(px(8.))
-                .rounded(px(5.))
+                .h(px(CONTROL_H_SM))
+                .px(px(SPACE_SM))
+                .rounded(px(RADIUS_SM))
                 .flex()
                 .items_center()
                 .border_1()
                 .border_color(theme.border)
-                .text_size(px(11.))
+                .text_size(px(FONT_CAPTION))
                 .text_color(theme.text_secondary)
                 .cursor_pointer()
                 .hover(|style| style.bg(theme.overlay).text_color(theme.text))
@@ -506,7 +506,7 @@ impl GuiApp {
         if tokens > 0 {
             hint = hint.child(
                 div()
-                    .text_size(px(10.5))
+                    .text_size(px(FONT_CAPTION))
                     .text_color(theme.text_ghost)
                     .child(SharedString::from(format!("context {tokens} tok"))),
             );
@@ -516,12 +516,12 @@ impl GuiApp {
         hint = hint.child(
             div()
                 .id("send")
-                .h(px(26.))
-                .px(px(14.))
-                .rounded(px(7.))
+                .h(px(CONTROL_H_MD))
+                .px(px(SPACE_MD))
+                .rounded(px(RADIUS_MD))
                 .flex()
                 .items_center()
-                .text_size(px(11.5))
+                .text_size(px(FONT_SMALL))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .bg(theme.inverse)
                 .text_color(theme.on_inverse)
@@ -553,16 +553,16 @@ impl GuiApp {
             .w_full()
             .max_w(px(CONTENT_MAX_WIDTH))
             .mx_auto()
-            .rounded(px(12.))
+            .rounded(px(RADIUS_LG))
             .bg(theme.composer)
             .border_1()
             .border_color(theme.border_strong)
             .flex()
             .flex_col()
-            .gap(px(8.))
-            .px(px(12.))
-            .pt(px(10.))
-            .pb(px(8.))
+            .gap(px(SPACE_SM))
+            .px(px(SPACE_MD))
+            .pt(px(SPACE_SM))
+            .pb(px(SPACE_SM))
             .child(composer::render_wrapped(
                 &self.editor,
                 &theme,
@@ -610,25 +610,25 @@ impl GuiApp {
                         .w_full()
                         .max_w(px(CONTENT_MAX_WIDTH))
                         .mx_auto()
-                        .px(px(28.))
+                        .px(px(SPACE_XL))
                         .flex()
                         .flex_col()
-                        .gap(px(16.))
+                        .gap(px(SPACE_LG))
                         .child(
                             div()
                                 .flex()
                                 .flex_col()
-                                .gap(px(4.))
+                                .gap(px(SPACE_XS))
                                 .child(
                                     div()
-                                        .text_size(px(22.))
+                                        .text_size(px(FONT_HERO))
                                         .font_weight(gpui::FontWeight::SEMIBOLD)
                                         .text_color(theme.text)
                                         .child(SharedString::from("What should we build today?")),
                                 )
                                 .child(
                                     div()
-                                        .text_size(px(12.5))
+                                        .text_size(px(FONT_SMALL))
                                         .text_color(theme.text_tertiary)
                                         .child(SharedString::from(
                                             "Enter to send · Ctrl-M for commands · Ctrl-Shift-O to switch sessions",
@@ -638,8 +638,8 @@ impl GuiApp {
                         .child(measured_composer(composer_card, self.composer_bounds.clone()))
                         .child(
                             div()
-                                .px(px(13.))
-                                .text_size(px(10.5))
+                                .px(px(SPACE_MD))
+                                .text_size(px(FONT_CAPTION))
                                 .text_color(theme.text_ghost)
                                 .child(SharedString::from(
                                     "Shift+Enter new line · Ctrl-L model · Ctrl-Q quit",
@@ -659,21 +659,21 @@ impl GuiApp {
                     div()
                         .flex_none()
                         .w_full()
-                        .px(px(28.))
-                        .pb(px(6.))
+                        .px(px(SPACE_XL))
+                        .pb(px(SPACE_XS))
                         .child(composer_card),
                     self.composer_bounds.clone(),
                 ))
                 .child(
-                    div().flex_none().w_full().px(px(28.)).pb(px(6.)).child(
+                    div().flex_none().w_full().px(px(SPACE_XL)).pb(px(SPACE_XS)).child(
                         div()
                             .max_w(px(CONTENT_MAX_WIDTH))
                             .mx_auto()
-                            .px(px(13.))
+                            .px(px(SPACE_MD))
                             .flex()
                             .items_center()
                             .justify_between()
-                            .text_size(px(10.5))
+                            .text_size(px(FONT_CAPTION))
                             .text_color(theme.text_ghost)
                             .child(SharedString::from(footer_status))
                             .child(SharedString::from(
@@ -809,7 +809,7 @@ impl GuiApp {
             .size_full()
             .bg(theme.canvas)
             .text_color(theme.text)
-            .text_size(px(13.))
+            .text_size(px(FONT_BODY))
             .font_family(theme::UI_FONT_FAMILY)
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::on_key_down))
@@ -921,8 +921,8 @@ impl GuiApp {
                 .left(gpui::px(left))
                 .top(gpui::px(top))
                 .w(gpui::px(width_px))
-                .p(px(4.))
-                .rounded(px(8.))
+                .p(px(SPACE_XS))
+                .rounded(px(RADIUS_MD))
                 .bg(theme.composer)
                 .border_1()
                 .border_color(theme.border_strong)
@@ -944,13 +944,13 @@ impl GuiApp {
                 let action = item.action.clone();
                 let mut row = div()
                     .id(("dropdown", index))
-                    .min_h(px(24.))
-                    .px(px(8.))
-                    .rounded(px(6.))
+                    .min_h(px(CONTROL_H_MD))
+                    .px(px(SPACE_SM))
+                    .rounded(px(RADIUS_MD))
                     .flex()
                     .items_center()
-                    .gap(px(10.))
-                    .text_size(px(12.))
+                    .gap(px(SPACE_SM))
+                    .text_size(px(FONT_SMALL))
                     .text_color(theme.text_secondary)
                     .cursor_pointer()
                     .hover(|style| style.bg(theme.overlay).text_color(theme.text))
@@ -969,7 +969,7 @@ impl GuiApp {
                     row = row.child(
                         div()
                             .flex_none()
-                            .text_size(px(10.5))
+                            .text_size(px(FONT_CAPTION))
                             .text_color(theme.text_ghost)
                             .child(SharedString::from(item.detail.clone())),
                     );
@@ -1056,8 +1056,8 @@ impl GuiApp {
                             .left(anchor.x)
                             .top(anchor.y)
                             .w(px(132.))
-                            .p(px(4.))
-                            .rounded(px(8.))
+                            .p(px(SPACE_XS))
+                            .rounded(px(RADIUS_MD))
                             .bg(theme.composer)
                             .border_1()
                             .border_color(theme.border_strong)
@@ -1071,12 +1071,12 @@ impl GuiApp {
                             .child(
                                 div()
                                     .id("session-menu-rename")
-                                    .h(px(26.))
-                                    .px(px(8.))
-                                    .rounded(px(6.))
+                                    .h(px(CONTROL_H_MD))
+                                    .px(px(SPACE_SM))
+                                    .rounded(px(RADIUS_MD))
                                     .flex()
                                     .items_center()
-                                    .text_size(px(12.))
+                                    .text_size(px(FONT_SMALL))
                                     .text_color(theme.text_secondary)
                                     .cursor_pointer()
                                     .hover(|style| style.bg(theme.overlay).text_color(theme.text))
@@ -1092,12 +1092,12 @@ impl GuiApp {
                             .child(
                                 div()
                                     .id("session-menu-delete")
-                                    .h(px(26.))
-                                    .px(px(8.))
-                                    .rounded(px(6.))
+                                    .h(px(CONTROL_H_MD))
+                                    .px(px(SPACE_SM))
+                                    .rounded(px(RADIUS_MD))
                                     .flex()
                                     .items_center()
-                                    .text_size(px(12.))
+                                    .text_size(px(FONT_SMALL))
                                     .text_color(theme.text_secondary)
                                     .cursor_pointer()
                                     .hover(|style| style.bg(theme.overlay).text_color(theme.danger))
@@ -1168,17 +1168,17 @@ impl GuiApp {
                     cx.listener(|_, _, _, cx| cx.stop_propagation()),
                 )
                 .w(px(380.))
-                .rounded(px(12.))
+                .rounded(px(RADIUS_LG))
                 .bg(theme.composer)
                 .border_1()
                 .border_color(theme.border_strong)
-                .p(px(16.))
+                .p(px(SPACE_LG))
                 .flex()
                 .flex_col()
-                .gap(px(10.))
+                .gap(px(SPACE_SM))
                 .child(
                     div()
-                        .text_size(px(13.))
+                        .text_size(px(FONT_BODY))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(theme.text)
                         .child(SharedString::from(title)),
@@ -1187,18 +1187,18 @@ impl GuiApp {
                 card = card.child(
                     div()
                         .w_full()
-                        .rounded(px(8.))
+                        .rounded(px(RADIUS_MD))
                         .bg(theme.canvas)
                         .border_1()
                         .border_color(theme.border)
-                        .px(px(10.))
-                        .py(px(8.))
+                        .px(px(SPACE_SM))
+                        .py(px(SPACE_SM))
                         .child(field),
                 );
             } else {
                 card = card.child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(px(FONT_SMALL))
                         .text_color(theme.text_secondary)
                         .child(SharedString::from(body)),
                 );
@@ -1206,7 +1206,7 @@ impl GuiApp {
             card = card
                 .child(
                     div()
-                        .text_size(px(10.5))
+                        .text_size(px(FONT_CAPTION))
                         .text_color(theme.text_ghost)
                         .child(SharedString::from(if danger {
                             "Enter to delete · Esc cancel"
@@ -1219,16 +1219,16 @@ impl GuiApp {
                         .flex()
                         .items_center()
                         .justify_end()
-                        .gap(px(8.))
+                        .gap(px(SPACE_SM))
                         .child(
                             div()
                                 .id("dialog-cancel")
-                                .h(px(26.))
-                                .px(px(12.))
-                                .rounded(px(7.))
+                                .h(px(CONTROL_H_MD))
+                                .px(px(SPACE_MD))
+                                .rounded(px(RADIUS_MD))
                                 .flex()
                                 .items_center()
-                                .text_size(px(11.5))
+                                .text_size(px(FONT_SMALL))
                                 .bg(theme.overlay)
                                 .text_color(theme.text_secondary)
                                 .cursor_pointer()
@@ -1242,12 +1242,12 @@ impl GuiApp {
                         .child(
                             div()
                                 .id("dialog-confirm")
-                                .h(px(26.))
-                                .px(px(12.))
-                                .rounded(px(7.))
+                                .h(px(CONTROL_H_MD))
+                                .px(px(SPACE_MD))
+                                .rounded(px(RADIUS_MD))
                                 .flex()
                                 .items_center()
-                                .text_size(px(11.5))
+                                .text_size(px(FONT_SMALL))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .bg(theme.inverse)
                                 .text_color(theme.on_inverse)

@@ -1,6 +1,10 @@
-//! 输入框补全提示：`/` 命令、`@` 文件路径、`!` `!!` shell 命令。
+//! 输入框补全提示：`/` 命令、`@` 文件路径。
 //!
 //! 只做「识别触发词 + 给候选」，插入/执行由视图层负责（见 [`super::app`]）。
+//! 匹配规则与 TUI 一致：`/` 按字符顺序模糊匹配（[`crate::utils::fuzzy`]），
+//! `@` 按路径打分（[`crate::utils::fuzzy::path_score`]），都不是简单前缀。
+
+use crate::utils::fuzzy::{fuzzy_filter, path_score};
 
 /// 候选面板最多显示几条。
 pub const MAX_ITEMS: usize = 30;
@@ -12,8 +16,6 @@ pub enum Trigger {
     Command,
     /// `@` 开头的文件路径
     File,
-    /// `!` / `!!` 开头的 shell 命令
-    Shell,
 }
 
 /// 一条候选。
@@ -53,13 +55,14 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("fork", "Fork current session"),
     ("label", "Label current branch"),
     ("tree", "Session tree"),
-    ("giff", "Review uncommitted changes"),
+    ("sidebar", "Toggle session sidebar"),
     ("import", "Import session file"),
     ("history", "Search prompt history"),
     ("share", "Share session (gist)"),
     ("export", "Export session (HTML)"),
     ("copy", "Copy last reply"),
     ("rewind", "Rewind last input"),
+    ("giff", "Review uncommitted changes"),
     ("quit", "Quit"),
 ];
 
@@ -70,68 +73,93 @@ fn token_start(text: &str) -> usize {
 
 /// 识别光标前的触发词，返回类型、起点（全文字节）与已输入前缀。
 ///
-/// `/` 与 `!` `!!` 只在行首生效（与命令行习惯一致），`@` 可以在行内任意位置。
+/// `/` 只在行首生效（与命令行习惯一致），`@` 可以在行内任意位置。
+/// `!` / `!!` 是 shell 命令，没有候选，不触发面板。
 pub fn detect(text_before_cursor: &str) -> Option<(Trigger, usize, String)> {
     let start = token_start(text_before_cursor);
     let token = &text_before_cursor[start..];
     let at_line_start = start == 0 || text_before_cursor[..start].ends_with('\n');
 
-    if at_line_start {
-        if let Some(rest) = token.strip_prefix("!!") {
-            return Some((Trigger::Shell, start, rest.to_string()));
-        }
-        if let Some(rest) = token.strip_prefix('!') {
-            return Some((Trigger::Shell, start, rest.to_string()));
-        }
-        if let Some(rest) = token.strip_prefix('/') {
-            return Some((Trigger::Command, start, rest.to_string()));
-        }
+    if at_line_start && let Some(rest) = token.strip_prefix('/') {
+        return Some((Trigger::Command, start, rest.to_string()));
     }
+
     if let Some(rest) = token.strip_prefix('@') {
         return Some((Trigger::File, start, rest.to_string()));
     }
     None
 }
 
-/// 命令候选：名字前缀匹配。
-pub fn commands(query: &str) -> Vec<Item> {
-    let query = query.trim().to_lowercase();
-    COMMANDS
-        .iter()
-        .filter(|(name, _)| name.starts_with(&query))
-        .take(MAX_ITEMS)
-        .map(|(name, detail)| Item {
-            label: format!("/{name}"),
-            detail: (*detail).to_string(),
-        })
-        .collect()
+/// 命令候选：内置命令 + `extra`（技能、扩展命令）一起做字符顺序匹配并按匹配质量排序。
+///
+/// `extra` 是 `(名字, 说明)`，名字不含前导 `/`。技能名以 `skill:` 开头时按裸名参与匹配
+/// （`/idea` 不得因 `skill:` 里的字符误命中），显式查 `skill:` 前缀时仍按全名匹配。
+fn command_candidates(extra: &[(String, String)], query: &str) -> Vec<Item> {
+    let mut all: Vec<(&str, &str)> = COMMANDS.to_vec();
+    all.extend(
+        extra
+            .iter()
+            .map(|(name, detail)| (name.as_str(), detail.as_str())),
+    );
+    let explicit_skill = query.trim().to_lowercase().starts_with("skill:");
+    fuzzy_filter(&all, query, move |(name, _): &(&str, &str)| {
+        if explicit_skill {
+            name
+        } else {
+            name.strip_prefix("skill:").unwrap_or(name)
+        }
+    })
+    .into_iter()
+    .take(MAX_ITEMS)
+    .map(|(name, detail)| Item {
+        label: format!("/{name}"),
+        detail: (*detail).to_string(),
+    })
+    .collect()
 }
 
-/// 文件候选：路径子串匹配（`@src/mo` 这种逐段输入最好用），文件名命中的排前面。
+/// 命令候选（内置 + 技能 + 扩展命令），排序与查询不分来源。
+pub fn commands_with(extra: &[(String, String)], query: &str) -> Vec<Item> {
+    command_candidates(extra, query)
+}
+
+/// 文件候选：路径打分（文件名完全>开头>子串，其次仅路径子串），同分按层级浅、路径短、字典序。
 ///
+/// 查询是子串而非字符顺序匹配（`@sgt` 不命中 `suggest.rs`）。
 /// `images_only` 为真时只列图片（附件按钮选「图片」后）。
 pub fn files(paths: &[String], query: &str, images_only: bool) -> Vec<Item> {
-    let query = query.trim().to_lowercase();
-    let mut matched: Vec<&String> = paths
+    let query = query.trim();
+    let mut scored: Vec<(i32, &String)> = paths
         .iter()
         .filter(|path| {
             !images_only || crate::utils::mime::is_image_path(std::path::Path::new(path))
         })
-        .filter(|path| query.is_empty() || path.to_lowercase().contains(&query))
+        .map(|path| {
+            let score = if query.is_empty() {
+                1
+            } else {
+                path_score(path, query, false)
+            };
+            (score, path)
+        })
+        .filter(|(score, _)| *score > 0)
         .collect();
-    matched.sort_by_key(|path| {
-        let lower = path.to_lowercase();
-        let name_hit = lower
-            .rsplit('/')
-            .next()
-            .is_some_and(|name| name.starts_with(&query));
-        let prefix_hit = lower.starts_with(&query);
-        (!name_hit, !prefix_hit, path.len())
+    scored.sort_by(|(a_score, a_path), (b_score, b_path)| {
+        b_score
+            .cmp(a_score)
+            .then_with(|| {
+                a_path
+                    .matches('/')
+                    .count()
+                    .cmp(&b_path.matches('/').count())
+            })
+            .then_with(|| a_path.len().cmp(&b_path.len()))
+            .then_with(|| a_path.cmp(b_path))
     });
-    matched
+    scored
         .into_iter()
         .take(MAX_ITEMS)
-        .map(|path| Item {
+        .map(|(_, path)| Item {
             label: format!("@{path}"),
             detail: String::new(),
         })
@@ -142,13 +170,13 @@ pub fn files(paths: &[String], query: &str, images_only: bool) -> Vec<Item> {
 mod tests {
     use super::*;
 
-    /// 行首的 `/` `!` `!!` 才算触发；行中的 `!` 不算。
+    /// 行首的 `/` 才算触发；行中的 `/` 与 shell 的 `!` `!!` 都不触发。
     #[test]
     fn detects_line_start_triggers() {
         assert_eq!(detect("/mo"), Some((Trigger::Command, 0, "mo".to_string())));
-        assert_eq!(detect("!ls"), Some((Trigger::Shell, 0, "ls".to_string())));
-        assert_eq!(detect("!!ls"), Some((Trigger::Shell, 0, "ls".to_string())));
         assert_eq!(detect("看下 /usr 里的东西"), None);
+        assert_eq!(detect("!ls"), None);
+        assert_eq!(detect("!!ls"), None);
         assert_eq!(detect("echo !x"), None);
     }
 
@@ -167,30 +195,62 @@ mod tests {
         );
     }
 
-    /// 命令候选按前缀过滤，带 `/` 前缀展示。
+    /// 命令候选：字符顺序命中即可，按匹配质量排序，带 `/` 前缀展示。
     #[test]
-    fn commands_filter_by_prefix() {
-        let all = commands("");
+    fn commands_match_in_order_by_quality() {
+        let all = commands_with(&[], "");
         assert_eq!(all.len(), COMMANDS.len().min(MAX_ITEMS));
         assert_eq!(all[0].label, "/new");
-
-        let some = commands("re");
-        assert!(some.iter().all(|item| item.label.starts_with("/re")));
-        assert!(some.iter().any(|item| item.label == "/resume"));
-        assert!(commands("zzz").is_empty());
+        // 模糊命中：`mdl` 的项目符号顺序命中 `/model`
+        assert_eq!(commands_with(&[], "mdl")[0].label, "/model");
+        // 同分/近分时词边界命中的排前面
+        let re: Vec<String> = commands_with(&[], "re")
+            .into_iter()
+            .map(|item| item.label)
+            .collect();
+        assert_eq!(re[0], "/resume");
+        assert!(re.contains(&"/tree".to_string()));
+        // 乱序不算命中
+        assert!(commands_with(&[], "zzz").is_empty());
+        assert!(commands_with(&[], "dle").is_empty());
         // 配置类命令不在 `/` 里（走 Ctrl-M 命令面板）
-        assert!(commands("settings").is_empty());
+        assert!(commands_with(&[], "settings").is_empty());
     }
 
-    /// 触发词识别：`/` `!` 只在行首，`@` 行内任意位置。
+    /// 技能候选按裸名参与模糊匹配，不因 `skill:` 前缀误命中。
+    #[test]
+    fn skills_match_by_bare_name() {
+        let extra = vec![
+            (
+                "skill:deep-research".to_string(),
+                "Multi-agent deep research".to_string(),
+            ),
+            ("skill:research-idea".to_string(), "Refine idea".to_string()),
+        ];
+        let labels: Vec<String> = commands_with(&extra, "idea")
+            .into_iter()
+            .map(|item| item.label)
+            .collect();
+        assert!(labels.contains(&"/skill:research-idea".to_string()));
+        assert!(!labels.contains(&"/skill:deep-research".to_string()));
+        // 显式写 skill: 时按完整名称匹配
+        let explicit: Vec<String> = commands_with(&extra, "skill:deep")
+            .into_iter()
+            .map(|item| item.label)
+            .collect();
+        assert_eq!(explicit, vec!["/skill:deep-research"]);
+    }
+
+    /// 触发词识别：`/` 只在行首，`@` 行内任意位置。
     #[test]
     fn detect_requires_line_start_for_commands() {
         assert!(detect("abc /new").is_none());
         assert_eq!(detect("/ne").map(|d| d.0), Some(Trigger::Command));
-        assert_eq!(detect("第一行\n!/ls").map(|d| d.0), Some(Trigger::Shell));
+        assert!(detect("第一行\n!/ls").is_none());
+        assert_eq!(detect("第一行\n/x").map(|d| d.0), Some(Trigger::Command));
     }
 
-    /// 文件候选命中文件名前缀的排前面。
+    /// 文件候选：文件名命中先于仅路径命中，同分按层级浅、路径短。
     #[test]
     fn files_prefer_name_hits() {
         let paths = vec![
@@ -198,14 +258,19 @@ mod tests {
             "docs/suggest.md".to_string(),
             "src/app.rs".to_string(),
         ];
+        // 两者文件名都是开头命中（80）：路径更短、层级更浅的 docs 在前
         let items = files(&paths, "suggest", false);
         assert_eq!(items[0].label, "@docs/suggest.md");
         assert!(items.iter().all(|item| item.label.starts_with('@')));
-        assert!(
-            files(&paths, "app", false)
-                .iter()
-                .any(|i| i.label.ends_with("app.rs"))
-        );
+        // 文件名子串命中（50）排在仅路径命中（30）前
+        let mixed = vec!["a/app.rs".to_string(), "app/x.rs".to_string()];
+        let got: Vec<String> = files(&mixed, "app", false)
+            .into_iter()
+            .map(|item| item.label)
+            .collect();
+        assert_eq!(got, vec!["@a/app.rs", "@app/x.rs"]);
+        // 子串语义：乱序字符不命中（与 `/` 的模糊匹配不同）
+        assert!(files(&paths, "sgt", false).is_empty());
     }
 
     /// 附件选「图片」时只列图片。

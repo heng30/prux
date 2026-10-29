@@ -99,6 +99,10 @@ impl GuiApp {
             }
             "appearance" => self.open_appearance_picker(cx),
             "panel" => self.toggle_panel(None, cx),
+            "sidebar" => {
+                self.show_sidebar = !self.show_sidebar;
+                cx.notify();
+            }
             "usage" => self.open_info(InfoKind::Usage, cx),
             "skills" => self.open_skills_panel(cx),
             "extension" => self.open_extension_panel(cx),
@@ -396,6 +400,8 @@ impl GuiApp {
             return;
         };
         self.editor.clear();
+        self.editor
+            .push_history(&text, settings_manager::read_settings_history_max_entries());
         self.suggest = None;
 
         // `!!cmd`：本地执行，输出只显示、不进对话上下文

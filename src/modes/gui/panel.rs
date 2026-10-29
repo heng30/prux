@@ -4,8 +4,10 @@
 //! 再经 [`RightPanel::apply`] 一次性换上去。
 
 use super::app::GuiApp;
-use super::theme::Theme;
-use super::theme::px;
+use super::theme::{
+    CONTROL_H_MD, CONTROL_H_SM, FONT_CAPTION, FONT_SMALL, HEADER_H, ICON_SIZE, RADIUS_MD,
+    RADIUS_SM, SPACE_MD, SPACE_SM, SPACE_XS, SPACE_XXS, Theme, px,
+};
 use crate::utils::process::run_stdout;
 use gpui::{AnyElement, IntoElement, ParentElement, SharedString, Styled, div, prelude::*};
 use std::path::Path;
@@ -255,9 +257,9 @@ pub fn render(
     if let Some(error) = &panel.error {
         column = column.child(
             div()
-                .px(px(10.))
-                .py(px(8.))
-                .text_size(px(11.5))
+                .px(px(SPACE_SM))
+                .py(px(SPACE_SM))
+                .text_size(px(FONT_SMALL))
                 .text_color(theme.text_tertiary)
                 .child(SharedString::from(error.clone())),
         );
@@ -269,9 +271,9 @@ pub fn render(
 
             if let Some((path, diff)) = &panel.diff {
                 column = column.child(
-                    div().px(px(12.)).py(px(4.)).child(
+                    div().px(px(SPACE_MD)).py(px(SPACE_XS)).child(
                         div()
-                            .text_size(px(10.5))
+                            .text_size(px(FONT_CAPTION))
                             .text_color(theme.text_ghost)
                             .truncate()
                             .child(SharedString::from(path.clone())),
@@ -293,12 +295,12 @@ fn tab_bar(theme: &Theme, panel: &RightPanel) -> AnyElement {
     // 标签栏
     let tab = |label: &str, active: bool| -> AnyElement {
         let mut element = div()
-            .h(px(26.))
-            .px(px(10.))
-            .rounded(px(6.))
+            .h(px(CONTROL_H_MD))
+            .px(px(SPACE_SM))
+            .rounded(px(RADIUS_MD))
             .flex()
             .items_center()
-            .text_size(px(11.5))
+            .text_size(px(FONT_SMALL))
             .text_color(if active {
                 theme.text
             } else {
@@ -315,9 +317,9 @@ fn tab_bar(theme: &Theme, panel: &RightPanel) -> AnyElement {
         .flex_none()
         .flex()
         .items_center()
-        .gap(px(4.))
-        .px(px(8.))
-        .h(px(38.))
+        .gap(px(SPACE_XS))
+        .px(px(SPACE_SM))
+        .h(px(HEADER_H))
         .border_b_1()
         .border_color(theme.border)
         .child(tab(
@@ -331,8 +333,8 @@ fn tab_bar(theme: &Theme, panel: &RightPanel) -> AnyElement {
         .child(div().flex_1())
         .child(
             div()
-                .pr(px(6.))
-                .text_size(px(10.))
+                .pr(px(SPACE_XS))
+                .text_size(px(FONT_CAPTION))
                 .text_color(theme.text_ghost)
                 .child(SharedString::from(if panel.loading {
                     "Loading…"
@@ -351,27 +353,27 @@ fn changes_body(theme: &Theme, panel: &RightPanel, cx: &mut gpui::Context<GuiApp
         .flex_col()
         .flex_none()
         .max_h(px(220.))
-        .gap(px(2.))
-        .p(px(8.))
+        .gap(px(SPACE_XXS))
+        .p(px(SPACE_SM))
         .overflow_y_scroll();
     for (index, row) in panel.changes.iter().enumerate() {
         let color = status_color(theme, &row.status);
         let mut entry = div()
             .w_full()
-            .h(px(24.))
-            .px(px(8.))
-            .rounded(px(5.))
+            .h(px(CONTROL_H_MD))
+            .px(px(SPACE_SM))
+            .rounded(px(RADIUS_SM))
             .flex()
             .items_center()
-            .gap(px(8.))
-            .text_size(px(11.5));
+            .gap(px(SPACE_SM))
+            .text_size(px(FONT_SMALL));
         if index == panel.selected {
             entry = entry.bg(theme.overlay_strong);
         }
         entry = entry
             .child(
                 div()
-                    .w(px(16.))
+                    .w(px(ICON_SIZE))
                     .flex_none()
                     .text_color(color)
                     .child(SharedString::from(row.status.clone())),
@@ -394,8 +396,8 @@ fn changes_body(theme: &Theme, panel: &RightPanel, cx: &mut gpui::Context<GuiApp
     if panel.changes.is_empty() && panel.error.is_none() {
         body = body.child(
             div()
-                .px(px(8.))
-                .text_size(px(11.5))
+                .px(px(SPACE_SM))
+                .text_size(px(FONT_SMALL))
                 .text_color(theme.text_ghost)
                 .child(SharedString::from(if panel.loading {
                     "Reading changes…"
@@ -413,10 +415,10 @@ fn diff_view(theme: &Theme, diff: &str) -> AnyElement {
         .id("diff")
         .flex_1()
         .min_h_0()
-        .mx(px(8.))
-        .mb(px(8.))
-        .p(px(8.))
-        .rounded(px(8.))
+        .mx(px(SPACE_SM))
+        .mb(px(SPACE_SM))
+        .p(px(SPACE_SM))
+        .rounded(px(RADIUS_MD))
         .bg(theme.inset)
         .flex()
         .flex_col()
@@ -431,7 +433,7 @@ fn diff_view(theme: &Theme, diff: &str) -> AnyElement {
         };
         diff_box = diff_box.child(
             div()
-                .text_size(px(10.5))
+                .text_size(px(FONT_CAPTION))
                 .text_color(color)
                 .child(SharedString::from(line.to_string())),
         );
@@ -447,24 +449,24 @@ fn files_body(theme: &Theme, panel: &RightPanel) -> AnyElement {
         .flex_col()
         .flex_1()
         .min_h_0()
-        .gap(px(1.))
-        .p(px(8.))
+        .gap(px(SPACE_XXS))
+        .p(px(SPACE_SM))
         .overflow_y_scroll();
     for row in &panel.files {
         body = body.child(
             div()
                 .w_full()
-                .h(px(22.))
-                .px(px(6.))
-                .rounded(px(4.))
+                .h(px(CONTROL_H_SM))
+                .px(px(SPACE_XS))
+                .rounded(px(RADIUS_SM))
                 .flex()
                 .items_center()
-                .gap(px(6.))
+                .gap(px(SPACE_XS))
                 .hover(|style| style.bg(theme.overlay))
                 .child(
                     div()
                         .flex_none()
-                        .text_size(px(11.))
+                        .text_size(px(FONT_CAPTION))
                         .text_color(theme.text_tertiary)
                         .child(SharedString::from(row.name.clone())),
                 )
@@ -473,7 +475,7 @@ fn files_body(theme: &Theme, panel: &RightPanel) -> AnyElement {
                         .min_w_0()
                         .flex_1()
                         .truncate()
-                        .text_size(px(10.))
+                        .text_size(px(FONT_CAPTION))
                         .text_color(theme.text_ghost)
                         .child(SharedString::from(row.dir.clone())),
                 ),

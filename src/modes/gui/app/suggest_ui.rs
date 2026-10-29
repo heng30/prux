@@ -11,6 +11,12 @@ impl GuiApp {
         if self.suggest.is_some() {
             return;
         }
+        // 历史浏览（↑/↓ 载入 `/model` 这类历史）不该弹面板，否则抢走 ↑/↓ 焦点
+        if self.editor.browsing_history() {
+            self.suggest = None;
+            self.attach_images = false;
+            return;
+        }
         let before = self.editor.text_before_cursor();
         let Some((trigger, start, query)) = suggest::detect(&before) else {
             self.suggest = None;
@@ -57,43 +63,30 @@ impl GuiApp {
     ) {
         let items = match trigger {
             Trigger::Command => {
-                // 命令 + 本会话技能（`/skill:名称`，与 TUI 的技能命令同形）
-                let mut items = suggest::commands(&query);
-                let prefix = query.trim();
+                // 命令 + 本会话技能（`/skill:名称`，与 TUI 的技能命令同形）+ 已启用扩展声明的命令，
+                // 三类合在一起模糊匹配排序；技能按裸名参与匹配（`/idea` 不会因 `skill:` 前缀误命中）
+                let mut extra: Vec<(String, String)> = Vec::new();
                 for (name, description, _source) in self
                     .snapshot
                     .as_ref()
                     .map(|snapshot| snapshot.skills.clone())
                     .unwrap_or_default()
                 {
-                    let label = format!("/skill:{name}");
-                    if !prefix.is_empty() && !label.trim_start_matches('/').starts_with(prefix) {
-                        continue;
-                    }
-                    items.push(suggest::Item {
-                        label,
-                        detail: description,
-                    });
+                    extra.push((format!("skill:{name}"), description));
                 }
-                // 已启用扩展声明的命令（执行入口还挂在 TUI 层，这里先按现状列出）
+                // 执行入口还挂在 TUI 层，这里先按现状列出
                 for command in crate::core::extensions::registered_commands() {
-                    let label = format!("/{}", command.name);
-                    if !prefix.is_empty() && !label.trim_start_matches('/').starts_with(prefix) {
-                        continue;
-                    }
-                    items.push(suggest::Item {
-                        label,
-                        detail: format!("{} (extension)", command.description),
-                    });
+                    extra.push((
+                        command.name.clone(),
+                        format!("{} (extension)", command.description),
+                    ));
                 }
-                items
+                suggest::commands_with(&extra, &query)
             }
             Trigger::File => {
                 self.ensure_files(cx);
                 suggest::files(&self.files_cache.paths, &query, self.attach_images)
             }
-            // shell 命令直接执行，不列候选；面板只留一句说明
-            Trigger::Shell => Vec::new(),
         };
         // 同一触发词 + 同一前缀：保留选中项，避免每敲一个字符跳回第一行
         let keep = self

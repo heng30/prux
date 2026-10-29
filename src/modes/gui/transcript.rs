@@ -6,7 +6,10 @@
 use super::app::GuiApp;
 use super::components::dot;
 use super::markdown;
-use super::theme::{Theme, px};
+use super::theme::{
+    DOT_SIZE, FONT_BODY, FONT_CAPTION, FONT_SMALL, RADIUS_MD, SPACE_LG, SPACE_MD, SPACE_SM,
+    SPACE_XS, SPACE_XXS, Theme, px,
+};
 use crate::core::provider::{AgentMessage, ContentBlock};
 use gpui::{
     AnyElement, Bounds, Context, FontStyle, FontWeight, HighlightStyle, Hsla, IntoElement,
@@ -640,7 +643,7 @@ fn output_body(text: &str, theme: &Theme, max: usize, expanded: bool) -> AnyElem
         .flex()
         .flex_col()
         .overflow_hidden()
-        .text_size(px(11.5));
+        .text_size(px(FONT_SMALL));
     let lines = text.trim().lines();
     let total = lines.clone().count();
     for line in lines.take(max) {
@@ -656,7 +659,7 @@ fn output_body(text: &str, theme: &Theme, max: usize, expanded: bool) -> AnyElem
     if let Some(hint) = output_hint(total.saturating_sub(max), expanded) {
         column = column.child(
             div()
-                .text_size(px(11.))
+                .text_size(px(FONT_CAPTION))
                 .text_color(theme.text_ghost)
                 .child(SharedString::from(hint)),
         );
@@ -779,19 +782,19 @@ fn user_block(
     // 宽度显式给出：带 padding 的盒子里，文本实测用的宽度和绘制用的不一致，
     // 会少算换行高度、底部被截
     let bubble_w = width.min(px(USER_BUBBLE_MAX_WIDTH));
-    let inner_w = bubble_w - px(28.);
+    let inner_w = bubble_w - px(SPACE_MD * 2.);
     let mut bubble = div()
         .id(("user", index))
         .w(bubble_w)
         .min_w_0()
-        .px(px(14.))
-        .py(px(10.))
-        .rounded(px(10.))
+        .px(px(SPACE_MD))
+        .py(px(SPACE_SM))
+        .rounded(px(RADIUS_MD))
         .bg(theme.raised)
         .flex()
         .flex_col()
-        .gap(px(8.))
-        .text_size(px(13.5))
+        .gap(px(SPACE_SM))
+        .text_size(px(FONT_BODY))
         .text_color(theme.text)
         .cursor_pointer()
         .hover(|style| style.bg(theme.overlay_strong))
@@ -804,13 +807,16 @@ fn user_block(
                 .child(SharedString::from(shown.join("\n"))),
         );
     if hidden > 0 {
-        bubble = bubble.child(div().text_size(px(11.)).text_color(theme.text_ghost).child(
-            SharedString::from(if expanded {
-                "click to collapse".to_string()
-            } else {
-                format!("⋯ {hidden} more line(s) · click to expand")
-            }),
-        ));
+        bubble = bubble.child(
+            div()
+                .text_size(px(FONT_CAPTION))
+                .text_color(theme.text_ghost)
+                .child(SharedString::from(if expanded {
+                    "click to collapse".to_string()
+                } else {
+                    format!("⋯ {hidden} more line(s) · click to expand")
+                })),
+        );
     }
     // `@图片` 引用直接渲染成缩略图
     let images = image_refs(text, cwd);
@@ -819,7 +825,7 @@ fn user_block(
             div()
                 .max_w(px(IMAGE_THUMB))
                 .max_h(px(IMAGE_THUMB))
-                .rounded(px(6.))
+                .rounded(px(RADIUS_MD))
                 .overflow_hidden()
                 .child(
                     gpui::img(path)
@@ -832,7 +838,7 @@ fn user_block(
         .w_full()
         .flex()
         .justify_end()
-        .pt(px(6.))
+        .pt(px(SPACE_XS))
         .child(bubble)
         .into_any_element()
 }
@@ -844,14 +850,19 @@ fn assistant_block(
     show_thinking: bool,
     ctx: &mut FlowCtx<'_>,
 ) -> AnyElement {
-    let mut column = div().w_full().flex().flex_col().gap(px(8.)).pt(px(2.));
+    let mut column = div()
+        .w_full()
+        .flex()
+        .flex_col()
+        .gap(px(SPACE_SM))
+        .pt(px(SPACE_XXS));
     if show_thinking && !assistant.thinking.trim().is_empty() {
         column = column.child(
             div()
-                .pl(px(10.))
+                .pl(px(SPACE_SM))
                 .border_l_2()
                 .border_color(theme.border_strong)
-                .text_size(px(12.))
+                .text_size(px(FONT_SMALL))
                 .text_color(theme.text_tertiary)
                 .child(SharedString::from(crate::utils::display::fit_display(
                     assistant.thinking.trim(),
@@ -882,15 +893,15 @@ fn tool_block(
     let mut card = div()
         .id(("tool", index))
         .w_full()
-        .rounded(px(8.))
+        .rounded(px(RADIUS_MD))
         .border_1()
         .border_color(theme.border)
         .bg(theme.inset)
         .flex()
         .flex_col()
-        .gap(px(6.))
-        .px(px(12.))
-        .py(px(8.))
+        .gap(px(SPACE_XS))
+        .px(px(SPACE_MD))
+        .py(px(SPACE_SM))
         .cursor_pointer()
         .hover(|style| style.border_color(theme.border_strong))
         // 点卡片展开/收起这一块的输出
@@ -899,11 +910,11 @@ fn tool_block(
         div()
             .flex()
             .items_center()
-            .gap(px(8.))
-            .child(dot(color, 6.))
+            .gap(px(SPACE_SM))
+            .child(dot(color, DOT_SIZE))
             .child(
                 div()
-                    .text_size(px(12.))
+                    .text_size(px(FONT_SMALL))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme.text)
                     .child(SharedString::from(tool.name.clone())),
@@ -913,14 +924,14 @@ fn tool_block(
                     .min_w_0()
                     .flex_1()
                     .truncate()
-                    .text_size(px(11.5))
+                    .text_size(px(FONT_SMALL))
                     // shell 类调用用代码色，跟普通工具区分开
                     .text_color(tool_arg_color(&tool.name, theme))
                     .child(SharedString::from(tool.args.clone())),
             )
             .child(
                 div()
-                    .text_size(px(10.5))
+                    .text_size(px(FONT_CAPTION))
                     .text_color(color)
                     .child(SharedString::from(label)),
             ),
@@ -940,7 +951,7 @@ fn tool_block(
             div()
                 .max_w(px(IMAGE_THUMB))
                 .max_h(px(IMAGE_THUMB))
-                .rounded(px(6.))
+                .rounded(px(RADIUS_MD))
                 .overflow_hidden()
                 .child(
                     gpui::img(image.clone())
@@ -958,18 +969,18 @@ fn system_block(text: &str, theme: &Theme, width: Pixels) -> AnyElement {
         .w_full()
         .min_w_0()
         .overflow_hidden()
-        .rounded(px(8.))
+        .rounded(px(RADIUS_MD))
         .border_1()
         .border_color(theme.border)
         .bg(theme.inset)
-        .px(px(12.))
-        .py(px(8.))
+        .px(px(SPACE_MD))
+        .py(px(SPACE_SM))
         .flex()
         .flex_col()
-        .gap(px(4.))
+        .gap(px(SPACE_XS))
         .child(
             div()
-                .text_size(px(10.5))
+                .text_size(px(FONT_CAPTION))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme.text_ghost)
                 .child(SharedString::from("system")),
@@ -980,8 +991,8 @@ fn system_block(text: &str, theme: &Theme, width: Pixels) -> AnyElement {
                 .min_w_0()
                 .flex()
                 .flex_col()
-                .gap(px(2.))
-                .text_size(px(12.))
+                .gap(px(SPACE_XXS))
+                .text_size(px(FONT_SMALL))
                 .text_color(theme.text_tertiary)
                 .children(text.split('\n').map(|line| {
                     div()
@@ -1004,11 +1015,11 @@ fn note_block(note: &Note, theme: &Theme) -> AnyElement {
         .w_full()
         .flex()
         .items_start()
-        .gap(px(8.))
-        .px(px(2.))
+        .gap(px(SPACE_SM))
+        .px(px(SPACE_XXS))
         .child(
             div()
-                .text_size(px(11.5))
+                .text_size(px(FONT_SMALL))
                 .text_color(color)
                 .child(SharedString::from(mark)),
         )
@@ -1018,7 +1029,7 @@ fn note_block(note: &Note, theme: &Theme) -> AnyElement {
                 .flex_1()
                 .flex()
                 .flex_col()
-                .text_size(px(12.))
+                .text_size(px(FONT_SMALL))
                 .text_color(color)
                 .children(text.split('\n').map(|line| {
                     div()
@@ -1048,7 +1059,7 @@ fn parse_rows(text: &str, theme: &Theme) -> Vec<Row> {
 
 /// 预解析行 → 元素（行内样式、标题字号、代码块的逐行着色）。
 fn render_rows(rows: &[Row], theme: &Theme, lines: &mut TextLines) -> AnyElement {
-    let mut column = div().w_full().flex().flex_col().gap(px(4.));
+    let mut column = div().w_full().flex().flex_col().gap(px(SPACE_XS));
     // 子元素下标 → 行序号（规则线之类不参与选区的行记 None）
     let mut child_lines: Vec<Option<usize>> = Vec::new();
     for row in rows {
@@ -1069,23 +1080,23 @@ fn render_rows(rows: &[Row], theme: &Theme, lines: &mut TextLines) -> AnyElement
                         };
                         font_size = size;
                         element = element
-                            .mt(px(6.))
+                            .mt(px(SPACE_XS))
                             .text_size(px(size))
                             .font_weight(FontWeight::BOLD)
                             .text_color(theme.text);
                         None
                     }
                     markdown::LineKind::Bullet(depth) => {
-                        element = element.pl(px(14. * (depth as f32 + 1.)));
+                        element = element.pl(px(SPACE_LG * (depth as f32 + 1.)));
                         Some("• ".to_string())
                     }
                     markdown::LineKind::Numbered(index) => {
-                        element = element.pl(px(14.));
+                        element = element.pl(px(SPACE_MD));
                         Some(format!("{index}. "))
                     }
                     markdown::LineKind::Quote => {
                         element = element
-                            .pl(px(10.))
+                            .pl(px(SPACE_SM))
                             .border_l_2()
                             .border_color(theme.border_strong)
                             .text_color(theme.text_secondary);
@@ -1121,8 +1132,8 @@ fn render_rows(rows: &[Row], theme: &Theme, lines: &mut TextLines) -> AnyElement
             Row::Code { lang, lines: code } => {
                 let mut card = div()
                     .w_full()
-                    .my(px(4.))
-                    .rounded(px(8.))
+                    .my(px(SPACE_XS))
+                    .rounded(px(RADIUS_MD))
                     .border_1()
                     .border_color(theme.border)
                     .bg(theme.inset)
@@ -1132,11 +1143,11 @@ fn render_rows(rows: &[Row], theme: &Theme, lines: &mut TextLines) -> AnyElement
                         .flex()
                         .items_center()
                         .justify_between()
-                        .px(px(10.))
-                        .py(px(5.))
+                        .px(px(SPACE_SM))
+                        .py(px(SPACE_XS))
                         .border_b_1()
                         .border_color(theme.border)
-                        .text_size(px(10.5))
+                        .text_size(px(FONT_CAPTION))
                         .text_color(theme.text_ghost)
                         .child(SharedString::from(
                             lang.clone().unwrap_or_else(|| "text".into()),
@@ -1145,14 +1156,14 @@ fn render_rows(rows: &[Row], theme: &Theme, lines: &mut TextLines) -> AnyElement
                 let mut body = div()
                     .flex()
                     .flex_col()
-                    .px(px(10.))
-                    .py(px(8.))
+                    .px(px(SPACE_SM))
+                    .py(px(SPACE_SM))
                     .font_family("monospace");
                 for line in code {
                     let mut element = div()
                         .w_full()
                         .flex()
-                        .text_size(px(11.5))
+                        .text_size(px(FONT_SMALL))
                         .text_color(theme.text);
                     for (color, text) in line {
                         element = element.child(match color {
@@ -1172,7 +1183,7 @@ fn render_rows(rows: &[Row], theme: &Theme, lines: &mut TextLines) -> AnyElement
                 div()
                     .w_full()
                     .h(px(1.))
-                    .my(px(8.))
+                    .my(px(SPACE_SM))
                     .bg(theme.border)
                     .into_any_element()
             }

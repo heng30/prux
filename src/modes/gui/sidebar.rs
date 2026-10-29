@@ -5,8 +5,10 @@
 //! 渲染时只取已就绪的那部分。
 
 use super::components::{dot, section_label};
-use super::theme::Theme;
-use super::theme::px;
+use super::theme::{
+    CONTROL_H_SM, DOT_SIZE, FONT_CAPTION, FONT_SMALL, HEADER_H, RADIUS_MD, RADIUS_SM, SPACE_MD,
+    SPACE_SM, SPACE_XS, SPACE_XXS, Theme, px,
+};
 use crate::cli::session_picker::ProgressiveMetas;
 use crate::core::session_manager::{default_session_dir, list_sessions};
 use crate::core::settings_manager::agent_dir;
@@ -210,13 +212,13 @@ fn brand_row(theme: &Theme, new_session: ClickHandler) -> AnyElement {
     let bar = div()
         .flex()
         .items_center()
-        .gap(px(8.))
-        .h(px(40.))
-        .px(px(12.))
-        .child(dot(theme.accent, 7.))
+        .gap(px(SPACE_SM))
+        .h(px(HEADER_H))
+        .px(px(SPACE_MD))
+        .child(dot(theme.accent, DOT_SIZE))
         .child(
             div()
-                .text_size(px(12.5))
+                .text_size(px(FONT_SMALL))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(theme.text)
                 .child(SharedString::from("prux")),
@@ -225,12 +227,12 @@ fn brand_row(theme: &Theme, new_session: ClickHandler) -> AnyElement {
         .child(
             div()
                 .id("new-session")
-                .h(px(20.))
-                .px(px(7.))
-                .rounded(px(5.))
+                .h(px(CONTROL_H_SM))
+                .px(px(SPACE_SM))
+                .rounded(px(RADIUS_SM))
                 .flex()
                 .items_center()
-                .text_size(px(11.))
+                .text_size(px(FONT_CAPTION))
                 .bg(theme.overlay)
                 .text_color(theme.text_secondary)
                 .cursor_pointer()
@@ -256,25 +258,22 @@ fn session_list(
         .flex()
         .flex_col()
         .flex_1()
-        // 高度必须被父容器定死：否则列表按内容高度撑开（比窗口还高），
-        // 悬浮/滚动判定范围跟着一起变大
         .h_full()
         .w_full()
         .min_h_0()
-        .gap(px(2.))
-        .px(px(6.))
-        .py(px(4.))
-        // 底部留白：列表最后一行不贴着窗口下沿
-        .pb(px(12.))
+        .gap(px(SPACE_XS))
+        .px(px(SPACE_XS))
+        .py(px(SPACE_XS))
+        .pb(px(SPACE_MD))
         .overflow_y_scroll()
         .track_scroll(scroll);
     list = list.child(section_label(theme, "Sessions"));
     if rows.is_empty() {
         list = list.child(
             div()
-                .px(px(8.))
-                .py(px(6.))
-                .text_size(px(11.5))
+                .px(px(SPACE_SM))
+                .py(px(SPACE_XS))
+                .text_size(px(FONT_SMALL))
                 .text_color(theme.text_ghost)
                 .child(SharedString::from(if loading {
                     "Loading sessions…"
@@ -289,18 +288,18 @@ fn session_list(
             last_group = Some(row.group);
             list = list.child(
                 div()
-                    .mt(px(6.))
+                    .mt(px(SPACE_XS))
                     .child(section_label(theme, row.group.label())),
             );
         }
         let mut entry = div()
             .w_full()
-            .px(px(8.))
-            .py(px(6.))
-            .rounded(px(6.))
+            .px(px(SPACE_SM))
+            .py(px(SPACE_XS))
+            .rounded(px(RADIUS_MD))
             .flex()
             .flex_col()
-            .gap(px(2.))
+            .gap(px(SPACE_XXS))
             .cursor_pointer()
             .hover(|style| style.bg(theme.overlay));
         if active == Some(index) {
@@ -309,7 +308,7 @@ fn session_list(
         entry = entry
             .child(
                 div()
-                    .text_size(px(12.5))
+                    .text_size(px(FONT_SMALL))
                     .text_color(if active == Some(index) {
                         theme.text
                     } else {
@@ -322,8 +321,8 @@ fn session_list(
                 div()
                     .flex()
                     .items_center()
-                    .gap(px(6.))
-                    .text_size(px(10.5))
+                    .gap(px(SPACE_XS))
+                    .text_size(px(FONT_CAPTION))
                     .text_color(theme.text_ghost)
                     .child(SharedString::from(row.age.clone()))
                     .child(SharedString::from(format!("· {} messages", row.messages))),
@@ -356,12 +355,12 @@ fn footer_block(
     let mut footer = div()
         .id("cwd")
         .w_full()
-        .px(px(6.))
-        .py(px(5.))
-        .rounded(px(6.))
+        .px(px(SPACE_XS))
+        .py(px(SPACE_XS))
+        .rounded(px(RADIUS_MD))
         .flex()
         .flex_col()
-        .gap(px(2.))
+        .gap(px(SPACE_XXS))
         .cursor_pointer()
         .hover(|style| style.bg(theme.overlay))
         .on_click(change_cwd);
@@ -370,39 +369,40 @@ fn footer_block(
             div()
                 .flex()
                 .items_center()
-                .gap(px(5.))
-                .text_size(px(10.5))
+                .gap(px(SPACE_XS))
+                .text_size(px(FONT_CAPTION))
                 .text_color(theme.text_ghost)
-                .child(SharedString::from("⎇"))
+                .child(SharedString::from(" "))
                 .child(
                     div()
                         .min_w_0()
                         .flex_1()
                         .truncate()
-                        .text_size(px(10.5))
+                        .text_size(px(FONT_CAPTION))
                         .text_color(theme.text_ghost)
                         .child(SharedString::from(branch.to_string())),
                 ),
         );
     }
+
     footer = footer.child(
         div()
             .flex()
             .items_center()
-            .gap(px(5.))
+            .gap(px(SPACE_XS))
             .child(
                 div()
                     .flex_none()
-                    .text_size(px(10.5))
+                    .text_size(px(FONT_CAPTION))
                     .text_color(theme.text_ghost)
-                    .child(SharedString::from("⌂")),
+                    .child(SharedString::from("📁 ")),
             )
             .child(
                 div()
                     .min_w_0()
                     .flex_1()
                     .truncate()
-                    .text_size(px(11.))
+                    .text_size(px(FONT_CAPTION))
                     .text_color(theme.text_secondary)
                     .child(SharedString::from(cwd.to_string())),
             ),
