@@ -227,3 +227,66 @@ fn detail_lines_become_table_rows() {
     assert_eq!(rows[2].key, "fork url");
     assert_eq!(rows[2].value, "https://example.com/x");
 }
+
+/// 排队消息：steer 先于 follow-up 出队，同类按 settings 的 mode 取整批或一条，
+/// 待发送区一条一行（steer 标 `Steering:`，follow-up 标 `Follow-up:`，只取首行）。
+#[test]
+fn queued_messages_drain_steer_before_follow_up() {
+    let _guard = crate::test_support::AgentDirGuard::temp();
+    crate::core::settings_manager::write_settings_steering_mode("one-at-a-time").unwrap();
+    crate::core::settings_manager::write_settings_follow_up_mode("all").unwrap();
+
+    let inbox = std::sync::Mutex::new(VecDeque::from(vec![
+        AgentMessage::user_text("steer one\nsecond line"),
+        AgentMessage::user_text("steer two"),
+    ]));
+    let mut follow_ups = VecDeque::from(vec!["fup one".to_string(), "fup two".to_string()]);
+
+    let lines = pending_lines(&inbox, &follow_ups);
+    assert_eq!(
+        lines,
+        vec![
+            "Steering: steer one",
+            "Steering: steer two",
+            "Follow-up: fup one",
+            "Follow-up: fup two",
+        ]
+    );
+    assert_eq!(pending_count(&inbox, &follow_ups), 4);
+
+    // one-at-a-time：steer 逐条出，两条出完才轮到 follow-up（followUpMode=all 一次取完）
+    assert_eq!(
+        take_next_batch(&inbox, &mut follow_ups).unwrap()[0].text(),
+        "steer one\nsecond line"
+    );
+    assert_eq!(
+        take_next_batch(&inbox, &mut follow_ups).unwrap()[0].text(),
+        "steer two"
+    );
+    let batch = take_next_batch(&inbox, &mut follow_ups).unwrap();
+    assert_eq!(batch.len(), 2);
+    assert_eq!(batch[0].text(), "fup one");
+    assert_eq!(batch[1].text(), "fup two");
+    assert!(
+        take_next_batch(&inbox, &mut follow_ups).is_none(),
+        "队列空后不再出批"
+    );
+}
+
+/// Alt+Up 取回排队消息：steer 在前、follow-up 在后，空行分隔并拼在草稿之前，队列清空。
+#[test]
+fn restore_queued_messages_prepends_steer_then_follow_up() {
+    let inbox = std::sync::Mutex::new(VecDeque::from(vec![
+        AgentMessage::user_text("steer one"),
+        AgentMessage::user_text("steer two"),
+    ]));
+    let mut follow_ups = VecDeque::from(vec!["fup one".to_string()]);
+
+    let (text, count) = restore_text(&inbox, &mut follow_ups, "current draft").unwrap();
+    assert_eq!(text, "steer one\n\nsteer two\n\nfup one\n\ncurrent draft");
+    assert_eq!(count, 3);
+    assert_eq!(pending_count(&inbox, &follow_ups), 0, "取回后队列清空");
+
+    // 空队列：不动编辑器
+    assert!(restore_text(&inbox, &mut follow_ups, "draft").is_none());
+}

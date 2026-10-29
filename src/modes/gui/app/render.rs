@@ -359,6 +359,41 @@ impl GuiApp {
         transcript.into_any_element()
     }
 
+    /// 待发送区（输入框上方）：忙碌时排队的 steer / follow-up。
+    /// 未发送前不进对话流，只在这里列出（同 TUI 的待发送区）。
+    fn render_pending(&self) -> Option<AnyElement> {
+        let lines = self.pending_lines();
+        if lines.is_empty() {
+            return None;
+        }
+        let theme = self.theme.clone();
+        Some(
+            div()
+                .flex_none()
+                .w_full()
+                .px(px(SPACE_XL))
+                .child(
+                    div()
+                        .max_w(px(CONTENT_MAX_WIDTH))
+                        .mx_auto()
+                        .px(px(SPACE_MD))
+                        .flex()
+                        .flex_col()
+                        .text_size(px(FONT_CAPTION))
+                        .text_color(theme.text_ghost)
+                        .children(
+                            lines
+                                .into_iter()
+                                .map(|line| div().child(SharedString::from(line))),
+                        )
+                        .child(
+                            div().child(SharedString::from("↳ Alt+Up to edit all queued messages")),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+
     /// 输入卡片：文本框 + 一行提示与动作。
     fn render_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::Div {
         let theme = self.theme.clone();
@@ -442,7 +477,7 @@ impl GuiApp {
                 if this.busy {
                     this.abort_turn(cx);
                 } else {
-                    this.submit(cx);
+                    this.submit(false, cx);
                     cx.notify();
                 }
             }))
@@ -562,19 +597,23 @@ impl GuiApp {
                                 .text_size(px(FONT_CAPTION))
                                 .text_color(theme.text_ghost)
                                 .child(SharedString::from(
-                                    "Enter send · Shift+Enter new line · Ctrl+P cycle model · Shift+Tab cycle thinking",
+                                    "Enter send · Shift+Enter new line · Alt+Enter queue follow-up · Ctrl+P cycle model · Shift+Tab cycle thinking",
                                 )),
                         ),
                 )
         } else {
-            div()
+            let mut column = div()
                 .flex()
                 .flex_col()
                 .flex_1()
                 .min_w_0()
                 .min_h_0()
                 .bg(theme.canvas)
-                .child(transcript)
+                .child(transcript);
+            if let Some(pending) = self.render_pending() {
+                column = column.child(pending);
+            }
+            column
                 .child(measured_composer(
                     div()
                         .flex_none()

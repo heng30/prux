@@ -74,10 +74,11 @@ use gpui::{
 use status::UsageMeter;
 use std::{
     cell::{Cell, RefCell},
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     ops::Range,
     path::PathBuf,
     rc::Rc,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -258,8 +259,11 @@ pub struct GuiApp {
     editor: Editor,
     /// 是否有一轮进行中
     busy: bool,
-    /// 排队等待发送的消息数（busy 时提交进入队列）
-    queued: usize,
+    /// 运行中 steer 注入箱（与 agent 共享同一个队列）：忙碌时提交的文本排这里，
+    /// run_loop 在回合内注入，不单独开一轮；未注入的条目显示在待发送区
+    steer_inbox: Arc<Mutex<VecDeque<AgentMessage>>>,
+    /// follow-up 队列：回合 settle 后才发送，同样显示在待发送区
+    follow_ups: VecDeque<String>,
     /// 本轮用量计时与 token 速率（状态栏用）
     meter: UsageMeter,
     /// 忙碌期的重绘任务是否在跑（状态栏耗时走字与忙碌指示闪烁靠它）
@@ -365,6 +369,7 @@ impl GuiApp {
         cmd_tx: CommandTx,
         event_rx: UnboundedReceiver<GuiEvent>,
         initial_messages: Vec<AgentMessage>,
+        steer_inbox: Arc<Mutex<VecDeque<AgentMessage>>>,
         cx: &mut Context<Self>,
     ) -> Self {
         let focus = cx.focus_handle();
@@ -396,7 +401,8 @@ impl GuiApp {
             transcript: Transcript::default(),
             editor: Editor::new(),
             busy: false,
-            queued: 0,
+            steer_inbox,
+            follow_ups: VecDeque::new(),
             meter: UsageMeter::default(),
             ticking: false,
             blink: false,
@@ -470,8 +476,11 @@ impl GuiApp {
                     }
                     "agent_settled" => {
                         self.busy = false;
-                        if self.queued > 0 {
-                            self.queued -= 1;
+                        // 回合结束：取下一批排队消息（steer 先于 follow-up，
+                        // 同类按 settings 的 mode 取整批或一条）继续跑，与 TUI 一致
+                        if let Some(batch) = self.drain_next_batch() {
+                            _ = self.cmd_tx.send(AgentCommand::PromptBatch(batch));
+                            self.busy = true;
                         }
                     }
                     _ => {}
@@ -636,6 +645,97 @@ impl GuiApp {
     fn cx_notify(&self, cx: &mut Context<Self>) {
         cx.notify();
     }
+}
+
+/// 待发送消息数（steer 注入箱 + follow-up 队列）。
+fn pending_count(inbox: &Mutex<VecDeque<AgentMessage>>, follow_ups: &VecDeque<String>) -> usize {
+    let steers = inbox.lock().map(|inbox| inbox.len()).unwrap_or(0);
+    steers + follow_ups.len()
+}
+
+/// 待发送区行：steer 在前（标 `Steering:`），follow-up 在后（标 `Follow-up:`），
+/// 每条只取首行（行数不随内容行数变）。
+fn pending_lines(
+    inbox: &Mutex<VecDeque<AgentMessage>>,
+    follow_ups: &VecDeque<String>,
+) -> Vec<String> {
+    let first = |text: String| text.split('\n').next().unwrap_or("").to_string();
+    let mut lines: Vec<String> = inbox
+        .lock()
+        .map(|inbox| {
+            inbox
+                .iter()
+                .map(|message| format!("Steering: {}", first(message.text())))
+                .collect()
+        })
+        .unwrap_or_default();
+    lines.extend(
+        follow_ups
+            .iter()
+            .map(|text| format!("Follow-up: {}", first(text.clone()))),
+    );
+    lines
+}
+
+/// settle 后取下一批待发送消息：steer（回合内注入箱）优先于 follow-up（本地队列），
+/// 同类内部 FIFO，按 settings 的 mode all=整批 / one-at-a-time=一条。
+/// `None` 表示两个队列都已空（闸门已锁时也返回 None）。
+fn take_next_batch(
+    inbox: &Mutex<VecDeque<AgentMessage>>,
+    follow_ups: &mut VecDeque<String>,
+) -> Option<Vec<AgentMessage>> {
+    let steer_mode = settings_manager::read_settings_steering_mode();
+    let follow_up_mode = settings_manager::read_settings_follow_up_mode();
+
+    let steer_batch: Vec<AgentMessage> = {
+        let mut inbox = inbox.lock().ok()?;
+        if steer_mode == "all" {
+            inbox.drain(..).collect()
+        } else {
+            inbox.pop_front().into_iter().collect()
+        }
+    };
+
+    if !steer_batch.is_empty() {
+        return Some(steer_batch);
+    }
+
+    let mut batch = Vec::new();
+    while let Some(text) = follow_ups.pop_front() {
+        batch.push(AgentMessage::user_text(&text));
+        if follow_up_mode != "all" {
+            break;
+        }
+    }
+
+    (!batch.is_empty()).then_some(batch)
+}
+
+/// 取回排队的消息（Alt+Up）：steer 在前、follow-up 在后，空行分隔并拼在草稿 `draft` 之前。
+/// 返回合并后的编辑器文本与取回的条数；两个队列都空时返回 None（不动编辑器）。
+fn restore_text(
+    inbox: &Mutex<VecDeque<AgentMessage>>,
+    follow_ups: &mut VecDeque<String>,
+    draft: &str,
+) -> Option<(String, usize)> {
+    let mut texts: Vec<String> = inbox
+        .lock()
+        .map(|mut inbox| inbox.drain(..).map(|message| message.text()).collect())
+        .unwrap_or_default();
+    texts.extend(follow_ups.drain(..));
+
+    if texts.is_empty() {
+        return None;
+    }
+
+    let count = texts.len();
+    let mut combined = texts.join("\n\n");
+    if !draft.trim().is_empty() {
+        combined.push_str("\n\n");
+        combined.push_str(draft);
+    }
+
+    Some((combined, count))
 }
 
 /// 最近工作目录清单文件（放在 agent 目录，不动用户的 settings.json）。

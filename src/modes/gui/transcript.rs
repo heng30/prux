@@ -302,15 +302,7 @@ impl Transcript {
         for message in messages {
             match message.role.as_str() {
                 "user" => {
-                    let text = message
-                        .content
-                        .iter()
-                        .filter_map(|block| match block {
-                            ContentBlock::Text { text, .. } => Some(text.as_str()),
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n");
+                    let text = user_text(message);
                     if !text.is_empty() {
                         transcript.push_user(text);
                     }
@@ -441,6 +433,26 @@ impl Transcript {
                     "thinking_delta" => assistant.thinking.push_str(delta),
                     _ => {}
                 }
+            }
+            "message_end" => {
+                let Some(message) = event.get("message") else {
+                    return;
+                };
+                let Ok(message) = serde_json::from_value::<AgentMessage>(message.clone()) else {
+                    return;
+                };
+                if message.role != "user" {
+                    return;
+                }
+                // 排队（steer / follow-up）的消息不本地回显，由 agent 回合开始时的
+                // message_end 推入；本地已推过同文本就不重复渲染
+                let text = user_text(&message);
+                if text.is_empty()
+                    || matches!(self.blocks.last(), Some(Block::User(prev)) if prev.text == text)
+                {
+                    return;
+                }
+                self.push_user(text);
             }
             "tool_execution_start" => {
                 let id = event
@@ -605,6 +617,11 @@ fn summarize_args(args: &Value) -> String {
         other => other.to_string(),
     };
     fit_display(&text, 120)
+}
+
+/// 用户消息的正文：只取 text 块，按行拼接（图片块不回显）。
+fn user_text(message: &AgentMessage) -> String {
+    tool_result_text(&message.content)
 }
 
 /// 工具结果内容 → 纯文本。

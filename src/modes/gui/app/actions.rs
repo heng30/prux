@@ -404,22 +404,30 @@ impl GuiApp {
     /// 本地复位，中断提示也只能自己补（同 TUI 的硬中止）。
     pub(super) fn abort_turn(&mut self, cx: &mut Context<Self>) {
         _ = self.cmd_tx.send(AgentCommand::Abort);
-        self.queued = 0;
         self.busy = false;
         self.transcript.abort();
         self.scroll_to_bottom();
         cx.notify();
     }
 
-    /// 提交输入框内容。
-    pub(super) fn submit(&mut self, cx: &mut Context<Self>) {
-        let Some(text) = self.editor.trimmed() else {
-            return;
-        };
+    /// 取出编辑器内容（清空、记编辑器历史、收起补全）：空内容返回 None。
+    fn take_input(&mut self) -> Option<String> {
+        let text = self.editor.trimmed()?;
         self.editor.clear();
         self.editor
             .push_history(&text, settings_manager::read_settings_history_max_entries());
         self.suggest = None;
+        Some(text)
+    }
+
+    /// 提交输入框内容。
+    ///
+    /// `follow_up` 为 true（Alt+Enter）时，忙碌下排进 follow-up 队列（settle 后发送），
+    /// 否则排进 steer 注入箱（回合内注入）；两者都不立即发送，也不回显进对话流。
+    pub(super) fn submit(&mut self, follow_up: bool, cx: &mut Context<Self>) {
+        let Some(text) = self.take_input() else {
+            return;
+        };
 
         // `!!cmd`：本地执行，输出只显示、不进对话上下文
         if let Some(command) = text.strip_prefix("!!") {
@@ -447,21 +455,65 @@ impl GuiApp {
             return;
         }
 
-        // 回合中提交的输入由 worker 排队，这里同步计数给状态栏
-        if self.busy {
-            self.queued += 1;
-        } else {
-            self.busy = true;
-        }
-        self.transcript.push_user(text.clone());
         // 和 TUI 一样记进项目级 prompt 历史，`/history` 才翻得到
         crate::core::prompt_history::append(
             &self.cwd(),
             &text,
             settings_manager::read_settings_history_max_entries(),
         );
+
+        if self.busy {
+            // 忙碌：只排队，由 agent 在回合内注入 / 结算后取走，不在本地开新回合
+            if follow_up {
+                self.follow_ups.push_back(text);
+            } else if let Ok(mut inbox) = self.steer_inbox.lock() {
+                inbox.push_back(AgentMessage::user_text(&text));
+            }
+            cx.notify();
+            return;
+        }
+
+        self.busy = true;
+        self.transcript.push_user(text.clone());
         _ = self.cmd_tx.send(AgentCommand::Prompt(text));
         self.scroll_to_bottom();
+    }
+
+    /// 待发送消息数（steer 注入箱 + follow-up 队列）：状态栏「N queued」用。
+    pub(super) fn pending_count(&self) -> usize {
+        pending_count(&self.steer_inbox, &self.follow_ups)
+    }
+
+    /// 待发送区行（见 [`pending_lines`]）。
+    pub(super) fn pending_lines(&self) -> Vec<String> {
+        pending_lines(&self.steer_inbox, &self.follow_ups)
+    }
+
+    /// settle 后取下一批待发送消息（见 [`take_next_batch`]）。
+    pub(super) fn drain_next_batch(&mut self) -> Option<Vec<AgentMessage>> {
+        take_next_batch(&self.steer_inbox, &mut self.follow_ups)
+    }
+
+    /// Alt+Up：把排队的消息全部取回编辑器（steer 在前、follow-up 在后，空行分隔，
+    /// 拼在当前草稿之前），队列清空；没有排队时提示一句。
+    pub(super) fn dequeue_queued(&mut self, cx: &mut Context<Self>) {
+        let Some((combined, count)) =
+            restore_text(&self.steer_inbox, &mut self.follow_ups, &self.editor.text())
+        else {
+            self.toast("No queued messages to restore", ToastKind::Info, cx);
+            return;
+        };
+
+        self.editor.clear();
+        self.editor.insert(&combined);
+        self.toast(
+            format!(
+                "Restored {count} queued message{}",
+                if count > 1 { "s" } else { "" }
+            ),
+            ToastKind::Info,
+            cx,
+        );
     }
     /// 打开/切换右侧面板；`tab` 为 None 时保持当前标签。
     pub(super) fn toggle_panel(&mut self, tab: Option<PanelTab>, cx: &mut Context<Self>) {

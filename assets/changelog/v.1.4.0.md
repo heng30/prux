@@ -98,6 +98,15 @@
   before switching. `Shift+Tab` cycles the current model's thinking levels. Both follow the TUI
   bindings.
 
+- **The desktop GUI queues what you send while a turn runs**: `Enter` puts the text into the
+  steering queue, so the model reads it inside the same run (before its next step) instead of a
+  fresh turn after the fact, and `Alt+Enter` queues a follow-up that is sent once the turn settles.
+  Both queues drain by `steeringMode` / `followUpMode` as they do in the terminal, and the waiting
+  messages are listed above the input box as `Steering:` / `Follow-up:` — they enter the
+  transcript only when actually sent. `Alt+Up` pulls them all back into the input box (steers
+  first, then follow-ups, separated by blank lines and kept ahead of the current draft) and empties
+  both queues.
+
 - **The desktop GUI now shares the TUI's keymap**: the command palette moved to `Ctrl+M`, so `Ctrl+K`
   is free to delete to the end of the line the way it does in the terminal. Every key the two
   interfaces have in common now means the same thing: `Ctrl+O` expands tool output, `Ctrl+L` opens

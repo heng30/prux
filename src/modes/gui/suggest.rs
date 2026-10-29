@@ -37,7 +37,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("copy", "Copy last reply"),
     ("rewind", "Rewind last input"),
     ("giff", "Review uncommitted changes"),
-    ("sidebar", "Toggle session sidebar"),
+    ("sidebar", "Toggle session list"),
     ("quit", "Quit"),
 ];
 

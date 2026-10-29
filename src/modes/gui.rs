@@ -22,6 +22,7 @@ use crate::{
     APP_NAME, cli::startup::Startup, core::settings_manager, embedded_bytes,
     modes::interactive::agent_actor,
 };
+use app::GuiApp;
 use gpui::{
     App, AppContext, Application, Bounds, TitlebarOptions, WindowBackgroundAppearance,
     WindowBounds, WindowOptions, px, size,
@@ -54,6 +55,9 @@ pub fn run(startup: Startup, rt: &Handle) {
     let (event_tx, event_rx) = unbounded_channel();
     let (cmd_tx, cmd_rx) = agent_actor::channels();
 
+    // 运行中 steer 注入箱与 agent 共享：忙碌时提交的消息由 run_loop 在回合内注入
+    let steer_inbox = startup.agent.runtime_steer_inbox.clone();
+
     rt.spawn(bridge::worker::run(
         Arc::new(Mutex::new(startup.agent)),
         cmd_rx,
@@ -84,7 +88,8 @@ pub fn run(startup: Startup, rt: &Handle) {
             ..Default::default()
         };
 
-        let view = cx.new(|cx| app::GuiApp::new(theme, cmd_tx, event_rx, initial_messages, cx));
+        let view =
+            cx.new(|cx| GuiApp::new(theme, cmd_tx, event_rx, initial_messages, steer_inbox, cx));
 
         _ = cx.open_window(options, move |window, cx| {
             // Wayland 后端不会用 `TitlebarOptions::title` 设标题，得显式设一次

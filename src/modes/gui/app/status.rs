@@ -133,7 +133,7 @@ impl GuiApp {
     /// 圆点由渲染层单独画（它才是闪的那个），文字只换品牌色。
     pub(super) fn busy_text(&self) -> Option<String> {
         self.busy
-            .then(|| format!("Working… (Esc to abort, {} queued)", self.queued))
+            .then(|| format!("Working… (Esc to abort, {} queued)", self.pending_count()))
     }
 
     /// 状态栏文案（左, 右）：左侧消息数 + 上下文占用率 + 缓存命中率，

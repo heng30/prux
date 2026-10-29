@@ -164,7 +164,7 @@ impl GuiApp {
                     let command = suggest.trigger == Trigger::Command;
                     self.apply_suggestion(cx);
                     if command {
-                        self.submit(cx);
+                        self.submit(false, cx);
                     }
                     cx.notify();
                     return true;
@@ -215,6 +215,12 @@ impl GuiApp {
         // ── 编辑器键位：与 TUI 的 tui.editor.* 对齐 ─────────────
         let alt = keystroke.modifiers.alt;
         let key = keystroke.key.as_str();
+        // Alt+Up：把排队的 steer / follow-up 全部取回编辑器（同 TUI 的 app.message.dequeue）
+        if alt && key == "up" {
+            self.dequeue_queued(cx);
+            cx.notify();
+            return true;
+        }
         if (alt && (key == "left" || key == "b")) || (primary && key == "left") {
             self.editor.word_left(shift);
             cx.notify();
@@ -473,12 +479,17 @@ impl GuiApp {
         cx: &mut Context<Self>,
     ) {
         match keystroke.key.as_str() {
+            // Alt+Enter：排 follow-up（回合 settle 后才发送，同 TUI 的 app.message.followUp）
+            "enter" if keystroke.modifiers.alt => {
+                self.submit(true, cx);
+                cx.notify();
+            }
             "enter" if shift => {
                 self.editor.insert("\n");
                 cx.notify();
             }
             "enter" => {
-                self.submit(cx);
+                self.submit(false, cx);
                 cx.notify();
             }
             "escape" => {
