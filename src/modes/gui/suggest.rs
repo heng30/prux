@@ -13,6 +13,34 @@ use std::path::Path;
 /// 候选面板最多显示几条。
 pub const MAX_ITEMS: usize = 30;
 
+/// 有独立 GUI 面板入口的扩展命令：`/` 面板不再列它们，避免同一个动作两个入口
+/// （技能面板 Ctrl-I，扩展/设置/循环名单在 Ctrl-M 命令面板里）。
+pub const PANEL_COMMANDS: &[&str] = &["skills", "extension", "settings", "scoped-models"];
+
+/// GUI 支持的斜杠命令：名字（不含 `/`）+ 说明。
+/// `/` 面板里列出的命令：只放对话相关动作，配置类留给 Ctrl-M 命令面板。
+pub const COMMANDS: &[(&str, &str)] = &[
+    ("new", "New session"),
+    ("resume", "Switch session"),
+    ("model", "Select model"),
+    ("thinking", "Set thinking level"),
+    ("compact", "Compact context"),
+    ("name", "Rename current session"),
+    ("clone", "Clone current branch"),
+    ("fork", "Fork current session"),
+    ("label", "Label current branch"),
+    ("tree", "Session tree"),
+    ("import", "Import session file"),
+    ("history", "Search prompt history"),
+    ("share", "Share session (gist)"),
+    ("export", "Export session (HTML)"),
+    ("copy", "Copy last reply"),
+    ("rewind", "Rewind last input"),
+    ("giff", "Review uncommitted changes"),
+    ("sidebar", "Toggle session sidebar"),
+    ("quit", "Quit"),
+];
+
 /// 触发词类型。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Trigger {
@@ -45,30 +73,6 @@ pub struct Suggest {
     /// 当前选中项下标
     pub selected: usize,
 }
-
-/// GUI 支持的斜杠命令：名字（不含 `/`）+ 说明。
-/// `/` 面板里列出的命令：只放对话相关动作，配置类留给 Ctrl-M 命令面板。
-pub const COMMANDS: &[(&str, &str)] = &[
-    ("new", "New session"),
-    ("resume", "Switch session"),
-    ("model", "Select model"),
-    ("thinking", "Set thinking level"),
-    ("compact", "Compact context"),
-    ("name", "Rename current session"),
-    ("clone", "Clone current branch"),
-    ("fork", "Fork current session"),
-    ("label", "Label current branch"),
-    ("tree", "Session tree"),
-    ("import", "Import session file"),
-    ("history", "Search prompt history"),
-    ("share", "Share session (gist)"),
-    ("export", "Export session (HTML)"),
-    ("copy", "Copy last reply"),
-    ("rewind", "Rewind last input"),
-    ("giff", "Review uncommitted changes"),
-    ("sidebar", "Toggle session sidebar"),
-    ("quit", "Quit"),
-];
 
 /// 光标前最后一个 token 的起点。
 fn token_start(text: &str) -> usize {

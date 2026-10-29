@@ -60,6 +60,8 @@ impl GuiApp {
                 theme,
                 overlay::RowSpec {
                     label: &item.label,
+                    columns: &[],
+                    cells: &[],
                     detail: &item.detail,
                     checked: None,
                     selected: index == suggest.selected,

@@ -154,13 +154,18 @@ impl GuiApp {
                     return true;
                 }
                 "tab" if !suggest.items.is_empty() => {
+                    // Tab 只补全：命令文本落进输入框，等 Enter 再执行
                     self.apply_suggestion(cx);
                     cx.notify();
                     return true;
                 }
-                // 有候选时 Enter 先采纳
+                // 有候选时 Enter 先补全再提交：`/` 命令随即执行，`@` 文件只补全
                 "enter" if !suggest.items.is_empty() => {
+                    let command = suggest.trigger == Trigger::Command;
                     self.apply_suggestion(cx);
+                    if command {
+                        self.submit(cx);
+                    }
                     cx.notify();
                     return true;
                 }
@@ -583,9 +588,10 @@ impl GuiApp {
                 return;
             }
             self.overlay = None;
-            // 扩展/技能面板的改动是草稿：Esc 直接丢弃
+            // 扩展/技能/模型名单面板的改动是草稿：Esc 直接丢弃
             self.skills_draft = None;
             self.extensions_draft = None;
+            self.scoped_draft = None;
             return;
         }
         let up = key == "up" || (primary && !shift && key == "k");

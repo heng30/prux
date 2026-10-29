@@ -56,6 +56,25 @@ impl GuiApp {
             cx.notify();
             return true;
         }
+        if let Some(patterns) = self.scoped_draft.take() {
+            match settings_manager::write_enabled_models(Some(&patterns)) {
+                Ok(()) => {
+                    self.overlay = None;
+                    self.toast(
+                        format!("Model scope saved ({} enabled)", patterns.len()),
+                        ToastKind::Success,
+                        cx,
+                    );
+                }
+                Err(error) => self.toast(
+                    format!("Cannot write settings: {error}"),
+                    ToastKind::Error,
+                    cx,
+                ),
+            }
+            cx.notify();
+            return true;
+        }
         if let Some(rules) = self.skills_draft.take() {
             match settings_manager::write_settings_skills(&rules) {
                 Ok(()) => {
@@ -142,7 +161,7 @@ impl GuiApp {
                     if self.theme.is_dark { "dark" } else { "light" }
                 ),
                 detail: "Enter to toggle".into(),
-                action: Action::SetDark(!self.theme.is_dark),
+                action: Action::ToggleSetting(SettingKey::GuiTheme),
                 ..Entry::default()
             },
             Entry {
@@ -345,11 +364,16 @@ impl GuiApp {
             .collect();
         let mut entries: Vec<Entry> = draft
             .into_iter()
-            .map(|(name, enabled)| Entry {
-                label: name.clone(),
-                detail: modes.get(&name).cloned().unwrap_or_default(),
-                action: Action::ToggleExtension(name),
-                checked: Some(enabled),
+            .map(|(name, enabled)| {
+                let modes_cell = modes.get(&name).cloned().unwrap_or_default();
+                Entry {
+                    label: name.clone(),
+                    detail: String::new(),
+                    action: Action::ToggleExtension(name),
+                    checked: Some(enabled),
+                    // 表格第二列：扩展可用的模式
+                    cells: vec![modes_cell],
+                }
             })
             .collect();
         if entries.is_empty() {
@@ -362,6 +386,10 @@ impl GuiApp {
             "Extensions (Ctrl-S saves)",
             entries,
             DetailSource::Extension,
+            vec![
+                Column::fixed("Extension", TABLE_NAME_W),
+                Column::fixed("Modes", TABLE_MODES_W),
+            ],
         );
         cx.notify();
     }
@@ -381,21 +409,19 @@ impl GuiApp {
             .into_iter()
             .map(|(name, description, source, model_off, _path)| {
                 let on = enabled.contains(&name);
-                let mut detail = description;
-                if !source.is_empty() {
-                    if !detail.is_empty() {
-                        detail.push_str(" · ");
-                    }
-                    detail.push_str(&source);
-                }
-                if model_off {
-                    detail.push_str(" · [model-off]");
-                }
+                // model-off 罕见，标在描述前；完整说明在 Tab 详情页里
+                let description = if model_off {
+                    format!("[model-off] {description}")
+                } else {
+                    description
+                };
                 Entry {
                     label: name.clone(),
-                    detail,
+                    detail: String::new(),
                     action: Action::ToggleSkill { name, enable: !on },
                     checked: Some(on),
+                    // 表格第 2、3 列：来源根目录（超宽截断）+ 描述
+                    cells: vec![source, description],
                 }
             })
             .collect();
@@ -411,6 +437,11 @@ impl GuiApp {
             format!("Skills (Ctrl-S saves {} rules)", rules.len()),
             entries,
             DetailSource::Skill,
+            vec![
+                Column::fixed("Skill", TABLE_NAME_W),
+                Column::fixed("Source", TABLE_SOURCE_W),
+                Column::flex("Description"),
+            ],
         );
         cx.notify();
     }
@@ -420,16 +451,19 @@ impl GuiApp {
         title: impl Into<String>,
         entries: Vec<Entry>,
         detail_source: DetailSource,
+        columns: Vec<Column>,
     ) {
         match self.overlay.as_mut() {
             Some(Overlay::List(list)) => {
                 list.detail = None;
                 list.detail_source = detail_source;
+                list.columns = columns;
                 list.refresh(title, entries);
             }
             _ => {
                 let mut list = List::new(title, entries);
                 list.detail_source = detail_source;
+                list.columns = columns;
                 self.overlay = Some(Overlay::List(list));
             }
         }
@@ -456,51 +490,63 @@ impl GuiApp {
             list.detail = Some(Info::new(name, lines));
         }
     }
-    /// `/scoped-models`：勾选哪些模型进入 Ctrl-P 循环名单（写 settings 的 enabledModels）。
+    /// `/scoped-models`：勾选哪些模型进入 Ctrl-P 循环名单。
+    /// 与扩展/技能面板一样只改草稿，Ctrl-S 才写回 settings 的 enabledModels。
     pub(super) fn open_scoped_models_panel(&mut self, cx: &mut Context<Self>) {
-        self.overlay = Some(Overlay::List(List::new(
-            "Scoped models",
-            vec![Entry {
-                label: "Reading models…".into(),
-                detail: String::new(),
+        if self.scoped_draft.is_none() {
+            // settings 里没写等于全选：展开成完整名单，取消勾选才有对象可减
+            let stored = settings_manager::read_enabled_models();
+            self.scoped_draft = Some(if stored.is_empty() {
+                scoped_catalog()
+                    .into_iter()
+                    .map(|(provider, id, _)| format!("{provider}/{id}"))
+                    .collect()
+            } else {
+                stored
+            });
+        }
+        self.rebuild_scoped_models_panel(cx);
+    }
+    /// 用草稿重算模型名单（勾选态来自草稿，Ctrl-S 才写 settings）。
+    pub(super) fn rebuild_scoped_models_panel(&mut self, cx: &mut Context<Self>) {
+        let enabled = self.scoped_draft.clone().unwrap_or_default();
+        let mut on_count = 0usize;
+        let mut entries: Vec<Entry> = scoped_catalog()
+            .into_iter()
+            .map(|(provider, id, name)| {
+                let pattern = format!("{provider}/{id}");
+                let on = enabled.iter().any(|rule| rule == &pattern || rule == &id);
+                if on {
+                    on_count += 1;
+                }
+                Entry {
+                    label: id.clone(),
+                    detail: String::new(),
+                    action: Action::ToggleScopedModel(pattern),
+                    checked: Some(on),
+                    // 表格第 2、3 列：provider + 模型显示名
+                    cells: vec![provider, name],
+                }
+            })
+            .collect();
+        if entries.is_empty() {
+            entries.push(Entry {
+                label: "No models configured".into(),
                 action: Action::None,
                 ..Entry::default()
-            }],
-        )));
-        cx.spawn(async move |this, cx| {
-            let models = cx
-                .background_executor()
-                .spawn(async {
-                    let mut models = Vec::new();
-                    for provider in crate::core::auth::list_configured_providers() {
-                        for (id, name) in crate::core::model_resolver::list_models(&provider) {
-                            models.push((provider.clone(), id, name));
-                        }
-                    }
-                    models
-                })
-                .await;
-            _ = this.update(cx, |app, cx| {
-                let enabled = settings_manager::read_enabled_models();
-                let entries: Vec<Entry> = models
-                    .into_iter()
-                    .map(|(provider, id, name)| {
-                        let pattern = format!("{provider}/{id}");
-                        let on = enabled.is_empty()
-                            || enabled.iter().any(|rule| rule == &pattern || rule == &id);
-                        Entry {
-                            label: format!("[{}] {pattern}", if on { "x" } else { " " }),
-                            detail: name,
-                            action: Action::ToggleScopedModel(pattern),
-                            ..Entry::default()
-                        }
-                    })
-                    .collect();
-                app.overlay = Some(Overlay::List(List::new("Scoped models", entries)));
-                cx.notify();
             });
-        })
-        .detach();
+        }
+        self.replace_list(
+            format!("Scoped models — Ctrl+P cycling (Ctrl-S saves {on_count})"),
+            entries,
+            DetailSource::None,
+            vec![
+                Column::fixed("Model", TABLE_NAME_W),
+                Column::fixed("Provider", TABLE_PROVIDER_W),
+                Column::flex("Name"),
+            ],
+        );
+        cx.notify();
     }
     /// 模型选择器。
     pub(super) fn open_model_picker(&mut self, cx: &mut Context<Self>) {
@@ -821,6 +867,17 @@ fn skills_snapshot(rules: &[String]) -> SkillsSnapshot {
         })
         .collect();
     (rows, enabled)
+}
+
+/// 已配置 provider 的模型目录：`(provider, id, 显示名)`（本地 JSON，同步读足够快）。
+fn scoped_catalog() -> Vec<(String, String, String)> {
+    let mut models = Vec::new();
+    for provider in crate::core::auth::list_configured_providers() {
+        for (id, name) in crate::core::model_resolver::list_models(&provider) {
+            models.push((provider.clone(), id, name));
+        }
+    }
+    models
 }
 
 /// `/skills` 详情页（Tab）的行：启用态 + SKILL.md 头信息 + 来源 + 路径。

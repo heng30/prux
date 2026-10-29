@@ -74,8 +74,11 @@ impl GuiApp {
                 {
                     extra.push((format!("skill:{name}"), description));
                 }
-                // 执行入口还挂在 TUI 层，这里先按现状列出
+                // 执行入口还挂在 TUI 层，这里先按现状列出；有 GUI 面板入口的命令不重复列
                 for command in crate::core::extensions::registered_commands() {
+                    if suggest::PANEL_COMMANDS.contains(&command.name.as_str()) {
+                        continue;
+                    }
                     extra.push((
                         command.name.clone(),
                         format!("{} (extension)", command.description),
@@ -149,7 +152,8 @@ impl GuiApp {
         // 选中行超出面板时跟着滚，保证它始终在视口里
         overlay::reveal_row(&scroll, suggest.selected);
     }
-    /// 把选中候选写进输入框（命令/文件补全）。
+    /// 把选中候选写进输入框：只补全，不执行（执行由 `submit` 负责）。
+    /// `/` 命令与 `@` 文件都补一个尾随空格，便于接着输入。
     pub(super) fn apply_suggestion(&mut self, cx: &mut Context<Self>) {
         let Some(suggest) = self.suggest.clone() else {
             return;
@@ -158,20 +162,16 @@ impl GuiApp {
             return;
         };
         let end = self.editor.cursor_byte();
-        // `/` 命令是动作不是文本：清掉触发文本直接执行
-        if suggest.trigger == Trigger::Command {
-            let name = item.label.trim_start_matches('/').to_string();
-            self.editor.replace_byte_range(suggest.start..end, "");
-            self.suggest = None;
-            self.suggest_dismissed = None;
-            self.run_slash(&name, cx);
-            return;
-        }
+        let start = suggest.start.min(end);
         let insert = format!("{} ", item.label);
-        self.editor.replace_byte_range(suggest.start..end, &insert);
+        self.editor.replace_byte_range(start..end, &insert);
         self.suggest = None;
         self.suggest_dismissed = None;
-        self.refresh_suggest(cx);
+        match suggest.trigger {
+            // 命令已补全完：别在同一位置再弹一次命令面板
+            Trigger::Command => self.suggest_dismissed = Some(start),
+            Trigger::File => self.refresh_suggest(cx),
+        }
     }
     /// 点击候选：选中它并写入输入框。
     pub(super) fn pick_suggestion(&mut self, index: usize, cx: &mut Context<Self>) {

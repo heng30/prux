@@ -291,18 +291,19 @@ impl GuiApp {
                 self.rebuild_extension_panel(cx);
             }
             Action::ToggleScopedModel(pattern) => {
-                let mut patterns = settings_manager::read_enabled_models();
-                match patterns.iter().position(|item| item == &pattern) {
-                    Some(index) => {
-                        patterns.remove(index);
+                // 与扩展/技能面板一致：只改草稿，Ctrl-S 才落盘
+                if self.scoped_draft.is_none() {
+                    self.scoped_draft = Some(settings_manager::read_enabled_models());
+                }
+                if let Some(draft) = self.scoped_draft.as_mut() {
+                    match draft.iter().position(|item| item == &pattern) {
+                        Some(index) => {
+                            draft.remove(index);
+                        }
+                        None => draft.push(pattern),
                     }
-                    None => patterns.push(pattern),
                 }
-                if let Err(error) = settings_manager::write_enabled_models(Some(&patterns)) {
-                    self.transcript
-                        .push_note(Note::Error(format!("Cannot write settings: {error}")));
-                }
-                self.open_scoped_models_panel(cx);
+                self.rebuild_scoped_models_panel(cx);
             }
             Action::ToggleSetting(key) if key.is_number() => self.start_number_setting(key, cx),
             Action::ToggleSetting(key) => {
@@ -372,6 +373,10 @@ impl GuiApp {
                             QuietStartup::Silent => QuietStartup::Full,
                         };
                         settings_manager::write_settings_quiet_startup(next)
+                    }
+                    SettingKey::GuiTheme => {
+                        self.set_dark(!self.theme.is_dark);
+                        Ok(())
                     }
                     // 数值项走输入框（上面带 guard 的分支），这里不会命中
                     _ => Ok(()),

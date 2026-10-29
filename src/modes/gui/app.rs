@@ -31,7 +31,8 @@ use super::{
     components::chip,
     composer,
     overlay::{
-        self, Action, DetailSource, Entry, Info, InfoKind, List, ListKind, Overlay, SettingKey,
+        self, Action, Column, DetailSource, Entry, Info, InfoKind, List, ListKind, Overlay,
+        SettingKey, TABLE_MODES_W, TABLE_NAME_W, TABLE_PROVIDER_W, TABLE_SOURCE_W,
     },
     panel::{self, PanelTab, RightPanel},
     sidebar::{self, SessionRow},
@@ -308,6 +309,8 @@ pub struct GuiApp {
     extensions_draft: Option<Vec<(String, bool)>>,
     /// `/skills` 面板的草稿规则（None = 面板没开，改动丢弃）
     skills_draft: Option<Vec<String>>,
+    /// `/scoped-models` 面板的草稿启用名单（None = 面板没开，Ctrl-S 才落盘）
+    scoped_draft: Option<Vec<String>>,
     /// 屏幕右上角的 toast 队列
     toasts: Vec<Toast>,
     /// toast 自增 id
@@ -417,6 +420,7 @@ impl GuiApp {
             last_toggle: None,
             extensions_draft: None,
             skills_draft: None,
+            scoped_draft: None,
             toasts: Vec::new(),
             toast_seq: 0,
             panel_width: PANEL_DEFAULT_WIDTH,
@@ -702,11 +706,14 @@ fn history_entries(history: Vec<HistoryEntry>) -> Vec<Entry> {
     entries
 }
 
-/// 勾选类动作会重建同一个面板：执行前别关覆盖层，否则过滤与选中行都丢了。
+/// 勾选/切换类动作会重建同一个面板：执行前别关覆盖层，否则过滤与选中行都丢了。
 fn keeps_overlay(action: &Action) -> bool {
     matches!(
         action,
-        Action::ToggleSkill { .. } | Action::ToggleExtension(_)
+        Action::ToggleSkill { .. }
+            | Action::ToggleExtension(_)
+            | Action::ToggleSetting(_)
+            | Action::ToggleScopedModel(_)
     )
 }
 

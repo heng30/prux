@@ -128,6 +128,8 @@ pub enum SettingKey {
     CompactReserve,
     /// 压缩保留最近 token 数（数字输入）
     CompactKeepRecent,
+    /// 桌面窗口明暗主题（切换时写回 `theme-gui`）
+    GuiTheme,
 }
 
 impl SettingKey {
@@ -183,16 +185,57 @@ pub(crate) const ROW_GAP: f32 = 2.0;
 /// 行尾说明文字的最大宽度（逻辑像素）：技能/扩展描述很长，超了就截断。
 const DETAIL_MAX_WIDTH: f32 = 260.0;
 
+/// 表格第一列（名称）宽度（逻辑像素）：技能与扩展面板共用，两个面板列宽对得上。
+pub(crate) const TABLE_NAME_W: f32 = 140.0;
+
+/// 表格来源列宽度（逻辑像素）：技能面板的 `source`（发现根目录，超宽截断）。
+pub(crate) const TABLE_SOURCE_W: f32 = 150.0;
+
+/// 表格模式列宽度（逻辑像素）：扩展面板的可用模式。
+pub(crate) const TABLE_MODES_W: f32 = 150.0;
+
+/// 表格 provider 列宽度（逻辑像素）：模型名单面板的 provider 名。
+pub(crate) const TABLE_PROVIDER_W: f32 = 110.0;
+
+/// 表格列：表头标题 + 固定宽度。
+pub struct Column {
+    /// 表头文字
+    pub title: String,
+    /// 列宽（逻辑像素）；`None` = 吃剩余宽度（表格里最多一个）
+    pub width: Option<f32>,
+}
+
+impl Column {
+    /// 定宽列。
+    pub fn fixed(title: impl Into<String>, width: f32) -> Self {
+        Self {
+            title: title.into(),
+            width: Some(width),
+        }
+    }
+
+    /// 伸缩列（占满剩余宽度）。
+    pub fn flex(title: impl Into<String>) -> Self {
+        Self {
+            title: title.into(),
+            width: None,
+        }
+    }
+}
+
 /// 列表项。
 pub struct Entry {
-    /// 主文案
+    /// 主文案（表格模式下就是第一列，即名称）
     pub label: String,
-    /// 右侧次要说明
+    /// 右侧次要说明（表格模式下作行尾说明用；表格面板一般留空）
     pub detail: String,
     /// 选中后的动作
     pub action: Action,
-    /// 勾选框状态：`Some` 时行首画一个方框（扩展/技能面板的启停态）
+    /// 勾选框状态：`Some` 时行首画一个方框（扩展/技能/模型名单面板的启停态）
     pub checked: Option<bool>,
+    /// 表格模式下除第一列以外的单元格（与 [`List::columns`] 从第二列起一一对应）；
+    /// 空 = 普通两列布局
+    pub cells: Vec<String>,
 }
 
 impl Default for Entry {
@@ -202,6 +245,7 @@ impl Default for Entry {
             detail: String::new(),
             action: Action::None,
             checked: None,
+            cells: Vec::new(),
         }
     }
 }
@@ -231,6 +275,8 @@ pub struct List {
     pub detail: Option<Info>,
     /// 详情页取哪份数据（[`DetailSource::None`] 时 Tab 无效）
     pub detail_source: DetailSource,
+    /// 表格列定义（空 = 普通两列布局）；第一列渲染 [`Entry::label`]
+    pub columns: Vec<Column>,
     /// 列表视口（键盘移动选中项时要把它滚进视野）
     scroll: ScrollHandle,
 }
@@ -245,6 +291,7 @@ impl List {
             selected: 0,
             detail: None,
             detail_source: DetailSource::None,
+            columns: Vec::new(),
             scroll: ScrollHandle::new(),
         }
     }
@@ -277,6 +324,10 @@ impl List {
             .filter(|(_, entry)| {
                 entry.label.to_lowercase().contains(query)
                     || entry.detail.to_lowercase().contains(query)
+                    || entry
+                        .cells
+                        .iter()
+                        .any(|cell| cell.to_lowercase().contains(query))
             })
             .map(|(index, _)| index)
             .collect()
@@ -364,10 +415,14 @@ pub fn render(
     }
 }
 
-/// 一行的内容与状态：主文案、右侧说明、勾选态、是否选中、行高。
+/// 一行的内容与状态：主文案、对齐列、右侧说明、勾选态、是否选中、行高。
 pub(crate) struct RowSpec<'a> {
     /// 主文案
     pub label: &'a str,
+    /// 表格列定义（空 = 普通两列布局）
+    pub columns: &'a [Column],
+    /// 表格行除第一列以外的单元格（与 `columns` 从第二列起对应）
+    pub cells: &'a [String],
     /// 右侧次要说明（空串表示不显示）
     pub detail: &'a str,
     /// 勾选框状态（`Some` 时行首画方框）
@@ -378,7 +433,10 @@ pub(crate) struct RowSpec<'a> {
     pub height: f32,
 }
 
-/// 列表里的一行：勾选框 + 主文案 + 右侧说明（面板与 `/`、`@` 补全面板共用）。
+/// 列表里的一行：勾选框 + 主文案 + 对齐列 + 右侧说明（面板与 `/`、`@` 补全面板共用）。
+///
+/// `columns` 非空时切到表格版式（名称定宽、每列定宽，描述占剩余宽），
+/// 空时保持「名称撑满 + 说明右对齐」。
 ///
 /// `height` 是行高（面板 30、补全面板 26），`id` 的前半段区分不同列表，
 /// 避免两个列表的同一行号抢同一个元素 id。
@@ -390,11 +448,14 @@ pub(crate) fn list_row(
 ) -> AnyElement {
     let RowSpec {
         label,
+        columns,
+        cells,
         detail,
         checked,
         selected,
         height,
     } = spec;
+    let table = !columns.is_empty();
     let mut row = div()
         .id(id)
         .cursor_pointer()
@@ -407,6 +468,7 @@ pub(crate) fn list_row(
         .gap(px(SPACE_SM))
         .text_size(px(FONT_BODY))
         .on_click(on_click);
+
     if let Some(checked) = checked {
         row = row.child(
             div()
@@ -429,12 +491,23 @@ pub(crate) fn list_row(
                 .child(SharedString::from(if checked { "✓" } else { "" })),
         );
     }
+
     row = if selected {
         row.bg(theme.overlay_strong).text_color(theme.text)
     } else {
         row.text_color(theme.text_secondary)
             .hover(|style| style.bg(theme.overlay).text_color(theme.text))
     };
+
+    if table {
+        // 表格：第一列是名称（主色、正常字号），其余列按列宽定长，超宽截断
+        row = row.child(table_cell(theme, label, columns[0].width, false));
+        for (text, column) in cells.iter().zip(&columns[1..]) {
+            row = row.child(table_cell(theme, text, column.width, true));
+        }
+        return row.into_any_element();
+    }
+
     row = row.child(
         div()
             .min_w_0()
@@ -455,6 +528,46 @@ pub(crate) fn list_row(
         );
     }
     row.into_any_element()
+}
+
+/// 表格单元格：定宽列截断，`None` 宽度吃剩余空间；`muted` 用次要色与小字号。
+fn table_cell(theme: &Theme, text: &str, width: Option<f32>, muted: bool) -> AnyElement {
+    let cell = div()
+        .min_w_0()
+        .truncate()
+        .child(SharedString::from(text.to_string()));
+    let cell = match width {
+        Some(width) => cell.flex_none().w(px(width)),
+        None => cell.flex_1(),
+    };
+    if muted {
+        cell.text_size(px(FONT_CAPTION))
+            .text_color(theme.text_tertiary)
+            .into_any_element()
+    } else {
+        cell.into_any_element()
+    }
+}
+
+/// 表头：与 [`list_row`] 的表格行同宽同列（行首留出勾选框与间距的位置）。
+fn table_header(theme: &Theme, columns: &[Column]) -> AnyElement {
+    let mut header = div()
+        .w_full()
+        .h(px(ROW_HEIGHT))
+        .px(px(SPACE_SM))
+        .flex()
+        .items_center()
+        .gap(px(SPACE_SM))
+        .border_b_1()
+        .border_color(theme.border)
+        .text_size(px(FONT_CAPTION))
+        .text_color(theme.text_ghost);
+    // 勾选框占位，保证表头与行的列对齐
+    header = header.child(div().flex_none().w(px(ICON_SIZE)).h(px(ICON_SIZE)));
+    for column in columns {
+        header = header.child(table_cell(theme, &column.title, column.width, true));
+    }
+    header.into_any_element()
 }
 
 /// 可滚动行容器（行数超过 `max_h` 时用滚轮滚动）。
@@ -569,6 +682,12 @@ fn render_list(
     let mut rows = rows_container("overlay-rows", &list.scroll, 340.)
         .flex_1()
         .mt(px(SPACE_XS));
+
+    // 表头不随行滚动：贴在列表上方，列宽与行内单元格一致
+    if !list.columns.is_empty() {
+        column = column.child(table_header(theme, &list.columns));
+    }
+
     if filtered.is_empty() {
         rows = rows.child(
             div()
@@ -586,6 +705,8 @@ fn render_list(
             theme,
             RowSpec {
                 label: &entry.label,
+                columns: &list.columns,
+                cells: &entry.cells,
                 detail: &entry.detail,
                 checked: entry.checked,
                 selected: index == list.selected,
@@ -597,10 +718,12 @@ fn render_list(
     }
     column = column.child(rows);
 
-    let hint = if list.detail_source == DetailSource::None {
-        "↑↓ select · Enter confirm · Esc close"
-    } else {
+    let hint = if list.detail_source != DetailSource::None {
         "↑↓ select · Enter toggle · Tab detail · Esc close"
+    } else if list.entries.iter().any(|entry| entry.checked.is_some()) {
+        "↑↓ select · Enter toggle · Esc close"
+    } else {
+        "↑↓ select · Enter confirm · Esc close"
     };
     column = column.child(
         div()

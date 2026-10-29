@@ -8,12 +8,12 @@ use gpui::{AnyElement, IntoElement, div, prelude::*};
 /// 停止方块的边长（逻辑像素）。
 pub(super) const STOP_SIZE: f32 = 10.;
 
-/// 播放器风格的停止方块（忙碌时发送按钮的内容）：反色实心方块。
+/// 播放器风格的停止方块（忙碌时发送按钮的内容）：品牌色实心方块。
 pub(super) fn stop(theme: &Theme) -> AnyElement {
     div()
         .w(px(STOP_SIZE))
         .h(px(STOP_SIZE))
         .rounded(px(2.))
-        .bg(theme.on_inverse)
+        .bg(theme.accent)
         .into_any_element()
 }

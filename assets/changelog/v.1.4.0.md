@@ -152,7 +152,25 @@
   launch, so the window theme no longer follows `--theme` once you have picked one. The terminal's
   `theme` is a separate key and is left alone.
 
+- **The desktop GUI's skill, extension and scoped-model panels are tables**: a header row names the
+  columns, and name, source / modes / provider and description each get a fixed-width cell instead
+  of one run-together `description · source · [model-off]` string, so rows line up and long text is
+  clipped per cell (the `Tab` detail page still shows the full path). The scoped-model panel also
+  matches the other two: `Enter` toggles a checkbox in a draft and only `Ctrl-S` writes
+  `enabledModels`, with the count of enabled models in the title, and `Esc` throws the draft away.
+  Commands that already have a GUI panel of their own — `/skills`, `/extension`, `/settings`,
+  `/scoped-models` — no longer show up in the `/` completion panel.
+
 ### Fixed
+
+- **Enter in the settings panel changes the setting instead of closing the panel**: every row now
+  keeps the list open (and keeps your filter and highlighted row), so you can flip several settings
+  in a row. The stop square on the send button is drawn in the accent colour rather than inverted.
+
+- **`Tab` in the desktop GUI's `/` panel completes instead of running**: it writes the highlighted
+  command into the input (with a trailing space) and leaves running to `Enter`, so a completion can
+  be edited first. `@` file candidates still only complete on `Enter` and never send, matching the
+  terminal UI.
 
 - **`uiScale` lands in `settings.json` as one decimal**: writing the float straight through turned
   `2.1` into `2.0999999046325684`; it is now quantised to one decimal before saving.
@@ -356,7 +374,19 @@
   的 `theme-gui`，下次启动照样恢复，选过一次之后窗口主题就不再跟着 `--theme` 走；终端里的 `theme`
   是另一个键，互不影响。
 
+- **桌面 GUI 的技能、扩展与模型名单面板改成表格**：有表头行，名称、来源（扩展是可用模式、模型是
+  provider）与描述各占一列定宽，不再把 `描述 · 来源 · [model-off]` 拼成一串挤在行尾，行与行对得齐，
+  长文本按单元格截断（`Tab` 详情页仍显示完整路径）。模型名单面板也跟另外两个对齐：`Enter` 只切换
+  草稿里的勾选框、只有 `Ctrl-S` 才写回 `enabledModels`，标题里带启用数量，`Esc` 丢弃草稿。已有独立
+  GUI 面板的命令——`/skills`、`/extension`、`/settings`、`/scoped-models`——不再出现在 `/` 补全面板里。
+
 ## 修复
+
+- **设置面板按 Enter 只改配置、不关面板**：每一行都保留列表（过滤串与高亮行一起留着），可以连着
+  改好几项。发送按钮上的停止方块改用品牌强调色，而不再取反色。
+
+- **桌面 GUI 的 `/` 面板里 Tab 只补全、Enter 才执行**：Tab 把选中的命令连同尾随空格写进输入框，
+  执行留给 Enter，因此补全完还能先改；`@` 文件候选仍然只在 Enter 时补全、不发送，与终端一致。
 
 - **`uiScale` 在 `settings.json` 里只留一位小数**：直接把 f32 转过去会写成 `2.0999999046325684`，
   现在存盘前量化到一位小数。

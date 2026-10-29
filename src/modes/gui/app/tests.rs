@@ -186,3 +186,13 @@ fn scrollbar_shows_on_hover_or_drag() {
         false
     ));
 }
+
+/// 设置面板的每一行都只改一项配置：执行前必须保住覆盖层，否则 Enter 一按面板就没了。
+#[test]
+fn setting_toggles_keep_the_overlay_open() {
+    assert!(keeps_overlay(&Action::ToggleSetting(SettingKey::GuiTheme)));
+    assert!(keeps_overlay(&Action::ToggleSetting(
+        SettingKey::AutoCompact
+    )));
+    assert!(!keeps_overlay(&Action::SetDark(true)));
+}
