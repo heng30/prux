@@ -21,7 +21,7 @@ pub type CommandTx = mpsc::UnboundedSender<AgentCommand>;
 pub type CommandRx = mpsc::UnboundedReceiver<AgentCommand>;
 
 /// UI → worker 命令
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum AgentCommand {
     /// 启动一轮 prompt（结果全经 sink 事件流）
     Prompt(String),

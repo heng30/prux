@@ -618,7 +618,7 @@ impl GuiApp {
                 let len = list.filtered().len();
                 match key {
                     "enter" => {
-                        let action = list.take_action().map(clone_action);
+                        let action = list.take_action().cloned();
                         if let Some(action) = action {
                             // 同上：勾选类动作要保留面板
                             if !keeps_overlay(&action) {
@@ -708,7 +708,7 @@ impl GuiApp {
             "escape" => {}
             "enter" => {
                 if let Some(item) = dropdown.items.get(dropdown.selected) {
-                    run = Some(clone_action(&item.action));
+                    run = Some(item.action.clone());
                 }
             }
             "pageup" => dropdown.selected = dropdown.selected.saturating_sub(12),

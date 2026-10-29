@@ -115,6 +115,10 @@
 
 ### Fixed
 
+- **Command palette entries run the command they name**: cloning a list entry mapped any command
+  outside a hard-coded handful to `/session` stats, so "Share session (gist)…" only printed the
+  statistics. Entries now carry their command through unchanged.
+
 - **Dragging a sidebar edge no longer overshoots**: sidebar and right-panel widths were stored in
   scaled design pixels but mouse movement arrives in physical pixels, so at any zoom other than
   100% the panel grew faster than the pointer. The delta is now converted before it is applied.
@@ -273,6 +277,9 @@
   终端里的 `Ctrl+R`（改名）、`Ctrl+D`（删除）、`Ctrl+G`（下一个会话）。
 
 ## 修复
+
+- **命令面板执行的就是它写着的那条命令**：拷贝列表项时，硬编码清单之外的命令会被换成 `/session`
+  统计，于是「Share session (gist)…」只打印了统计。现在命令原样带过去。
 
 - **拖侧栏边框不再跑偏**：侧栏与右侧面板的宽度按「设计像素 × 缩放」存，鼠标位移却是物理像素，
   缩放不是 100% 时面板比指针长得快。现在位移先折回宽度单位再相加。

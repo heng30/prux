@@ -9,6 +9,7 @@ use gpui::{
 };
 
 /// 列表项被选中后要做的事。
+#[derive(Clone)]
 pub enum Action {
     /// 不做事（纯展示）
     None,

@@ -162,7 +162,7 @@ impl GuiApp {
                 let filtered = list.filtered();
                 filtered
                     .get(visible)
-                    .map(|index| clone_action(&list.entries[*index].action))
+                    .map(|index| list.entries[*index].action.clone())
             }
             _ => None,
         };

@@ -941,7 +941,7 @@ impl GuiApp {
                     .track_scroll(&handle);
             }
             for (index, item) in dropdown.items.iter().enumerate() {
-                let action = clone_action(&item.action);
+                let action = item.action.clone();
                 let mut row = div()
                     .id(("dropdown", index))
                     .min_h(px(24.))
@@ -976,7 +976,7 @@ impl GuiApp {
                 }
                 card = card.child(row.on_click(cx.listener(move |this, _, _, cx| {
                     this.dropdown = None;
-                    let action = clone_action(&action);
+                    let action = action.clone();
                     this.run_action(action, cx);
                     cx.notify();
                 })));
