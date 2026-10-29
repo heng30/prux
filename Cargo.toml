@@ -83,7 +83,7 @@ base64 = { version = "0.23", default-features = false, features = ["std"] }
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 similar = { version = "3.1", default-features = false, features = ["text"] }
 getrandom = { version = "0.4", default-features = false, features = ["std"] }
-sysinfo = { version = "0.39", default-features = false, features = ["system"] }
+sysinfo = { version = "0.40", default-features = false, features = ["system"] }
 calamine = { version = "0.37", default-features = false, features = ["dates"] }
 hyper-util = { version = "0.1", default-features = false, features = ["tokio"] }
 
@@ -102,7 +102,7 @@ rmcp = { version = "3.1", default-features = false, features = [
   "reqwest-tls-no-provider",
   "transport-streamable-http-client-reqwest",
 ] }
-russh = { version = "0.64", default-features = false, features = [
+russh = { version = "0.65", default-features = false, features = [
   "rsa",
   "flate2",
   "aws-lc-rs",

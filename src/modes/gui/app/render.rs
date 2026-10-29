@@ -550,7 +550,7 @@ impl GuiApp {
                                         .text_size(px(FONT_SMALL))
                                         .text_color(theme.text_tertiary)
                                         .child(SharedString::from(
-                                            "Ctrl-M for commands · Ctrl-Shift-O to switch sessions",
+                                            "Ctrl-M for commands · Ctrl-, for settings",
                                         )),
                                 ),
                         )
@@ -563,7 +563,9 @@ impl GuiApp {
                                 .px(px(SPACE_MD))
                                 .text_size(px(FONT_CAPTION))
                                 .text_color(theme.text_ghost)
-                                .child(SharedString::from("Shift+Enter new line · Ctrl-L model")),
+                                .child(SharedString::from(
+                                    "Enter send · Shift+Enter new line · Ctrl-P cycle model · Shift-Tab cycle thinking",
+                                )),
                         ),
                 )
         } else {

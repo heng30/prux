@@ -158,8 +158,10 @@
   clipped per cell (the `Tab` detail page still shows the full path). The scoped-model panel also
   matches the other two: `Enter` toggles a checkbox in a draft and only `Ctrl-S` writes
   `enabledModels`, with the count of enabled models in the title, and `Esc` throws the draft away.
-  Commands that already have a GUI panel of their own — `/skills`, `/extension`, `/settings`,
-  `/scoped-models` — no longer show up in the `/` completion panel.
+  The `Tab` detail page is a `Property / Value` table too, and a `fork url` value that is an
+  `http(s)://` link opens in the system browser on click. Commands that already have a GUI panel of
+  their own — `/skills`, `/extension`, `/settings`, `/scoped-models` — no longer show up in the `/`
+  completion panel.
 
 ### Fixed
 
@@ -377,8 +379,10 @@
 - **桌面 GUI 的技能、扩展与模型名单面板改成表格**：有表头行，名称、来源（扩展是可用模式、模型是
   provider）与描述各占一列定宽，不再把 `描述 · 来源 · [model-off]` 拼成一串挤在行尾，行与行对得齐，
   长文本按单元格截断（`Tab` 详情页仍显示完整路径）。模型名单面板也跟另外两个对齐：`Enter` 只切换
-  草稿里的勾选框、只有 `Ctrl-S` 才写回 `enabledModels`，标题里带启用数量，`Esc` 丢弃草稿。已有独立
-  GUI 面板的命令——`/skills`、`/extension`、`/settings`、`/scoped-models`——不再出现在 `/` 补全面板里。
+  草稿里的勾选框、只有 `Ctrl-S` 才写回 `enabledModels`，标题里带启用数量，`Esc` 丢弃草稿。`Tab` 详情页
+  同样是 `Property / Value` 两列表格，`fork url` 这类 `http(s)://` 链接点一下就交给系统浏览器打开。
+  已有独立 GUI 面板的命令——`/skills`、`/extension`、`/settings`、`/scoped-models`——不再出现在 `/`
+  补全面板里。
 
 ## 修复
 

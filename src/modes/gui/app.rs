@@ -31,8 +31,8 @@ use super::{
     components::chip,
     composer,
     overlay::{
-        self, Action, Column, DetailSource, Entry, Info, InfoKind, List, ListKind, Overlay,
-        SettingKey, TABLE_MODES_W, TABLE_NAME_W, TABLE_PROVIDER_W, TABLE_SOURCE_W,
+        self, Action, Column, DetailSource, Entry, Info, InfoKind, InfoRow, List, ListKind,
+        Overlay, SettingKey, TABLE_MODES_W, TABLE_NAME_W, TABLE_PROVIDER_W, TABLE_SOURCE_W,
     },
     panel::{self, PanelTab, RightPanel},
     sidebar::{self, SessionRow},

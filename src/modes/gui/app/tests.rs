@@ -196,3 +196,21 @@ fn setting_toggles_keep_the_overlay_open() {
     )));
     assert!(!keeps_overlay(&Action::SetDark(true)));
 }
+
+/// Tab 详情页：`key: value` 拆成表格两列，纯文本行当作描述，空行是分组分隔。
+#[test]
+fn detail_lines_become_table_rows() {
+    let rows = super::panels::info_rows(vec![
+        "  fork detail description".to_string(),
+        String::new(),
+        "  mode: Dev, Creator".to_string(),
+        "  fork url: https://example.com/x".to_string(),
+    ]);
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[0].key, "Description");
+    assert_eq!(rows[0].value, "fork detail description");
+    assert_eq!(rows[1].key, "mode");
+    assert_eq!(rows[1].value, "Dev, Creator");
+    assert_eq!(rows[2].key, "fork url");
+    assert_eq!(rows[2].value, "https://example.com/x");
+}

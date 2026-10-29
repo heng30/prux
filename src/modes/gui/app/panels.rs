@@ -487,7 +487,7 @@ impl GuiApp {
             return;
         }
         if let Some(Overlay::List(list)) = &mut self.overlay {
-            list.detail = Some(Info::new(name, lines));
+            list.detail = Some(Info::with_rows(name, info_rows(lines)));
         }
     }
     /// `/scoped-models`：勾选哪些模型进入 Ctrl-P 循环名单。
@@ -867,6 +867,29 @@ fn skills_snapshot(rules: &[String]) -> SkillsSnapshot {
         })
         .collect();
     (rows, enabled)
+}
+
+/// 详情行（`"  key: value"` / 纯描述）→ 表格行：`key: value` 拆成两列，
+/// 首个不是键值对的行作描述；空行是分组分隔，丢掉。
+pub(super) fn info_rows(lines: Vec<String>) -> Vec<InfoRow> {
+    let mut rows = Vec::new();
+    for line in lines {
+        let text = line.trim();
+        if text.is_empty() {
+            continue;
+        }
+        match text.split_once(": ") {
+            Some((key, value)) => rows.push(InfoRow {
+                key: key.to_string(),
+                value: value.to_string(),
+            }),
+            None => rows.push(InfoRow {
+                key: "Description".to_string(),
+                value: text.to_string(),
+            }),
+        }
+    }
+    rows
 }
 
 /// 已配置 provider 的模型目录：`(provider, id, 显示名)`（本地 JSON，同步读足够快）。

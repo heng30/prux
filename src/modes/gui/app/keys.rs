@@ -606,8 +606,8 @@ impl GuiApp {
                 match key {
                     "pageup" => detail.scroll_by(-12, 18),
                     "pagedown" => detail.scroll_by(12, 18),
-                    "home" => detail.scroll_by(-(detail.lines.len() as i32), 18),
-                    "end" => detail.scroll_by(detail.lines.len() as i32, 18),
+                    "home" => detail.scroll_by(-(detail.len() as i32), 18),
+                    "end" => detail.scroll_by(detail.len() as i32, 18),
                     _ if up => detail.scroll_by(-1, 18),
                     _ if down => detail.scroll_by(1, 18),
                     _ => {}

@@ -185,6 +185,9 @@ pub(crate) const ROW_GAP: f32 = 2.0;
 /// 行尾说明文字的最大宽度（逻辑像素）：技能/扩展描述很长，超了就截断。
 const DETAIL_MAX_WIDTH: f32 = 260.0;
 
+/// 详情页表格左列（属性名）宽度（逻辑像素）。
+const INFO_LABEL_W: f32 = 132.0;
+
 /// 表格第一列（名称）宽度（逻辑像素）：技能与扩展面板共用，两个面板列宽对得上。
 pub(crate) const TABLE_NAME_W: f32 = 140.0;
 
@@ -368,10 +371,20 @@ impl List {
 pub struct Info {
     /// 面板标题
     pub title: String,
-    /// 逐行文本
+    /// 逐行文本（`rows` 为空时按普通文本渲染）
     pub lines: Vec<String>,
+    /// 两列表格内容（属性 / 值）：非空时按表格渲染，值里是 URL 的可点击
+    pub rows: Vec<InfoRow>,
     /// 滚动偏移（行）
     pub scroll: usize,
+}
+
+/// 详情页表格的一行：属性名 + 值。
+pub struct InfoRow {
+    /// 属性名（左列）
+    pub key: String,
+    /// 值（右列）；以 `http://` / `https://` 开头时渲染成可点击链接
+    pub value: String,
 }
 
 impl Info {
@@ -380,13 +393,33 @@ impl Info {
         Self {
             title: title.into(),
             lines,
+            rows: Vec::new(),
             scroll: 0,
+        }
+    }
+
+    /// 新建表格型详情页（扩展 / 技能的 Tab 详情）。
+    pub fn with_rows(title: impl Into<String>, rows: Vec<InfoRow>) -> Self {
+        Self {
+            title: title.into(),
+            lines: Vec::new(),
+            rows,
+            scroll: 0,
+        }
+    }
+
+    /// 可滚动的总行数（表格详情按行数，文本详情按行数）。
+    pub fn len(&self) -> usize {
+        if self.rows.is_empty() {
+            self.lines.len()
+        } else {
+            self.rows.len()
         }
     }
 
     /// 滚动（夹到有效范围）。
     pub fn scroll_by(&mut self, delta: i32, visible: usize) {
-        let max = self.lines.len().saturating_sub(visible);
+        let max = self.len().saturating_sub(visible);
         let next = self.scroll as i32 + delta;
         self.scroll = next.clamp(0, max as i32) as usize;
     }
@@ -756,13 +789,17 @@ fn render_info(info: &Info, theme: &Theme) -> AnyElement {
                 .child(SharedString::from(info.title.clone())),
         );
 
-    for line in info.lines.iter().skip(info.scroll).take(16) {
-        column = column.child(
-            div()
-                .text_size(px(FONT_SMALL))
-                .text_color(theme.text_secondary)
-                .child(SharedString::from(line.clone())),
-        );
+    if !info.rows.is_empty() {
+        column = column.child(info_table(info, theme));
+    } else {
+        for line in info.lines.iter().skip(info.scroll).take(16) {
+            column = column.child(
+                div()
+                    .text_size(px(FONT_SMALL))
+                    .text_color(theme.text_secondary)
+                    .child(SharedString::from(line.clone())),
+            );
+        }
     }
 
     column
@@ -774,6 +811,82 @@ fn render_info(info: &Info, theme: &Theme) -> AnyElement {
                 .child(SharedString::from("↑↓ scroll · Esc close")),
         )
         .into_any_element()
+}
+
+/// 详情页表格：表头 + 「属性 / 值」两列，值是可点击的 URL 时用链接色。
+fn info_table(info: &Info, theme: &Theme) -> AnyElement {
+    let mut table = div().w_full().flex().flex_col().gap(px(ROW_GAP));
+    let header = div()
+        .flex()
+        .items_center()
+        .gap(px(SPACE_SM))
+        .px(px(SPACE_XS))
+        .pb(px(SPACE_XS))
+        .border_b_1()
+        .border_color(theme.border)
+        .text_size(px(FONT_CAPTION))
+        .text_color(theme.text_ghost)
+        .child(
+            div()
+                .flex_none()
+                .w(px(INFO_LABEL_W))
+                .child(SharedString::from("Property")),
+        )
+        .child(div().flex_1().min_w_0().child(SharedString::from("Value")));
+    table = table.child(header);
+
+    for (index, row) in info.rows.iter().skip(info.scroll).enumerate() {
+        let link = is_url(&row.value);
+        let value = div()
+            .flex_1()
+            .min_w_0()
+            .truncate()
+            .text_size(px(FONT_SMALL));
+        let value = if link {
+            let url = row.value.clone();
+            value
+                .id(("info-link", index))
+                .text_color(theme.link)
+                .cursor_pointer()
+                .hover(|style| style.underline())
+                .on_click(move |_, _, _| open_url(&url))
+                .child(SharedString::from(row.value.clone()))
+                .into_any_element()
+        } else {
+            value
+                .text_color(theme.text_secondary)
+                .child(SharedString::from(row.value.clone()))
+                .into_any_element()
+        };
+        table = table.child(
+            div()
+                .flex()
+                .items_start()
+                .gap(px(SPACE_SM))
+                .px(px(SPACE_XS))
+                .text_size(px(FONT_SMALL))
+                .child(
+                    div()
+                        .flex_none()
+                        .w(px(INFO_LABEL_W))
+                        .truncate()
+                        .text_color(theme.text_tertiary)
+                        .child(SharedString::from(row.key.clone())),
+                )
+                .child(value),
+        );
+    }
+    table.into_any_element()
+}
+
+/// 详情页里可点击的值：只看 `http(s)://` 开头的绝对链接。
+fn is_url(value: &str) -> bool {
+    value.starts_with("http://") || value.starts_with("https://")
+}
+
+/// 用系统默认浏览器打开链接（`webbrowser` crate，与 TUI 的 Ctrl+click 同一条路径）。
+fn open_url(url: &str) {
+    _ = webbrowser::open(url);
 }
 
 #[cfg(test)]
