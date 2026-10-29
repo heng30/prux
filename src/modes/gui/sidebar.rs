@@ -4,7 +4,7 @@
 //! 逐条解析会话元数据（整文件读，慢）交给 [`ProgressiveMetas`] 的后台线程，
 //! 渲染时只取已就绪的那部分。
 
-use super::components::{dot, ellipsis, section_label};
+use super::components::{dot, section_label};
 use super::theme::Theme;
 use super::theme::px;
 use crate::cli::session_picker::ProgressiveMetas;
@@ -33,9 +33,9 @@ impl Group {
     /// 分组标题。
     fn label(self) -> &'static str {
         match self {
-            Group::Today => "今天",
-            Group::Week => "本周",
-            Group::Older => "更早",
+            Group::Today => "Today",
+            Group::Week => "This week",
+            Group::Older => "Older",
         }
     }
 }
@@ -60,11 +60,12 @@ pub fn paths(cwd: &str) -> Vec<PathBuf> {
 }
 
 /// 把已解析完的元数据组装成侧栏行（未就绪的会话不出现）。
+///
+/// 消息数为 0 的会话也列出：空会话可能是刚建的、或还没写入内容，藏起来会让人
+/// 以为列表坏了（标题退回到文件名）。
 pub fn rows(loader: &ProgressiveMetas) -> Vec<SessionRow> {
     loader
         .visible()
-        // 没有任何消息的会话不列出：老版本每次启动都会留下一个只有 header 的空文件
-        .filter(|(_, _, meta)| meta.message_count > 0)
         .map(|(_, path, meta)| {
             let title = meta
                 .name
@@ -122,6 +123,10 @@ pub struct SidebarCtx<'a> {
     pub theme: &'a Theme,
     /// 当前工作目录（底部展示）
     pub cwd: &'a str,
+    /// 当前 git 分支（非 git 仓库时为 None）
+    pub branch: Option<&'a str>,
+    /// 侧栏宽度（逻辑像素，可拖拽改变）
+    pub width: f32,
     /// 会话行
     pub rows: &'a [SessionRow],
     /// 当前会话文件路径
@@ -138,6 +143,8 @@ pub struct SidebarCtx<'a> {
     pub new_session: ClickHandler,
     /// 会话行右键：参数是会话文件路径
     pub context_menu: ContextHandler,
+    /// 点底部工作目录：切目录
+    pub change_cwd: ClickHandler,
 }
 
 /// 渲染侧栏。
@@ -145,6 +152,8 @@ pub fn render(ctx: SidebarCtx<'_>) -> AnyElement {
     let SidebarCtx {
         theme,
         cwd,
+        branch,
+        width,
         rows,
         current,
         loading,
@@ -153,10 +162,11 @@ pub fn render(ctx: SidebarCtx<'_>) -> AnyElement {
         cmd_tx,
         new_session,
         context_menu,
+        change_cwd,
     } = ctx;
     let active = current_index(rows, current);
     let mut column = div()
-        .w(px(252.))
+        .w(px(width))
         .h_full()
         .flex_none()
         .flex()
@@ -196,7 +206,7 @@ pub fn render(ctx: SidebarCtx<'_>) -> AnyElement {
                     .cursor_pointer()
                     .hover(|style| style.bg(theme.overlay_strong).text_color(theme.text))
                     .on_click(new_session)
-                    .child(SharedString::from("+ 新会话")),
+                    .child(SharedString::from("+ New session")),
             ),
     );
 
@@ -218,7 +228,7 @@ pub fn render(ctx: SidebarCtx<'_>) -> AnyElement {
         .pb(px(12.))
         .overflow_y_scroll()
         .track_scroll(scroll);
-    list = list.child(section_label(theme, "会话"));
+    list = list.child(section_label(theme, "Sessions"));
     if rows.is_empty() {
         list = list.child(
             div()
@@ -227,9 +237,9 @@ pub fn render(ctx: SidebarCtx<'_>) -> AnyElement {
                 .text_size(px(11.5))
                 .text_color(theme.text_ghost)
                 .child(SharedString::from(if loading {
-                    "正在加载会话…"
+                    "Loading sessions…"
                 } else {
-                    "还没有会话"
+                    "No sessions yet"
                 })),
         );
     }
@@ -276,7 +286,7 @@ pub fn render(ctx: SidebarCtx<'_>) -> AnyElement {
                     .text_size(px(10.5))
                     .text_color(theme.text_ghost)
                     .child(SharedString::from(row.age.clone()))
-                    .child(SharedString::from(format!("· {} 条", row.messages))),
+                    .child(SharedString::from(format!("· {} messages", row.messages))),
             );
         let tx = cmd_tx.clone();
         let path = row.path.clone();
@@ -305,24 +315,69 @@ pub fn render(ctx: SidebarCtx<'_>) -> AnyElement {
             .child(scrollbar),
     );
 
-    // 底部：当前工作目录
+    // 底部：工作目录 + git 分支（点击弹系统目录选择器）
+    let mut footer = div()
+        .id("cwd")
+        .w_full()
+        .px(px(6.))
+        .py(px(5.))
+        .rounded(px(6.))
+        .flex()
+        .flex_col()
+        .gap(px(2.))
+        .cursor_pointer()
+        .hover(|style| style.bg(theme.overlay))
+        .on_click(change_cwd);
+    if let Some(branch) = branch {
+        footer = footer.child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(5.))
+                .text_size(px(10.5))
+                .text_color(theme.text_ghost)
+                .child(SharedString::from("⎇"))
+                .child(
+                    div()
+                        .min_w_0()
+                        .flex_1()
+                        .truncate()
+                        .text_size(px(10.5))
+                        .text_color(theme.text_ghost)
+                        .child(SharedString::from(branch.to_string())),
+                ),
+        );
+    }
+    footer = footer.child(
+        div()
+            .flex()
+            .items_center()
+            .gap(px(5.))
+            .child(
+                div()
+                    .flex_none()
+                    .text_size(px(10.5))
+                    .text_color(theme.text_ghost)
+                    .child(SharedString::from("⌂")),
+            )
+            .child(
+                div()
+                    .min_w_0()
+                    .flex_1()
+                    .truncate()
+                    .text_size(px(11.))
+                    .text_color(theme.text_secondary)
+                    .child(SharedString::from(cwd.to_string())),
+            ),
+    );
     column = column.child(
         div()
             .border_t_1()
             .border_color(theme.border)
-            .px(px(12.))
-            .py(px(8.))
-            .child(ellipsis(basename(cwd), theme.text_ghost, 10.5)),
+            .p(px(6.))
+            .child(footer),
     );
     column.into_any_element()
-}
-
-/// 路径最后一段（项目名）。
-fn basename(path: &str) -> String {
-    path.rsplit(['/', '\\'])
-        .find(|part| !part.is_empty())
-        .unwrap_or(path)
-        .to_string()
 }
 
 /// 按字符截断并补省略号。

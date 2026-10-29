@@ -38,6 +38,11 @@ pub enum AgentCommand {
         /// true 时切换成功后才写回 settings 作为默认模型。
         persist: bool,
     },
+    /// 切换工作目录（GUI 侧栏底部改目录；同时在新目录下开一个会话）
+    SwitchCwd {
+        /// 新的工作目录绝对路径
+        path: String,
+    },
     /// 设置 thinking 级别（persist=true 时设置成功后写 settings 默认级别）
     SetThinking { level: String, persist: bool },
     /// 切换会话

@@ -8,13 +8,16 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 /// 界面缩放系数的下限：再小中文就糊了。
 pub const UI_SCALE_MIN: f32 = 0.8;
-/// 界面缩放系数的上限：再大侧栏与输入框会被挤出窗口。
-pub const UI_SCALE_MAX: f32 = 2.0;
+/// 界面缩放系数的上限：放大到 5 倍仍允许（窗口不够宽时侧栏/输入框会被挤，用户自己缩回）。
+pub const UI_SCALE_MAX: f32 = 5.0;
 /// 每档缩放的步进（Ctrl+= / Ctrl+- 一次调多少）。
 pub const UI_SCALE_STEP: f32 = 0.1;
 
 /// 当前界面缩放系数，存千分比整数（1000 = 1.0）：全局唯一，渲染时由 [`px`] 读取。
 static UI_SCALE_PERMILLE: AtomicU32 = AtomicU32::new(1000);
+
+/// 界面默认字体族：编译期内嵌的思源黑体 CN（`assets/fonts/SourceHanSansCN.otf`）。
+pub const UI_FONT_FAMILY: &str = "Source Han Sans CN";
 
 /// 当前界面缩放系数（1.0 = 设计稿尺寸）。
 pub fn ui_scale() -> f32 {
@@ -76,8 +79,6 @@ pub struct Theme {
     pub danger: Hsla,
     /// 行内代码前景
     pub code_text: Hsla,
-    /// 行内代码底色
-    pub code_wash: Hsla,
     /// 主按钮底色（深色主题为浅色）
     pub inverse: Hsla,
     /// 主按钮前景
@@ -110,7 +111,6 @@ impl Theme {
             warning: rgb(0xE0B36A).into(),
             danger: rgb(0xE2726A).into(),
             code_text: rgb(0xE0A882).into(),
-            code_wash: rgba(0xFFFFFF14).into(),
             inverse: rgb(0xE7E9EC).into(),
             on_inverse: rgb(0x17181C).into(),
             selection: rgba(0x3B82F58C).into(),
@@ -140,7 +140,6 @@ impl Theme {
             warning: rgb(0xA66B20).into(),
             danger: rgb(0xC64A42).into(),
             code_text: rgb(0x9A5528).into(),
-            code_wash: rgba(0x00000012).into(),
             inverse: rgb(0x202227).into(),
             on_inverse: rgb(0xF8F8F9).into(),
             selection: rgba(0x3B82F559).into(),

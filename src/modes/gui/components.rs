@@ -52,14 +52,3 @@ pub fn section_label(theme: &Theme, text: impl Into<SharedString>) -> AnyElement
         .child(text.into())
         .into_any_element()
 }
-
-/// 单行文本（超宽截断）。
-pub fn ellipsis(text: impl Into<SharedString>, color: gpui::Hsla, size: f32) -> AnyElement {
-    div()
-        .min_w_0()
-        .truncate()
-        .text_size(px(size))
-        .text_color(color)
-        .child(text.into())
-        .into_any_element()
-}

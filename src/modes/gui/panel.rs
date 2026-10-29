@@ -102,8 +102,8 @@ impl RightPanel {
                 Ok(changes) => {
                     let diff = changes.get(selected).map(|row| {
                         let path = row.path.clone();
-                        let text =
-                            git_diff(cwd, &path).unwrap_or_else(|e| format!("无法读取 diff：{e}"));
+                        let text = git_diff(cwd, &path)
+                            .unwrap_or_else(|e| format!("Cannot read diff: {e}"));
                         (path, text)
                     });
                     PanelData {
@@ -194,9 +194,9 @@ fn git_changes(cwd: &str) -> Result<Vec<ChangeRow>, String> {
         .arg(cwd)
         .args(["status", "--porcelain"])
         .output()
-        .map_err(|e| format!("无法运行 git：{e}"))?;
+        .map_err(|e| format!("Cannot run git: {e}"))?;
     if !output.status.success() {
-        return Err("当前目录不是 git 工作区，或 git 执行失败".to_string());
+        return Err("Not a git work tree, or git failed".to_string());
     }
     Ok(parse_status(&String::from_utf8_lossy(&output.stdout)))
 }
@@ -231,21 +231,26 @@ fn git_diff(cwd: &str, path: &str) -> Result<String, String> {
         .arg(cwd)
         .args(["diff", "--no-color", "--", path])
         .output()
-        .map_err(|e| format!("无法运行 git：{e}"))?;
+        .map_err(|e| format!("Cannot run git: {e}"))?;
     if !output.status.success() {
-        return Err("git diff 执行失败".to_string());
+        return Err("git diff failed".to_string());
     }
     let text = String::from_utf8_lossy(&output.stdout).to_string();
     if text.trim().is_empty() {
-        return Ok("（没有已暂存的差异；新文件需先 git add）".to_string());
+        return Ok("(no staged diff; new files need `git add` first)".to_string());
     }
     Ok(text)
 }
 
 /// 渲染右侧面板。
-pub fn render(theme: &Theme, panel: &RightPanel, cx: &mut gpui::Context<GuiApp>) -> AnyElement {
+pub fn render(
+    theme: &Theme,
+    panel: &RightPanel,
+    width: f32,
+    cx: &mut gpui::Context<GuiApp>,
+) -> AnyElement {
     let mut column = div()
-        .w(px(320.))
+        .w(px(width))
         .h_full()
         .flex_none()
         .flex()
@@ -286,11 +291,11 @@ pub fn render(theme: &Theme, panel: &RightPanel, cx: &mut gpui::Context<GuiApp>)
             .border_b_1()
             .border_color(theme.border)
             .child(tab(
-                &format!("变更 {}", panel.changes.len()),
+                &format!("Changes {}", panel.changes.len()),
                 panel.tab == PanelTab::Changes,
             ))
             .child(tab(
-                &format!("文件 {}", panel.files.len()),
+                &format!("files {}", panel.files.len()),
                 panel.tab == PanelTab::Files,
             ))
             .child(div().flex_1())
@@ -300,7 +305,7 @@ pub fn render(theme: &Theme, panel: &RightPanel, cx: &mut gpui::Context<GuiApp>)
                     .text_size(px(10.))
                     .text_color(theme.text_ghost)
                     .child(SharedString::from(if panel.loading {
-                        "加载中…"
+                        "Loading…"
                     } else {
                         ""
                     })),
@@ -371,9 +376,9 @@ pub fn render(theme: &Theme, panel: &RightPanel, cx: &mut gpui::Context<GuiApp>)
                         .text_size(px(11.5))
                         .text_color(theme.text_ghost)
                         .child(SharedString::from(if panel.loading {
-                            "正在读取变更…"
+                            "Reading changes…"
                         } else {
-                            "工作区干净"
+                            "Working tree clean"
                         })),
                 );
             }

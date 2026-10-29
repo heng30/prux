@@ -223,6 +223,7 @@ async fn dispatch(
         AgentCommand::SetThinking { level, persist } => {
             dispatch_set_thinking(agent, level, persist).await
         }
+        AgentCommand::SwitchCwd { path } => dispatch_switch_cwd(agent, path).await,
         AgentCommand::NewSession => dispatch_new_session(agent).await,
         AgentCommand::ResumeSession { path } => dispatch_resume_session(agent, path).await,
         AgentCommand::ApplyKey { provider, key } => dispatch_apply_key(agent, provider, key).await,
@@ -548,7 +549,7 @@ async fn dispatch_share(agent: &Arc<Mutex<Agent>>, theme: Option<String>) -> Opt
 }
 
 /// 导出会话 HTML 并用 `gh gist create --public=false` 上传，返回给聊天区的回执文本。
-fn share_via_gist(session: &Session, theme: Option<&str>) -> String {
+pub(crate) fn share_via_gist(session: &Session, theme: Option<&str>) -> String {
     let Ok(tmp) = tempfile::Builder::new()
         .prefix(&format!("{APP_NAME}-share-"))
         .suffix(".html")
@@ -801,7 +802,23 @@ async fn dispatch_set_thinking(
     None
 }
 
-/// 处理 AgentCommand::NewSession。
+/// 处理 AgentCommand::SwitchCwd：改工作目录、按新目录重建工具与系统提示，
+/// 再在新目录下开一个会话（旧会话留在原目录）。
+async fn dispatch_switch_cwd(agent: &Arc<Mutex<Agent>>, path: String) -> Option<RoundFuture> {
+    if !std::path::Path::new(&path).is_dir() {
+        return None;
+    }
+
+    {
+        let mut a = agent.lock().await;
+        a.cwd = path;
+        a.rebuild_tools();
+    }
+
+    dispatch_new_session(agent).await
+}
+
+/// 处理 AgentCommand::NewSession：在当前目录下开新会话。
 async fn dispatch_new_session(agent: &Arc<Mutex<Agent>>) -> Option<RoundFuture> {
     let mut a = agent.lock().await;
     let cwd = a.cwd.clone();
@@ -1338,7 +1355,7 @@ fn usage_cost_breakdown(messages: &[AgentMessage], entries: &[Value]) -> Vec<Cos
 }
 
 /// /tree 会话树文本
-fn session_tree_text(s: &Session) -> String {
+pub(crate) fn session_tree_text(s: &Session) -> String {
     let tree = s.get_tree();
     let mut lines = Vec::new();
 

@@ -91,6 +91,13 @@
   (instead of halfblocks) and the palette is treated as truecolor, so hyperlinks and pictures
   render instead of degrading to `text (url)`.
 
+- **The desktop GUI switches models and thinking levels from the keyboard**: `Ctrl+P` /
+  `Ctrl+Shift+P` step through the model scope (`--models` / `settings.enabledModels`, falling back
+  to every configured model only when the scope is empty, keeping the scope's order and skipping
+  entries the catalog no longer has); a scoped entry that carries a thinking level sets that level
+  before switching. `Shift+Tab` cycles the current model's thinking levels. Both follow the TUI
+  bindings, and `Ctrl+K` is still the command palette.
+
 ### Fixed
 
 - **Left/Right now reach the panel**: the TUI key translation never mapped `←`/`→`, so every
@@ -131,10 +138,35 @@
   now active.
 - **HTML export renders CJK emphasis**: bold and italic next to CJK punctuation no longer show
   up as literal asterisks.
+- **The desktop GUI's transcript and menus behave**: right-clicking a session row and picking
+  `Rename` / `Delete` now opens the dialog instead of just closing the menu, the transcript can
+  be scrolled to its real end (the last lines are no longer hidden under the composer), text
+  selection lands on the character under the pointer, `Esc` during a turn drops the busy state
+  and leaves an `Operation aborted` line behind, and command results appear in the transcript
+  as system messages rather than a transient toast. UI scale can be raised to 500%.
 - **A second overlay no longer replaces the first**: when two extensions ask for input at the
   same time, the second one used to take over and the first was simply gone. The covered overlay
   is now kept on a stack and comes back as soon as the one above it closes; switching sessions
   still closes all of them.
+
+- **The desktop GUI's input box wraps to the width it really has**: wrapping measures real glyph
+  widths through the text system instead of assuming 0.6em per character — the estimate overflowed
+  the card once the interface was zoomed, and scaling it back wrapped a fifth too early; the
+  available width is now the card's inner width. A draft longer than eight rows scrolls with the
+  wheel, the cursor scrolls itself back into view when it moves without fighting a manual scroll,
+  and collapsed tool output ends with the same `⋯ N more line(s) · click to expand` hint the user
+  bubbles use instead of a bare `…`.
+- **Streaming no longer drags the transcript back to the bottom**: every agent event used to call
+  `scroll_to_bottom`, so scrolling up to read history was undone event by event. Only a view that is
+  still following the bottom auto-scrolls now; reloading a session re-arms it.
+
+- **The desktop GUI's `/extension` and `/skills` panels behave like the TUI ones**: a toggle only
+  edits an unsaved draft — `Ctrl+S` writes it, `Esc` throws it away — and the panel keeps the row you
+  clicked selected along with the filter box instead of jumping back to the first row after the list
+  is rebuilt. `Tab` opens a read-only detail page for the selected entry (`Tab` / `Enter` / `Esc` go
+  back, the draft survives) — the extension description, mode, tools and fork URL, or the skill's
+  `SKILL.md` header, source and path. Footer and banner extensions are no longer listed, since only
+  the terminal UI renders them.
 
 ## 中文
 
@@ -205,6 +237,10 @@
 - **Rex 终端被认出来了**：`TERM_PROGRAM=rex` 下内联图片走 kitty 协议（不再退化成半块字符），
   配色按 truecolor 处理，超链接与图片都能正常显示，而不是退成 `text (url)`。
 
+- **桌面 GUI 也能只用键盘切模型与思考级别**：`Ctrl+P` / `Ctrl+Shift+P` 在模型 scope 里前后循环
+  （scope 来自 `--models` / `settings.enabledModels`，为空时才退回全部已配置模型；顺序跟 scope、
+  跳过目录里已经没有的条目，条目带 thinking 时先设思考级别再换模型）；`Shift+Tab` 循环当前模型
+  支持的思考级别。两个键都与 TUI 的默认绑定一致，命令面板仍是 `Ctrl+K`。
 
 ## 修复
 
@@ -236,5 +272,19 @@
   永远是非激活态；分支既没加过也没删过的已注册工具现在默认激活（声明 `default_active: false` 的工具不在此列，
   仍要用户显式开启）。
 - **HTML 导出的 CJK 强调正常了**：CJK 标点紧邻 `**` / `*` 时不再显示字面星号。
+- **桌面 GUI 的对话流与菜单修好了一批问题**：会话行右键的 `Rename` / `Delete` 能打开对话框
+  （之前只把菜单关掉），对话流能滚到真正的底部（最后几行不再被输入卡片盖住），文本选区的落点
+  对准指针下的字符，回合中按 `Esc` 会退出忙碌状态并在对话流里留下 `Operation aborted`，
+  命令结果作为系统消息写进对话流而不是只弹 toast；界面缩放上限提到 500%。
 - **第二个覆盖层不再顶掉第一个**：两个扩展同时要输入时，第二个会把第一个挤掉、前者直接消失；
   现在被盖住的覆盖层挂在栈上，上面的关掉就露回来，切换会话仍然会一次关掉全部。
+- **桌面 GUI 的输入框按真实字宽折行，长草稿也能滚**：折行改成用排版器量每个字符的实际宽度，
+  不再按 0.6em 估算（估算在放大后会溢出卡片，缩放一次又会早折一截），可用宽度也改用卡片的真实
+  内宽；超过八行的草稿能用滚轮滚，光标移动时自己滚进视口、但不会跟手动滚动抢位置；折叠的工具
+  输出不再只留一个 `…`，改成和用户气泡一样的 `⋯ N more line(s) · click to expand`。
+- **流式输出不再把对话流拽回底部**：原来每来一条 agent 事件都调用 `scroll_to_bottom`，用户滚上去
+  看历史会被逐条拽回底部；现在只有仍跟随底部时才自动滚，重载会话会重新接管。
+- **桌面 GUI 的 `/extension` 与 `/skills` 面板跟 TUI 对齐**：勾选只改未落盘的草稿，`Ctrl+S` 才写盘、
+  `Esc` 丢弃；点过哪一行就是哪一行，列表重建后不再跳回第一条，过滤框也一起保留。`Tab` 打开当前条目
+  的只读详情页（`Tab` / `Enter` / `Esc` 返回，草稿还在）——扩展显示描述、模式、工具与 fork 来源，
+  技能显示 `SKILL.md` 头信息、来源与路径。底栏与横幅扩展不再列出，它们只在终端界面渲染。

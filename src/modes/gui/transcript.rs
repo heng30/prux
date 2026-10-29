@@ -9,11 +9,14 @@ use super::markdown;
 use super::theme::{Theme, px};
 use crate::core::provider::{AgentMessage, ContentBlock};
 use gpui::{
-    AnyElement, Context, FontStyle, FontWeight, HighlightStyle, Hsla, IntoElement, ParentElement,
-    SharedString, Styled, StyledText, div, prelude::*,
+    AnyElement, Bounds, Context, FontStyle, FontWeight, HighlightStyle, Hsla, IntoElement,
+    ParentElement, Pixels, SharedString, Styled, StyledText, div, prelude::*,
 };
 use serde_json::Value;
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::ops::Range;
+use std::rc::Rc;
 
 /// 工具输出收起时显示的行数。
 const COLLAPSED_OUTPUT_LINES: usize = 6;
@@ -99,6 +102,8 @@ pub struct Tool {
     pub status: ToolStatus,
     /// 单块展开状态：`None` 跟随全局开关（Ctrl-L），点击卡片切换
     pub expanded: Option<bool>,
+    /// 工具返回的图片（落成临时文件后的路径，按返回顺序）
+    pub images: Vec<std::path::PathBuf>,
 }
 
 /// 非对话提示。
@@ -110,17 +115,119 @@ pub enum Note {
     Error(String),
 }
 
+/// 对话流里的文本选区：两端都是（行序号, 行内字符下标）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TextSel {
+    /// 起点（按下时落在哪一行哪一列）
+    pub anchor: (usize, usize),
+    /// 终点（拖动后落在哪一行哪一列）
+    pub focus: (usize, usize),
+}
+
+impl TextSel {
+    /// 起止按文档顺序排好（起点在前）。
+    pub fn ordered(self) -> ((usize, usize), (usize, usize)) {
+        if self.anchor <= self.focus {
+            (self.anchor, self.focus)
+        } else {
+            (self.focus, self.anchor)
+        }
+    }
+
+    /// 这一行被选中的字符区间（`len` 是这一行的字符数）；`None` = 整行都没选中。
+    pub fn range_for(self, line: usize, len: usize) -> Option<Range<usize>> {
+        let ((first, first_col), (last, last_col)) = self.ordered();
+        if line < first || line > last {
+            return None;
+        }
+        let start = if line == first { first_col.min(len) } else { 0 };
+        let end = if line == last { last_col.min(len) } else { len };
+        (start < end).then_some(start..end)
+    }
+}
+
+/// 一行可选文本的登记信息。
+#[derive(Clone, Debug)]
+pub struct LineInfo {
+    /// 行序号（渲染顺序，从 0 开始）
+    pub index: usize,
+    /// 行内纯文本（含列表/引用标记）
+    pub text: String,
+    /// 该行字号（逻辑像素），点选定位时按它重新排版
+    pub font_size: f32,
+}
+
+/// 选区覆盖的文本：按行拼接，行间插换行符。
+///
+/// `lines` 是渲染时收集的（行序号, 行文本），顺序即文档顺序。
+pub fn selected_text(sel: TextSel, lines: &[LineInfo]) -> String {
+    let mut out: Vec<String> = Vec::new();
+    for line in lines {
+        let len = line.text.chars().count();
+        if let Some(range) = sel.range_for(line.index, len) {
+            out.push(
+                line.text
+                    .chars()
+                    .skip(range.start)
+                    .take(range.end - range.start)
+                    .collect(),
+            );
+        }
+    }
+    out.join("\n")
+}
+
+/// 渲染对话流的版式上下文：内容可用宽度 + 选区/行登记。
+pub struct FlowCtx<'a> {
+    /// 内容可用内宽（逻辑像素）：带 padding 的盒子按它算内部换行宽度
+    pub width: Pixels,
+    /// 选区高亮与行登记
+    pub lines: &'a mut TextLines,
+}
+
+/// 渲染时收集的可选文本上下文：行序号、选区高亮、每行的边界与文本。
+pub struct TextLines {
+    /// 下一行的序号
+    pub next: usize,
+    /// 当前选区（画成背景高亮）
+    pub selection: Option<TextSel>,
+    /// 行序号 → 该行元素在窗口里的边界（点选时按坐标反查行）
+    pub bounds: Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>,
+    /// 行序号 → 该行文字元素在窗口里的边界（列定位用：外层行盒含缩进/padding，
+    /// 拿它算列号会整体偏移）
+    pub text_bounds: Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>,
+    /// 逐行的文本与字号（复制取文本、点选时按字号重新排版定位）
+    pub rows: Rc<RefCell<Vec<LineInfo>>>,
+}
+
+/// 用户消息块：正文 + 单块展开态（`None` 跟随全局 Ctrl-L，点击气泡切换）。
+#[derive(Debug)]
+pub struct UserMessage {
+    /// 消息正文
+    pub text: String,
+    /// 单块展开态：`None` 跟随全局开关
+    pub expanded: Option<bool>,
+}
+
+/// 用户气泡的最大宽度（逻辑像素）
+const USER_BUBBLE_MAX_WIDTH: f32 = 560.;
+
+/// 用户消息折叠时显示的行数（超过就截断，点击气泡展开）
+const USER_COLLAPSED_LINES: usize = 6;
+
 /// transcript 里的一块。
 #[derive(Debug)]
 pub enum Block {
     /// 用户消息
-    User(String),
+    User(UserMessage),
     /// 助手回复
     Assistant(Assistant),
     /// 工具调用
     Tool(Tool),
     /// 提示/错误
     Note(Note),
+    /// 系统消息（role=system：内核注入的指令、扩展提示等）
+    System(String),
 }
 
 /// 对话流状态机。
@@ -154,13 +261,32 @@ impl Transcript {
 
     /// 追加一条用户消息（本地回显，agent 自己也会发 user 消息但不重复渲染）。
     pub fn push_user(&mut self, text: String) {
-        self.blocks.push(Block::User(text));
+        self.blocks.push(Block::User(UserMessage {
+            text,
+            expanded: None,
+        }));
         self.open_assistant = None;
     }
 
     /// 追加一条提示。
     pub fn push_note(&mut self, note: Note) {
         self.blocks.push(Block::Note(note));
+    }
+
+    /// 硬中止（Esc）后的收尾：在跑的工具块改成失败，补一条中断提示。
+    ///
+    /// 回合 future 被 drop 后不会再有 `tool_execution_end`，不收尾的话工具块会
+    /// 永远显示 running。
+    pub fn abort(&mut self) {
+        self.open_assistant = None;
+        for block in &mut self.blocks {
+            if let Block::Tool(tool) = block
+                && tool.status == ToolStatus::Running
+            {
+                tool.status = ToolStatus::Failed;
+            }
+        }
+        self.push_note(Note::Error("Operation aborted".to_string()));
     }
 
     /// 从会话历史重建（切会话后渲染既有对话）。
@@ -207,6 +333,20 @@ impl Transcript {
                         }
                     }
                 }
+                "system" => {
+                    let text = message
+                        .content
+                        .iter()
+                        .filter_map(|block| match block {
+                            ContentBlock::Text { text, .. } => Some(text.as_str()),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    if !text.trim().is_empty() {
+                        transcript.blocks.push(Block::System(text));
+                    }
+                }
                 "toolResult" => {
                     let output = tool_result_text(&message.content);
                     if let Some(index) = message
@@ -216,6 +356,16 @@ impl Transcript {
                         && let Some(Block::Tool(tool)) = transcript.blocks.get_mut(index)
                     {
                         tool.output = output;
+                        tool.images = message
+                            .content
+                            .iter()
+                            .filter_map(|block| match block {
+                                ContentBlock::Image { data, mime_type } => {
+                                    save_tool_image(data, mime_type)
+                                }
+                                _ => None,
+                            })
+                            .collect();
                         tool.status = if message.is_error {
                             ToolStatus::Failed
                         } else {
@@ -243,6 +393,23 @@ impl Transcript {
                 if role == "assistant" {
                     self.blocks.push(Block::Assistant(Assistant::default()));
                     self.open_assistant = Some(self.blocks.len() - 1);
+                } else if role == "system" {
+                    // 系统消息不流式：开头就把正文取出来
+                    let text = event
+                        .get("message")
+                        .and_then(|m| m.get("content"))
+                        .and_then(Value::as_array)
+                        .map(|content| {
+                            content
+                                .iter()
+                                .filter_map(|c| c.get("text").and_then(Value::as_str))
+                                .collect::<Vec<_>>()
+                                .join("\n")
+                        })
+                        .unwrap_or_default();
+                    if !text.trim().is_empty() {
+                        self.blocks.push(Block::System(text));
+                    }
                 }
             }
             "message_update" => {
@@ -322,9 +489,32 @@ impl Transcript {
                             .collect::<String>()
                     })
                     .unwrap_or_default();
+                // 结果里的图片单独落盘，随后按缩略图渲染
+                let images: Vec<std::path::PathBuf> = event
+                    .get("result")
+                    .and_then(|r| r.get("content"))
+                    .and_then(Value::as_array)
+                    .map(|content| {
+                        content
+                            .iter()
+                            .filter(|c| c.get("type").and_then(Value::as_str) == Some("image"))
+                            .filter_map(|c| {
+                                let data = c.get("data").and_then(Value::as_str)?;
+                                let mime = c
+                                    .get("mimeType")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("image/png");
+                                save_tool_image(data, mime)
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
                 if let Some(Block::Tool(tool)) = self.tool_mut(id) {
                     if !output.is_empty() {
                         tool.output = output;
+                    }
+                    if !images.is_empty() {
+                        tool.images = images;
                     }
                     tool.status = if failed {
                         ToolStatus::Failed
@@ -333,21 +523,21 @@ impl Transcript {
                     };
                 }
             }
-            "compaction_start" => self.push_note(Note::Info("正在压缩上下文…".to_string())),
-            "compaction_end" => self.push_note(Note::Info("上下文已压缩".to_string())),
+            "compaction_start" => self.push_note(Note::Info("Compacting context…".to_string())),
+            "compaction_end" => self.push_note(Note::Info("Context compacted".to_string())),
             "auto_retry_start" => {
                 let attempt = event
                     .get("attempt")
                     .and_then(Value::as_u64)
                     .unwrap_or_default();
-                self.push_note(Note::Info(format!("请求失败，第 {attempt} 次重试…")));
+                self.push_note(Note::Info(format!("Request failed, retry #{attempt}…")));
             }
             "error" => {
                 let message = event
                     .get("message")
                     .or_else(|| event.get("error"))
                     .and_then(Value::as_str)
-                    .unwrap_or("未知错误");
+                    .unwrap_or("unknown error");
                 self.push_note(Note::Error(message.to_string()));
             }
             _ => {}
@@ -362,11 +552,24 @@ impl Transcript {
             output: String::new(),
             status: ToolStatus::Running,
             expanded: None,
+            images: Vec::new(),
         }));
         let index = self.blocks.len() - 1;
         if !id.is_empty() {
             self.tools.insert(id.to_string(), index);
         }
+    }
+
+    /// 最后一条助手回复的正文（`/copy` 用）。
+    pub fn last_assistant_text(&self) -> String {
+        self.blocks
+            .iter()
+            .rev()
+            .find_map(|block| match block {
+                Block::Assistant(assistant) => Some(assistant.text.clone()),
+                _ => None,
+            })
+            .unwrap_or_default()
     }
 
     /// 按 id 找工具块。
@@ -440,16 +643,17 @@ fn line_color(line: &str, theme: &Theme) -> Hsla {
 }
 
 /// 工具输出正文：逐行着色，超过 `max` 行截断（按行截断而不是裁剪像素，
-/// 被裁掉的部分不计入布局高度，会盖住输入卡片）。
-fn output_body(text: &str, theme: &Theme, max: usize) -> AnyElement {
+/// 被裁掉的部分不计入布局高度，会盖住输入卡片），剩下的行数用与用户气泡同样式的提示标出。
+fn output_body(text: &str, theme: &Theme, max: usize, expanded: bool) -> AnyElement {
     let mut column = div()
         .w_full()
         .flex()
         .flex_col()
         .overflow_hidden()
         .text_size(px(11.5));
-    let mut lines = text.trim().lines();
-    for line in lines.by_ref().take(max) {
+    let lines = text.trim().lines();
+    let total = lines.clone().count();
+    for line in lines.take(max) {
         let shown = truncate(line, OUTPUT_LINE_CHARS);
         column = column.child(
             div()
@@ -459,14 +663,110 @@ fn output_body(text: &str, theme: &Theme, max: usize) -> AnyElement {
                 .child(SharedString::from(shown)),
         );
     }
-    if lines.next().is_some() {
+    if let Some(hint) = output_hint(total.saturating_sub(max), expanded) {
         column = column.child(
             div()
+                .text_size(px(11.))
                 .text_color(theme.text_ghost)
-                .child(SharedString::from("…")),
+                .child(SharedString::from(hint)),
         );
     }
     column.into_any_element()
+}
+
+/// 被截掉的输出行提示：`hidden` 为没显示出来的行数，与用户消息气泡的折叠提示一致。
+///
+/// 没有剩余时不提示；已展开时只说还剩多少行（展开已经到底，再点只会收起）。
+fn output_hint(hidden: usize, expanded: bool) -> Option<String> {
+    (hidden > 0).then(|| {
+        if expanded {
+            format!("⋯ {hidden} more line(s)")
+        } else {
+            format!("⋯ {hidden} more line(s) · click to expand")
+        }
+    })
+}
+
+/// 缩略图最大边长（逻辑像素）
+const IMAGE_THUMB: f32 = 180.0;
+
+/// 把 base64 图片写成临时文件，供 `gpui::img` 读取；解码失败返回 None。
+fn save_tool_image(data: &str, mime_type: &str) -> Option<std::path::PathBuf> {
+    use base64::Engine as _;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data.trim())
+        .ok()?;
+    let ext = match mime_type.rsplit('/').next()? {
+        "jpeg" | "jpg" => "jpg",
+        "png" => "png",
+        "gif" => "gif",
+        "webp" => "webp",
+        "bmp" => "bmp",
+        _ => return None,
+    };
+    let dir = std::env::temp_dir().join("prux-gui-images");
+    std::fs::create_dir_all(&dir).ok()?;
+    // 名字用内容长度 + 首字节凑合：同一张图重复出现时复用同一个文件
+    let name = format!(
+        "{}-{:x}.{ext}",
+        bytes.len(),
+        bytes.first().copied().unwrap_or(0)
+    );
+    let path = dir.join(name);
+    if !path.exists() {
+        std::fs::write(&path, &bytes).ok()?;
+    }
+    Some(path)
+}
+
+/// 从消息里挑出可显示的图片引用：`@路径` 且扩展名是图片、文件确实存在。
+fn image_refs(text: &str, cwd: &str) -> Vec<std::path::PathBuf> {
+    text.split_whitespace()
+        .filter_map(|token| token.strip_prefix('@'))
+        .map(|raw| {
+            let raw = raw.trim_matches(|c: char| c == '，' || c == ',');
+            let expanded = match raw.strip_prefix("~/") {
+                Some(rest) => std::env::var("HOME")
+                    .map(|home| std::path::PathBuf::from(home).join(rest))
+                    .unwrap_or_else(|_| std::path::PathBuf::from(raw)),
+                None => std::path::PathBuf::from(raw),
+            };
+            if expanded.is_absolute() {
+                expanded
+            } else {
+                std::path::Path::new(cwd).join(expanded)
+            }
+        })
+        .filter(|path| path.is_file() && is_image_path(path))
+        .collect()
+}
+
+/// 按扩展名判断是不是图片（与补全面板的图片过滤保持一致）。
+fn is_image_path(path: &std::path::Path) -> bool {
+    path.extension()
+        .map(|ext| ext.to_string_lossy().to_lowercase())
+        .is_some_and(|ext| {
+            matches!(
+                ext.as_str(),
+                "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "svg" | "tif" | "tiff"
+            )
+        })
+}
+
+/// 用户消息该显示哪些行：收起时只留前 `max` 行，展开时给全部行。
+///
+/// 返回 (要显示的行, 被折起来的行数)；`hidden` 只用来决定提示文案，与展开态无关。
+fn user_preview(text: &str, expanded: bool, max: usize) -> (Vec<&str>, usize) {
+    let lines: Vec<&str> = text.split('\n').collect();
+    let hidden = lines.len().saturating_sub(max);
+    let shown = if expanded {
+        lines
+    } else if hidden > 0 {
+        lines[..max].to_vec()
+    } else {
+        lines
+    };
+    (shown, hidden)
 }
 
 /// 单个块的渲染；`index` 是块下标（点击工具卡片切换展开时要回查）。
@@ -475,27 +775,76 @@ pub fn render_block(
     theme: &Theme,
     expand_tools: bool,
     index: usize,
+    cwd: &str,
+    ctx: &mut FlowCtx<'_>,
     cx: &mut Context<GuiApp>,
 ) -> AnyElement {
     match block {
         // 用户消息：右对齐气泡，与助手正文拉开层级
-        Block::User(text) => div()
-            .w_full()
-            .flex()
-            .justify_end()
-            .pt(px(6.))
-            .child(
-                div()
-                    .max_w(px(560.))
-                    .px(px(14.))
-                    .py(px(10.))
-                    .rounded(px(10.))
-                    .bg(theme.raised)
-                    .text_size(px(13.5))
-                    .text_color(theme.text)
-                    .child(SharedString::from(text.clone())),
-            )
-            .into_any_element(),
+        Block::User(message) => {
+            let text = &message.text;
+            let expanded = message.expanded.unwrap_or(expand_tools);
+            let (shown, hidden) = user_preview(text, expanded, USER_COLLAPSED_LINES);
+            // 宽度显式给出：带 padding 的盒子里，文本实测用的宽度和绘制用的不一致，
+            // 会少算换行高度、底部被截
+            let bubble_w = ctx.width.min(px(USER_BUBBLE_MAX_WIDTH));
+            let inner_w = bubble_w - px(28.);
+            let mut bubble = div()
+                .id(("user", index))
+                .w(bubble_w)
+                .min_w_0()
+                .px(px(14.))
+                .py(px(10.))
+                .rounded(px(10.))
+                .bg(theme.raised)
+                .flex()
+                .flex_col()
+                .gap(px(8.))
+                .text_size(px(13.5))
+                .text_color(theme.text)
+                .cursor_pointer()
+                .hover(|style| style.bg(theme.overlay_strong))
+                // 点气泡展开/收起长消息
+                .on_click(cx.listener(move |this, _, _, cx| this.toggle_user(index, cx)))
+                .child(
+                    div()
+                        .w(inner_w)
+                        .min_w_0()
+                        .child(SharedString::from(shown.join("\n"))),
+                );
+            if hidden > 0 {
+                bubble = bubble.child(div().text_size(px(11.)).text_color(theme.text_ghost).child(
+                    SharedString::from(if expanded {
+                        "click to collapse".to_string()
+                    } else {
+                        format!("⋯ {hidden} more line(s) · click to expand")
+                    }),
+                ));
+            }
+            // `@图片` 引用直接渲染成缩略图
+            let images = image_refs(text, cwd);
+            for path in images {
+                bubble = bubble.child(
+                    div()
+                        .max_w(px(IMAGE_THUMB))
+                        .max_h(px(IMAGE_THUMB))
+                        .rounded(px(6.))
+                        .overflow_hidden()
+                        .child(
+                            gpui::img(path)
+                                .max_w(px(IMAGE_THUMB))
+                                .max_h(px(IMAGE_THUMB)),
+                        ),
+                );
+            }
+            div()
+                .w_full()
+                .flex()
+                .justify_end()
+                .pt(px(6.))
+                .child(bubble)
+                .into_any_element()
+        }
         // 助手回复：不加卡片，直接正文；思考内容单独一段细边框提示
         Block::Assistant(assistant) => {
             let mut column = div().w_full().flex().flex_col().gap(px(8.)).pt(px(2.));
@@ -511,14 +860,16 @@ pub fn render_block(
                 );
             }
             let rows = assistant.body.rows(&assistant.text, theme);
-            column.child(render_rows(rows, theme)).into_any_element()
+            column
+                .child(render_rows(rows, theme, ctx.lines))
+                .into_any_element()
         }
         // 工具调用：带描边的小卡片，状态用圆点表示
         Block::Tool(tool) => {
             let (color, label) = match tool.status {
-                ToolStatus::Running => (theme.warning, "运行中"),
-                ToolStatus::Ok => (theme.success, "完成"),
-                ToolStatus::Failed => (theme.danger, "失败"),
+                ToolStatus::Running => (theme.warning, "running"),
+                ToolStatus::Ok => (theme.success, "done"),
+                ToolStatus::Failed => (theme.danger, "failed"),
             };
             let expanded = tool.expanded.unwrap_or(expand_tools);
             let mut card = div()
@@ -575,19 +926,72 @@ pub fn render_block(
                 } else {
                     COLLAPSED_OUTPUT_LINES
                 };
-                card = card.child(output_body(&tool.output, theme, lines));
+                card = card.child(output_body(&tool.output, theme, lines, expanded));
+            }
+            for image in &tool.images {
+                card = card.child(
+                    div()
+                        .max_w(px(IMAGE_THUMB))
+                        .max_h(px(IMAGE_THUMB))
+                        .rounded(px(6.))
+                        .overflow_hidden()
+                        .child(
+                            gpui::img(image.clone())
+                                .max_w(px(IMAGE_THUMB))
+                                .max_h(px(IMAGE_THUMB)),
+                        ),
+                );
             }
             card.into_any_element()
         }
+        // 系统消息：灰底细边框 + 标签，和用户/助手区分开
+        Block::System(text) => div()
+            .w_full()
+            .min_w_0()
+            .overflow_hidden()
+            .rounded(px(8.))
+            .border_1()
+            .border_color(theme.border)
+            .bg(theme.inset)
+            .px(px(12.))
+            .py(px(8.))
+            .flex()
+            .flex_col()
+            .gap(px(4.))
+            .child(
+                div()
+                    .text_size(px(10.5))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(theme.text_ghost)
+                    .child(SharedString::from("system")),
+            )
+            .child(
+                div()
+                    .w(ctx.width - px(24.))
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .text_size(px(12.))
+                    .text_color(theme.text_tertiary)
+                    .children(text.split('\n').map(|line| {
+                        div()
+                            .w_full()
+                            .min_w_0()
+                            .child(SharedString::from(line.to_string()))
+                    })),
+            )
+            .into_any_element(),
         Block::Note(note) => {
             let (text, color, mark) = match note {
                 Note::Info(text) => (text, theme.text_tertiary, "·"),
                 Note::Error(text) => (text, theme.danger, "!"),
             };
+            // 系统提示常是多行（命令输出、会话树）：逐行成子元素，不能当一个长行挤
             div()
                 .w_full()
                 .flex()
-                .items_center()
+                .items_start()
                 .gap(px(8.))
                 .px(px(2.))
                 .child(
@@ -598,9 +1002,18 @@ pub fn render_block(
                 )
                 .child(
                     div()
+                        .min_w_0()
+                        .flex_1()
+                        .flex()
+                        .flex_col()
                         .text_size(px(12.))
                         .text_color(color)
-                        .child(SharedString::from(text.clone())),
+                        .children(text.split('\n').map(|line| {
+                            div()
+                                .w_full()
+                                .min_w_0()
+                                .child(SharedString::from(line.to_string()))
+                        })),
                 )
                 .into_any_element()
         }
@@ -624,12 +1037,18 @@ fn parse_rows(text: &str, theme: &Theme) -> Vec<Row> {
 }
 
 /// 预解析行 → 元素（行内样式、标题字号、代码块的逐行着色）。
-fn render_rows(rows: &[Row], theme: &Theme) -> AnyElement {
+fn render_rows(rows: &[Row], theme: &Theme, lines: &mut TextLines) -> AnyElement {
     let mut column = div().w_full().flex().flex_col().gap(px(4.));
+    // 子元素下标 → 行序号（规则线之类不参与选区的行记 None）
+    let mut child_lines: Vec<Option<usize>> = Vec::new();
     for row in rows {
         let element: AnyElement = match row {
             Row::Line(line) => {
-                let mut element = div().w_full().text_size(px(13.5)).text_color(theme.text);
+                let mut font_size = 13.5_f32;
+                let mut element = div()
+                    .w_full()
+                    .text_size(px(font_size))
+                    .text_color(theme.text);
                 let marker = match line.kind {
                     markdown::LineKind::Heading(level) => {
                         let size = match level {
@@ -638,6 +1057,7 @@ fn render_rows(rows: &[Row], theme: &Theme) -> AnyElement {
                             3 => 15.5,
                             _ => 14.,
                         };
+                        font_size = size;
                         element = element
                             .mt(px(6.))
                             .text_size(px(size))
@@ -663,11 +1083,32 @@ fn render_rows(rows: &[Row], theme: &Theme) -> AnyElement {
                     }
                     markdown::LineKind::Text => None,
                 };
+                // 这一行参与选区：登记序号/文本，并把选区画成背景高亮
+                let index = lines.next;
+                lines.next += 1;
+                let (plain, _) = inline_runs(marker.as_deref(), &line.spans, theme);
+                let len = plain.chars().count();
+                let selected = lines
+                    .selection
+                    .and_then(|selection| selection.range_for(index, len));
+                lines.rows.borrow_mut().push(LineInfo {
+                    index,
+                    text: plain,
+                    font_size,
+                });
+                child_lines.push(Some(index));
+                let text_bounds = lines.text_bounds.clone();
                 element
-                    .child(inline_text(marker.as_deref(), &line.spans, theme))
+                    .child(inline_text(marker.as_deref(), &line.spans, theme, selected))
+                    // 文字元素的实测边界：列定位按它算，外层行盒的 padding/缩进不进列号
+                    .on_children_prepainted(move |children: Vec<Bounds<Pixels>>, _, _| {
+                        if let Some(child) = children.first() {
+                            text_bounds.borrow_mut().insert(index, *child);
+                        }
+                    })
                     .into_any_element()
             }
-            Row::Code { lang, lines } => {
+            Row::Code { lang, lines: code } => {
                 let mut card = div()
                     .w_full()
                     .my(px(4.))
@@ -697,7 +1138,7 @@ fn render_rows(rows: &[Row], theme: &Theme) -> AnyElement {
                     .px(px(10.))
                     .py(px(8.))
                     .font_family("monospace");
-                for line in lines {
+                for line in code {
                     let mut element = div()
                         .w_full()
                         .flex()
@@ -713,17 +1154,30 @@ fn render_rows(rows: &[Row], theme: &Theme) -> AnyElement {
                     }
                     body = body.child(element);
                 }
+                child_lines.push(None);
                 card.child(body).into_any_element()
             }
-            Row::Rule => div()
-                .w_full()
-                .h(px(1.))
-                .my(px(8.))
-                .bg(theme.border)
-                .into_any_element(),
+            Row::Rule => {
+                child_lines.push(None);
+                div()
+                    .w_full()
+                    .h(px(1.))
+                    .my(px(8.))
+                    .bg(theme.border)
+                    .into_any_element()
+            }
         };
         column = column.child(element);
     }
+    let bounds = lines.bounds.clone();
+    column = column.on_children_prepainted(move |children, _, _| {
+        let mut map = bounds.borrow_mut();
+        for (child, line) in children.iter().zip(child_lines.iter()) {
+            if let Some(line) = line {
+                map.insert(*line, *child);
+            }
+        }
+    });
     column.into_any_element()
 }
 
@@ -732,7 +1186,34 @@ fn render_rows(rows: &[Row], theme: &Theme) -> AnyElement {
 /// 一个片段一个 `div` 是不行的：每个 `div` 都是独立的块，行内代码会被排成
 /// 单独一行并撑满宽度，正文也就断在半句上。行内样式只能靠 `StyledText` 的
 /// 分段高亮表达，标记（`•` / `1.`）也拼进同一段文本里才能跟着首行缩进。
-fn inline_text(marker: Option<&str>, spans: &[markdown::Span], theme: &Theme) -> StyledText {
+fn inline_text(
+    marker: Option<&str>,
+    spans: &[markdown::Span],
+    theme: &Theme,
+    selection: Option<Range<usize>>,
+) -> StyledText {
+    let (text, mut highlights) = inline_runs(marker, spans, theme);
+    if let Some(range) = selection {
+        let byte = char_range_to_bytes(&text, range);
+        if !byte.is_empty() {
+            highlights.push((
+                byte,
+                HighlightStyle {
+                    background_color: Some(theme.selection),
+                    ..Default::default()
+                },
+            ));
+        }
+    }
+    StyledText::new(text).with_highlights(highlights)
+}
+
+/// 行内片段 → (纯文本, 分段高亮)；纯文本用来复制与按字符定位。
+fn inline_runs(
+    marker: Option<&str>,
+    spans: &[markdown::Span],
+    theme: &Theme,
+) -> (String, Vec<(Range<usize>, HighlightStyle)>) {
     let mut text = String::new();
     let mut highlights: Vec<(std::ops::Range<usize>, HighlightStyle)> = Vec::new();
     let mut push = |text: &mut String, body: &str, style: HighlightStyle| {
@@ -755,21 +1236,38 @@ fn inline_text(marker: Option<&str>, spans: &[markdown::Span], theme: &Theme) ->
     for span in spans {
         push(&mut text, &span.text, span_highlight(&span.style, theme));
     }
-    StyledText::new(text).with_highlights(highlights)
+    (text, highlights)
+}
+
+/// 字符下标区间 → 字节区间（越界自动夹住）。
+fn char_range_to_bytes(text: &str, range: Range<usize>) -> Range<usize> {
+    let start = text
+        .char_indices()
+        .nth(range.start)
+        .map(|(byte, _)| byte)
+        .unwrap_or(text.len());
+    let end = text
+        .char_indices()
+        .nth(range.end)
+        .map(|(byte, _)| byte)
+        .unwrap_or(text.len());
+    start..end.max(start)
 }
 
 /// 行内片段样式 → 文本高亮；默认前景色留给外层容器的文字样式。
+///
+/// 行内代码只上色不画底色：gpui 的高亮底色铺满整个行盒（行高 1.32em），
+/// 比字形高一截、文字看着偏下，折行时相邻行的底色还会连成一片。
 fn span_highlight(style: &markdown::SpanStyle, theme: &Theme) -> HighlightStyle {
-    let (color, background_color) = if style.code {
-        (Some(theme.code_text), Some(theme.code_wash))
+    let color = if style.code {
+        Some(theme.code_text)
     } else if style.link {
-        (Some(theme.link), None)
+        Some(theme.link)
     } else {
-        (None, None)
+        None
     };
     HighlightStyle {
         color,
-        background_color,
         font_weight: style.bold.then_some(FontWeight::BOLD),
         font_style: style.italic.then_some(FontStyle::Italic),
         ..Default::default()
@@ -778,6 +1276,108 @@ fn span_highlight(style: &markdown::SpanStyle, theme: &Theme) -> HighlightStyle 
 
 #[cfg(test)]
 mod tests {
+    /// 工具输出截断提示：没隐藏行就不提，折叠时提示可点开，展开后只说还剩多少行。
+    #[test]
+    fn output_hint_counts_hidden_lines() {
+        assert_eq!(output_hint(0, false), None);
+        assert_eq!(output_hint(0, true), None);
+        assert_eq!(
+            output_hint(3, false),
+            Some("⋯ 3 more line(s) · click to expand".to_string())
+        );
+        assert_eq!(output_hint(3, true), Some("⋯ 3 more line(s)".to_string()));
+    }
+
+    /// Esc 硬中止：跑着的工具要收尾成失败，并补一条中断提示（否则永远显示 running）。
+    #[test]
+    fn abort_fails_running_tools_and_notes_interruption() {
+        let mut transcript = Transcript::default();
+        transcript.push_tool("t1", "bash", "ls");
+        transcript.abort();
+        let Block::Tool(tool) = &transcript.blocks()[0] else {
+            panic!("第一块应是工具块");
+        };
+        assert_eq!(tool.status, ToolStatus::Failed);
+        assert!(matches!(
+            transcript.blocks().last(),
+            Some(Block::Note(Note::Error(text))) if text == "Operation aborted"
+        ));
+    }
+
+    /// 选区按行切字符区间：跨行、反向拖动、越界都夹住。
+    #[test]
+    fn selection_ranges_slice_lines() {
+        let lines = vec![
+            LineInfo {
+                index: 0,
+                text: "abcdef".to_string(),
+                font_size: 13.5,
+            },
+            LineInfo {
+                index: 1,
+                text: "ghij".to_string(),
+                font_size: 13.5,
+            },
+            LineInfo {
+                index: 2,
+                text: "klm".to_string(),
+                font_size: 13.5,
+            },
+        ];
+        let forward = TextSel {
+            anchor: (0, 2),
+            focus: (2, 1),
+        };
+        assert_eq!(forward.range_for(0, 6), Some(2..6));
+        assert_eq!(forward.range_for(1, 4), Some(0..4));
+        assert_eq!(forward.range_for(2, 3), Some(0..1));
+        assert_eq!(forward.range_for(3, 3), None);
+        assert_eq!(selected_text(forward, &lines), "cdef\nghij\nk");
+
+        // 反向拖动与正向等价
+        let backward = TextSel {
+            anchor: (2, 1),
+            focus: (0, 2),
+        };
+        assert_eq!(backward.ordered(), ((0, 2), (2, 1)));
+        assert_eq!(selected_text(backward, &lines), "cdef\nghij\nk");
+
+        // 单击不产生文本
+        let click = TextSel {
+            anchor: (1, 2),
+            focus: (1, 2),
+        };
+        assert_eq!(selected_text(click, &lines), "");
+    }
+
+    /// 字符区间转字节区间：中文按字符算，越界夹到行尾。
+    #[test]
+    fn char_range_becomes_bytes() {
+        let text = "中文abcd";
+        assert_eq!(char_range_to_bytes(text, 0..2), 0..6);
+        assert_eq!(char_range_to_bytes(text, 2..6), 6..10);
+        assert_eq!(char_range_to_bytes(text, 4..99), 8..10);
+    }
+
+    /// 展开时必须给全部行，收起只留前几行。
+    #[test]
+    fn user_preview_expands_to_every_line() {
+        let text = "1\n2\n3\n4\n5\n6\n7\n8";
+        let (shown, hidden) = user_preview(text, false, 6);
+        assert_eq!(shown.len(), 6);
+        assert_eq!(hidden, 2);
+
+        let (shown, hidden) = user_preview(text, true, 6);
+        assert_eq!(shown.len(), 8);
+        assert_eq!(shown.last(), Some(&"8"));
+        assert_eq!(hidden, 2);
+
+        // 短消息不收也不折
+        let (shown, hidden) = user_preview("a\nb", false, 6);
+        assert_eq!(shown.len(), 2);
+        assert_eq!(hidden, 0);
+    }
+
     use super::*;
 
     /// 单行过长时按字符截断并补省略号。
@@ -786,6 +1386,40 @@ mod tests {
         let long = truncate(&"x".repeat(OUTPUT_LINE_CHARS + 5), OUTPUT_LINE_CHARS);
         assert_eq!(long.chars().count(), OUTPUT_LINE_CHARS + 1);
         assert!(long.ends_with('…'));
+    }
+
+    /// 工具返回的图片：base64 解不开或 MIME 不认识时不落盘。
+    #[test]
+    fn tool_images_skip_undecodable_data() {
+        assert!(save_tool_image("not-base64!!", "image/png").is_none());
+        assert!(save_tool_image("AAAA", "application/pdf").is_none());
+        // 1x1 PNG 的 base64（真实可解码）
+        let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+        let path = save_tool_image(png, "image/png").expect("png 应该落盘");
+        assert!(path.is_file());
+        assert_eq!(path.extension().unwrap(), "png");
+    }
+
+    /// 只把存在的图片 `@引用` 挑成缩略图：非图片、找不到的路径都跳过。
+    #[test]
+    fn image_refs_only_take_existing_images() {
+        let dir = std::env::temp_dir().join(format!("prux-gui-img-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let image = dir.join("a.png");
+        std::fs::write(&image, b"not-really-a-png").expect("write");
+        let text = format!(
+            "看这个 @{} 和 @{}/missing.png",
+            image.display(),
+            dir.display()
+        );
+        let refs = image_refs(&text, "/");
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0], image);
+        // 扩展名不是图片的引用不渲染
+        let rs = dir.join("a.rs");
+        std::fs::write(&rs, b"").expect("write");
+        assert!(image_refs(&format!("@{}", rs.display()), "/").is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// diff 行按增/删/块头着色，普通行用次要色。

@@ -255,6 +255,146 @@ impl Editor {
         self.cursor.col = self.lines[self.cursor.row].chars().count();
     }
 
+    /// 词左移（`alt+left` / `ctrl+left` / `alt+b`）：按空白断词，与 TUI 的
+    /// `move_word_left` 同一套规则（先跳空白，再跳到本词词首）。
+    pub fn word_left(&mut self, extend: bool) {
+        let (row, mut col) = (self.cursor.row, self.cursor.col);
+        let chars: Vec<char> = self.lines[row].chars().collect();
+        while col > 0 && chars[col - 1].is_whitespace() {
+            col -= 1;
+        }
+        while col > 0 && !chars[col - 1].is_whitespace() {
+            col -= 1;
+        }
+        if col == 0 && self.cursor.col == 0 && row > 0 {
+            // 已在行首：跳到上一行行尾
+            if extend {
+                self.anchor.get_or_insert(self.cursor);
+            }
+            self.cursor.row = row - 1;
+            self.cursor.col = self.lines[row - 1].chars().count();
+            return;
+        }
+        self.set_cursor(row, col, extend);
+    }
+
+    /// 词右移（`alt+right` / `ctrl+right` / `alt+f`）：同样按空白断词。
+    pub fn word_right(&mut self, extend: bool) {
+        let (row, mut col) = (self.cursor.row, self.cursor.col);
+        let chars: Vec<char> = self.lines[row].chars().collect();
+        while col < chars.len() && !chars[col].is_whitespace() {
+            col += 1;
+        }
+        while col < chars.len() && chars[col].is_whitespace() {
+            col += 1;
+        }
+        if col == chars.len() && self.cursor.col == chars.len() && row + 1 < self.lines.len() {
+            // 已在行尾：跳到下一行行首
+            if extend {
+                self.anchor.get_or_insert(self.cursor);
+            }
+            self.cursor.row = row + 1;
+            self.cursor.col = 0;
+            return;
+        }
+        self.set_cursor(row, col, extend);
+    }
+
+    /// 向前删一个词（`ctrl+w` / `alt+backspace`）：先折叠选区，再按 [`Self::word_left`] 删除。
+    pub fn delete_word_backward(&mut self) {
+        if self.has_selection() {
+            self.push_undo();
+            self.delete_selection();
+            self.anchor = None;
+            return;
+        }
+        let before = self.cursor;
+        self.word_left(false);
+        let start = self.cursor;
+        self.cursor = before;
+        self.delete_range(start, before);
+    }
+
+    /// 向后删一个词（`alt+d`）。
+    pub fn delete_word_forward(&mut self) {
+        if self.has_selection() {
+            self.push_undo();
+            self.delete_selection();
+            self.anchor = None;
+            return;
+        }
+        let start = self.cursor;
+        self.word_right(false);
+        let end = self.cursor;
+        self.cursor = start;
+        self.delete_range(start, end);
+    }
+
+    /// 删到行首（`ctrl+u`）；已在行首时删掉本行的换行。
+    pub fn delete_to_line_start(&mut self) {
+        let start = Pos {
+            row: self.cursor.row,
+            col: 0,
+        };
+        if self.cursor.col == 0 {
+            if self.cursor.row > 0 {
+                self.push_undo();
+                self.delete_forward();
+            }
+            return;
+        }
+        self.delete_range(start, self.cursor);
+    }
+
+    /// 删到行尾（`ctrl+shift+k`）。
+    pub fn delete_to_line_end(&mut self) {
+        let end = Pos {
+            row: self.cursor.row,
+            col: self.lines[self.cursor.row].chars().count(),
+        };
+        if self.cursor.col == end.col {
+            self.push_undo();
+            self.delete_forward();
+            return;
+        }
+        self.delete_range(self.cursor, end);
+    }
+
+    /// 删除 `start..end` 之间的内容（保证 `start <= end`），光标停在 `start`。
+    fn delete_range(&mut self, start: Pos, end: Pos) {
+        if start == end {
+            return;
+        }
+        let (start, end) = if ordered(start, end) == (start, end) {
+            (start, end)
+        } else {
+            (end, start)
+        };
+        self.push_undo();
+        let head: String = self.lines[start.row].chars().take(start.col).collect();
+        let tail: String = self.lines[end.row].chars().skip(end.col).collect();
+        self.lines.splice(start.row..=end.row, [head + &tail]);
+        self.cursor = start;
+        self.anchor = None;
+    }
+
+    /// 鼠标点选：把光标放到 `row` 行第 `col` 个字符（越界自动夹到行尾）。
+    ///
+    /// `extend` 为真时保留锚点（拖选/Shift 点选）；为假时清掉选区。
+    pub fn set_cursor(&mut self, row: usize, col: usize, extend: bool) {
+        let row = row.min(self.lines.len().saturating_sub(1));
+        let len = self.lines[row].chars().count();
+        if extend {
+            self.anchor.get_or_insert(self.cursor);
+        } else {
+            self.anchor = None;
+        }
+        self.cursor = Pos {
+            row,
+            col: col.min(len),
+        };
+    }
+
     /// 全选。
     pub fn select_all(&mut self) {
         let last = self.lines.len() - 1;
@@ -501,6 +641,52 @@ fn slice_chars(line: &str, start: usize, end: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 鼠标点选把光标放到 (行, 列)，越界夹到行尾；不扩展时清掉选区。
+    #[test]
+    fn set_cursor_clamps_to_line_end() {
+        let mut editor = Editor::new();
+        editor.insert("abc\ndefg");
+        editor.set_cursor(1, 99, false);
+        assert_eq!(editor.cursor(), Pos { row: 1, col: 4 });
+        assert!(!editor.has_selection());
+        editor.set_cursor(0, 1, false);
+        editor.set_cursor(0, 3, true);
+        assert!(editor.has_selection());
+        assert_eq!(editor.selected_text(), "bc");
+    }
+
+    /// 词移动按空白断词（与 TUI 的 line_input 一致）。
+    #[test]
+    fn word_moves_split_on_whitespace() {
+        let mut editor = Editor::new();
+        editor.insert("foo, bar 中文");
+        editor.word_left(false);
+        assert_eq!(editor.cursor(), Pos { row: 0, col: 9 });
+        editor.word_left(false);
+        assert_eq!(editor.cursor(), Pos { row: 0, col: 5 });
+        editor.word_right(false);
+        assert_eq!(editor.cursor(), Pos { row: 0, col: 9 });
+        // "foo," 算一个词：下一个词首是 5
+        editor.home(false);
+        editor.word_right(false);
+        assert_eq!(editor.cursor(), Pos { row: 0, col: 5 });
+    }
+
+    /// 删词 / 删到行首行尾。
+    #[test]
+    fn deletes_words_and_line_ranges() {
+        let mut editor = Editor::new();
+        editor.insert("alpha beta gamma");
+        editor.delete_word_backward();
+        assert_eq!(editor.text(), "alpha beta ");
+        editor.delete_to_line_start();
+        assert_eq!(editor.text(), "");
+        editor.insert("one two");
+        editor.set_cursor(0, 4, false);
+        editor.delete_to_line_end();
+        assert_eq!(editor.text(), "one ");
+    }
 
     /// IME 组装：先替换空区间插入「nih」，再把同一区域换成「你好」。
     #[test]

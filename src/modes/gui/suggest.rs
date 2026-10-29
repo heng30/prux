@@ -3,7 +3,7 @@
 //! 只做「识别触发词 + 给候选」，插入/执行由视图层负责（见 [`super::app`]）。
 
 /// 候选面板最多显示几条。
-pub const MAX_ITEMS: usize = 20;
+pub const MAX_ITEMS: usize = 30;
 
 /// 触发词类型。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -41,18 +41,26 @@ pub struct Suggest {
 }
 
 /// GUI 支持的斜杠命令：名字（不含 `/`）+ 说明。
+/// `/` 面板里列出的命令：只放对话相关动作，配置类留给 Ctrl-K 命令面板。
 pub const COMMANDS: &[(&str, &str)] = &[
-    ("new", "新建会话"),
-    ("sessions", "切换会话"),
-    ("model", "选择模型"),
-    ("thinking", "设置思考级别"),
-    ("appearance", "切换外观"),
-    ("panel", "显示/隐藏右侧面板"),
-    ("usage", "用量与费用"),
-    ("skills", "技能列表"),
-    ("settings", "设置"),
-    ("help", "快捷键"),
-    ("quit", "退出"),
+    ("new", "New session"),
+    ("resume", "Switch session"),
+    ("model", "Select model"),
+    ("thinking", "Set thinking level"),
+    ("compact", "Compact context"),
+    ("name", "Rename current session"),
+    ("clone", "Clone current branch"),
+    ("fork", "Fork current session"),
+    ("label", "Label current branch"),
+    ("tree", "Session tree"),
+    ("giff", "Review uncommitted changes"),
+    ("import", "Import session file"),
+    ("history", "Search prompt history"),
+    ("share", "Share session (gist)"),
+    ("export", "Export session (HTML)"),
+    ("copy", "Copy last reply"),
+    ("rewind", "Rewind last input"),
+    ("quit", "Quit"),
 ];
 
 /// 光标前最后一个 token 的起点。
@@ -173,13 +181,23 @@ mod tests {
     #[test]
     fn commands_filter_by_prefix() {
         let all = commands("");
-        assert_eq!(all.len(), COMMANDS.len());
+        assert_eq!(all.len(), COMMANDS.len().min(MAX_ITEMS));
         assert_eq!(all[0].label, "/new");
 
-        let some = commands("se");
-        assert!(some.iter().all(|item| item.label.starts_with("/se")));
-        assert!(some.iter().any(|item| item.label == "/sessions"));
+        let some = commands("re");
+        assert!(some.iter().all(|item| item.label.starts_with("/re")));
+        assert!(some.iter().any(|item| item.label == "/resume"));
         assert!(commands("zzz").is_empty());
+        // 配置类命令不在 `/` 里（走 Ctrl-K 命令面板）
+        assert!(commands("settings").is_empty());
+    }
+
+    /// 触发词识别：`/` `!` 只在行首，`@` 行内任意位置。
+    #[test]
+    fn detect_requires_line_start_for_commands() {
+        assert!(detect("abc /new").is_none());
+        assert_eq!(detect("/ne").map(|d| d.0), Some(Trigger::Command));
+        assert_eq!(detect("第一行\n!/ls").map(|d| d.0), Some(Trigger::Shell));
     }
 
     /// 文件候选命中文件名前缀的排前面。

@@ -35,8 +35,8 @@ incremental = true
 
 [features]
 default = ["tui"]
-tui = []           # 交互 TUI（crossterm + ratatui）
-gui = ["dep:gpui"] # 桌面 GUI（gpui）：启用后才有 `prux-gui` 二进制
+tui = []                                # 交互 TUI（crossterm + ratatui）
+gui = ["dep:gpui", "dep:native-dialog"] # 桌面 GUI（gpui）：启用后才有 `prux-gui` 二进制
 test-support = []
 
 [[bin]]
@@ -51,6 +51,7 @@ url = { version = "2.5", default-features = false }
 lru = { version = "0.19", default-features = false }
 http = { version = "1.0", default-features = false }
 dirs = { version = "7.0", default-features = false }
+native-dialog = { version = "0.9", optional = true }
 sha2 = { version = "0.11", default-features = false }
 bytes = { version = "1.12", default-features = false }
 ignore = { version = "0.4", default-features = false }
