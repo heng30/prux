@@ -197,6 +197,19 @@ fn setting_toggles_keep_the_overlay_open() {
     assert!(!keeps_overlay(&Action::SetDark(true)));
 }
 
+/// 设置面板的表格行：名称进第一列，当前值与说明进后两个单元格（列数必须对齐）。
+#[test]
+fn settings_entries_fill_three_columns() {
+    let _guard = crate::test_support::AgentDirGuard::temp();
+    let entries = super::panels::settings_entries(true);
+    assert!(entries.len() > 10, "设置项太少: {}", entries.len());
+    for entry in &entries {
+        assert_eq!(entry.cells.len(), 2, "{}: {:?}", entry.label, entry.cells);
+        assert!(!entry.label.contains(": "), "名称不该带值: {}", entry.label);
+    }
+    assert_eq!(entries[0].cells[0], "dark");
+}
+
 /// Tab 详情页：`key: value` 拆成表格两列，纯文本行当作描述，空行是分组分隔。
 #[test]
 fn detail_lines_become_table_rows() {

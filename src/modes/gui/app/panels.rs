@@ -151,194 +151,15 @@ impl GuiApp {
             }
         }
     }
-    /// 设置面板：列出常用开关与外观，Enter 直接改并落盘到 settings.json。
+    /// 设置面板：`Setting / Value / Notes` 三列表格，Enter 直接改并落盘到 settings.json。
     pub(super) fn open_settings_panel(&mut self, _cx: &mut Context<Self>) {
-        let on_off = |on: bool| if on { "on" } else { "off" };
-        let entries = vec![
-            Entry {
-                label: format!(
-                    "Theme: {}",
-                    if self.theme.is_dark { "dark" } else { "light" }
-                ),
-                detail: "Enter to toggle".into(),
-                action: Action::ToggleSetting(SettingKey::GuiTheme),
-                ..Entry::default()
-            },
-            Entry {
-                label: format!(
-                    "Auto-compact: {}",
-                    on_off(settings_manager::read_settings_auto_compact())
-                ),
-                detail: "Compact when near the limit".into(),
-                action: Action::ToggleSetting(SettingKey::AutoCompact),
-                ..Entry::default()
-            },
-            Entry {
-                label: format!(
-                    "Auto-retry: {}",
-                    on_off(settings_manager::read_settings_retry_enabled())
-                ),
-                detail: "Retry failed requests".into(),
-                action: Action::ToggleSetting(SettingKey::Retry),
-                ..Entry::default()
-            },
-            Entry {
-                label: format!(
-                    "Hide thinking: {}",
-                    on_off(settings_manager::read_settings_hide_thinking())
-                ),
-                detail: "Hide model reasoning".into(),
-                action: Action::ToggleSetting(SettingKey::HideThinking),
-                ..Entry::default()
-            },
-            Entry {
-                label: format!(
-                    "Syntax highlighting: {}",
-                    on_off(settings_manager::read_settings_syntax_highlight())
-                ),
-                detail: "Highlight code blocks".into(),
-                action: Action::ToggleSetting(SettingKey::SyntaxHighlight),
-                ..Entry::default()
-            },
-            Entry {
-                label: format!(
-                    "Auto-resize images: {}",
-                    on_off(settings_manager::read_settings_images_auto_resize())
-                ),
-                detail: "Downscale oversized images".into(),
-                action: Action::ToggleSetting(SettingKey::ImagesAutoResize),
-                ..Entry::default()
-            },
-            Entry {
-                label: format!(
-                    "Block images: {}",
-                    on_off(settings_manager::read_settings_images_block_images())
-                ),
-                detail: "Refuse image input".into(),
-                action: Action::ToggleSetting(SettingKey::ImagesBlockImages),
-                ..Entry::default()
-            },
-            Entry {
-                label: format!(
-                    "Expose session env: {}",
-                    on_off(settings_manager::read_settings_expose_session_environment())
-                ),
-                detail: "Pass session info to tools as env vars".into(),
-                action: Action::ToggleSetting(SettingKey::ExposeSessionEnvironment),
-                ..Entry::default()
-            },
-            Entry {
-                label: format!(
-                    "Cache miss notices: {}",
-                    on_off(settings_manager::read_settings_show_cache_miss_notices())
-                ),
-                detail: String::new(),
-                action: Action::ToggleSetting(SettingKey::ShowCacheMissNotices),
-                ..Entry::default()
-            },
-            Entry {
-                label: format!(
-                    "Steering mode: {}",
-                    settings_manager::read_settings_steering_mode()
-                ),
-                detail: "Enter to cycle".into(),
-                action: Action::ToggleSetting(SettingKey::SteeringMode),
-                ..Entry::default()
-            },
-            Entry {
-                label: format!(
-                    "Follow-up mode: {}",
-                    settings_manager::read_settings_follow_up_mode()
-                ),
-                detail: "Enter to cycle".into(),
-                action: Action::ToggleSetting(SettingKey::FollowUpMode),
-                ..Entry::default()
-            },
-            Entry {
-                label: format!(
-                    "Cache warming: {}",
-                    settings_manager::read_settings_cache_warming()
-                ),
-                detail: "Enter to cycle".into(),
-                action: Action::ToggleSetting(SettingKey::CacheWarming),
-                ..Entry::default()
-            },
-            Entry {
-                label: format!(
-                    "Quiet startup: {:?}",
-                    settings_manager::read_settings_quiet_startup()
-                ),
-                detail: "Enter to cycle".into(),
-                action: Action::ToggleSetting(SettingKey::QuietStartup),
-                ..Entry::default()
-            },
-            Entry {
-                label: format!(
-                    "Max retries: {}",
-                    settings_manager::read_settings_retry_max_retries()
-                ),
-                detail: "Enter to edit".into(),
-                action: Action::ToggleSetting(SettingKey::RetryMaxRetries),
-                ..Entry::default()
-            },
-            Entry {
-                label: format!(
-                    "temperature: {}",
-                    settings_manager::read_settings_temperature()
-                        .map(|v| v.to_string())
-                        .unwrap_or_else(|| "(model default)".into())
-                ),
-                detail: "Enter to edit, empty restores default".into(),
-                action: Action::ToggleSetting(SettingKey::Temperature),
-                ..Entry::default()
-            },
-            Entry {
-                label: format!(
-                    "Compact reserve tokens: {}",
-                    settings_manager::read_settings_compact_reserve()
-                ),
-                detail: "Enter to edit".into(),
-                action: Action::ToggleSetting(SettingKey::CompactReserve),
-                ..Entry::default()
-            },
-            Entry {
-                label: format!(
-                    "Compact keep recent tokens: {}",
-                    settings_manager::read_settings_compact_keep_recent()
-                ),
-                detail: "Enter to edit".into(),
-                action: Action::ToggleSetting(SettingKey::CompactKeepRecent),
-                ..Entry::default()
-            },
-            Entry {
-                label: format!("UI scale: {}%", (theme::ui_scale() * 100.0).round()),
-                detail: "Enter to reset 100%".into(),
-                action: Action::Scale(1.0),
-                ..Entry::default()
-            },
-            Entry {
-                label: "Default model…".into(),
-                detail: String::new(),
-                action: Action::Open(ListKind::Model),
-                ..Entry::default()
-            },
-            Entry {
-                label: "Thinking level…".into(),
-                detail: String::new(),
-                action: Action::Open(ListKind::Thinking),
-                ..Entry::default()
-            },
-            Entry {
-                label: format!(
-                    "Config directory: {}",
-                    settings_manager::agent_dir().display()
-                ),
-                detail: String::new(),
-                action: Action::None,
-                ..Entry::default()
-            },
+        let mut list = List::new("Settings", settings_entries(self.theme.is_dark));
+        list.columns = vec![
+            Column::fixed("Setting", TABLE_SETTING_W),
+            Column::fixed("Value", TABLE_VALUE_W),
+            Column::flex("Notes"),
         ];
-        self.overlay = Some(Overlay::List(List::new("Settings", entries)));
+        self.overlay = Some(Overlay::List(list));
     }
     /// 扩展管理面板：`[x] 名称` 勾选态，Enter/点击切换草稿，Ctrl-S 才落盘，Tab 看详情。
     pub(super) fn open_extension_panel(&mut self, cx: &mut Context<Self>) {
@@ -867,6 +688,145 @@ fn skills_snapshot(rules: &[String]) -> SkillsSnapshot {
         })
         .collect();
     (rows, enabled)
+}
+
+/// 设置面板的行：名称进第一列，当前值与说明进后两个单元格
+/// （`theme_dark` 决定 `Theme` 行显示的当前值）。
+pub(super) fn settings_entries(theme_dark: bool) -> Vec<Entry> {
+    let on_off = |on: bool| if on { "on" } else { "off" };
+    let config_dir = settings_manager::agent_dir().display().to_string();
+    let row = |name: &str, value: String, notes: &str, action: Action| Entry {
+        label: name.to_string(),
+        cells: vec![value, notes.to_string()],
+        action,
+        ..Entry::default()
+    };
+
+    vec![
+        row(
+            "Theme",
+            if theme_dark { "dark" } else { "light" }.into(),
+            "Enter to toggle",
+            Action::ToggleSetting(SettingKey::GuiTheme),
+        ),
+        row(
+            "Auto-compact",
+            on_off(settings_manager::read_settings_auto_compact()).into(),
+            "Compact when near the limit",
+            Action::ToggleSetting(SettingKey::AutoCompact),
+        ),
+        row(
+            "Auto-retry",
+            on_off(settings_manager::read_settings_retry_enabled()).into(),
+            "Retry failed requests",
+            Action::ToggleSetting(SettingKey::Retry),
+        ),
+        row(
+            "Hide thinking",
+            on_off(settings_manager::read_settings_hide_thinking()).into(),
+            "Hide model reasoning",
+            Action::ToggleSetting(SettingKey::HideThinking),
+        ),
+        row(
+            "Syntax highlighting",
+            on_off(settings_manager::read_settings_syntax_highlight()).into(),
+            "Highlight code blocks",
+            Action::ToggleSetting(SettingKey::SyntaxHighlight),
+        ),
+        row(
+            "Auto-resize images",
+            on_off(settings_manager::read_settings_images_auto_resize()).into(),
+            "Downscale oversized images",
+            Action::ToggleSetting(SettingKey::ImagesAutoResize),
+        ),
+        row(
+            "Block images",
+            on_off(settings_manager::read_settings_images_block_images()).into(),
+            "Refuse image input",
+            Action::ToggleSetting(SettingKey::ImagesBlockImages),
+        ),
+        row(
+            "Expose session env",
+            on_off(settings_manager::read_settings_expose_session_environment()).into(),
+            "Pass session info to tools as env vars",
+            Action::ToggleSetting(SettingKey::ExposeSessionEnvironment),
+        ),
+        row(
+            "Cache miss notices",
+            on_off(settings_manager::read_settings_show_cache_miss_notices()).into(),
+            "",
+            Action::ToggleSetting(SettingKey::ShowCacheMissNotices),
+        ),
+        row(
+            "Steering mode",
+            settings_manager::read_settings_steering_mode(),
+            "Enter to cycle",
+            Action::ToggleSetting(SettingKey::SteeringMode),
+        ),
+        row(
+            "Follow-up mode",
+            settings_manager::read_settings_follow_up_mode(),
+            "Enter to cycle",
+            Action::ToggleSetting(SettingKey::FollowUpMode),
+        ),
+        row(
+            "Cache warming",
+            settings_manager::read_settings_cache_warming(),
+            "Enter to cycle",
+            Action::ToggleSetting(SettingKey::CacheWarming),
+        ),
+        row(
+            "Quiet startup",
+            format!("{:?}", settings_manager::read_settings_quiet_startup()),
+            "Enter to cycle",
+            Action::ToggleSetting(SettingKey::QuietStartup),
+        ),
+        row(
+            "Max retries",
+            settings_manager::read_settings_retry_max_retries().to_string(),
+            "Enter to edit",
+            Action::ToggleSetting(SettingKey::RetryMaxRetries),
+        ),
+        row(
+            "temperature",
+            settings_manager::read_settings_temperature()
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "(model default)".into()),
+            "Enter to edit, empty restores default",
+            Action::ToggleSetting(SettingKey::Temperature),
+        ),
+        row(
+            "Compact reserve tokens",
+            settings_manager::read_settings_compact_reserve().to_string(),
+            "Enter to edit",
+            Action::ToggleSetting(SettingKey::CompactReserve),
+        ),
+        row(
+            "Compact keep recent tokens",
+            settings_manager::read_settings_compact_keep_recent().to_string(),
+            "Enter to edit",
+            Action::ToggleSetting(SettingKey::CompactKeepRecent),
+        ),
+        row(
+            "UI scale",
+            format!("{}%", (theme::ui_scale() * 100.0).round()),
+            "Enter to reset 100%",
+            Action::Scale(1.0),
+        ),
+        row(
+            "Default model",
+            String::new(),
+            "Enter to pick",
+            Action::Open(ListKind::Model),
+        ),
+        row(
+            "Thinking level",
+            String::new(),
+            "Enter to pick",
+            Action::Open(ListKind::Thinking),
+        ),
+        row("Config directory", String::new(), &config_dir, Action::None),
+    ]
 }
 
 /// 详情行（`"  key: value"` / 纯描述）→ 表格行：`key: value` 拆成两列，

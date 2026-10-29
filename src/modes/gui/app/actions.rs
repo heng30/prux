@@ -471,7 +471,7 @@ impl GuiApp {
         cx.spawn(async move |this, cx| {
             let data = cx
                 .background_executor()
-                .spawn(async move { panel::RightPanel::load(&cwd, tab, selected) })
+                .spawn(async move { giff::RightPanel::load(&cwd, tab, selected) })
                 .await;
             _ = this.update(cx, |app, cx| {
                 app.panel.apply(data);

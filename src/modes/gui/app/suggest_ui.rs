@@ -125,7 +125,7 @@ impl GuiApp {
         cx.spawn(async move |this, cx| {
             let paths = cx
                 .background_executor()
-                .spawn(async move { panel::file_paths(&cwd) })
+                .spawn(async move { giff::file_paths(&cwd) })
                 .await;
             _ = this.update(cx, |this, cx| {
                 this.files_cache.loading = false;

@@ -108,7 +108,7 @@ impl russh::server::Handler for TestSession {
     async fn auth_publickey(
         &mut self,
         user: &str,
-        _public_key: &russh::keys::PublicKey,
+        _public_key: russh::server::VerifiedPublicKey<'_>,
     ) -> Result<Auth, Self::Error> {
         if user == PASSWORD_USER {
             return Ok(Auth::Reject {

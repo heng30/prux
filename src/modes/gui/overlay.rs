@@ -1,15 +1,16 @@
 //! 覆盖层面板：可过滤列表（命令面板 / 模型 / 会话 / 思考级别 / 主题）与只读信息页。
 
 use super::{
+    app::GuiApp,
     text_edit::Editor,
     theme::{
         CONTROL_H_LG, FONT_BODY, FONT_CAPTION, FONT_SMALL, ICON_SIZE, RADIUS_LG, RADIUS_MD,
         RADIUS_SM, SPACE_MD, SPACE_SM, SPACE_XS, SPACE_XXS, Theme, px,
     },
 };
-use crate::modes::interactive::agent_actor::AgentCommand;
+use crate::{modes::interactive::agent_actor::AgentCommand, utils::geometry};
 use gpui::{
-    AnyElement, InteractiveElement, IntoElement, ParentElement, ScrollHandle, SharedString,
+    AnyElement, Div, InteractiveElement, IntoElement, ParentElement, ScrollHandle, SharedString,
     StatefulInteractiveElement, Styled, div,
 };
 
@@ -187,6 +188,18 @@ const DETAIL_MAX_WIDTH: f32 = 260.0;
 
 /// 详情页表格左列（属性名）宽度（逻辑像素）。
 const INFO_LABEL_W: f32 = 132.0;
+
+/// 详情卡片里可滚动主体的高度上限（逻辑像素）：超出后主体内部滚动，标题与提示行留在卡片里。
+const INFO_BODY_MAX_H: f32 = 360.0;
+
+/// 详情页「滚动一行」的位移（逻辑像素）：值会折行、行高不固定，用它把方向键换算成位移。
+const INFO_SCROLL_STEP: f32 = 20.0;
+
+/// 设置面板表格列宽（逻辑像素）：设置项名。
+pub(crate) const TABLE_SETTING_W: f32 = 200.0;
+
+/// 设置面板表格列宽（逻辑像素）：当前值（`on` / `off` / 数字 / 模式名）。
+pub(crate) const TABLE_VALUE_W: f32 = 110.0;
 
 /// 表格第一列（名称）宽度（逻辑像素）：技能与扩展面板共用，两个面板列宽对得上。
 pub(crate) const TABLE_NAME_W: f32 = 140.0;
@@ -375,8 +388,8 @@ pub struct Info {
     pub lines: Vec<String>,
     /// 两列表格内容（属性 / 值）：非空时按表格渲染，值里是 URL 的可点击
     pub rows: Vec<InfoRow>,
-    /// 滚动偏移（行）
-    pub scroll: usize,
+    /// 滚动位置：方向键与滚轮共用同一个句柄
+    pub scroll: ScrollHandle,
 }
 
 /// 详情页表格的一行：属性名 + 值。
@@ -394,7 +407,7 @@ impl Info {
             title: title.into(),
             lines,
             rows: Vec::new(),
-            scroll: 0,
+            scroll: ScrollHandle::new(),
         }
     }
 
@@ -404,24 +417,22 @@ impl Info {
             title: title.into(),
             lines: Vec::new(),
             rows,
-            scroll: 0,
+            scroll: ScrollHandle::new(),
         }
     }
 
-    /// 可滚动的总行数（表格详情按行数，文本详情按行数）。
-    pub fn len(&self) -> usize {
-        if self.rows.is_empty() {
-            self.lines.len()
-        } else {
-            self.rows.len()
-        }
+    /// 按行滚动：正数向下、负数向上，换算成像素后夹到实际可滚范围。
+    pub fn scroll_by(&mut self, rows: f32) {
+        let top = f32::from(self.scroll.offset().y);
+        self.scroll_to(top + rows * INFO_SCROLL_STEP);
     }
 
-    /// 滚动（夹到有效范围）。
-    pub fn scroll_by(&mut self, delta: i32, visible: usize) {
-        let max = self.len().saturating_sub(visible);
-        let next = self.scroll as i32 + delta;
-        self.scroll = next.clamp(0, max as i32) as usize;
+    /// 滚到纵坐标 `y`（夹到 `0..=max_offset`）；传 `f32::MAX` 即滚到底。
+    pub fn scroll_to(&mut self, y: f32) {
+        let max = f32::from(self.scroll.max_offset().height);
+        let y = y.clamp(0., max);
+        self.scroll
+            .set_offset(gpui::point(gpui::px(0.), gpui::px(y)));
     }
 }
 
@@ -434,11 +445,7 @@ pub enum Overlay {
 }
 
 /// 渲染覆盖层（居中卡片 + 半透明遮罩由调用方提供）。
-pub fn render(
-    overlay: &Overlay,
-    theme: &Theme,
-    cx: &mut gpui::Context<super::app::GuiApp>,
-) -> AnyElement {
+pub fn render(overlay: &Overlay, theme: &Theme, cx: &mut gpui::Context<GuiApp>) -> AnyElement {
     match overlay {
         Overlay::List(list) => match &list.detail {
             Some(detail) => render_info(detail, theme),
@@ -582,8 +589,8 @@ fn table_cell(theme: &Theme, text: &str, width: Option<f32>, muted: bool) -> Any
     }
 }
 
-/// 表头：与 [`list_row`] 的表格行同宽同列（行首留出勾选框与间距的位置）。
-fn table_header(theme: &Theme, columns: &[Column]) -> AnyElement {
+/// 表头：与 [`list_row`] 的表格行同宽同列；`checked` 为真时留出勾选框的位置。
+fn table_header(theme: &Theme, columns: &[Column], checked: bool) -> AnyElement {
     let mut header = div()
         .w_full()
         .h(px(ROW_HEIGHT))
@@ -595,11 +602,15 @@ fn table_header(theme: &Theme, columns: &[Column]) -> AnyElement {
         .border_color(theme.border)
         .text_size(px(FONT_CAPTION))
         .text_color(theme.text_ghost);
-    // 勾选框占位，保证表头与行的列对齐
-    header = header.child(div().flex_none().w(px(ICON_SIZE)).h(px(ICON_SIZE)));
+
+    if checked {
+        header = header.child(div().flex_none().w(px(ICON_SIZE)).h(px(ICON_SIZE)));
+    }
+
     for column in columns {
         header = header.child(table_cell(theme, &column.title, column.width, true));
     }
+
     header.into_any_element()
 }
 
@@ -632,23 +643,20 @@ pub(crate) fn reveal_row(scroll: &ScrollHandle, index: usize) {
     let (Some(row), area) = (scroll.bounds_for_item(index), scroll.bounds()) else {
         return;
     };
+
     let viewport = f32::from(area.size.height);
     let max = f32::from(scroll.max_offset().height);
     let offset = f32::from(scroll.offset().y);
     let top = f32::from(row.top() - area.top());
     let height = f32::from(row.size.height);
-    let next = crate::utils::geometry::offset_revealing(offset, top, height, viewport, max);
+    let next = geometry::offset_revealing(offset, top, height, viewport, max);
     if next != offset {
         scroll.set_offset(gpui::point(gpui::px(0.), gpui::px(next)));
     }
 }
 
 /// 列表卡片。
-fn render_list(
-    list: &List,
-    theme: &Theme,
-    cx: &mut gpui::Context<super::app::GuiApp>,
-) -> AnyElement {
+fn render_list(list: &List, theme: &Theme, cx: &mut gpui::Context<GuiApp>) -> AnyElement {
     let filtered = list.filtered();
     let mut column = div()
         .w(px(LIST_W))
@@ -718,7 +726,8 @@ fn render_list(
 
     // 表头不随行滚动：贴在列表上方，列宽与行内单元格一致
     if !list.columns.is_empty() {
-        column = column.child(table_header(theme, &list.columns));
+        let checked = list.entries.iter().any(|entry| entry.checked.is_some());
+        column = column.child(table_header(theme, &list.columns, checked));
     }
 
     if filtered.is_empty() {
@@ -768,7 +777,7 @@ fn render_list(
     column.into_any_element()
 }
 
-/// 信息卡片。
+/// 信息卡片：标题 + 可滚动主体（表格或纯文本）+ 底部提示。
 fn render_info(info: &Info, theme: &Theme) -> AnyElement {
     let mut column = div()
         .w(px(INFO_W))
@@ -789,17 +798,22 @@ fn render_info(info: &Info, theme: &Theme) -> AnyElement {
                 .child(SharedString::from(info.title.clone())),
         );
 
-    if !info.rows.is_empty() {
-        column = column.child(info_table(info, theme));
-    } else {
-        for line in info.lines.iter().skip(info.scroll).take(16) {
-            column = column.child(
+    if info.rows.is_empty() {
+        let mut body = info_body(&info.scroll);
+        for line in &info.lines {
+            body = body.child(
                 div()
                     .text_size(px(FONT_SMALL))
                     .text_color(theme.text_secondary)
                     .child(SharedString::from(line.clone())),
             );
         }
+        column = column.child(body);
+    } else {
+        column =
+            column
+                .child(info_header(theme))
+                .child(info_table(&info.rows, theme, &info.scroll));
     }
 
     column
@@ -813,10 +827,14 @@ fn render_info(info: &Info, theme: &Theme) -> AnyElement {
         .into_any_element()
 }
 
-/// 详情页表格：表头 + 「属性 / 值」两列，值是可点击的 URL 时用链接色。
-fn info_table(info: &Info, theme: &Theme) -> AnyElement {
-    let mut table = div().w_full().flex().flex_col().gap(px(ROW_GAP));
-    let header = div()
+/// 详情卡片主体：有高度上限、纵向滚动的容器（表格与纯文本共用同一个滚动句柄）。
+fn info_body(scroll: &ScrollHandle) -> gpui::Stateful<Div> {
+    rows_container("overlay-info-body", scroll, INFO_BODY_MAX_H).mt(px(SPACE_XS))
+}
+
+/// 详情表格的表头（属性 / 值）：贴在滚动主体上方，列宽与行内单元格一致。
+fn info_header(theme: &Theme) -> AnyElement {
+    div()
         .flex()
         .items_center()
         .gap(px(SPACE_SM))
@@ -832,16 +850,17 @@ fn info_table(info: &Info, theme: &Theme) -> AnyElement {
                 .w(px(INFO_LABEL_W))
                 .child(SharedString::from("Property")),
         )
-        .child(div().flex_1().min_w_0().child(SharedString::from("Value")));
-    table = table.child(header);
+        .child(div().flex_1().min_w_0().child(SharedString::from("Value")))
+        .into_any_element()
+}
 
-    for (index, row) in info.rows.iter().skip(info.scroll).enumerate() {
+/// 详情页表格主体：「属性 / 值」两列，值按列宽折行（不截断），值是 URL 时用链接色。
+fn info_table(rows: &[InfoRow], theme: &Theme, scroll: &ScrollHandle) -> gpui::Stateful<Div> {
+    let mut table = info_body(scroll);
+
+    for (index, row) in rows.iter().enumerate() {
         let link = is_url(&row.value);
-        let value = div()
-            .flex_1()
-            .min_w_0()
-            .truncate()
-            .text_size(px(FONT_SMALL));
+        let value = div().flex_1().min_w_0().text_size(px(FONT_SMALL));
         let value = if link {
             let url = row.value.clone();
             value
@@ -876,7 +895,7 @@ fn info_table(info: &Info, theme: &Theme) -> AnyElement {
                 .child(value),
         );
     }
-    table.into_any_element()
+    table
 }
 
 /// 详情页里可点击的值：只看 `http(s)://` 开头的绝对链接。

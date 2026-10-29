@@ -604,12 +604,12 @@ impl GuiApp {
                 list.detail = None;
             } else if let Some(detail) = list.detail.as_mut() {
                 match key {
-                    "pageup" => detail.scroll_by(-12, 18),
-                    "pagedown" => detail.scroll_by(12, 18),
-                    "home" => detail.scroll_by(-(detail.len() as i32), 18),
-                    "end" => detail.scroll_by(detail.len() as i32, 18),
-                    _ if up => detail.scroll_by(-1, 18),
-                    _ if down => detail.scroll_by(1, 18),
+                    "pageup" => detail.scroll_by(-12.),
+                    "pagedown" => detail.scroll_by(12.),
+                    "home" => detail.scroll_to(0.),
+                    "end" => detail.scroll_to(f32::MAX),
+                    _ if up => detail.scroll_by(-1.),
+                    _ if down => detail.scroll_by(1.),
                     _ => {}
                 }
             }
@@ -650,12 +650,12 @@ impl GuiApp {
                 }
             }
             Overlay::Info(info) => match key {
-                "pageup" => info.scroll_by(-12, 18),
-                "pagedown" => info.scroll_by(12, 18),
-                "home" => info.scroll_by(-(info.lines.len() as i32), 18),
-                "end" => info.scroll_by(info.lines.len() as i32, 18),
-                _ if up => info.scroll_by(-1, 18),
-                _ if down => info.scroll_by(1, 18),
+                "pageup" => info.scroll_by(-12.),
+                "pagedown" => info.scroll_by(12.),
+                "home" => info.scroll_to(0.),
+                "end" => info.scroll_to(f32::MAX),
+                _ if up => info.scroll_by(-1.),
+                _ if down => info.scroll_by(1.),
                 _ => {}
             },
         }

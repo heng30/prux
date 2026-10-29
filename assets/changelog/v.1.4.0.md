@@ -159,8 +159,11 @@
   matches the other two: `Enter` toggles a checkbox in a draft and only `Ctrl-S` writes
   `enabledModels`, with the count of enabled models in the title, and `Esc` throws the draft away.
   The `Tab` detail page is a `Property / Value` table too, and a `fork url` value that is an
-  `http(s)://` link opens in the system browser on click. Commands that already have a GUI panel of
-  their own — `/skills`, `/extension`, `/settings`, `/scoped-models` — no longer show up in the `/`
+  `http(s)://` link opens in the system browser on click. Its values wrap instead of being clipped,
+  and the table scrolls inside the card (wheel, arrow keys, `PgUp` / `PgDn`, `Home` / `End`) once it
+  is longer than fits. The `Ctrl-,` settings panel is the same kind of table now: `Setting / Value /
+  Notes`, with the current value in its own column. Commands that already have a GUI panel of their
+  own — `/skills`, `/extension`, `/settings`, `/scoped-models` — no longer show up in the `/`
   completion panel.
 
 ### Fixed
@@ -381,8 +384,10 @@
   长文本按单元格截断（`Tab` 详情页仍显示完整路径）。模型名单面板也跟另外两个对齐：`Enter` 只切换
   草稿里的勾选框、只有 `Ctrl-S` 才写回 `enabledModels`，标题里带启用数量，`Esc` 丢弃草稿。`Tab` 详情页
   同样是 `Property / Value` 两列表格，`fork url` 这类 `http(s)://` 链接点一下就交给系统浏览器打开。
-  已有独立 GUI 面板的命令——`/skills`、`/extension`、`/settings`、`/scoped-models`——不再出现在 `/`
-  补全面板里。
+  详情页的值按列宽折行、不再截断，内容长过卡片时在卡片内部滚动（滚轮、方向键、`PgUp` / `PgDn`、
+  `Home` / `End`）。`Ctrl-,` 设置面板也改成同样的表格：`Setting / Value / Notes` 三列，当前值单独
+  占一列。已有独立 GUI 面板的命令——`/skills`、`/extension`、`/settings`、`/scoped-models`——不再
+  出现在 `/` 补全面板里。
 
 ## 修复
 

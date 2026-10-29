@@ -715,7 +715,7 @@ impl GuiApp {
                     .relative()
                     .h_full()
                     .flex_none()
-                    .child(panel::render(&theme, &self.panel, self.panel_width, cx))
+                    .child(giff::render(&theme, &self.panel, self.panel_width, cx))
                     .child(
                         // 左边框拖拽热区：往左拉变宽，指针变左右缩放
                         div()
