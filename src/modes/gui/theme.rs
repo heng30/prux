@@ -61,9 +61,9 @@ pub const HEADER_H: f32 = 40.;
 pub const ICON_SIZE: f32 = 16.;
 /// 状态圆点直径：列表行前的品牌/状态点。
 pub const DOT_SIZE: f32 = 8.;
+/// diff 行号 gutter 的最小宽度：容纳 `+1234` 这类带标记的行号。
+pub const DIFF_GUTTER_W: f32 = 34.;
 
-/// 自绘标题栏高度（窗口顶部那条）。
-pub const CHROME_HEIGHT: f32 = 32.0;
 /// 正文列最大宽度：宽屏下不铺满整屏，阅读更稳。
 pub const CONTENT_MAX_WIDTH: f32 = 760.0;
 

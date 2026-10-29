@@ -127,9 +127,16 @@
   the panel it sits in no longer each pick their own 6, 7, 13 or 15.
 
 - **The desktop GUI's session list spans the whole window**: the sidebar now starts at the top
-  edge, and the title bar sits beside it over the transcript instead of above everything. The bar
-  no longer repeats the project and session name the sidebar already shows; the model, thinking
-  and command-palette chips stay.
+  edge instead of below a title bar, which is gone entirely. The model and thinking switches moved
+  to the composer's hint row, next to `+ Attach`, and the command palette still opens on `Ctrl+M`
+  — only its chip is gone.
+
+- **The desktop GUI's right panel numbers its diffs**: the diff view skips the `diff --git` /
+  `index` / `---` / `+++` file header and starts at the first hunk, and every line now carries a
+  gutter with its old or new line number (`+428` added, `-428` removed, ` 429` context), so a
+  hunk's position is readable without counting down from its `@@` marker. Both tabs also report
+  the full counts: the file list and the change list are computed whichever tab is open, so the
+  tab labels no longer disagree with what the other tab shows.
 
 ### Fixed
 
@@ -313,9 +320,14 @@
   阶梯值（4 的倍数，只给相邻行之间的细缝留了 2px 一档），不再各处自己写像素字面量——按钮、
   它旁边的元素和所在面板不会再各自取 6、7、13、15。
 
-- **桌面 GUI 的会话列表占满整列**：侧栏从窗口顶端开始，标题栏挪到它右侧、压在对话流上方，
-  不再横跨整个窗口。标题栏里删掉了侧栏已经显示的 `prux › 会话名`，模型、思考与命令面板
-  三个入口保留。
+- **桌面 GUI 的会话列表占满整列**：侧栏从窗口顶端开始，不再有压在它右侧的标题栏——标题栏
+  整个去掉了。模型与思考级别切换挪到输入卡片的提示行、`+ Attach` 旁边；命令面板照旧用 `Ctrl+M`
+  打开，只是那个芯片没了。
+
+- **桌面 GUI 的右侧面板给 diff 标上行号**：diff 视图跳过 `diff --git` / `index` / `---` / `+++`
+  这些文件头，直接从第一个 hunk 开始渲染，每行左侧带旧/新行号（新增 `+428`、删除 `-428`、
+  上下文 ` 429`），不必从 `@@` 标记往下数。两个页签的计数也都齐了：无论停在哪个页签，文件
+  列表与变更列表都会算一遍，标签页上的数字不再和另一个页签对不上。
 
 ## 修复
 

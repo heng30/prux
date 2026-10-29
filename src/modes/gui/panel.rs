@@ -5,8 +5,8 @@
 
 use super::app::GuiApp;
 use super::theme::{
-    CONTROL_H_MD, CONTROL_H_SM, FONT_CAPTION, FONT_SMALL, HEADER_H, ICON_SIZE, RADIUS_MD,
-    RADIUS_SM, SPACE_MD, SPACE_SM, SPACE_XS, SPACE_XXS, Theme, px,
+    CONTROL_H_MD, CONTROL_H_SM, DIFF_GUTTER_W, FONT_CAPTION, FONT_SMALL, HEADER_H, ICON_SIZE,
+    RADIUS_MD, RADIUS_SM, SPACE_MD, SPACE_SM, SPACE_XS, SPACE_XXS, Theme, px,
 };
 use crate::utils::process::run_stdout;
 use gpui::{AnyElement, IntoElement, ParentElement, SharedString, Styled, div, prelude::*};
@@ -42,9 +42,9 @@ pub struct ChangeRow {
 
 /// 后台一次读完的面板内容（纯数据，可在工作线程里算）。
 pub struct PanelData {
-    /// 文件列表（仅 [`PanelTab::Files`] 有内容）
+    /// 文件列表（两个页签都算，用于显示计数）
     files: Vec<FileRow>,
-    /// 变更列表（仅 [`PanelTab::Changes`] 有内容）
+    /// 变更列表（两个页签都算，用于显示计数）
     changes: Vec<ChangeRow>,
     /// 选中变更的 diff：(路径, 文本)
     diff: Option<(String, String)>,
@@ -94,10 +94,12 @@ impl RightPanel {
     /// 纯读盘：按 `tab` 算一份面板内容（不碰自身状态，可在工作线程跑）。
     /// `selected` 是期望展示 diff 的变更下标，越界时不给 diff。
     pub fn load(cwd: &str, tab: PanelTab, selected: usize) -> PanelData {
+        // 两个页签的计数都要显示，故文件列表恒算一遍
+        let files = list_files(Path::new(cwd));
         match tab {
             PanelTab::Files => PanelData {
-                files: list_files(Path::new(cwd)),
-                changes: Vec::new(),
+                files,
+                changes: git_changes(cwd).unwrap_or_default(),
                 diff: None,
                 error: None,
             },
@@ -110,14 +112,14 @@ impl RightPanel {
                         (path, text)
                     });
                     PanelData {
-                        files: Vec::new(),
+                        files,
                         changes,
                         diff,
                         error: None,
                     }
                 }
                 Err(e) => PanelData {
-                    files: Vec::new(),
+                    files,
                     changes: Vec::new(),
                     diff: None,
                     error: Some(e),
@@ -409,7 +411,7 @@ fn changes_body(theme: &Theme, panel: &RightPanel, cx: &mut gpui::Context<GuiApp
     body.into_any_element()
 }
 
-/// diff 正文：逐行染色（新增绿 / 删除红），最多 400 行。
+/// diff 正文：跳过 `diff --git` / `index` 等文件头，逐行带旧/新行号染色（新增绿 / 删除红），最多 400 行。
 fn diff_view(theme: &Theme, diff: &str) -> AnyElement {
     let mut diff_box = div()
         .id("diff")
@@ -423,22 +425,71 @@ fn diff_view(theme: &Theme, diff: &str) -> AnyElement {
         .flex()
         .flex_col()
         .overflow_y_scroll();
+    let (mut old_no, mut new_no) = (0, 0);
+    let mut in_hunk = false;
     for line in diff.lines().take(400) {
-        let color = if line.starts_with('+') && !line.starts_with("+++") {
-            theme.success
-        } else if line.starts_with('-') && !line.starts_with("---") {
-            theme.danger
-        } else {
-            theme.text_secondary
+        if line.starts_with("@@") {
+            let mut fields = line.split(' ').skip(1);
+            old_no = hunk_start(fields.next());
+            new_no = hunk_start(fields.next());
+            in_hunk = true;
+            continue;
+        }
+        // 首个 hunk 头之前全是 `diff --git` / `index` / `---` / `+++` 之类的文件头
+        if !in_hunk {
+            continue;
+        }
+        // 标记已经并到行号里，正文剥掉 diff 前缀
+        let (label, body, color) = match line.as_bytes().first() {
+            Some(b'+') => {
+                new_no += 1;
+                (format!("+{new_no}"), &line[1..], theme.success)
+            }
+            Some(b'-') => {
+                old_no += 1;
+                (format!("-{old_no}"), &line[1..], theme.danger)
+            }
+            Some(b' ') => {
+                old_no += 1;
+                new_no += 1;
+                (format!(" {new_no}"), &line[1..], theme.text_secondary)
+            }
+            _ => (String::new(), line, theme.text_ghost),
         };
         diff_box = diff_box.child(
             div()
+                .flex()
+                .gap(px(SPACE_XS))
                 .text_size(px(FONT_CAPTION))
                 .text_color(color)
-                .child(SharedString::from(line.to_string())),
+                .child(line_no(label))
+                .child(
+                    div()
+                        .min_w_0()
+                        .flex_1()
+                        .child(SharedString::from(body.to_string())),
+                ),
         );
     }
     diff_box.into_any_element()
+}
+
+/// hunk 头里的字段（`-4,22` / `+4,33`）→ 起始行号；缺失或非法时为 0。
+fn hunk_start(field: Option<&str>) -> usize {
+    field
+        .map(|f| f.trim_start_matches(['-', '+']))
+        .and_then(|f| f.split(',').next())
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(0)
+}
+
+/// diff 左侧行号格：`+428` / `-428` / ` 429` 这种带标记的写法，无行号时留空占位。
+fn line_no(label: String) -> AnyElement {
+    div()
+        .flex_none()
+        .min_w(px(DIFF_GUTTER_W))
+        .child(SharedString::from(label))
+        .into_any_element()
 }
 
 /// `Files` 页的目录列表。
@@ -511,6 +562,14 @@ mod tests {
         assert_eq!(rows[1].status, "??");
         assert_eq!(rows[2].status, "R");
         assert_eq!(rows[2].path, "new.rs");
+    }
+
+    /// hunk 头字段解析：取逗号前的起始行号，缺字段时给 0。
+    #[test]
+    fn parses_hunk_start() {
+        assert_eq!(hunk_start(Some("-4,22")), 4);
+        assert_eq!(hunk_start(Some("+12")), 12);
+        assert_eq!(hunk_start(None), 0);
     }
 
     /// 文件列表只收文件、排好序、跳过隐藏目录。

@@ -1,4 +1,4 @@
-//! GUI 渲染：自绘标题栏、对话流、输入卡片、覆盖层与滚动条。
+//! GUI 渲染：对话流、输入卡片、覆盖层与滚动条。
 //!
 //! 拆自 [`super::app`]：只搬渲染代码，状态与按键分发仍在父模块。
 
@@ -212,101 +212,17 @@ impl GuiApp {
 
 impl Render for GuiApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let chrome = self.render_chrome(cx);
         let transcript = self.render_transcript(cx);
         let composer = self.render_composer(window, cx);
         let main = self.render_main(transcript, composer);
         let body = self.render_body(main, cx);
         let sidebar = self.render_sidebar(cx);
-        let root = self.render_root(sidebar, chrome, body, cx);
+        let root = self.render_root(sidebar, body, cx);
         self.render_overlays(root, window, cx)
     }
 }
 
 impl GuiApp {
-    /// 标题栏：项目名 › 会话名，右侧模型 / 思考 / 命令面板标签。
-    fn render_chrome(&self, cx: &mut Context<Self>) -> AnyElement {
-        let theme = self.theme.clone();
-
-        let model = self
-            .snapshot
-            .as_ref()
-            .map(|s| format!("{}/{}", s.provider, s.model))
-            .unwrap_or_else(|| "No model selected".to_string());
-        let thinking = self
-            .snapshot
-            .as_ref()
-            .and_then(|s| s.thinking.clone())
-            .filter(|t| t != "off");
-
-        let mut chrome_right = div().flex().items_center().gap(px(SPACE_XS));
-        chrome_right = chrome_right.child(
-            chip(&theme, model.clone(), false)
-                .id("model-chip")
-                .cursor_pointer()
-                .hover(|style| style.bg(theme.overlay).text_color(theme.text))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
-                        this.open_model_menu(event.position, cx);
-                    }),
-                ),
-        );
-        chrome_right = chrome_right.child(
-            chip(
-                &theme,
-                match &thinking {
-                    Some(level) => format!("thinking {level}"),
-                    None => "thinking off".to_string(),
-                },
-                false,
-            )
-            .id("thinking-chip")
-            .cursor_pointer()
-            .hover(|style| style.bg(theme.overlay).text_color(theme.text))
-            .on_click(cx.listener(|this, event: &gpui::ClickEvent, _, cx| {
-                this.open_thinking_menu(event.position(), cx);
-            })),
-        );
-        chrome_right = chrome_right.child(
-            div()
-                .id("command-palette-button")
-                .h(px(CONTROL_H_SM))
-                .px(px(SPACE_SM))
-                .rounded(px(RADIUS_SM))
-                .flex()
-                .items_center()
-                .bg(theme.overlay)
-                .border_1()
-                .border_color(theme.border)
-                .text_size(px(FONT_CAPTION))
-                .text_color(theme.text_secondary)
-                .cursor_pointer()
-                .hover(|style| style.bg(theme.overlay_strong).text_color(theme.text))
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.open_command_palette(cx);
-                    cx.notify();
-                }))
-                .child(SharedString::from("Ctrl-M commands")),
-        );
-
-        let chrome = div()
-            .flex_none()
-            .h(px(CHROME_HEIGHT))
-            .w_full()
-            .flex()
-            .items_center()
-            .gap(px(SPACE_SM))
-            .px(px(SPACE_MD))
-            .bg(theme.canvas)
-            .border_b_1()
-            .border_color(theme.border)
-            .child(div().flex_1())
-            .child(chrome_right);
-
-        chrome.into_any_element()
-    }
-
     /// 对话流：逐块渲染 + 钉底滚动 + 滚动条。
     fn render_transcript(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.theme.clone();
@@ -450,6 +366,16 @@ impl GuiApp {
             .as_ref()
             .map(|s| s.usage.context_tokens)
             .unwrap_or(0);
+        let model = self
+            .snapshot
+            .as_ref()
+            .map(|s| format!("{}/{}", s.provider, s.model))
+            .unwrap_or_else(|| "No model selected".to_string());
+        let thinking = self
+            .snapshot
+            .as_ref()
+            .and_then(|s| s.thinking.clone())
+            .filter(|t| t != "off");
         let mut hint = div().flex().items_center().gap(px(SPACE_SM));
         hint = hint.child(
             div()
@@ -469,6 +395,34 @@ impl GuiApp {
                     this.open_attach_menu(event.position(), cx);
                 }))
                 .child(SharedString::from("+ Attach")),
+        );
+        hint = hint.child(
+            chip(&theme, model, false)
+                .id("model-chip")
+                .cursor_pointer()
+                .hover(|style| style.bg(theme.overlay).text_color(theme.text))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
+                        this.open_model_menu(event.position, cx);
+                    }),
+                ),
+        );
+        hint = hint.child(
+            chip(
+                &theme,
+                match &thinking {
+                    Some(level) => format!("thinking {level}"),
+                    None => "thinking off".to_string(),
+                },
+                false,
+            )
+            .id("thinking-chip")
+            .cursor_pointer()
+            .hover(|style| style.bg(theme.overlay).text_color(theme.text))
+            .on_click(cx.listener(|this, event: &gpui::ClickEvent, _, cx| {
+                this.open_thinking_menu(event.position(), cx);
+            })),
         );
         if tokens > 0 {
             hint = hint.child(
@@ -762,11 +716,10 @@ impl GuiApp {
         body.into_any_element()
     }
 
-    /// 根节点：侧栏 +（标题栏下接主区）的竖排，挂焦点与键盘监听。
+    /// 根节点：侧栏 + 主区并排，挂焦点与键盘监听。
     fn render_root(
         &mut self,
         sidebar: AnyElement,
-        chrome: AnyElement,
         body: AnyElement,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
@@ -783,17 +736,7 @@ impl GuiApp {
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::on_key_down))
             .child(sidebar)
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_w_0()
-                    .min_h_0()
-                    .h_full()
-                    .child(chrome)
-                    .child(body),
-            )
+            .child(body)
     }
 
     /// 盖在根节点上的浮层：模态、toast、下拉菜单、补全面板、会话菜单、对话框。
