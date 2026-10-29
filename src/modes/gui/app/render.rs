@@ -6,7 +6,7 @@ use super::theme::{
     CONTROL_H_MD, CONTROL_H_SM, FONT_BODY, FONT_CAPTION, FONT_HERO, FONT_SMALL, RADIUS_LG,
     RADIUS_MD, RADIUS_SM, SPACE_LG, SPACE_MD, SPACE_SM, SPACE_XL, SPACE_XS,
 };
-use super::*;
+use super::{icon, status::BLINK_DIM_OPACITY, *};
 
 impl GuiApp {
     /// 补全面板：贴在输入卡片上沿的覆盖层（不占布局空间）。
@@ -361,11 +361,6 @@ impl GuiApp {
     fn render_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::Div {
         let theme = self.theme.clone();
 
-        let tokens = self
-            .snapshot
-            .as_ref()
-            .map(|s| s.usage.context_tokens)
-            .unwrap_or(0);
         let model = self
             .snapshot
             .as_ref()
@@ -424,41 +419,39 @@ impl GuiApp {
                 this.open_thinking_menu(event.position(), cx);
             })),
         );
-        if tokens > 0 {
-            hint = hint.child(
-                div()
-                    .text_size(px(FONT_CAPTION))
-                    .text_color(theme.text_ghost)
-                    .child(SharedString::from(format!("context {tokens} tok"))),
-            );
-        }
         hint = hint.child(div().flex_1());
         let busy = self.busy;
-        hint = hint.child(
-            div()
-                .id("send")
-                .h(px(CONTROL_H_MD))
-                .px(px(SPACE_MD))
-                .rounded(px(RADIUS_MD))
-                .flex()
-                .items_center()
-                .text_size(px(FONT_SMALL))
-                .font_weight(gpui::FontWeight::SEMIBOLD)
-                .bg(theme.inverse)
-                .text_color(theme.on_inverse)
-                .cursor_pointer()
-                .hover(|style| style.opacity(0.86))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    if this.busy {
-                        _ = this.cmd_tx.send(AgentCommand::Abort);
-                        this.queued = 0;
-                    } else {
-                        this.submit(cx);
-                    }
-                    cx.notify();
-                }))
-                .child(SharedString::from(if busy { "Stop" } else { "Send" })),
-        );
+        // 忙碌时按钮换品牌色（Stop 的语义色），不再用反色
+        let send = div()
+            .id("send")
+            .h(px(CONTROL_H_MD))
+            .px(px(SPACE_MD))
+            .rounded(px(RADIUS_MD))
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_size(px(FONT_SMALL))
+            .font_weight(gpui::FontWeight::SEMIBOLD)
+            .bg(theme.inverse)
+            .text_color(theme.on_inverse)
+            .cursor_pointer()
+            .hover(|style| style.opacity(0.86))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if this.busy {
+                    _ = this.cmd_tx.send(AgentCommand::Abort);
+                    this.queued = 0;
+                } else {
+                    this.submit(cx);
+                }
+                cx.notify();
+            }))
+            .child(if busy {
+                // 忙碌只换形状：播放器的停止方块（颜色仍是反色）
+                icon::stop(&theme)
+            } else {
+                SharedString::from("Send").into_any_element()
+            });
+        hint = hint.child(send);
 
         let ime_layer = self.ime_layer(cx);
         // 输入框可用内宽：上一帧实测的卡片宽减左右内边距（首帧还没量到时按窗口估算）
@@ -515,7 +508,10 @@ impl GuiApp {
     fn render_main(&mut self, transcript: AnyElement, composer_card: gpui::Div) -> AnyElement {
         let theme = self.theme.clone();
         let empty = self.transcript.blocks().is_empty();
-        let footer_status = self.status_text();
+        let (status_left, status_right) = self.status_text();
+        // 忙碌指示单独一块：● 与文字一起按闪烁相位上色
+        let busy_text = self.busy_text();
+        let blink = self.blink;
 
         let main = if empty {
             div()
@@ -552,19 +548,20 @@ impl GuiApp {
                                         .text_size(px(FONT_SMALL))
                                         .text_color(theme.text_tertiary)
                                         .child(SharedString::from(
-                                            "Enter to send · Ctrl-M for commands · Ctrl-Shift-O to switch sessions",
+                                            "Ctrl-M for commands · Ctrl-Shift-O to switch sessions",
                                         )),
                                 ),
                         )
-                        .child(measured_composer(composer_card, self.composer_bounds.clone()))
+                        .child(measured_composer(
+                            composer_card,
+                            self.composer_bounds.clone(),
+                        ))
                         .child(
                             div()
                                 .px(px(SPACE_MD))
                                 .text_size(px(FONT_CAPTION))
                                 .text_color(theme.text_ghost)
-                                .child(SharedString::from(
-                                    "Shift+Enter new line · Ctrl-L model · Ctrl-Q quit",
-                                )),
+                                .child(SharedString::from("Shift+Enter new line · Ctrl-L model")),
                         ),
                 )
         } else {
@@ -586,21 +583,48 @@ impl GuiApp {
                     self.composer_bounds.clone(),
                 ))
                 .child(
-                    div().flex_none().w_full().px(px(SPACE_XL)).pb(px(SPACE_XS)).child(
-                        div()
-                            .max_w(px(CONTENT_MAX_WIDTH))
-                            .mx_auto()
-                            .px(px(SPACE_MD))
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .text_size(px(FONT_CAPTION))
-                            .text_color(theme.text_ghost)
-                            .child(SharedString::from(footer_status))
-                            .child(SharedString::from(
-                                "Enter to send · Shift+Enter for a new line · Ctrl-M commands · Ctrl-Q quit",
-                            )),
-                    ),
+                    div()
+                        .flex_none()
+                        .w_full()
+                        .px(px(SPACE_XL))
+                        .pb(px(SPACE_XS))
+                        .child(
+                            div()
+                                .max_w(px(CONTENT_MAX_WIDTH))
+                                .mx_auto()
+                                .px(px(SPACE_MD))
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .text_size(px(FONT_CAPTION))
+                                .text_color(theme.text_ghost)
+                                .child({
+                                    let mut left = div().flex().items_center();
+                                    if let Some(text) = busy_text {
+                                        // 圆点闪（明暗交替），文字恒为品牌色
+                                        left = left
+                                            .child(
+                                                div()
+                                                    .text_color(theme.accent)
+                                                    .opacity(if blink {
+                                                        1.0
+                                                    } else {
+                                                        BLINK_DIM_OPACITY
+                                                    })
+                                                    .child(SharedString::from("● ")),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_color(theme.accent)
+                                                    .child(SharedString::from(text)),
+                                            )
+                                            // 分隔圆点保持状态栏原色（不变品牌色）
+                                            .child(SharedString::from(" · "));
+                                    }
+                                    left.child(SharedString::from(status_left))
+                                })
+                                .child(SharedString::from(status_right)),
+                        ),
                 )
         };
 

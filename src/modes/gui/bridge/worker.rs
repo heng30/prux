@@ -511,9 +511,11 @@ fn snapshot(agent: &Agent) -> Snapshot {
         usage.cache_write += u64::from(u.cache_write);
         usage.cost += u.cost.total;
     }
-    if let Some(last) = &agent.last_usage {
-        usage.context_tokens = u64::from(last.total_tokens);
-    }
+    // 上下文占用走历史估算（末条 assistant usage + 其后新增消息），
+    // 刚载入的会话还没有 `last_usage`，只有走它状态栏才显示得出占用率
+    usage.context_tokens =
+        u64::from(crate::core::compaction::estimate_context_tokens(&agent.messages).tokens);
+    usage.context_window = u64::from(agent.model.context_window);
 
     Snapshot {
         provider: agent.model.provider.clone(),

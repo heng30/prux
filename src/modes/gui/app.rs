@@ -3,20 +3,24 @@
 //! 与 agent 的一切交互都经 [`CommandTx`] 下发、经 [`GuiEvent`] 上行，视图不持有 agent。
 //! 状态与装配留在本模块，其余按职责拆开：
 //!
+//! - [`icon`]：代码绘制的图标（停止方块等）；
 //! - [`render`]：渲染，`render()` 只负责把各段拼起来；
 //! - [`actions`]：动作与斜杠命令；
 //! - [`keys`]：键盘分发；
 //! - [`input`]：光标、选区与 IME；
 //! - [`menus`]：下拉菜单、会话菜单与拖拽；
 //! - [`panels`]：右侧面板与列表选择页；
-//! - [`suggest_ui`]：输入补全面板。
+//! - [`suggest_ui`]：输入补全面板；
+//! - [`status`]：状态栏文案与驱动它的计时/速率采样。
 
 mod actions;
+mod icon;
 mod input;
 mod keys;
 mod menus;
 mod panels;
 mod render;
+mod status;
 mod suggest_ui;
 
 #[cfg(test)]
@@ -64,6 +68,7 @@ use gpui::{
     IntoElement, KeyDownEvent, MouseButton, Pixels, Render, ScrollHandle, SharedString, Task,
     UTF16Selection, Window, canvas, div, prelude::*,
 };
+use status::UsageMeter;
 use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
@@ -252,6 +257,12 @@ pub struct GuiApp {
     busy: bool,
     /// 排队等待发送的消息数（busy 时提交进入队列）
     queued: usize,
+    /// 本轮用量计时与 token 速率（状态栏用）
+    meter: UsageMeter,
+    /// 忙碌期的重绘任务是否在跑（状态栏耗时走字与忙碌指示闪烁靠它）
+    ticking: bool,
+    /// 忙碌指示的闪烁相位：tick 每半秒翻转一次，乒乓出「正在忙」的脉冲
+    blink: bool,
     /// 对话流滚动句柄
     scroll: ScrollHandle,
     /// 侧栏会话列表滚动句柄
@@ -381,6 +392,9 @@ impl GuiApp {
             editor: Editor::new(),
             busy: false,
             queued: 0,
+            meter: UsageMeter::default(),
+            ticking: false,
+            blink: false,
             scroll: ScrollHandle::new(),
             sessions_scroll: ScrollHandle::new(),
             sessions: Vec::new(),
@@ -444,7 +458,10 @@ impl GuiApp {
             GuiEvent::Agent(event) => {
                 let kind = event.get("type").and_then(|v| v.as_str()).unwrap_or("");
                 match kind {
-                    "agent_start" => self.busy = true,
+                    "agent_start" => {
+                        self.busy = true;
+                        self.start_status_tick(cx);
+                    }
                     "agent_settled" => {
                         self.busy = false;
                         if self.queued > 0 {
@@ -453,11 +470,16 @@ impl GuiApp {
                     }
                     _ => {}
                 }
+                let model = self.snapshot.as_ref().map(|s| s.model.clone());
+                self.meter.observe(&event, model.as_deref());
+                self.sample_token_rate();
                 self.transcript.apply(&event);
                 self.follow_bottom();
             }
             GuiEvent::History(messages) => {
                 self.transcript = Transcript::from_messages(&messages);
+                // 换会话后速率/耗时基线作废（累计用量可能小很多）
+                self.meter = UsageMeter::default();
                 // 上一份内容的实测高度对新内容无效，置空后按新内容重新量
                 self.flow_height.set(None);
                 // 换会话/重载历史总是回到最新内容，重新接管钉底
@@ -601,21 +623,6 @@ impl GuiApp {
     /// 简单重绘（`confirm_dialog` 里提前返回时用）。
     fn cx_notify(&self, cx: &mut Context<Self>) {
         cx.notify();
-    }
-
-    /// 状态栏文案。
-    fn status_text(&self) -> String {
-        let messages = self.snapshot.as_ref().map(|s| s.messages).unwrap_or(0);
-        if self.busy {
-            return format!(
-                "● Working… (Esc to abort, {} queued) · {messages} messages",
-                self.queued
-            );
-        }
-        format!(
-            "{messages} messages · zoom {}%",
-            (theme::ui_scale() * 100.0).round()
-        )
     }
 }
 

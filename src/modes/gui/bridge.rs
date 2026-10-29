@@ -64,4 +64,6 @@ pub struct UsageTotals {
     pub cost: f64,
     /// 最后一次请求的合计 token（≈ 当前上下文占用）。
     pub context_tokens: u64,
+    /// 当前模型的上下文窗口（token）；窗口未知时为 0，此时不显示占用率。
+    pub context_window: u64,
 }

@@ -564,6 +564,17 @@ fn interest_for(st: &State) -> Vec<ExtensionHook> {
     out
 }
 
+/// 是否存在进行中的目标（`active`）。供 GUI 状态栏的 🎯 标记用：
+/// 它不像 TUI 那样订阅 `goal:changed` 事件，直接在渲染时读内存态。
+pub fn is_active() -> bool {
+    state()
+        .lock()
+        .unwrap()
+        .goal
+        .as_ref()
+        .is_some_and(|g| g.status == GoalStatus::Active)
+}
+
 /// 目标状态变化后：重建工具列表（下一轮 compose 生效）+ 广播 goal:changed（rich footer 用）
 fn sync_goal_visibility() {
     extensions::request_ui(ExtensionUiRequest::RebuildTools);

@@ -138,6 +138,15 @@
   the full counts: the file list and the change list are computed whichever tab is open, so the
   tab labels no longer disagree with what the other tab shows.
 
+- **The desktop GUI's status bar reports the run, not just the message count**: the left side shows
+  messages, the share of the context window in use and the cache hit rate; the right side shows
+  input / output tokens, cost, output rate in tokens per second, and whether a goal or plan is
+  active, how many turns have been sent and how long the round has taken. While the agent works,
+  a blinking dot and `Working… (Esc to abort, N queued)` lead the row, and a half-second redraw
+  keeps the elapsed time and the blink moving even when a long tool call sends no events. The send
+  button turns into a stop square during a run. Context usage comes from the estimated history
+  instead of the last request, so it shows up in a freshly loaded session too.
+
 ### Fixed
 
 - **`!` and `!!` no longer open a completion panel in the desktop GUI**: shell lines run on
@@ -328,6 +337,12 @@
   这些文件头，直接从第一个 hunk 开始渲染，每行左侧带旧/新行号（新增 `+428`、删除 `-428`、
   上下文 ` 429`），不必从 `@@` 标记往下数。两个页签的计数也都齐了：无论停在哪个页签，文件
   列表与变更列表都会算一遍，标签页上的数字不再和另一个页签对不上。
+
+- **桌面 GUI 的状态栏汇报这一轮，而不只是消息数**：左侧是消息数、上下文窗口占用率与缓存命中率，
+  右侧是 in/out token、费用、每秒输出速率，以及当前是否有目标或计划、已发交互数与本轮耗时。
+  忙碌时行首先亮一个闪烁圆点与 `Working… (Esc to abort, N queued)`，并每半秒重绘一次，长工具
+  调用期间没有事件时耗时也照样走；发送按钮在忙碌时变成停止方块。上下文占用改用历史估算而不取
+  最后一次请求，刚载入的会话也能看到占用率。
 
 ## 修复
 
