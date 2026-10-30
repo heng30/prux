@@ -19,16 +19,13 @@
 
 use crate::{
     core::extensions::{
-        self, Extension, ExtensionCommand, ExtensionMode, ExtensionTool, ExtensionUiRequest,
-        SelectOption, next_ui_id,
+        self, CommandHost, Extension, ExtensionCommand, ExtensionMode, ExtensionTool,
+        ExtensionUiRequest, SelectOption, UiNotifyLevel, next_ui_id,
     },
     extensions::{
         EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_REWIND, command_arg, util::choice_key,
     },
-    modes::interactive::{
-        app::{App, MsgLevel},
-        handlers::register_slash_command,
-    },
+    modes::interactive::handlers::register_host_command,
 };
 use std::sync::{Mutex, OnceLock};
 
@@ -119,7 +116,7 @@ impl Extension for Rewind {
 
     /// 接线 `/rewind` 执行入口（命令的"存在性"由已启用扩展的 [`Self::commands`] 声明）。
     fn on_registered(&self) {
-        register_slash_command(EXT, CMD, command_rewind);
+        register_host_command(EXT, CMD, command_rewind);
     }
 
     /// 启用状态变化：禁用时清掉待确认状态，避免残留 id 误认领后续面板回传。
@@ -152,29 +149,26 @@ impl Extension for Rewind {
 }
 
 /// `/rewind` 命令分发：校验前置条件 → 弹确认面板 → 结果经 [`Extension::on_ui_choice`] 处理。
-fn command_rewind(st: &mut App, raw: &str) -> bool {
+fn command_rewind(host: &mut dyn CommandHost, raw: &str) -> bool {
     if !command_arg(raw).trim().is_empty() {
-        st.push_msg(
-            "Usage: /rewind (no arguments)".to_string(),
-            MsgLevel::Warning,
-        );
+        host.push_message("Usage: /rewind (no arguments)", UiNotifyLevel::Warning);
         return false;
     }
 
     // 忙碌时分支正被追加：回退会破坏进行中的回合，且回合结束后叶子又会前进。
-    if st.busy {
-        st.push_msg(
-            "Cannot rewind while a run is in progress; press Esc to interrupt first.".to_string(),
-            MsgLevel::Warning,
+    if host.is_busy() {
+        host.push_message(
+            "Cannot rewind while a run is in progress; press Esc to interrupt first.",
+            UiNotifyLevel::Warning,
         );
         return false;
     }
 
     // 会话里至少要有 user 消息才可能回退（否则直接提示，不弹无意义的面板）。
-    let Some(preview) = last_user_preview(st) else {
-        st.push_msg(
-            "Nothing to rewind: no user input in the current session.".to_string(),
-            MsgLevel::Info,
+    let Some(preview) = last_user_preview(host) else {
+        host.push_message(
+            "Nothing to rewind: no user input in the current session.",
+            UiNotifyLevel::Info,
         );
         return false;
     };
@@ -188,8 +182,8 @@ fn command_rewind(st: &mut App, raw: &str) -> bool {
 /// 最后一条 user 消息的单行预览（折叠空白、超长截断）；无 user 消息返回 `None`。
 ///
 /// 面板标题回显它，让用户确认即将回退的是哪一条输入（避免与最近一次提交错位）。
-fn last_user_preview(st: &App) -> Option<String> {
-    let text = st.messages.iter().rev().find(|m| m.role == "user")?.text();
+fn last_user_preview(host: &dyn CommandHost) -> Option<String> {
+    let text = host.last_user_message()?;
     let one_line = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if one_line.is_empty() {
         return Some("(empty message)".to_string());
@@ -229,6 +223,7 @@ mod tests {
     use super::*;
     use crate::core::extensions::take_pending_ui;
     use crate::core::provider::AgentMessage;
+    use crate::modes::interactive::app::App;
 
     #[test]
     fn declares_dev_and_creator_modes_and_default_disabled() {

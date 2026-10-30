@@ -1,17 +1,23 @@
-//! 覆盖层面板：可过滤列表（命令面板 / 模型 / 会话 / 思考级别 / 主题）与只读信息页。
+//! 覆盖层面板：可过滤列表（命令面板 / 模型 / 会话 / 思考级别 / 主题）、只读信息页
+//! 与扩展覆盖层（扩展自持内容，GUI 只负责绘制与回传按键）。
 
 use super::{
     app::GuiApp,
+    composer,
     text_edit::Editor,
     theme::{
         CONTROL_H_LG, FONT_BODY, FONT_CAPTION, FONT_SMALL, ICON_SIZE, RADIUS_LG, RADIUS_MD,
         RADIUS_SM, SPACE_MD, SPACE_SM, SPACE_XS, SPACE_XXS, Theme, px,
     },
 };
-use crate::{modes::interactive::agent_actor::AgentCommand, utils::geometry};
+use crate::{
+    core::extensions::{self, DockLine, DockSpan, OverlayView},
+    modes::interactive::agent_actor::AgentCommand,
+    utils::geometry,
+};
 use gpui::{
-    AnyElement, Div, InteractiveElement, IntoElement, ParentElement, ScrollHandle, SharedString,
-    StatefulInteractiveElement, Styled, div,
+    AnyElement, Div, FontWeight, InteractiveElement, IntoElement, ParentElement, ScrollHandle,
+    SharedString, StatefulInteractiveElement, Styled, div,
 };
 
 /// 列表弹层宽度（命令面板 / 模型 / 会话选择 / 思考级别）。
@@ -22,6 +28,11 @@ const LIST_MAX_H: f32 = 460.;
 const INFO_W: f32 = 600.;
 /// 信息卡片高度上限。
 const INFO_MAX_H: f32 = 468.;
+/// 拉取扩展覆盖层一帧内容时报告给扩展的「终端宽度」。
+///
+/// 扩展按它自己折行（ask-user-question 的题干/描述就用这个宽度换行），
+/// 桌面窗口宽度差异很大，取一个通用值即可。
+const OVERLAY_COLS: u16 = 100;
 
 /// 列表项被选中后要做的事。
 #[derive(Clone)]
@@ -34,20 +45,12 @@ pub enum Action {
     LoadSession(String),
     /// 切换明暗主题
     SetDark(bool),
-    /// 新建会话
-    NewSession,
     /// 打开另一个列表面板
     Open(ListKind),
-    /// 打开一个信息页
-    Info(InfoKind),
     /// 刷新会话列表
     RefreshSessions,
     /// 设置界面缩放系数（1.0 = 设计稿尺寸）
     Scale(f32),
-    /// 退出
-    Quit,
-    /// 执行一条配置类斜杠命令（只从 Ctrl-M 面板进）
-    ConfigCommand(String),
     /// 把一段文本写回输入框（历史面板）
     InsertText(String),
     /// 技能面板：在草稿里把某个技能切到目标启停态
@@ -63,30 +66,37 @@ pub enum Action {
     BrowseCwd,
     /// 打开可编辑的设置面板
     Settings,
-    /// 显示/隐藏左侧会话列表
-    ToggleSidebar,
-    /// 打开登录面板（选 provider 填 key）
-    Login,
-    /// 打开登出面板（列出已存 key 的 provider）
-    Logout,
     /// 为某个 provider 填 API key
     LoginProvider(String),
     /// 清除某个 provider 的 API key
     LogoutProvider(String),
-    /// 显示当前版本的更新日志
-    Changelog,
     /// 打开扩展管理面板
     Extensions,
     /// 打开技能面板
     Skills,
-    /// 打开模型循环名单（/scoped-models）
-    ScopedModels,
     /// 切换某个扩展的启用状态
     ToggleExtension(String),
     /// 切换某个模型是否进入 Ctrl-P 循环名单
     ToggleScopedModel(String),
     /// 切换设置面板里的一个开关（改完立即落盘）
     ToggleSetting(SettingKey),
+    /// 扩展留下的选择面板（`ExtensionUiRequest::Select`）：把选中的选项文本回传；
+    /// `text` 为 None 表示用户取消（Esc）。
+    UiChoice {
+        /// 请求 id（`submit_ui_choice` 按它匹配发起方）
+        id: u64,
+        /// 选项文本；None = 取消
+        text: Option<String>,
+    },
+    /// `/trust` 面板里的一个信任决策（取值同 TUI：trust / trust_parent / distrust / clear）。
+    TrustDecision(String),
+    /// 扩展设置面板：把某一项设置循环到下一个候选值
+    CycleExtensionSetting {
+        /// 扩展名（`/extension` 面板里显示的名字）
+        ext: String,
+        /// 设置项的稳定键（`ExtensionSetting::key`）
+        key: String,
+    },
     /// 插入附件引用（`@路径`）：`images` 为真时补全只列图片
     Attach {
         /// 是否只列图片
@@ -151,18 +161,12 @@ impl SettingKey {
 pub enum ListKind {
     /// 模型
     Model,
-    /// 会话
-    Session,
     /// 思考级别
     Thinking,
     /// 外观（明/暗）
     Appearance,
-    /// 右侧面板：变更
-    PanelChanges,
     /// 右侧面板：文件
     PanelFiles,
-    /// 本会话历史输入
-    History,
 }
 
 /// 内置信息页。
@@ -295,6 +299,10 @@ pub struct List {
     pub columns: Vec<Column>,
     /// 列表视口（键盘移动选中项时要把它滚进视野）
     scroll: ScrollHandle,
+    /// 这条列表在回答哪个扩展的 `Select` 请求：收起时按「取消」回传
+    pub choice: Option<u64>,
+    /// 底部提示行覆盖（`None` 时按列表种类自动挑一句）
+    pub hint: Option<String>,
 }
 
 impl List {
@@ -309,6 +317,8 @@ impl List {
             detail_source: DetailSource::None,
             columns: Vec::new(),
             scroll: ScrollHandle::new(),
+            choice: None,
+            hint: None,
         }
     }
 
@@ -442,6 +452,137 @@ pub enum Overlay {
     List(List),
     /// 只读信息
     Info(Info),
+    /// 扩展覆盖层（内容每帧从扩展拉取）
+    Extension(ExtOverlay),
+}
+
+/// 扩展覆盖层：内容由扩展持有，GUI 只缓存最近一帧、绘制并把按键回传。
+pub struct ExtOverlay {
+    /// 扩展分配的覆盖层 id
+    pub id: u64,
+    /// 最近一帧内容（拉取失败时保留上一帧，避免闪空）
+    pub view: OverlayView,
+    /// 内联输入行（`view.input`）：真值在扩展，这里只是编辑缓冲
+    pub input: Editor,
+    /// 输入行是否聚焦（扩展请求 `input_focus` 或用户开始打字）
+    pub input_active: bool,
+    /// 内容滚动（滚轮）
+    pub scroll: ScrollHandle,
+    /// 上一帧扩展声明的选中行：只有它**变了**才把该行滚进视口（滚轮不会被拉回）
+    last_selected: Option<usize>,
+}
+
+impl ExtOverlay {
+    /// 按扩展当前状态建一帧；扩展不再认领该 id 时返回 None。
+    pub fn open(id: u64) -> Option<Self> {
+        let view = extensions::overlay_view(id, OVERLAY_COLS)?;
+        let input_active = view.input_focus;
+        let last_selected = view.selected;
+        let mut overlay = Self {
+            id,
+            view,
+            input: Editor::new(),
+            input_active,
+            scroll: ScrollHandle::new(),
+            last_selected,
+        };
+        overlay.sync_input();
+        Some(overlay)
+    }
+
+    /// 重新拉取内容；返回 false 表示扩展已经不再认领（调用方应关闭覆盖层）。
+    pub fn refresh(&mut self) -> bool {
+        let Some(view) = extensions::overlay_view(self.id, OVERLAY_COLS) else {
+            return false;
+        };
+
+        let gained = self.view.input.is_none() && view.input.is_some();
+        let lost = self.view.input.is_some() && view.input.is_none();
+        self.view = view;
+        if lost {
+            self.input_active = false;
+            self.input.clear();
+        }
+        if gained {
+            // 新出现的输入行可能带初值（编辑已有备注/密码框重开）：聚焦并装进缓冲
+            self.input_active = true;
+            self.input.clear();
+            self.sync_input();
+        }
+        // 未在编辑时以扩展的值为准（提交后扩展会把输入行置空）
+        if !self.input_active {
+            self.sync_input();
+        }
+        // 键盘移动了选中项才跟着滚；滚动条自己动过就不打扰
+        if self.view.selected != self.last_selected {
+            self.last_selected = self.view.selected;
+            if let Some(selected) = self.view.selected {
+                reveal_row(&self.scroll, selected);
+            }
+        }
+        true
+    }
+
+    /// 把扩展给的输入值同步进编辑缓冲（不覆盖正在敲的内容）。
+    fn sync_input(&mut self) {
+        let Some(input) = &self.view.input else {
+            return;
+        };
+        if self.input.text() != input.value {
+            self.input.clear();
+            self.input.insert(&input.value);
+        }
+    }
+}
+
+/// 一行扩展文本（主题键 + 兜底色 + 内容）→ GUI 元素；扩展覆盖层与停靠面板共用。
+pub(crate) fn render_dock_line(line: &DockLine, theme: &Theme) -> AnyElement {
+    let mut row = div().w_full().flex().flex_wrap();
+    for span in line {
+        row = row.child(
+            div()
+                .text_color(dock_span_color(span, theme))
+                .child(SharedString::from(span.text.clone())),
+        );
+    }
+    row.into_any_element()
+}
+
+/// 扩展文本片段的颜色：先按主题键查，认不出再用兜底的 `#RRGGBB`，
+/// 都没有就退回主文本色（扩展给的键是终端主题名，桌面端只认常见几个）。
+fn dock_span_color(span: &DockSpan, theme: &Theme) -> gpui::Hsla {
+    let by_key = match span.key {
+        "accent" => Some(theme.accent),
+        "text" => Some(theme.text),
+        "dim" | "muted" => Some(theme.text_tertiary),
+        "success" | "ok" => Some(theme.success),
+        "warning" | "warn" => Some(theme.warning),
+        "error" | "danger" => Some(theme.danger),
+        "link" => Some(theme.link),
+        _ => None,
+    };
+    by_key
+        .or_else(|| parse_hex_color(&span.fallback))
+        .unwrap_or(theme.text)
+}
+
+/// `#RRGGBB` / `#RGB` → 颜色；其它写法（终端色名）返回 None。
+fn parse_hex_color(spec: &str) -> Option<gpui::Hsla> {
+    let hex = spec.trim().trim_start_matches('#');
+    let expand = |s: &str| u8::from_str_radix(s, 16).ok();
+    let (r, g, b) = match hex.len() {
+        6 => (
+            expand(&hex[0..2])?,
+            expand(&hex[2..4])?,
+            expand(&hex[4..6])?,
+        ),
+        3 => {
+            let d = |i: usize| expand(&hex[i..i + 1]).map(|v| v * 17);
+            (d(0)?, d(1)?, d(2)?)
+        }
+        _ => return None,
+    };
+    Some(gpui::rgba(((r as u32) << 24) | ((g as u32) << 16) | ((b as u32) << 8) | 0xFF).into())
 }
 
 /// 渲染覆盖层（居中卡片 + 半透明遮罩由调用方提供）。
@@ -452,7 +593,114 @@ pub fn render(overlay: &Overlay, theme: &Theme, cx: &mut gpui::Context<GuiApp>) 
             None => render_list(list, theme, cx),
         },
         Overlay::Info(info) => render_info(info, theme),
+        Overlay::Extension(ext) => render_extension(ext, theme),
     }
+}
+
+/// 扩展覆盖层卡片：标题 + 固定区 + 内容（选中行高亮）+ 键位提示 + 内联输入行。
+fn render_extension(ext: &ExtOverlay, theme: &Theme) -> AnyElement {
+    let mut column = div()
+        .w(px(LIST_W))
+        .max_h(px(LIST_MAX_H))
+        .flex()
+        .flex_col()
+        .gap(px(SPACE_XS))
+        .p(px(SPACE_MD))
+        .rounded(px(RADIUS_LG))
+        .bg(theme.raised)
+        .border_1()
+        .border_color(theme.border_strong)
+        .text_size(px(FONT_SMALL))
+        .child(
+            div()
+                .text_size(px(FONT_SMALL))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(theme.text)
+                .child(SharedString::from(ext.view.title.clone())),
+        );
+
+    // 固定区：标签条、题干等（不随内容滚动）
+    for line in &ext.view.header {
+        column = column.child(render_dock_line(line, theme));
+    }
+
+    // 内容区：选中行整行铺一层强调底色
+    let mut body = div()
+        .id("ext-overlay-body")
+        .min_h_0()
+        .flex_1()
+        .flex()
+        .flex_col()
+        .overflow_y_scroll()
+        .track_scroll(&ext.scroll);
+
+    for (index, line) in ext.view.lines.iter().enumerate() {
+        let selected = ext.view.selected == Some(index);
+        let mut row = div().w_full().rounded(px(RADIUS_SM)).px(px(SPACE_XXS));
+        if selected {
+            row = row.bg(theme.overlay_strong);
+        }
+        body = body.child(row.child(render_dock_line(line, theme)));
+    }
+    column = column.child(body);
+
+    if !ext.view.footer.is_empty() {
+        let hints: Vec<String> = ext
+            .view
+            .footer
+            .iter()
+            .map(|(key, action)| format!("{key} {action}"))
+            .collect();
+        column = column.child(
+            div()
+                .text_size(px(FONT_CAPTION))
+                .text_color(theme.text_ghost)
+                .child(SharedString::from(hints.join(" · "))),
+        );
+    }
+
+    if let Some(input) = &ext.view.input {
+        let mut row = div()
+            .w_full()
+            .px(px(SPACE_SM))
+            .py(px(SPACE_XS))
+            .rounded(px(RADIUS_SM))
+            .bg(theme.inset)
+            .border_1()
+            .border_color(if ext.input_active {
+                theme.accent
+            } else {
+                theme.border
+            })
+            .flex()
+            .items_center()
+            .gap(px(SPACE_SM))
+            .child(
+                div()
+                    .text_size(px(FONT_CAPTION))
+                    .text_color(theme.text_tertiary)
+                    .child(SharedString::from(input.label.clone())),
+            );
+        let text = ext.input.text();
+        row = if text.is_empty() && !ext.input_active {
+            row.child(
+                div()
+                    .text_color(theme.text_ghost)
+                    .child(SharedString::from(input.placeholder.clone())),
+            )
+        } else {
+            row.child(
+                div()
+                    .min_w_0()
+                    .flex_1()
+                    .text_color(theme.text)
+                    .child(composer::render(&ext.input, theme)),
+            )
+        };
+        column = column.child(row);
+    }
+
+    column.into_any_element()
 }
 
 /// 一行的内容与状态：主文案、对齐列、右侧说明、勾选态、是否选中、行高。
@@ -760,12 +1008,14 @@ fn render_list(list: &List, theme: &Theme, cx: &mut gpui::Context<GuiApp>) -> An
     }
     column = column.child(rows);
 
-    let hint = if list.detail_source != DetailSource::None {
-        "↑↓ select · Enter toggle · Tab detail · Esc close"
+    let hint: String = if let Some(hint) = &list.hint {
+        hint.clone()
+    } else if list.detail_source != DetailSource::None {
+        "↑↓ select · Enter toggle · Tab detail · Esc close".to_string()
     } else if list.entries.iter().any(|entry| entry.checked.is_some()) {
-        "↑↓ select · Enter toggle · Esc close"
+        "↑↓ select · Enter toggle · Esc close".to_string()
     } else {
-        "↑↓ select · Enter confirm · Esc close"
+        "↑↓ select · Enter confirm · Esc close".to_string()
     };
     column = column.child(
         div()
@@ -934,5 +1184,83 @@ mod tests {
         assert_eq!(list.query.text(), "a");
         assert_eq!(list.filtered(), vec![0]);
         assert_eq!(list.selected, 0);
+    }
+
+    use crate::core::extensions::{Extension, ExtensionHook, OverlayEvent, register_extension};
+
+    /// 认领 id=7 的假扩展：覆盖层内容由扩展提供，GUI 只缓存一帧。
+    struct FakeOverlay;
+
+    /// 假扩展「当前选中的行」（`usize::MAX` 表示没有选中项）。
+    static SELECTED: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(usize::MAX);
+
+    impl Extension for FakeOverlay {
+        /// 扩展名（避免与其它测试冲突）。
+        fn name(&self) -> &str {
+            "gui-overlay-test"
+        }
+
+        /// 不提供工具。
+        fn tools(&self) -> Vec<crate::core::extensions::ExtensionTool> {
+            Vec::new()
+        }
+
+        /// 只声明覆盖层钩子。
+        fn hooks(&self) -> Vec<ExtensionHook> {
+            vec![ExtensionHook::Overlay]
+        }
+
+        /// 只认领 id=7；选中行由 [`SELECTED`] 控制，便于断言跟随行为。
+        fn overlay_view(&self, id: u64, _cols: u16) -> Option<OverlayView> {
+            if id != 7 {
+                return None;
+            }
+            let mut view = OverlayView::inline("t", Vec::new(), 5);
+            let selected = SELECTED.load(std::sync::atomic::Ordering::Relaxed);
+            view.selected = (selected != usize::MAX).then_some(selected);
+            Some(view)
+        }
+
+        /// 测试里不消费任何按键。
+        fn on_overlay_event(&self, _id: u64, _ev: &OverlayEvent) -> bool {
+            false
+        }
+    }
+
+    /// 扩展覆盖层按 id 拉取内容；没人认领的 id 返回 None（调用方据此收起）。
+    #[test]
+    fn ext_overlay_pulls_the_extension_view() {
+        let _g = crate::test_support::AUTH_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        register_extension(FakeOverlay);
+
+        let overlay = ExtOverlay::open(7).expect("认领 id=7");
+        assert_eq!(overlay.view.title, "t");
+        assert!(!overlay.input_active);
+        assert!(ExtOverlay::open(8).is_none());
+    }
+
+    /// 选中行变了才跟随：`refresh` 把新选中项记账（真正的滚动由 `reveal_row` 施加）。
+    #[test]
+    fn ext_overlay_tracks_the_selected_row() {
+        let _g = crate::test_support::AUTH_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        register_extension(FakeOverlay);
+
+        SELECTED.store(2, std::sync::atomic::Ordering::Relaxed);
+        let mut overlay = ExtOverlay::open(7).expect("认领 id=7");
+        assert_eq!(overlay.last_selected, Some(2));
+
+        SELECTED.store(5, std::sync::atomic::Ordering::Relaxed);
+        assert!(overlay.refresh(), "扩展仍认领该 id");
+        assert_eq!(overlay.last_selected, Some(5));
+
+        // 同一次选中重复拉取不会反复滚动
+        assert!(overlay.refresh());
+        assert_eq!(overlay.last_selected, Some(5));
+        SELECTED.store(usize::MAX, std::sync::atomic::Ordering::Relaxed);
     }
 }

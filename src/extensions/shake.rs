@@ -27,7 +27,7 @@
 use crate::{
     core::{
         extensions::{
-            Extension, ExtensionCommand, ExtensionHook, ExtensionMode, ExtensionTool,
+            CommandHost, Extension, ExtensionCommand, ExtensionHook, ExtensionMode, ExtensionTool,
             SubcommandDef, UiNotifyLevel,
         },
         provider::{AgentMessage, ContentBlock, estimate_tokens},
@@ -36,10 +36,7 @@ use crate::{
     extensions::{
         EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_SHAKE, command_arg, util::notify_plain,
     },
-    modes::interactive::{
-        app::{App, MsgLevel},
-        handlers::register_slash_command,
-    },
+    modes::interactive::handlers::register_host_command,
     utils::{display::plural, tokens},
 };
 use std::sync::{Arc, Mutex, OnceLock};
@@ -220,7 +217,7 @@ impl Extension for Shake {
 
     /// 接线 `/shake` 执行入口。
     fn on_registered(&self) {
-        register_slash_command(EXT, CMD, command_shake);
+        register_host_command(EXT, CMD, command_shake);
     }
 
     /// 只在有排队的模式时声明 `TransformContext`：空闲时框架直接跳过本扩展。
@@ -265,7 +262,7 @@ impl Extension for Shake {
 }
 
 /// `/shake [elide|images|thinking]` 命令分发：解析模式 → 落一次性标记（真正丢弃在下一轮请求前）。
-fn command_shake(st: &mut App, raw: &str) -> bool {
+fn command_shake(host: &mut dyn CommandHost, raw: &str) -> bool {
     let arg = command_arg(raw).trim().to_lowercase();
     let mode = if arg.is_empty() {
         ShakeMode::Elide
@@ -273,9 +270,9 @@ fn command_shake(st: &mut App, raw: &str) -> bool {
         match arg.parse::<ShakeMode>() {
             Ok(mode) => mode,
             Err(_) => {
-                st.push_msg(
-                    format!("Unknown /shake mode \"{arg}\". Use elide, images, or thinking."),
-                    MsgLevel::Warning,
+                host.push_message(
+                    &format!("Unknown /shake mode \"{arg}\". Use elide, images, or thinking."),
+                    UiNotifyLevel::Warning,
                 );
                 return false;
             }
@@ -284,9 +281,9 @@ fn command_shake(st: &mut App, raw: &str) -> bool {
 
     let name: &'static str = mode.into();
     *pending().lock().unwrap_or_else(|e| e.into_inner()) = Some(mode);
-    st.push_msg(
-        format!("Shake ({name}) queued: heavy content drops before the next request."),
-        MsgLevel::Info,
+    host.push_message(
+        &format!("Shake ({name}) queued: heavy content drops before the next request."),
+        UiNotifyLevel::Info,
     );
     false
 }
@@ -532,6 +529,7 @@ fn xml_open(line: &str) -> Option<&str> {
 mod tests {
     use super::*;
     use crate::core::provider::AgentMessage;
+    use crate::modes::interactive::app::App;
 
     /// 造一条足够长的文本（保证 token 估算远超保护预算）。
     fn filler(tag: &str, repeats: usize) -> String {

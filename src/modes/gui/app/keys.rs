@@ -15,6 +15,7 @@ impl GuiApp {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.swallow_char = None;
         self.dispatch_key(event, cx);
         self.refresh_suggest(cx);
         cx.notify();
@@ -156,6 +157,16 @@ impl GuiApp {
                 "tab" if !suggest.items.is_empty() => {
                     // Tab 只补全：命令文本落进输入框，等 Enter 再执行
                     self.apply_suggestion(cx);
+                    cx.notify();
+                    return true;
+                }
+                // 没有候选（带参数的命令 / 没匹配的路径）：原样补全，命令随即执行
+                "enter" if suggest.items.is_empty() => {
+                    let command = suggest.trigger == Trigger::Command;
+                    self.commit_suggest_input();
+                    if command {
+                        self.submit(false, cx);
+                    }
                     cx.notify();
                     return true;
                 }
@@ -584,6 +595,12 @@ impl GuiApp {
     ) {
         let key = keystroke.key.as_str();
         let primary = keystroke.modifiers.control || keystroke.modifiers.platform;
+        // 扩展覆盖层先拿键：输入行聚焦时 Esc 是「放弃编辑」而不是「关闭整个面板」，
+        // 放在下面那条通用 Esc 分支之后会被抢先关掉（问卷曾被整份取消）
+        if matches!(self.overlay, Some(Overlay::Extension(_))) {
+            self.handle_extension_overlay_key(keystroke, cx);
+            return;
+        }
         // Ctrl+C 是 tui.select.cancel；Ctrl-J / Ctrl-K 是列表上的上下移动
         if (primary && !shift && key == "c") || key == "escape" {
             // 详情页先退回列表（草稿还在），再按一次才关面板丢草稿
@@ -592,7 +609,7 @@ impl GuiApp {
             {
                 return;
             }
-            self.overlay = None;
+            self.dismiss_overlay();
             // 扩展/技能/模型名单面板的改动是草稿：Esc 直接丢弃
             self.skills_draft = None;
             self.extensions_draft = None;
@@ -625,6 +642,8 @@ impl GuiApp {
             return;
         };
         match overlay {
+            // 扩展覆盖层已在上面提前返回
+            Overlay::Extension(_) => {}
             Overlay::List(list) => {
                 let len = list.filtered().len();
                 match key {
@@ -664,6 +683,121 @@ impl GuiApp {
                 _ => {}
             },
         }
+    }
+
+    /// 扩展覆盖层的按键：编辑态交给内联输入行，其余翻译成 [`OverlayKey`] 回传给扩展。
+    ///
+    /// 与 TUI 的 `handlers/overlay.rs` 同一套顺序：输入行聚焦时字符/退格本地编辑、Enter 提交、
+    /// Esc 交出焦点并回传；扩展不认领的导航键由这里滚动内容；Esc 未被认领就关面板。
+    pub(super) fn handle_extension_overlay_key(
+        &mut self,
+        keystroke: &gpui::Keystroke,
+        cx: &mut Context<Self>,
+    ) {
+        let key = keystroke.key.as_str();
+        let primary = keystroke.modifiers.control || keystroke.modifiers.platform;
+        // Ctrl+C：与 TUI 一致，直接关掉覆盖层（不是「放弃编辑」）
+        if primary && key == "c" {
+            self.dismiss_overlay();
+            return;
+        }
+        let editing = matches!(self.overlay, Some(Overlay::Extension(ref ext)) if ext.input_active);
+        let has_input =
+            matches!(self.overlay, Some(Overlay::Extension(ref ext)) if ext.view.input.is_some());
+
+        // 输入行聚焦：字符交给输入框（IME 写入），退格/方向本地编辑，Enter 提交，Esc 交出焦点
+        if editing {
+            match key {
+                "enter" => {
+                    self.submit_overlay_input();
+                    return;
+                }
+                "escape" => {
+                    if let Some(Overlay::Extension(ext)) = self.overlay.as_mut() {
+                        ext.input_active = false;
+                    }
+                    self.send_overlay_key(OverlayKey::Esc);
+                    return;
+                }
+                "backspace" | "delete" | "left" | "right" | "home" | "end" => {
+                    if let Some(Overlay::Extension(ext)) = self.overlay.as_mut() {
+                        match key {
+                            "backspace" => ext.input.backspace(),
+                            "delete" => ext.input.delete_forward(),
+                            "left" => ext.input.move_cursor(-1, 0, false),
+                            "right" => ext.input.move_cursor(1, 0, false),
+                            "home" => ext.input.home(false),
+                            _ => ext.input.end(false),
+                        }
+                    }
+                    return;
+                }
+                // 其余可打印字符不转发（TUI 同样只本地编辑），避免扩展收到重复输入
+                _ if !primary && keystroke.key_char.is_some() => return,
+                _ => {}
+            }
+        }
+
+        // 有输入行但没聚焦时，`i` 聚焦它（TUI 同款；查看器的 steer 输入靠这个）
+        if !editing && has_input && key == "i" && !primary {
+            if let Some(Overlay::Extension(ext)) = self.overlay.as_mut() {
+                ext.input_active = true;
+            }
+            return;
+        }
+
+        let mapped = match key {
+            "escape" => OverlayKey::Esc,
+            "enter" => OverlayKey::Enter,
+            "up" => OverlayKey::Up,
+            "down" => OverlayKey::Down,
+            "left" => OverlayKey::Left,
+            "right" => OverlayKey::Right,
+            "tab" => OverlayKey::Tab,
+            "pageup" => OverlayKey::PageUp,
+            "pagedown" => OverlayKey::PageDown,
+            "home" => OverlayKey::Home,
+            "end" => OverlayKey::End,
+            "backspace" => OverlayKey::Backspace,
+            "delete" => OverlayKey::Delete,
+            "space" => OverlayKey::Char(' '),
+            other if other.chars().count() == 1 => {
+                OverlayKey::Char(other.chars().next().unwrap_or(' '))
+            }
+            _ => OverlayKey::Other,
+        };
+        let nav = match mapped {
+            OverlayKey::Up => Some(-1.),
+            OverlayKey::Down => Some(1.),
+            OverlayKey::PageUp => Some(-12.),
+            OverlayKey::PageDown => Some(12.),
+            OverlayKey::Home => Some(f32::MIN),
+            OverlayKey::End => Some(f32::MAX),
+            _ => None,
+        };
+        let cancel = mapped == OverlayKey::Esc;
+        let char_key = match mapped {
+            OverlayKey::Char(char) => Some(char),
+            _ => None,
+        };
+        let consumed = self.send_overlay_key(mapped);
+        // 这个字符键让输入行新冒出来（`n` 写备注、`i` 聚焦）：IME 随后要把同一个字符写进输入框，
+        // 记下来在写入时吞掉，否则输入框会自带一个多余字符
+        if consumed
+            && let Some(char) = char_key
+            && !editing
+            && matches!(self.overlay, Some(Overlay::Extension(ref ext)) if ext.input_active)
+        {
+            self.swallow_char = Some(char);
+        }
+        // 扩展不认领的导航键：滚动内容（TUI 的默认语义）
+        if !consumed && let Some(rows) = nav {
+            self.scroll_extension_overlay(rows);
+        }
+        if !consumed && cancel {
+            self.dismiss_overlay();
+        }
+        cx.notify();
     }
 
     /// 会话列表面板里的 TUI 专用键（`app.session.rename` / `delete` / `next`）：

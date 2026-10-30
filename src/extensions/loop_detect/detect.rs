@@ -80,7 +80,7 @@ use crate::{
     core::{
         self,
         extensions::{
-            self, BeforeToolCallOutcome, BoundaryOutcome, Extension, ExtensionCommand,
+            self, BeforeToolCallOutcome, BoundaryOutcome, CommandHost, Extension, ExtensionCommand,
             ExtensionHook, ExtensionMode, ExtensionSetting, ExtensionTool, ExtensionUiRequest,
             SubcommandDef, UiNotifyLevel,
         },
@@ -90,7 +90,7 @@ use crate::{
     },
     error::Result,
     extensions::{EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_LOOP_DETECT, command_arg},
-    modes::interactive::{app::App, handlers::register_slash_command},
+    modes::interactive::handlers::register_host_command,
     utils::time::now_iso,
 };
 use serde_json::{Value, json};
@@ -207,7 +207,7 @@ impl Extension for LoopDetect {
 
     /// 注册时把 `/loop-detect` 的执行入口挂到交互模式的斜杠命令表。
     fn on_registered(&self) {
-        register_slash_command(EXT, CMD, command_loop_detect);
+        register_host_command(EXT, CMD, command_loop_detect);
     }
 
     /// 扩展被关闭时清空全部检测状态，避免残留历史影响下次启用。
@@ -980,17 +980,12 @@ fn notify_text(text: &str, level: UiNotifyLevel) {
 
 /// `/loop-detect` 命令处理：无参切换设置面板，`reset` 清空状态，其余输出配置与运行状态。
 /// 返回值表示是否退出程序（此命令恒为 `false`）。
-fn command_loop_detect(app: &mut App, raw: &str) -> bool {
+fn command_loop_detect(host: &mut dyn CommandHost, raw: &str) -> bool {
     let trimmed = command_arg(raw).trim();
 
     // 无参数 = 打开/关闭设置面板
     if trimmed.is_empty() {
-        if app.ext_settings.is_open_for(EXT) {
-            app.ext_settings.close();
-        } else {
-            app.ext_settings.open(EXT);
-        }
-        app.dirty = true;
+        host.open_extension_settings(EXT);
         return false;
     }
 
@@ -1345,6 +1340,7 @@ fn strip_leading_counter(s: &str) -> String {
 mod tests {
     use super::*;
     use crate::core::provider::ContentBlock;
+    use crate::modes::interactive::app::App;
     use crate::utils::time::civil_from_days;
 
     /// 重置检测状态与配置（配置在 reset() 里不清，避免会话内 set 被冲掉；测试需要洁净缺省）。

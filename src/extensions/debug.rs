@@ -11,19 +11,15 @@
 //! 默认**不启用**（声明 `default_enabled() == false`）：`provider` 声明了最高频的订阅面，
 //! 不该默认给所有用户挂上。只在 `/extension` 面板开启（`Dev` 及以上模式可用）。
 
-mod agent;
 mod provider;
 
 use super::{EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_DEBUG, command_arg};
 use crate::{
     core::extensions::{
-        Extension, ExtensionCommand, ExtensionHook, ExtensionMode, ExtensionTool, RichSpan,
-        SubcommandDef,
+        CommandHost, Extension, ExtensionCommand, ExtensionHook, ExtensionMode, ExtensionTool,
+        RichSpan, SubcommandDef, UiNotifyLevel,
     },
-    modes::interactive::{
-        app::{App, MsgLevel},
-        handlers::register_slash_command,
-    },
+    modes::interactive::handlers::register_host_command,
 };
 use serde_json::Value;
 use std::sync::Arc;
@@ -108,7 +104,7 @@ impl Extension for Debug {
 
     /// 注册 `/debug` 的命令处理器。
     fn on_registered(&self) {
-        register_slash_command(EXT, CMD, command_debug);
+        register_host_command(EXT, CMD, command_debug);
     }
 
     /// 转发给 `provider` 子命令的捕获缓冲。
@@ -130,7 +126,7 @@ impl Extension for Debug {
 /// `/debug <info|provider|system-prompt> [args]`：按子命令分派，未知子命令打印用法。
 ///
 /// 参数原文经 [`command_arg`] 去掉命令名后，再按首个空白切成「子命令 + 其余参数」。
-fn command_debug(st: &mut App, raw: &str) -> bool {
+fn command_debug(host: &mut dyn CommandHost, raw: &str) -> bool {
     let args = command_arg(raw);
     let (sub, rest) = match args.split_once(char::is_whitespace) {
         Some((sub, rest)) => (sub, rest.trim()),
@@ -138,10 +134,10 @@ fn command_debug(st: &mut App, raw: &str) -> bool {
     };
 
     match sub.to_lowercase().as_str() {
-        "info" => agent::info(st),
-        "provider" => provider::command(st, rest),
-        "system-prompt" => agent::system_prompt(st),
-        other => st.push_msg(usage(other), MsgLevel::Warning),
+        "info" => host.debug_info(),
+        "provider" => provider::command(host, rest),
+        "system-prompt" => host.debug_system_prompt(),
+        other => host.push_message(&usage(other), UiNotifyLevel::Warning),
     }
     false
 }
@@ -166,7 +162,7 @@ mod tests {
         },
         modes::interactive::{
             agent_actor::{AgentCommand, WorkerHandle, channels},
-            app::sys_spans_text,
+            app::{App, sys_spans_text},
         },
         test_support::{AUTH_TEST_LOCK, AgentDirGuard},
     };

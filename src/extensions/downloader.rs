@@ -12,6 +12,7 @@
 //! - handler 不锁 agent（只起后台下载 + 动 dock 段显隐），故 `busy_safe`。
 
 use crate::{
+    core::extensions::CommandHost,
     core::{
         extensions::{
             self, DockLine, DockSpan, Extension, ExtensionCommand, ExtensionHook, ExtensionMode,
@@ -26,10 +27,7 @@ use crate::{
         SUCCESS, command_arg,
         util::{choice_key, download_spinner},
     },
-    modes::interactive::{
-        app::{App, MsgLevel},
-        handlers::register_slash_command,
-    },
+    modes::interactive::handlers::register_host_command,
 };
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -155,7 +153,7 @@ impl Extension for Downloader {
 
     /// 注册 `/download` 的 handler 到斜杠命令表。
     fn on_registered(&self) {
-        register_slash_command(EXT, CMD, command_download);
+        register_host_command(EXT, CMD, command_download);
     }
 
     /// 确认面板回传：按 id 认领待重装的工具，选 `download` 才起下载。
@@ -237,7 +235,7 @@ fn usage_message(arg: &str) -> String {
 }
 
 /// `/download`：无参数切换本扩展 dock 段显隐；`fd` / `rg` 下载或确认重装。
-fn command_download(st: &mut App, raw: &str) -> bool {
+fn command_download(host: &mut dyn CommandHost, raw: &str) -> bool {
     let action = plan_action(
         command_arg(raw),
         runtime::offline(),
@@ -245,20 +243,20 @@ fn command_download(st: &mut App, raw: &str) -> bool {
     );
 
     match action {
-        Action::ToggleDock => toggle_dock_section(st),
-        Action::Reject(message) => st.push_msg(message, MsgLevel::Error),
+        Action::ToggleDock => toggle_dock_section(host),
+        Action::Reject(message) => host.push_message(&message, UiNotifyLevel::Error),
         Action::Offline(tool) => {
-            st.push_msg(
-                tools_manager::offline_skip_message(&tool),
-                MsgLevel::Warning,
+            host.push_message(
+                &tools_manager::offline_skip_message(&tool),
+                UiNotifyLevel::Warning,
             );
         }
-        Action::Busy(tool) => st.push_msg(
-            format!(
+        Action::Busy(tool) => host.push_message(
+            &format!(
                 "{} is already downloading",
                 tools_manager::display_name(&tool)
             ),
-            MsgLevel::Info,
+            UiNotifyLevel::Info,
         ),
         Action::Confirm(tool) => {
             // `plan_action` 判定「已存在」就必然有快照；取不到只可能是并发刷新，放弃即可
@@ -274,17 +272,13 @@ fn command_download(st: &mut App, raw: &str) -> bool {
 /// 切换本扩展 dock 段的显隐（对齐 plan-mode `/todos` / proxy `/proxy`）：
 /// 面板未开 → 显示本段并打开面板；面板已开 → 切换本段显隐。
 /// 面板开关本身归 `/dock`；隐藏本段后若无其它段，下一帧渲染自动收起面板。
-fn toggle_dock_section(st: &mut App) {
-    if !st.dock_visible {
-        set_dock_shown(true);
-        st.dock_visible = true;
-        st.dock_offset = 0;
-        st.dirty = true;
-        return;
-    }
+fn toggle_dock_section(host: &mut dyn CommandHost) {
+    let shown = !is_dock_shown();
+    set_dock_shown(shown);
 
-    set_dock_shown(!is_dock_shown());
-    st.dirty = true;
+    if shown {
+        host.show_dock();
+    }
 }
 
 /// 工具已存在 → 弹确认面板（并记下 pending，供 [`Extension::on_ui_choice`] 认领）
@@ -422,6 +416,7 @@ fn first_line(text: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::modes::interactive::app::{App, MsgLevel};
 
     fn snap(
         tool: &str,
@@ -619,14 +614,11 @@ mod tests {
         assert!(!command_download(&mut st, "/download"));
         assert!(st.dock_visible, "裸 /download 应打开面板");
         assert!(is_dock_shown(), "段应变为可见");
-        assert!(st.dirty);
 
-        // 面板已开 → 只隐藏本段，面板开关不动
-        st.dirty = false;
+        // 面板已开 → 只隐藏本段，面板开关不动（重绘由分发层负责，命令体内不置 dirty）
         command_download(&mut st, "/download");
         assert!(st.dock_visible, "隐藏本段不应关闭面板开关");
         assert!(!is_dock_shown(), "第二次裸 /download 应隐藏本段");
-        assert!(st.dirty);
 
         // 再切一次 → 重新显示本段
         command_download(&mut st, "/download");

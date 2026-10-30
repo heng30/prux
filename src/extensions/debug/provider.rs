@@ -7,9 +7,8 @@
 //! 捕获默认关闭，由 `/debug provider [on|off|dump]` 控制——扩展被启用不等于开始吃事件。
 
 use crate::{
-    core::extensions::{ExtensionUiRequest, RichSpan, request_ui},
+    core::extensions::{CommandHost, ExtensionUiRequest, RichSpan, UiNotifyLevel, request_ui},
     extensions::util::truncate_chars,
-    modes::interactive::app::{App, MsgLevel},
 };
 use serde_json::{Value, json};
 use std::sync::{
@@ -126,21 +125,21 @@ pub(super) fn render_custom_message(custom_type: &str, data: &Value) -> Option<V
 /// `/debug provider [on|off|dump]`：无参切换捕获；`dump` 打印最近一轮已完成的完整 JSON。
 ///
 /// `args` 是命令名之后、子命令 `provider` 之后的剩余参数（由 `/debug` 的处理器切分）。
-pub(super) fn command(st: &mut App, args: &str) {
+pub(super) fn command(host: &mut dyn CommandHost, args: &str) {
     match args.trim().to_lowercase().as_str() {
-        "" => set_enabled(st, !enabled()),
-        "on" => set_enabled(st, true),
-        "off" => set_enabled(st, false),
-        "dump" => dump(st),
-        other => st.push_msg(
-            format!("Usage: /debug provider [on|off|dump] (got `{other}`)"),
-            MsgLevel::Warning,
+        "" => set_enabled(host, !enabled()),
+        "on" => set_enabled(host, true),
+        "off" => set_enabled(host, false),
+        "dump" => dump(host),
+        other => host.push_message(
+            &format!("Usage: /debug provider [on|off|dump] (got `{other}`)"),
+            UiNotifyLevel::Warning,
         ),
     }
 }
 
 /// 设置捕获开关并清空缓冲；关闭时同时丢弃最近一轮载荷，并在 App 里提示当前状态。
-fn set_enabled(st: &mut App, value: bool) {
+fn set_enabled(host: &mut dyn CommandHost, value: bool) {
     ENABLED.store(value, Ordering::Relaxed);
     reset_capture();
 
@@ -148,27 +147,27 @@ fn set_enabled(st: &mut App, value: bool) {
         *LAST.lock().unwrap() = None;
     }
 
-    st.push_msg(
-        format!(
+    host.push_message(
+        &format!(
             "Provider event capture {}",
             if value { "enabled" } else { "disabled" }
         ),
-        MsgLevel::Info,
+        UiNotifyLevel::Info,
     );
 }
 
 /// 把最近一轮已完成捕获的 JSON 格式化打印到消息区；没有捕获时提示先开启。
-fn dump(st: &mut App) {
+fn dump(host: &mut dyn CommandHost) {
     let Some(payload) = LAST.lock().unwrap().clone() else {
-        st.push_msg(
-            "No captured provider events. Run /debug provider on first.".to_string(),
-            MsgLevel::Info,
+        host.push_message(
+            "No captured provider events. Run /debug provider on first.",
+            UiNotifyLevel::Info,
         );
         return;
     };
 
     let text = serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string());
-    st.push_msg(text, MsgLevel::Info);
+    host.push_message(&text, UiNotifyLevel::Info);
 }
 
 /// assistant 消息结束：把本轮捕获渲染成卡片并落盘（无捕获则什么都不做）
@@ -235,6 +234,7 @@ fn peek_events() -> Vec<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::modes::interactive::app::App;
     use crate::{
         core::extensions::{Extension, dispatch_provider_stream_event},
         extensions::debug::Debug,

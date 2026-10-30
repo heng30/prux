@@ -5,7 +5,96 @@ use super::*;
 impl GuiApp {
     /// 斜杠命令：与命令面板共用同一批动作。
     pub(super) fn run_slash(&mut self, name: &str, cx: &mut Context<Self>) {
+        // `/name rest`：只有少数命令吃参数，其余把整串当命令名（落到下面的兜底分支）
+        match name.split_once(' ') {
+            Some((command, arg)) if takes_argument(command) => {
+                let (command, arg) = (command.to_string(), arg.trim().to_string());
+                self.run_slash_with(&command, &arg, cx);
+            }
+            _ => self.run_slash_with(name, "", cx),
+        }
+    }
+
+    /// 斜杠命令本体：`arg` 是命令名之后的原文（不吃参数的命令收到空串）。
+    fn run_slash_with(&mut self, name: &str, arg: &str, cx: &mut Context<Self>) {
         match name {
+            "name" if !arg.is_empty() => {
+                _ = self.cmd_tx.send(AgentCommand::SetSessionName {
+                    name: arg.to_string(),
+                });
+            }
+            "thinking" if !arg.is_empty() => {
+                if crate::cli::args::VALID_THINKING_LEVELS.contains(&arg) {
+                    _ = self.cmd_tx.send(AgentCommand::SetThinking {
+                        level: arg.to_string(),
+                        persist: true,
+                    });
+                } else {
+                    self.transcript.push_note(Note::Error(format!(
+                        "Unknown thinking level: {arg} (valid: {})",
+                        crate::cli::args::VALID_THINKING_LEVELS.join(", ")
+                    )));
+                }
+            }
+            "export" if !arg.is_empty() => {
+                _ = self.cmd_tx.send(AgentCommand::Export {
+                    out: Some(arg.to_string()),
+                    theme: None,
+                });
+            }
+            "import" if !arg.is_empty() => {
+                _ = self.cmd_tx.send(AgentCommand::ResumeSession {
+                    path: arg.to_string(),
+                });
+            }
+            // `/model <id>`：有 scope 时只在 scope 里匹配，否则交给 worker 按当前 provider 校验
+            "model" if !arg.is_empty() => {
+                let scoped = self
+                    .snapshot
+                    .as_ref()
+                    .map(|snapshot| snapshot.model_cycle.clone())
+                    .unwrap_or_default();
+                let needle = arg.to_lowercase();
+                if scoped.is_empty() {
+                    let provider = self
+                        .snapshot
+                        .as_ref()
+                        .map(|snapshot| snapshot.provider.clone())
+                        .unwrap_or_default();
+                    _ = self.cmd_tx.send(AgentCommand::SwitchModel {
+                        provider,
+                        model_id: arg.to_string(),
+                        persist: false,
+                    });
+                } else if let Some(model) = scoped.iter().find(|model| {
+                    model.canonical().to_lowercase() == needle || model.id.to_lowercase() == needle
+                }) {
+                    _ = self.cmd_tx.send(AgentCommand::SwitchModel {
+                        provider: model.provider.clone(),
+                        model_id: model.id.clone(),
+                        persist: false,
+                    });
+                } else {
+                    self.transcript
+                        .push_note(Note::Error(format!("model not found in scope: {arg}")));
+                }
+            }
+            // `/session <序号>`：按会话目录里「最近修改倒序」的 1 起序号切会话。
+            // 直接列目录而不是读侧栏行——侧栏是逐条回填的，刚启动时行数不全，
+            // 用它会报出错误的可用范围（同 TUI 的 `cmd_session_switch`）。
+            "session" if !arg.is_empty() => {
+                let paths = sidebar::paths(&self.cwd());
+                match arg.parse::<usize>() {
+                    Ok(index) if index >= 1 && index <= paths.len() => {
+                        let path = paths[index - 1].to_string_lossy().to_string();
+                        _ = self.cmd_tx.send(AgentCommand::ResumeSession { path });
+                    }
+                    _ => self.transcript.push_note(Note::Error(format!(
+                        "invalid index: {arg} (available 1-{})",
+                        paths.len()
+                    ))),
+                }
+            }
             "new" => {
                 _ = self.cmd_tx.send(AgentCommand::NewSession);
                 self.transcript.clear();
@@ -29,9 +118,6 @@ impl GuiApp {
             }
             "tree" => {
                 _ = self.cmd_tx.send(AgentCommand::Tree);
-            }
-            "debug" => {
-                _ = self.cmd_tx.send(AgentCommand::DebugInfo);
             }
             "bug" => {
                 let editor = Editor::new();
@@ -77,16 +163,7 @@ impl GuiApp {
                     theme: None,
                 });
             }
-            "trust" => {
-                let cwd = self.cwd();
-                crate::core::project_trust::set_project_trust(
-                    std::path::Path::new(&cwd),
-                    &settings_manager::agent_dir(),
-                    true,
-                );
-                _ = self.cmd_tx.send(AgentCommand::RebuildTools);
-                self.toast(format!("Project trusted: {cwd}"), ToastKind::Success, cx);
-            }
+            "trust" => self.open_trust_panel(cx),
             "name" => self.rename_current_session(cx),
             "copy" => self.copy_last_reply(cx),
             "compact" => {
@@ -94,50 +171,57 @@ impl GuiApp {
                     .cmd_tx
                     .send(AgentCommand::Compact { instructions: None });
             }
-            "rewind" => {
-                _ = self.cmd_tx.send(AgentCommand::Rewind);
-            }
-            "appearance" => self.open_appearance_picker(cx),
+            "appearance" | "theme" => self.open_appearance_picker(cx),
             "panel" => self.toggle_panel(None, cx),
+            // 停靠面板：扩展提供的状态行（内容为空时整块不渲染）
+            "dock" => {
+                self.dock_visible = !self.dock_visible;
+                cx.notify();
+            }
             "sidebar" => {
                 self.show_sidebar = !self.show_sidebar;
                 cx.notify();
             }
-            "usage" => self.open_info(InfoKind::Usage, cx),
             "skills" => self.open_skills_panel(cx),
             "extension" => self.open_extension_panel(cx),
             "scoped-models" => self.open_scoped_models_panel(cx),
+            // `/settings <扩展名>`：只显示该扩展的设置项（与 TUI 的扩展设置面板同语义）
+            "settings" if !arg.is_empty() => self.open_extension_settings(arg, cx),
             "settings" => self.open_settings_panel(cx),
             "session" => self.open_info(InfoKind::Session, cx),
-            "help" => self.open_info(InfoKind::Help, cx),
+            "help" | "hotkeys" => self.open_info(InfoKind::Help, cx),
             "quit" => cx.quit(),
-            // plan-mode 是内置扩展里唯一声明斜杠命令的：开关本身是 core 级 API，GUI 直接可调
-            "plan" => {
-                let enabled = crate::extensions::plan_mode::toggle_enabled();
-                _ = self.cmd_tx.send(AgentCommand::RebuildTools);
-                self.toast(
-                    format!("Plan mode: {}", if enabled { "on" } else { "off" }),
-                    ToastKind::Info,
-                    cx,
-                );
-            }
-            "todos" => {
-                let items = crate::extensions::plan_mode::extract_todo_items("");
-                self.transcript.push_note(Note::Info(if items.is_empty() {
-                    "No todos right now".to_string()
-                } else {
-                    format!("{} todos (dock panel in the terminal UI)", items.len())
-                }));
-            }
-            other
+            // 与 UI 无关的扩展命令（proxy / notify 等）：扩展自己处理并回通知
+            other => {
+                // 扩展命令吃参数（`/proxy listen 1.2.3.4:80`）：命令名是首个 token
+                let (command, rest) = match other.split_once(char::is_whitespace) {
+                    Some((name, rest)) => (name, rest.trim()),
+                    None => (other, ""),
+                };
+                // 扩展命令：与 TUI 共用同一份 handler（参数是宿主能力面，不是 App）
+                let raw = format!("/{command} {rest}");
+                if let Some(handler) = crate::core::extensions::command_handler(command) {
+                    handler(self, raw.trim_end());
+                    cx.notify();
+                    return;
+                }
                 if crate::core::extensions::registered_commands()
                     .iter()
-                    .any(|command| command.name == other) =>
-            {
-                self.transcript.push_note(Note::Info(format!(
-                    "Extension command /{other} is not wired into the desktop UI yet; use the terminal UI"
-                )));
+                    .any(|registered| registered.name == command)
+                {
+                    self.transcript.push_note(Note::Info(format!(
+                        "Extension command /{command} is terminal-only; use the terminal UI"
+                    )));
+                    return;
+                }
+                self.run_unknown_slash(other, cx);
             }
+        }
+    }
+
+    /// 兜底：不认识的斜杠命令原样还给输入框（技能命令交给 worker 展开）。
+    fn run_unknown_slash(&mut self, other: &str, _cx: &mut Context<Self>) {
+        match other {
             other if other.starts_with("skill:") => {
                 // 技能命令：把 `/skill:名称` 交给 worker 展开成提示词并发送
                 _ = self.cmd_tx.send(AgentCommand::Prompt(format!("/{other}")));
@@ -173,7 +257,11 @@ impl GuiApp {
         if let Some(action) = action {
             // 勾选类动作会重建同一个面板，保留它才能沿用过滤与选中行
             if !keeps_overlay(&action) {
-                self.overlay = None;
+                // 选择/信任面板的动作已经回传结果，收起时不要再按「取消」发一次
+                if let Some(Overlay::List(list)) = self.overlay.as_mut() {
+                    list.choice = None;
+                }
+                self.dismiss_overlay();
             }
             self.run_action(action, cx);
         }
@@ -190,27 +278,27 @@ impl GuiApp {
                 _ = self.cmd_tx.send(AgentCommand::ResumeSession { path });
             }
             Action::SetDark(is_dark) => self.set_dark(is_dark),
-            Action::NewSession => {
-                _ = self.cmd_tx.send(AgentCommand::NewSession);
-                self.transcript.clear();
-                self.flow_height.set(None);
-            }
-            Action::Info(kind) => self.open_info(kind, cx),
             Action::Open(kind) => match kind {
                 ListKind::Model => self.open_model_picker(cx),
-                ListKind::Session => self.open_session_picker(cx),
                 ListKind::Thinking => self.open_thinking_picker(cx),
                 ListKind::Appearance => self.open_appearance_picker(cx),
-                ListKind::PanelChanges => self.toggle_panel(Some(PanelTab::Changes), cx),
                 ListKind::PanelFiles => self.toggle_panel(Some(PanelTab::Files), cx),
-                ListKind::History => self.open_history_panel(cx),
             },
+            Action::UiChoice { id, text } => {
+                if let Some(prompt) = crate::core::extensions::submit_ui_choice(id, text) {
+                    _ = self.cmd_tx.send(AgentCommand::Prompt(prompt));
+                }
+            }
+            Action::TrustDecision(choice) => self.resolve_trust(&choice, cx),
+            Action::CycleExtensionSetting { ext, key } => {
+                self.cycle_extension_setting(&ext, &key, cx);
+                // 面板要留着继续改：跳过下面的「收起覆盖层」
+                return;
+            }
             Action::RefreshSessions => self.reload_sessions(cx),
             Action::Scale(scale) => {
                 _ = settings_manager::write_settings_ui_scale(Some(theme::set_ui_scale(scale)));
             }
-            Action::Quit => cx.quit(),
-            Action::ConfigCommand(name) => self.run_slash(&name, cx),
             Action::SwitchCwdTo(path) => {
                 _ = self.cmd_tx.send(AgentCommand::SwitchCwd { path });
             }
@@ -242,13 +330,6 @@ impl GuiApp {
                 self.refresh_suggest(cx);
                 cx.notify();
             }
-            Action::ToggleSidebar => {
-                self.show_sidebar = !self.show_sidebar;
-                cx.notify();
-            }
-            Action::Login => self.open_login_panel(cx),
-            Action::Logout => self.open_logout_panel(cx),
-            Action::Changelog => self.open_changelog(cx),
             Action::LoginProvider(provider) => {
                 let editor = Editor::new();
                 self.dialog = Some(SessionDialog::ApiKey { provider, editor });
@@ -267,7 +348,6 @@ impl GuiApp {
             }
             Action::Extensions => self.open_extension_panel(cx),
             Action::Skills => self.open_skills_panel(cx),
-            Action::ScopedModels => self.open_scoped_models_panel(cx),
             Action::ToggleExtension(name) => {
                 let now = std::time::Instant::now();
                 if ignore_repeat_toggle(
@@ -554,189 +634,7 @@ impl GuiApp {
     }
     /// 命令面板。
     pub(super) fn open_command_palette(&mut self, _cx: &mut Context<Self>) {
-        let entries = vec![
-            Entry {
-                label: "New session".into(),
-                detail: "Ctrl-N".into(),
-                action: Action::NewSession,
-                ..Entry::default()
-            },
-            Entry {
-                label: "Switch session…".into(),
-                detail: "Ctrl-Shift-O".into(),
-                action: Action::Open(ListKind::Session),
-                ..Entry::default()
-            },
-            Entry {
-                label: "Select model…".into(),
-                detail: "Ctrl-L".into(),
-                action: Action::Open(ListKind::Model),
-                ..Entry::default()
-            },
-            Entry {
-                label: "Thinking level…".into(),
-                detail: "Shift-Tab".into(),
-                action: Action::Open(ListKind::Thinking),
-                ..Entry::default()
-            },
-            Entry {
-                label: "Switch appearance…".into(),
-                detail: "Ctrl-Shift-G".into(),
-                action: Action::Open(ListKind::Appearance),
-                ..Entry::default()
-            },
-            Entry {
-                label: "Zoom in".into(),
-                detail: "Ctrl+=".into(),
-                action: Action::Scale(theme::ui_scale() + theme::UI_SCALE_STEP),
-                ..Entry::default()
-            },
-            Entry {
-                label: "Zoom out".into(),
-                detail: "Ctrl+-".into(),
-                action: Action::Scale(theme::ui_scale() - theme::UI_SCALE_STEP),
-                ..Entry::default()
-            },
-            Entry {
-                label: "Reset scale to 100%".into(),
-                detail: "Ctrl+0".into(),
-                action: Action::Scale(1.0),
-                ..Entry::default()
-            },
-            Entry {
-                label: "Usage & cost".into(),
-                detail: "Ctrl-U".into(),
-                action: Action::Info(InfoKind::Usage),
-                ..Entry::default()
-            },
-            Entry {
-                label: "Skills".into(),
-                detail: "Ctrl-I".into(),
-                action: Action::Skills,
-                ..Entry::default()
-            },
-            Entry {
-                label: "Settings".into(),
-                detail: "Ctrl-,".into(),
-                action: Action::Settings,
-                ..Entry::default()
-            },
-            Entry {
-                label: "Prompt history…".into(),
-                detail: "/history".into(),
-                action: Action::Open(ListKind::History),
-                ..Entry::default()
-            },
-            Entry {
-                label: "Toggle session list".into(),
-                detail: "Ctrl-Shift-B".into(),
-                action: Action::ToggleSidebar,
-                ..Entry::default()
-            },
-            Entry {
-                label: "Share session (gist)…".into(),
-                detail: "/share".into(),
-                action: Action::Command(Box::new(AgentCommand::Share { theme: None })),
-                ..Entry::default()
-            },
-            Entry {
-                label: "Login (API key)…".into(),
-                detail: "/login".into(),
-                action: Action::Login,
-                ..Entry::default()
-            },
-            Entry {
-                label: "Logout (clear key)…".into(),
-                detail: "/logout".into(),
-                action: Action::Logout,
-                ..Entry::default()
-            },
-            Entry {
-                label: "Changelog…".into(),
-                detail: "/changelog".into(),
-                action: Action::Changelog,
-                ..Entry::default()
-            },
-            Entry {
-                label: "Trust this project".into(),
-                detail: "/trust".into(),
-                action: Action::ConfigCommand("trust".into()),
-                ..Entry::default()
-            },
-            Entry {
-                label: "Reload skills / context".into(),
-                detail: "/reload".into(),
-                action: Action::ConfigCommand("reload".into()),
-                ..Entry::default()
-            },
-            Entry {
-                label: "Report a bug (zip)".into(),
-                detail: "/bug".into(),
-                action: Action::ConfigCommand("bug".into()),
-                ..Entry::default()
-            },
-            Entry {
-                label: "Debug info".into(),
-                detail: "/debug".into(),
-                action: Action::ConfigCommand("debug".into()),
-                ..Entry::default()
-            },
-            Entry {
-                label: "Extensions…".into(),
-                detail: "/extension".into(),
-                action: Action::Extensions,
-                ..Entry::default()
-            },
-            Entry {
-                label: "Scoped models…".into(),
-                detail: "/scoped-models".into(),
-                action: Action::ScopedModels,
-                ..Entry::default()
-            },
-            Entry {
-                label: "Keybindings".into(),
-                detail: "?".into(),
-                action: Action::Info(InfoKind::Help),
-                ..Entry::default()
-            },
-            Entry {
-                label: "Compact context".into(),
-                detail: "/compact".into(),
-                action: Action::Command(Box::new(AgentCommand::Compact { instructions: None })),
-                ..Entry::default()
-            },
-            Entry {
-                label: "Rewind last input".into(),
-                detail: "/rewind".into(),
-                action: Action::Command(Box::new(AgentCommand::Rewind)),
-                ..Entry::default()
-            },
-            Entry {
-                label: "Workspace changes…".into(),
-                detail: "Ctrl-Shift-E".into(),
-                action: Action::Open(ListKind::PanelChanges),
-                ..Entry::default()
-            },
-            Entry {
-                label: "Files…".into(),
-                detail: String::new(),
-                action: Action::Open(ListKind::PanelFiles),
-                ..Entry::default()
-            },
-            Entry {
-                label: "Refresh sessions".into(),
-                detail: String::new(),
-                action: Action::RefreshSessions,
-                ..Entry::default()
-            },
-            Entry {
-                label: "Quit".into(),
-                detail: "Ctrl-Q".into(),
-                action: Action::Quit,
-                ..Entry::default()
-            },
-        ];
-        let list = List::new("Commands", entries);
+        let list = List::new("Commands", command_palette_entries());
         self.overlay = Some(Overlay::List(list));
     }
     /// `/history`：本会话发过的用户消息，Enter 写回输入框（不发出去）。
@@ -798,4 +696,73 @@ impl GuiApp {
             lines,
         )));
     }
+}
+
+/// 吃参数的斜杠命令：`/name foo` 里的 foo 是值，不能当命令名的一部分。
+fn takes_argument(command: &str) -> bool {
+    matches!(
+        command,
+        "name" | "thinking" | "export" | "import" | "model" | "session" | "settings"
+    )
+}
+
+/// Ctrl-M 命令面板的条目：只放 `/` 面板里没有的东西 + 允许两边都在的三个
+/// （`skills` / `extension` / `settings`，它们有独立面板）；其余斜杠命令只从 `/` 面板进。
+pub(super) fn command_palette_entries() -> Vec<Entry> {
+    vec![
+        Entry {
+            label: "Skills".into(),
+            detail: "Ctrl-I".into(),
+            action: Action::Skills,
+            ..Entry::default()
+        },
+        Entry {
+            label: "Settings".into(),
+            detail: "Ctrl-,".into(),
+            action: Action::Settings,
+            ..Entry::default()
+        },
+        Entry {
+            label: "Extensions…".into(),
+            detail: "Ctrl-E".into(),
+            action: Action::Extensions,
+            ..Entry::default()
+        },
+        Entry {
+            label: "Switch appearance…".into(),
+            detail: "Ctrl-Shift-G".into(),
+            action: Action::Open(ListKind::Appearance),
+            ..Entry::default()
+        },
+        Entry {
+            label: "Zoom in".into(),
+            detail: "Ctrl+=".into(),
+            action: Action::Scale(theme::ui_scale() + theme::UI_SCALE_STEP),
+            ..Entry::default()
+        },
+        Entry {
+            label: "Zoom out".into(),
+            detail: "Ctrl+-".into(),
+            action: Action::Scale(theme::ui_scale() - theme::UI_SCALE_STEP),
+            ..Entry::default()
+        },
+        Entry {
+            label: "Reset scale to 100%".into(),
+            detail: "Ctrl+0".into(),
+            action: Action::Scale(1.0),
+            ..Entry::default()
+        },
+        Entry {
+            label: "Files…".into(),
+            detail: String::new(),
+            action: Action::Open(ListKind::PanelFiles),
+            ..Entry::default()
+        },
+        Entry {
+            label: "Refresh sessions".into(),
+            detail: String::new(),
+            action: Action::RefreshSessions,
+            ..Entry::default()
+        },
+    ]
 }

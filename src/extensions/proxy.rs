@@ -29,8 +29,8 @@ use crate::{
     core::{
         auth,
         extensions::{
-            DockLine, DockSpan, Extension, ExtensionCommand, ExtensionHook, ExtensionMode,
-            ExtensionTool, SubcommandDef, UiNotifyLevel,
+            CommandHost, DockLine, DockSpan, Extension, ExtensionCommand, ExtensionHook,
+            ExtensionMode, ExtensionTool, SubcommandDef, UiNotifyLevel,
         },
         model_resolver,
     },
@@ -38,7 +38,7 @@ use crate::{
         EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_PROXY, command_arg,
         util::{self, notify_text},
     },
-    modes::interactive::{app::App, handlers::register_slash_command},
+    modes::interactive::handlers::register_host_command,
     utils::{
         display::{format_bytes, format_rate},
         glyphs::{DEF_DOT_EMPTY, DEF_DOT_FILLED, DEF_INPUT_TOKENS, DEF_OUTPUT_TOKENS},
@@ -202,7 +202,7 @@ impl Extension for Proxy {
 
     /// 注册 `/proxy` 的 TUI 执行入口（幂等，重复注册覆盖旧接线）。
     fn on_registered(&self) {
-        register_slash_command(EXT, CMD, command_proxy);
+        register_host_command(EXT, CMD, command_proxy);
     }
 
     /// 启用即按配置自动监听；禁用即停服（配置保留）
@@ -261,8 +261,8 @@ fn auto_listen_addr(cfg: &ProxyConfig) -> Option<String> {
 }
 
 /// `/proxy` 命令入口：解析子命令后分派给对应处理器，未知子命令只提示用法。
-/// 始终返回 false（不请求退出程序）。
-fn command_proxy(app: &mut App, raw: &str) -> bool {
+/// 正文只依赖 [`CommandHost`]，TUI 与桌面 GUI 共用；始终返回 false（不请求退出程序）。
+fn command_proxy(host: &mut dyn CommandHost, raw: &str) -> bool {
     let arg = command_arg(raw).trim();
     let (sub, rest) = match arg.split_once(char::is_whitespace) {
         Some((a, b)) => (a, b.trim()),
@@ -280,7 +280,7 @@ fn command_proxy(app: &mut App, raw: &str) -> bool {
     };
 
     match action {
-        Action::ToggleDock => toggle_dock(app),
+        Action::ToggleDock => toggle_dock(host),
         Action::ShowStatus => show_status(),
         Action::Listen => set_listen(rest),
         Action::Provider => set_provider(rest),
@@ -304,20 +304,19 @@ fn parse_action(sub: &str, rest: &str) -> Option<Action> {
     }
 }
 
-/// 裸 `/proxy`：三分支开关 dock 段（对齐 plan-mode `/todos`）
-fn toggle_dock(app: &mut App) {
-    if !app.dock_visible {
-        lock(state()).dock_shown = true;
-        app.dock_visible = true;
-        app.dirty = true;
-        return;
-    }
-
-    {
+/// 裸 `/proxy`：开关本扩展的 dock 段（对齐 plan-mode `/todos`）。
+///
+/// 段被打开时请求宿主显示停靠面板；宿主重绘由分发层负责，这里不碰 `dirty`。
+fn toggle_dock(host: &mut dyn CommandHost) {
+    let shown = {
         let mut st = lock(state());
         st.dock_shown = !st.dock_shown;
+        st.dock_shown
+    };
+
+    if shown {
+        host.show_dock();
     }
-    app.dirty = true;
 }
 
 /// 裸子命令（`/proxy listen` / `/proxy provider` 无参数）时提示当前监听地址、
@@ -643,6 +642,7 @@ fn api_key_label(cfg: &ProxyConfig) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::modes::interactive::app::App;
     use crate::test_support::{AgentDirGuard, env_key_lock};
 
     /// 状态是进程内单例、测试并行：所有触碰它的用例共用一把锁串行
@@ -988,8 +988,8 @@ mod tests {
         command_proxy(&mut app, "/proxy");
         assert!(app.dock_visible, "应打开面板");
         assert!(lock(state()).dock_shown, "应显示本段");
-        assert!(app.dirty, "应请求重绘");
 
+        // 面板已显示：再执行只关本段，不再强制显示
         command_proxy(&mut app, "/proxy");
         assert!(!lock(state()).dock_shown, "第二次应隐藏本段");
 

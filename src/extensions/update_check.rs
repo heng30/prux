@@ -19,9 +19,9 @@ use crate::{
     APP_NAME,
     core::{
         extensions::{
-            DockLine, DockSpan, Extension, ExtensionCommand, ExtensionHook, ExtensionMode,
-            ExtensionTool, ExtensionUiRequest, OverlayEvent, OverlayKey, OverlaySize, OverlayView,
-            SubcommandDef, UiNotifyLevel, next_ui_id, request_ui,
+            CommandHost, DockLine, DockSpan, Extension, ExtensionCommand, ExtensionHook,
+            ExtensionMode, ExtensionTool, ExtensionUiRequest, OverlayEvent, OverlayKey,
+            OverlaySize, OverlayView, SubcommandDef, UiNotifyLevel, next_ui_id, request_ui,
         },
         provider::AgentMessage,
         runtime,
@@ -32,11 +32,9 @@ use crate::{
         EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_UPDATE_CHECK, command_arg,
         util::{normalize_version, notify_text, version_greater},
     },
-    modes::interactive::{
-        app::{App, MsgLevel},
-        handlers::register_slash_command,
-    },
+    modes::interactive::handlers::register_host_command,
     utils::{
+        async_task,
         glyphs::{DEF_ARROW_UP_DOWN, DEF_SELECTED_MARK},
         http,
     },
@@ -160,7 +158,7 @@ impl Extension for UpdateCheck {
 
     /// 注册 `/update` 的 handler 到斜杠命令表。
     fn on_registered(&self) {
-        register_slash_command(EXT, "update", command_update);
+        register_host_command(EXT, "update", command_update);
     }
 
     /// TUI 启动时由 `main` 分发一次：发起异步检查（离线 / 已检查过则跳过）。
@@ -268,7 +266,7 @@ fn start_check() {
     }
 
     // 不在 tokio 运行时内（如部分单测直接调 on_session_start）时不发起检查，避免 panic
-    let Ok(handle) = tokio::runtime::Handle::try_current() else {
+    let Some(handle) = async_task::handle() else {
         return;
     };
 
@@ -410,18 +408,16 @@ fn clear(id: Option<u64>) -> bool {
 /// `/update` handler：`check` 异步检查并输出，`open` 直接打开最新 release 下载页。
 ///
 /// `open` **不比较版本**：用户自己判断是否需要更新（仓库未公开 / 想手动看 release 时也有用）。
-fn command_update(st: &mut App, raw: &str) -> bool {
+fn command_update(host: &mut dyn CommandHost, raw: &str) -> bool {
     match command_arg(raw).trim() {
-        "" => st.push_msg(
-            "Usage: /update check (check for a newer release) | /update open (open the download page)"
-                .to_string(),
-            MsgLevel::Info,
+        "" => host.push_message("Usage: /update check (check for a newer release) | /update open (open the download page)",
+            UiNotifyLevel::Info,
         ),
         "check" => start_manual_check(),
         "open" => open_download_page(),
-        other => st.push_msg(
+        other => host.push_message(&
             format!("Unknown /update subcommand: {other}. Use `check` or `open`."),
-            MsgLevel::Warning,
+            UiNotifyLevel::Warning,
         ),
     }
     false
@@ -472,6 +468,7 @@ fn open_download_page() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::modes::interactive::app::App;
     use crate::test_support::{AUTH_TEST_LOCK, AgentDirGuard};
 
     fn lock_global() -> MutexGuard<'static, ()> {

@@ -27,9 +27,10 @@ mod widget;
 use crate::{
     core::{
         extensions::{
-            self, BoundaryOutcome, DockLine, Extension, ExtensionCommand, ExtensionHook,
-            ExtensionMode, ExtensionSetting, ExtensionTool, ExtensionUiRequest, ForkProjectInfo,
-            SubcommandDef, ToolAnnotations, ToolExecCtx, ToolExposure, UiNotifyLevel,
+            self, BoundaryOutcome, CommandHost, DockLine, Extension, ExtensionCommand,
+            ExtensionHook, ExtensionMode, ExtensionSetting, ExtensionTool, ExtensionUiRequest,
+            ForkProjectInfo, SubcommandDef, ToolAnnotations, ToolExecCtx, ToolExposure,
+            UiNotifyLevel,
         },
         provider::AgentMessage,
         session_manager::{Session, session_parent_id},
@@ -41,7 +42,7 @@ use crate::{
         EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_TASKS, command_arg,
         util::{SPINNER_TICK_MS, notify_text, push_context, spinner_frame_index},
     },
-    modes::interactive::{app::App, handlers::register_slash_command},
+    modes::interactive::handlers::register_host_command,
     utils::{glyphs::DEF_SPINNER, time::now_ms},
 };
 use auto_clear::AutoClearManager;
@@ -682,7 +683,7 @@ impl Extension for Tasks {
 
     /// 注册 `/tasks` 斜杠命令的 handler。
     fn on_registered(&self) {
-        register_slash_command(EXT, CMD, command_tasks);
+        register_host_command(EXT, CMD, command_tasks);
     }
 
     /// 会话开始：记录 cwd 与会话 id、按作用域重定 store，并按是否 resume 恢复展示态；
@@ -846,7 +847,7 @@ impl Extension for Tasks {
 /// 无参（或未识别的输入）打开事件驱动的交互菜单；`/tasks create ...` 直接建任务，
 /// 不弹输入面板（prux 无 `ui.input` 单行输入原语，故改用带参子命令）；
 /// `/tasks run [<id>...]` 发一条续跑消息，让主 agent 按任务列表把未竟工作做完。
-fn command_tasks(st: &mut App, raw: &str) -> bool {
+fn command_tasks(host: &mut dyn CommandHost, raw: &str) -> bool {
     let arg = command_arg(raw).trim().to_string();
 
     {
@@ -867,7 +868,7 @@ fn command_tasks(st: &mut App, raw: &str) -> bool {
 
     match sub {
         "create" => create_task_from_command(rest),
-        "run" => run_tasks_from_command(st, rest),
+        "run" => run_tasks_from_command(host, rest),
         _ => {
             let mut state = lock_state();
             let State { store, menu, .. } = &mut *state;
@@ -974,12 +975,10 @@ stop until every task in this list is completed."
 /// 空闲时走 `Continuation`（触发下一轮 prompt）；忙碌时作为 steer 注入当前回合——
 /// 忙碌态下 `Continuation` 会被 TUI 丢弃（见 TUI 分发），而 `/tasks` 命令声明了
 /// `busy_safe`，忙碌时也会照常执行，故必须自带一条不丢消息的回退路径。
-fn dispatch_run_prompt(app: &mut App, prompt: String) {
-    if app.busy {
-        app.runtime_steer_inbox
-            .lock()
-            .unwrap()
-            .push_back(AgentMessage::user_text(&prompt));
+fn dispatch_run_prompt(host: &mut dyn CommandHost, prompt: String) {
+    if host.is_busy() {
+        // 忙碌：并进当前回合（宿主自己的 steer 通道）
+        host.send_prompt(&prompt);
     } else {
         extensions::request_ui(ExtensionUiRequest::Continuation {
             message: Box::new(AgentMessage::user_text(&prompt)),
@@ -990,7 +989,7 @@ fn dispatch_run_prompt(app: &mut App, prompt: String) {
 /// `/tasks run` 的入口：筛出未完成任务并投一条续跑消息。
 ///
 /// 无参=全部未完成任务；带 id=只跑这些任务（已完成的会被过滤掉，全无目标时只提示）。
-fn run_tasks_from_command(app: &mut App, rest: &str) {
+fn run_tasks_from_command(host: &mut dyn CommandHost, rest: &str) {
     let ids = parse_run_ids(rest);
 
     let targets: Vec<Task> = {
@@ -1016,7 +1015,7 @@ fn run_tasks_from_command(app: &mut App, rest: &str) {
     }
 
     let count = targets.len();
-    dispatch_run_prompt(app, run_prompt(&targets));
+    dispatch_run_prompt(host, run_prompt(&targets));
     extensions::request_show_dock();
     notify_text(&format!("Running {count} task(s)..."), UiNotifyLevel::Info);
 }
@@ -1423,6 +1422,7 @@ Set up task dependencies:
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::modes::interactive::app::App;
     use crate::test_support::AgentDirGuard;
 
     #[test]

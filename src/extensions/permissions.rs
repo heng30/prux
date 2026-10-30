@@ -57,7 +57,7 @@ use crate::{
         tools::ToolError,
     },
     extensions::{EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_PERMISSIONS},
-    modes::interactive::handlers::register_slash_command,
+    modes::interactive::handlers::register_host_command,
     utils::{
         glyphs::DEF_ELLIPSIS,
         paths::{absolutize, cwd, is_outside},
@@ -234,7 +234,7 @@ impl Extension for Permissions {
 
     /// 接线 `/permissions` 执行入口。
     fn on_registered(&self) {
-        register_slash_command(EXT, CMD, command::handle);
+        register_host_command(EXT, CMD, command::handle);
     }
 
     /// 只订阅**异步**工具前钩子：命中 `ask` 时要弹面板等用户作答。

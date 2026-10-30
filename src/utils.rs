@@ -2,6 +2,7 @@
 //!
 //! 不依赖 core/，供 core/ 与 cli/、modes/ 使用。
 
+pub mod async_task;
 pub mod clipboard;
 pub mod color;
 pub mod cron;

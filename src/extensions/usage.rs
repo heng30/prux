@@ -33,9 +33,9 @@ mod fetch;
 use crate::{
     core::{
         extensions::{
-            DockLine, DockSpan, Extension, ExtensionCommand, ExtensionHook, ExtensionMode,
-            ExtensionTool, ExtensionUiRequest, ForkProjectInfo, OverlayEvent, OverlaySize,
-            OverlayView, next_ui_id, request_ui,
+            CommandHost, DockLine, DockSpan, Extension, ExtensionCommand, ExtensionHook,
+            ExtensionMode, ExtensionTool, ExtensionUiRequest, ForkProjectInfo, OverlayEvent,
+            OverlaySize, OverlayView, UiNotifyLevel, next_ui_id, request_ui,
         },
         runtime,
     },
@@ -43,11 +43,9 @@ use crate::{
         ACCENT, DIM, ERROR, EXTENSION_FACTORIES, ExtensionFactory, MUTED, PRIORITY_USAGE, SUCCESS,
         command_arg, util::truncate_chars,
     },
-    modes::interactive::{
-        app::{App, MsgLevel},
-        handlers::register_slash_command,
-    },
+    modes::interactive::handlers::register_host_command,
     utils::{
+        async_task,
         glyphs::{DEF_ARROW_UP_DOWN, DEF_BAR_EMPTY, DEF_BAR_FULL},
         time::{now_ms, rel_time},
     },
@@ -159,7 +157,7 @@ impl Extension for Usage {
 
     /// 注册 `/usage` 的 handler 到斜杠命令表。
     fn on_registered(&self) {
-        register_slash_command(EXT, "usage", command_usage);
+        register_host_command(EXT, "usage", command_usage);
     }
 
     /// 禁用时收起面板并清状态：禁用后框架不再轮询本扩展。
@@ -252,12 +250,12 @@ fn clear(id: Option<u64>) -> bool {
 }
 
 /// `/usage` handler：无参数时打开面板（缓存未过期就复用），有参数时报错。
-fn command_usage(st: &mut App, raw: &str) -> bool {
+fn command_usage(host: &mut dyn CommandHost, raw: &str) -> bool {
     let arg = command_arg(raw).trim();
     if !arg.is_empty() {
-        st.push_msg(
-            format!("Usage: /usage (unexpected argument: {arg})"),
-            MsgLevel::Warning,
+        host.push_message(
+            &format!("Usage: /usage (unexpected argument: {arg})"),
+            UiNotifyLevel::Warning,
         );
         return false;
     }
@@ -299,15 +297,15 @@ fn start_report() {
         return;
     }
 
-    match tokio::runtime::Handle::try_current() {
-        Ok(handle) => {
+    match async_task::handle() {
+        Some(handle) => {
             handle.spawn(async move {
                 let reports = fetch::fetch_all().await;
                 let unqueried = fetch::unqueried_providers();
                 finish_report(id, reports, unqueried);
             });
         }
-        Err(_) => {
+        None => {
             // 没有 tokio 运行时（单测 / 极简环境）：不发请求，直接给出说明
             finish_report(
                 id,
@@ -455,6 +453,7 @@ mod tests {
     use crate::{
         core::auth,
         extensions::WARNING,
+        modes::interactive::app::App,
         test_support::{AUTH_TEST_LOCK, AgentDirGuard},
         utils::time::now_ms,
     };

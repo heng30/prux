@@ -37,6 +37,7 @@ mod config;
 use super::{EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_JET, command_arg, util::tighter_u32};
 use crate::{
     core::{
+        extensions::{CommandHost, UiNotifyLevel},
         extensions::{
             Extension, ExtensionCommand, ExtensionMode, ExtensionTool, ForkProjectInfo, ModelRoute,
             ModelRouteReason, ModelRouteRequest, RouteTarget, SubcommandDef,
@@ -51,11 +52,7 @@ use crate::{
     },
     error::Result,
     extensions::util::truncate_chars_with_postfix,
-    modes::interactive::{
-        agent_actor::AgentCommand,
-        app::{App, MsgLevel},
-        handlers::register_slash_command,
-    },
+    modes::interactive::handlers::{register_host_command, tui_host},
 };
 use config::{ClassifierConfig, JetConfig, RouterConfig, Target};
 use futures_util::future::BoxFuture;
@@ -619,7 +616,7 @@ impl Extension for Jet {
 
     /// 接线 `/jet` 的 TUI 执行入口。
     fn on_registered(&self) {
-        register_slash_command(EXT, CMD, command_jet);
+        register_host_command(EXT, CMD, command_jet);
     }
 
     /// 被启用时按当前配置补一次注册（禁用期间配置可能已变）。
@@ -786,26 +783,26 @@ fn router_summary(router: &RouterConfig) -> String {
 }
 
 /// 打印 `jet/auto` 的注册状态（可注册 / 不可注册的原因）。
-fn report_registration(st: &mut App, cfg: &JetConfig) {
+fn report_registration(host: &mut dyn CommandHost, cfg: &JetConfig) {
     match build_definition(cfg) {
-        Ok(_) => st.push_msg(
-            format!("jet/auto: ready ({})", router_summary(&cfg.router)),
-            MsgLevel::Success,
+        Ok(_) => host.push_message(
+            &format!("jet/auto: ready ({})", router_summary(&cfg.router)),
+            UiNotifyLevel::Success,
         ),
-        Err(reason) => st.push_msg(
-            format!("jet/auto: not registered — {reason}"),
-            MsgLevel::Warning,
+        Err(reason) => host.push_message(
+            &format!("jet/auto: not registered — {reason}"),
+            UiNotifyLevel::Warning,
         ),
     }
 }
 
 /// 打印分类器配置状态。
-fn report_classifier(st: &mut App, cfg: &JetConfig) {
+fn report_classifier(host: &mut dyn CommandHost, cfg: &JetConfig) {
     let classifier = &cfg.classifier;
     if !classifier.is_complete() {
-        st.push_msg(
-            "jet classifier: (unset — planning complexity is not classified)".to_string(),
-            MsgLevel::Info,
+        host.push_message(
+            "jet classifier: (unset — planning complexity is not classified)",
+            UiNotifyLevel::Info,
         );
         return;
     }
@@ -817,53 +814,56 @@ fn report_classifier(st: &mut App, cfg: &JetConfig) {
         ModelType::Classifier,
         "jet classifier",
     ) {
-        Ok(_) => st.push_msg(format!("jet classifier: {label}"), MsgLevel::Info),
-        Err(err) => st.push_msg(
-            format!("jet classifier: {label} is unusable — {err}"),
-            MsgLevel::Warning,
+        Ok(_) => host.push_message(&format!("jet classifier: {label}"), UiNotifyLevel::Info),
+        Err(err) => host.push_message(
+            &format!("jet classifier: {label} is unusable — {err}"),
+            UiNotifyLevel::Warning,
         ),
     }
 }
 
 /// `/jet`（无参数）：打印配置与注册状态。
-fn show_status(st: &mut App) {
+fn show_status(host: &mut dyn CommandHost) {
     let cfg = config::load();
-    report_registration(st, &cfg);
-    report_classifier(st, &cfg);
+    report_registration(host, &cfg);
+    report_classifier(host, &cfg);
 }
 
 /// `/jet set <provider> <model-id>`：配置分类器模型（必须是 `type: classifier` 条目）。
-fn set_command(st: &mut App, rest: &str) {
+fn set_command(host: &mut dyn CommandHost, rest: &str) {
     let parts: Vec<&str> = rest.split_whitespace().collect();
     if parts.len() != 2 {
-        st.push_msg(format!("jet: {SET_USAGE}"), MsgLevel::Warning);
+        host.push_message(&format!("jet: {SET_USAGE}"), UiNotifyLevel::Warning);
         return;
     }
 
     let (provider, model) = (parts[0], parts[1]);
     if let Err(err) = check_physical(provider, model, ModelType::Classifier, "jet classifier") {
-        st.push_msg(format!("jet: {err}"), MsgLevel::Warning);
+        host.push_message(&format!("jet: {err}"), UiNotifyLevel::Warning);
         return;
     }
 
     let cfg = config::set_classifier(provider, model);
     sync_registration();
-    st.push_msg(
-        format!("jet classifier set: {provider}/{model}"),
-        MsgLevel::Success,
+    host.push_message(
+        &format!("jet classifier set: {provider}/{model}"),
+        UiNotifyLevel::Success,
     );
-    report_registration(st, &cfg);
+    report_registration(host, &cfg);
 }
 
 /// `/jet router [flags]`：增量覆盖路由目标（只改给到的项）。
 ///
 /// `--provider` 一次给三档设同一个 provider，`--*-provider` 单独覆盖某一档；
 /// 两者同时给时以单项为准。每档的模型 id 由 `--planning` / `--planning-complex` / `--implementation` 指定。
-fn router_command(st: &mut App, rest: &str) {
+fn router_command(host: &mut dyn CommandHost, rest: &str) {
     let args = match parse_router_args(rest) {
         Ok(args) => args,
         Err(err) => {
-            st.push_msg(format!("jet: {err}. {ROUTER_USAGE}"), MsgLevel::Warning);
+            host.push_message(
+                &format!("jet: {err}. {ROUTER_USAGE}"),
+                UiNotifyLevel::Warning,
+            );
             return;
         }
     };
@@ -909,60 +909,69 @@ fn router_command(st: &mut App, rest: &str) {
     }
 
     if let Err(err) = validate_router_change(&args, &before, &candidate) {
-        st.push_msg(format!("jet: {err}"), MsgLevel::Warning);
+        host.push_message(&format!("jet: {err}"), UiNotifyLevel::Warning);
         return;
     }
 
     let cfg = config::set_router(&candidate);
     sync_registration();
-    st.push_msg(
-        format!("jet router set: {}", router_summary(&cfg.router)),
-        MsgLevel::Success,
+    host.push_message(
+        &format!("jet router set: {}", router_summary(&cfg.router)),
+        UiNotifyLevel::Success,
     );
-    report_registration(st, &cfg);
+    report_registration(host, &cfg);
 }
 
 /// `/jet reset`：清空配置并注销 `jet/auto`。
-fn reset_command(st: &mut App) {
+fn reset_command(host: &mut dyn CommandHost) {
     config::reset();
     sync_registration();
-    st.push_msg(
-        "jet: configuration cleared (jet/auto unregistered)".to_string(),
-        MsgLevel::Success,
+    host.push_message(
+        "jet: configuration cleared (jet/auto unregistered)",
+        UiNotifyLevel::Success,
     );
-    switch_away_from_virtual(st);
+    switch_away_from_virtual(host);
 }
 
 /// reset 之后 `jet/auto` 已注销：若当前会话正选中它，切回最近一次路由到的物理模型
 /// （拿不到就回落到 provider/model 解析的兜底模型），避免留下必然报错的选中项。
-fn switch_away_from_virtual(st: &mut App) {
-    let selected_virtual = st.current_provider.as_deref() == Some(VIRTUAL_PROVIDER)
-        && st.current_model.as_deref() == Some(VIRTUAL_ID);
+fn switch_away_from_virtual(host: &mut dyn CommandHost) {
+    let selected_virtual = host
+        .current_model()
+        .is_some_and(|(provider, model)| provider == VIRTUAL_PROVIDER && model == VIRTUAL_ID);
 
     if !selected_virtual {
         return;
     }
 
-    let Some((provider, model_id)) = switch_target(&st.messages) else {
-        st.push_msg(
-            format!(
-                "jet: switch away from {VIRTUAL_PROVIDER}/{VIRTUAL_ID} manually (/model): no usable fallback model"
+    // 「上一次路由到的物理模型」只在 TUI 侧拿得到（需要完整会话历史），
+    // 其它宿主退回到「请手动切换」，不猜一个模型替用户决定。
+    let Some(app) = tui_host(host) else {
+        host.push_message(
+            &format!(
+                "jet: switch away from {VIRTUAL_PROVIDER}/{VIRTUAL_ID} manually (/model): this host cannot pick a fallback model"
             ),
-            MsgLevel::Warning,
+            UiNotifyLevel::Warning,
         );
         return;
     };
 
-    st.worker.send(AgentCommand::SwitchModel {
-        provider: provider.clone(),
-        model_id: model_id.clone(),
-        persist: false,
-    });
-    st.push_msg(
-        format!(
+    let Some((provider, model_id)) = switch_target(&app.messages) else {
+        host.push_message(
+            &format!(
+                "jet: switch away from {VIRTUAL_PROVIDER}/{VIRTUAL_ID} manually (/model): no usable fallback model"
+            ),
+            UiNotifyLevel::Warning,
+        );
+        return;
+    };
+
+    host.switch_model(&provider, &model_id);
+    host.push_message(
+        &format!(
             "jet: current session was on {VIRTUAL_PROVIDER}/{VIRTUAL_ID}; switched to {provider}/{model_id}"
         ),
-        MsgLevel::Info,
+        UiNotifyLevel::Info,
     );
 }
 
@@ -978,7 +987,7 @@ fn switch_target(messages: &[AgentMessage]) -> Option<(String, String)> {
 }
 
 /// `/jet` 的 TUI 执行入口：返回 `false`（永不退出 TUI）。
-fn command_jet(st: &mut App, raw: &str) -> bool {
+fn command_jet(host: &mut dyn CommandHost, raw: &str) -> bool {
     let arg = command_arg(raw).trim();
     let (sub, rest) = match arg.split_once(char::is_whitespace) {
         Some((sub, rest)) => (sub, rest.trim()),
@@ -986,13 +995,13 @@ fn command_jet(st: &mut App, raw: &str) -> bool {
     };
 
     match sub {
-        "" => show_status(st),
-        "set" => set_command(st, rest),
-        "router" => router_command(st, rest),
-        "reset" => reset_command(st),
-        other => st.push_msg(
-            format!("Unknown /jet subcommand: {other}. Use `set`, `router` or `reset`."),
-            MsgLevel::Warning,
+        "" => show_status(host),
+        "set" => set_command(host, rest),
+        "router" => router_command(host, rest),
+        "reset" => reset_command(host),
+        other => host.push_message(
+            &format!("Unknown /jet subcommand: {other}. Use `set`, `router` or `reset`."),
+            UiNotifyLevel::Warning,
         ),
     }
     false
@@ -1001,6 +1010,7 @@ fn command_jet(st: &mut App, raw: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::modes::interactive::app::App;
     use crate::modes::interactive::app::sys_spans_text;
     use std::sync::MutexGuard;
     use tokio::{

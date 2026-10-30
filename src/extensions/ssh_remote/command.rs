@@ -4,7 +4,7 @@
 //! `/tunnel` 管端口转发：把远端服务映射到 `127.0.0.1:<local>`，之后本地一切照旧。
 
 use crate::{
-    core::extensions::{ExtensionCommand, SubcommandDef, UiNotifyLevel},
+    core::extensions::{CommandHost, ExtensionCommand, SubcommandDef, UiNotifyLevel},
     extensions::{
         command_arg,
         ssh_remote::{
@@ -15,7 +15,6 @@ use crate::{
         },
         util::notify_text,
     },
-    modes::interactive::app::App,
     utils::{
         display::split_head, env::default_user, net::split_host_port, process::shell_tokenize,
     },
@@ -124,7 +123,7 @@ pub fn tunnel_command() -> ExtensionCommand {
 }
 
 /// `/ssh` 执行入口
-pub fn handle(_app: &mut App, raw: &str) -> bool {
+pub fn handle(_host: &mut dyn CommandHost, raw: &str) -> bool {
     // `raw` 是 `/` 后的原文（含命令名，如 `ssh help`），与其它扩展命令同一约定
     let text = command_arg(raw);
     if text.is_empty() {
@@ -148,7 +147,7 @@ pub fn handle(_app: &mut App, raw: &str) -> bool {
 }
 
 /// `/tunnel` 执行入口
-pub fn handle_tunnel(_app: &mut App, raw: &str) -> bool {
+pub fn handle_tunnel(_host: &mut dyn CommandHost, raw: &str) -> bool {
     let text = command_arg(raw);
     if text.is_empty() || text.eq_ignore_ascii_case("list") {
         notify_text(&tunnel_text(), UiNotifyLevel::Info);
@@ -731,6 +730,7 @@ fn lookup_ssh_config(alias: &str) -> Option<SshHost> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::modes::interactive::app::App;
 
     /// 串行化「会往进程级 UI 队列推通知」的用例。
     ///

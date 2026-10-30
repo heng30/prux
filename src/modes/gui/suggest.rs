@@ -11,32 +11,47 @@ use crate::utils::{
 use std::path::Path;
 
 /// 候选面板最多显示几条。
-pub const MAX_ITEMS: usize = 30;
+pub const MAX_ITEMS: usize = 40;
 
-/// 有独立 GUI 面板入口的扩展命令：`/` 面板不再列它们，避免同一个动作两个入口
-/// （技能面板 Ctrl-I，扩展/设置/循环名单在 Ctrl-M 命令面板里）。
-pub const PANEL_COMMANDS: &[&str] = &["skills", "extension", "settings", "scoped-models"];
+/// 有独立 GUI 面板入口的扩展命令：`/` 面板与 Ctrl-M 命令面板里都列（同一个动作两个入口）。
+pub const PANEL_COMMANDS: &[&str] = &["skills", "extension", "settings"];
 
 /// GUI 支持的斜杠命令：名字（不含 `/`）+ 说明。
-/// `/` 面板里列出的命令：只放对话相关动作，配置类留给 Ctrl-M 命令面板。
+/// 与 TUI 的命令集对齐（`dock` 没有桌面等价物，除了它全部列出）。
 pub const COMMANDS: &[(&str, &str)] = &[
     ("new", "New session"),
     ("resume", "Switch session"),
     ("model", "Select model"),
     ("thinking", "Set thinking level"),
     ("compact", "Compact context"),
+    ("copy", "Copy last reply"),
+    ("rewind", "Rewind last input"),
+    ("session", "Show current session info"),
     ("name", "Rename current session"),
     ("clone", "Clone current branch"),
     ("fork", "Fork current session"),
     ("label", "Label current branch"),
     ("tree", "Session tree"),
     ("import", "Import session file"),
-    ("history", "Search prompt history"),
-    ("share", "Share session (gist)"),
     ("export", "Export session (HTML)"),
-    ("copy", "Copy last reply"),
-    ("rewind", "Rewind last input"),
+    ("share", "Share session (gist)"),
+    ("history", "Search prompt history"),
     ("giff", "Review uncommitted changes"),
+    ("trust", "Trust the current project"),
+    ("reload", "Reload skills, extensions and context"),
+    ("theme", "Show/switch theme"),
+    ("settings", "Open settings"),
+    ("extension", "Enable/disable extensions"),
+    ("skills", "Enable/disable skills"),
+    ("scoped-models", "Models for Ctrl-P cycling"),
+    ("login", "Store an API key for a provider"),
+    ("logout", "Remove stored API key for a provider"),
+    ("changelog", "Show changelog entries"),
+    ("hotkeys", "Show keybindings"),
+    ("bug", "Report a bug (collects diagnostics, exports a zip)"),
+    ("usage", "Usage & cost"),
+    ("debug", "Debug info"),
+    ("dock", "Toggle the dock panel"),
     ("sidebar", "Toggle session list"),
     ("quit", "Quit"),
 ];
@@ -219,8 +234,9 @@ mod tests {
         // 乱序不算命中
         assert!(commands_with(&[], "zzz").is_empty());
         assert!(commands_with(&[], "dle").is_empty());
-        // 配置类命令不在 `/` 里（走 Ctrl-M 命令面板）
-        assert!(commands_with(&[], "settings").is_empty());
+        // 配置类命令也在 `/` 面板里（TUI 对齐）；Ctrl-M 面板只额外保留三个独立面板入口
+        assert_eq!(commands_with(&[], "settings")[0].label, "/settings");
+        assert!(COMMANDS.iter().any(|(name, _)| *name == "trust"));
     }
 
     /// 技能候选按裸名参与模糊匹配，不因 `skill:` 前缀误命中。
@@ -251,6 +267,8 @@ mod tests {
     #[test]
     fn detect_requires_line_start_for_commands() {
         assert!(detect("abc /new").is_none());
+        // 参数段不触发命令面板（`/session 2` 的 token 是 `2`）
+        assert!(detect("/session 2").is_none());
         assert_eq!(detect("/ne").map(|d| d.0), Some(Trigger::Command));
         assert!(detect("第一行\n!/ls").is_none());
         assert_eq!(detect("第一行\n/x").map(|d| d.0), Some(Trigger::Command));

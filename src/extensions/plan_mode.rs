@@ -28,6 +28,7 @@
 //! - 广播 `plan-mode:changed` 事件（rich footer 显示 📋 plan 状态）。
 
 use crate::{
+    core::extensions::CommandHost,
     core::{
         self,
         extensions::{
@@ -41,13 +42,11 @@ use crate::{
     },
     error::Result,
     extensions::{
-        EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_PLAN_MODE, command_arg,
-        util::{push_context, send_prompt},
+        EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_PLAN_MODE, command_arg, util::push_context,
     },
     modes::interactive::{
-        agent_actor::AgentCommand,
-        app::{App, MsgLevel, SysSpan},
-        handlers::{register_extension_keybinding, register_slash_command},
+        app::{App, SysSpan},
+        handlers::{register_extension_keybinding, register_host_command},
     },
     utils::glyphs::{DEF_CHECKBOX_EMPTY, DEF_DONE},
 };
@@ -718,36 +717,41 @@ pub fn is_enabled() -> bool {
 /// 切换 plan-mode 的 UI 入口（/plan 无参命令与 Alt+P 快捷键共用）：
 /// rebuild 工具列表使过滤立即生效。扩展被禁用时不切换、不提示
 /// （命令/快捷键分发已按 enabled 过滤；这里兜底）。
-fn toggle_plan_ui(st: &mut App) {
+/// 键位回调（TUI 专用）：把 `&mut App` 当宿主能力面用，与 `/plan` 走同一段逻辑。
+fn keybinding_toggle(app: &mut App) {
+    toggle_plan_ui(app);
+}
+
+fn toggle_plan_ui(host: &mut dyn CommandHost) {
     if !core::extensions::is_extension_enabled("plan-mode") {
         return;
     }
 
     let enabled = toggle_enabled();
-    apply_plan_mode_ui(st, enabled);
+    apply_plan_mode_ui(host, enabled);
 }
 
 /// 确保进入 plan mode（已开启则不动）。
 /// 扩展被禁用时不动作（同 [`toggle_plan_ui`] 的兜底）。
-fn enable_plan_ui(st: &mut App) {
+fn enable_plan_ui(host: &mut dyn CommandHost) {
     if !core::extensions::is_extension_enabled("plan-mode") || is_enabled() {
         return;
     }
 
     set_enabled(true);
-    apply_plan_mode_ui(st, true);
+    apply_plan_mode_ui(host, true);
 }
 
 /// 开关生效后的 TUI 侧同步：rebuild 工具表 + 提示（开/关共用）
-fn apply_plan_mode_ui(st: &mut App, enabled: bool) {
-    st.worker.send(AgentCommand::RebuildTools);
-    st.push_msg(
-        if enabled {
+fn apply_plan_mode_ui(host: &mut dyn CommandHost, enabled: bool) {
+    core::extensions::request_ui(ExtensionUiRequest::RebuildTools);
+    host.push_message(
+        &if enabled {
             "Plan mode enabled. Built-in write tools disabled.".to_string()
         } else {
             "Plan mode disabled. Full access restored.".to_string()
         },
-        MsgLevel::Info,
+        UiNotifyLevel::Info,
     );
 }
 
@@ -910,9 +914,9 @@ impl Extension for PlanMode {
     /// `/todos` 的执行入口始终绑定，但其"存在性"由 commands() 按当前 todos
     /// 状态动态决定：无 todo 任务时不出现在候选、也不可分发（避免误操作）。
     fn on_registered(&self) {
-        register_slash_command("plan-mode", "plan", command_plan);
-        register_slash_command("plan-mode", "todos", command_todos);
-        register_extension_keybinding("plan-mode", "plan-mode.toggle", toggle_plan_ui);
+        register_host_command("plan-mode", "plan", command_plan);
+        register_host_command("plan-mode", "todos", command_todos);
+        register_extension_keybinding("plan-mode", "plan-mode.toggle", keybinding_toggle);
     }
 
     // /extension 面板开关：禁用时关闭 plan mode 并清状态
@@ -1183,35 +1187,32 @@ fn is_injected_plan_context(m: &AgentMessage) -> bool {
 
 /// `/plan [text]`：无参数切换 plan mode；带参数时先确保进入 plan mode（只读工具集生效），
 /// 再把参数作为输入发送（空闲开新回合，忙碌时 steer 进当前回合）。
-fn command_plan(st: &mut App, cmd: &str) -> bool {
+fn command_plan(host: &mut dyn CommandHost, cmd: &str) -> bool {
     let arg = command_arg(cmd);
     if arg.is_empty() {
-        toggle_plan_ui(st);
+        toggle_plan_ui(host);
         return false;
     }
 
-    enable_plan_ui(st);
-    send_prompt(st, arg.to_string());
+    enable_plan_ui(host);
+    host.send_prompt(arg);
     false
 }
 
 /// `/todos`：切换 plan 停靠段的显隐并置脏；调用前提是已存在 todo（commands() 已按此门控）。
-fn command_todos(st: &mut App, _: &str) -> bool {
+fn command_todos(host: &mut dyn CommandHost, _: &str) -> bool {
     // 分发本身保证此时存在 todos（commands() 仅在 todo_count>0 时声明 /todos），
     // 故无需空列表分支；这里只负责 plan 停靠段的显隐切换。
-    if !st.dock_visible {
+    if !host.dock_visible() {
         // 面板未显示：显示 plan 段并打开面板
         show_dock_section();
-        st.dock_visible = true;
-        st.dirty = true;
+        host.show_dock();
     } else if is_dock_shown() {
         // 面板显示中：隐藏 plan 段（若面板再无其他内容，下一帧渲染自动收起）
         hide_dock_section();
-        st.dirty = true;
     } else {
         // 面板显示中：重新显示 plan 段
         show_dock_section();
-        st.dirty = true;
     }
     false
 }

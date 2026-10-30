@@ -30,6 +30,7 @@ mod ext_settings;
 mod extensions;
 mod giff;
 mod history;
+mod host;
 mod messages;
 mod metrics;
 mod mouse;
@@ -78,7 +79,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub(crate) use self::commands::{register_extension_keybinding, register_slash_command};
+pub(crate) use self::commands::register_extension_keybinding;
+pub use self::host::{register_host_command, register_slash_command, tui_host};
 pub(crate) use retry::RetryUi;
 pub use session_repair::{
     stage_session_repair_global, stage_zombie_operations_global, take_staged_session_repair,

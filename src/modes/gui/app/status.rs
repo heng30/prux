@@ -140,7 +140,15 @@ impl GuiApp {
     /// 右侧 in/out + 费用 + 速率 + 标记 + 交互数 + 耗时。
     pub(super) fn status_text(&self) -> (String, String) {
         let messages = self.snapshot.as_ref().map(|s| s.messages).unwrap_or(0);
-        let mut left = format!("{messages} messages");
+        let mut left = String::new();
+        // 扩展命令写的临时提示优先占左侧（过期即不再显示）
+        if let Some((text, deadline)) = &self.status_note
+            && Instant::now() < *deadline
+        {
+            left.push_str(text);
+            left.push_str(" · ");
+        }
+        left.push_str(&format!("{messages} messages"));
         let mut right = String::new();
 
         if let Some(u) = self.snapshot.as_ref().map(|s| &s.usage) {

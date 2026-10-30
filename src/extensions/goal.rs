@@ -30,6 +30,7 @@ use super::util::{
     format_tokens, make_id, notify, notify_cmd, notify_text, push_context, truncate_objective,
 };
 use crate::{
+    core::extensions::CommandHost,
     core::{
         self,
         extensions::{
@@ -43,10 +44,7 @@ use crate::{
     },
     error::Result,
     extensions::{EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_GOAL, command_arg},
-    modes::interactive::{
-        app::{App, MsgLevel},
-        handlers::register_slash_command,
-    },
+    modes::interactive::{app::MsgLevel, handlers::register_host_command},
     utils::{
         glyphs::DEF_PAUSED,
         time::{format_elapsed, now_ms},
@@ -988,7 +986,7 @@ impl Extension for Goal {
 
     /// 把 `/goal` 的执行入口接线到 TUI 命令注册表。
     fn on_registered(&self) {
-        register_slash_command(EXT, CMD, command_goal);
+        register_host_command(EXT, CMD, command_goal);
     }
 
     /// 禁用扩展：清内存态（会话里的持久化条目不动）；重新启用后需重启恢复
@@ -1311,7 +1309,7 @@ impl Goal {
 /// 执行 `/goal` 命令：无参 toggle 停靠段，`clear`/`pause`/`resume` 改状态，
 /// 其余按 `[--tokens N] <objective>` 设目标（已有未完成目标时先弹覆盖确认）。
 /// 返回值是 handler 约定的 quit 标志，恒为 false。
-fn command_goal(st: &mut App, raw: &str) -> bool {
+fn command_goal(host: &mut dyn CommandHost, raw: &str) -> bool {
     let now = now_ms();
     let trimmed = command_arg(raw).trim().to_string();
 
@@ -1324,20 +1322,18 @@ fn command_goal(st: &mut App, raw: &str) -> bool {
             );
             return false;
         }
+
         let shown = state().lock().unwrap().dock_shown;
-        if !st.dock_visible {
+        if !host.dock_visible() {
             // 面板未开：显示段并打开面板
             state().lock().unwrap().dock_shown = true;
-            st.dock_visible = true;
-            st.dirty = true;
+            host.show_dock();
         } else if shown {
             // 面板已开且段可见：隐藏段（无内容时面板下一帧自动收起）
             state().lock().unwrap().dock_shown = false;
-            st.dirty = true;
         } else {
             // 面板已开但段隐藏：重新显示
             state().lock().unwrap().dock_shown = true;
-            st.dirty = true;
         }
         return false;
     }
@@ -1515,6 +1511,7 @@ impl Goal {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::modes::interactive::app::App;
     use std::sync::MutexGuard;
 
     fn lock_auth() -> MutexGuard<'static, ()> {

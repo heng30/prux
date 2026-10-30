@@ -7,7 +7,7 @@ use crate::{
     core::{
         self,
         changelog::CHANGELOG,
-        extensions::{SubcommandDef, dispatch_agent_event},
+        extensions::{SubcommandDef, command_handler, dispatch_agent_event},
         keybindings,
         keybindings::KEYBINDINGS,
         prompt_templates::{self, PromptTemplate},
@@ -31,9 +31,6 @@ use std::{
 
 /// 扩展注册的键位回调：用户按下绑定键后直接操作 App 状态。
 pub type ExtensionKeybindingHandler = fn(&mut App);
-/// 扩展注册的斜杠命令回调：接收 `/` 后的完整原文（含命令名，如 `plan 分析`），
-/// 取参数用 [`crate::extensions::command_arg`]；返回是否退出 TUI。
-type SlashCommandHandler = fn(&mut App, &str) -> bool;
 
 /// 忙碌时可安全执行的内置命令（handler 不锁 agent、纯 UI 操作）。
 /// 其余内置命令忙碌时仍入 steer 队列，避免与可能锁 agent 的 handler 死锁。
@@ -94,15 +91,6 @@ const BUILTIN_COMMANDS: &[(&str, &str, &[SubcommandDef])] = &[
     ("dock", "Toggle the dock panel", &[]),
     ("giff", "Review uncommitted changes", &[]),
 ];
-
-/// 扩展命令：执行入口注册表
-///
-/// 命令的"存在性"（是否显示、是否可执行）由已启用扩展的
-/// [`crate::core::extensions::Extension::commands`] 声明动态决定；
-/// 执行需要 TUI 状态（&mut App），不能下沉到 core，故入口在 TUI 层注册。
-/// 扩展命令执行入口：返回 true 表示退出 TUI（与 `handle_slash_command` 一致）。
-static EXT_COMMAND_HANDLERS: OnceLock<Mutex<Vec<(String, String, SlashCommandHandler)>>> =
-    OnceLock::new();
 
 /// 扩展快捷键执行入口类型：需要 TUI 状态 &mut App + agent
 static EXT_KEYBINDING_HANDLERS: OnceLock<Mutex<Vec<(String, String, ExtensionKeybindingHandler)>>> =
@@ -172,7 +160,7 @@ impl App {
             // 执行入口查 TUI 注册表。命令名取首个空白前的部分（`/plan foo` 命中 `plan`），
             // 原文（含参数，保留大小写）传给 handler。未命中内置与扩展命令 → 未知命令
             // 作为普通用户输入（与 /skill、模板展开同一路径）。
-            _ => match extension_command_handler(command_name(&cmd)) {
+            _ => match command_handler(command_name(&cmd)) {
                 Some(handler) => quit = handler(self, raw.trim()),
                 None => self.cmd_unknown(&cmd),
             },
@@ -921,27 +909,6 @@ fn cmd_arg<'a>(raw: &'a str, keyword: &str) -> &'a str {
     }
 }
 
-/// 动态注册命令
-fn ext_command_handlers() -> &'static Mutex<Vec<(String, String, SlashCommandHandler)>> {
-    EXT_COMMAND_HANDLERS.get_or_init(|| Mutex::new(Vec::new()))
-}
-
-/// 注册扩展命令的"执行入口"（TUI 层，供扩展接线）。
-///
-/// 命令的"存在性"由已启用扩展的 [`crate::core::extensions::Extension::commands`]
-/// 声明动态决定，本函数只绑定"谁来执行"——执行需要 TUI 状态（&mut App），
-/// 不能下沉到 core，故入口在 TUI 层注册：扩展模块在自身初始化处（如 plan-mode
-/// 的 `ensure_registered`）调用本函数即可接入，无需改动 TUI 代码。
-///
-/// 语义：按 `(ext, cmd)` 键注册——同一扩展重复注册同一命令时替换旧接线
-/// （幂等，允许扩展重新初始化）；不同扩展声明同名命令互不覆盖，分发权由
-/// [`crate::core::extensions::command_provider`] 的先到先得决定。
-pub fn register_slash_command(ext: &str, cmd: &str, handler: SlashCommandHandler) {
-    let mut table = ext_command_handlers().lock().unwrap();
-    table.retain(|(e, c, _)| e != ext || c != cmd);
-    table.push((ext.to_string(), cmd.to_string(), handler));
-}
-
 /// 斜杠命令是否可在忙碌（流式输出）时安全执行。
 ///
 /// 忙碌时 prompt future 持续持有 agent 锁，只有 [`BUILTIN_BUSY_SAFE`] 中的内置命令、
@@ -958,17 +925,6 @@ fn command_name(cmd: &str) -> &str {
     cmd.trim()
         .split_once(char::is_whitespace)
         .map_or_else(|| cmd.trim(), |(name, _)| name)
-}
-
-/// 查询扩展命令执行入口：仅当命令由当前已启用扩展声明时返回。
-/// 扩展禁用 / 模式不可用时 `command_provider` 返回 None，命令按未知处理。
-fn extension_command_handler(cmd: &str) -> Option<SlashCommandHandler> {
-    let provider = core::extensions::command_provider(cmd)?;
-    let table = ext_command_handlers().lock().unwrap();
-    table
-        .iter()
-        .find(|(ext, name, _)| ext == &provider && name == cmd)
-        .map(|(_, _, h)| *h)
 }
 
 /// 动态注册keybinding
@@ -2025,10 +1981,14 @@ mod tests {
         }
         crate::core::extensions::register_extension(EchoCmdExt);
         crate::core::extensions::set_extension_enabled("echo-cmd-ext", true);
-        register_slash_command("echo-cmd-ext", "echo-cmd", |st, _| {
-            st.push_msg("echo-cmd executed".to_string(), MsgLevel::Info);
-            false
-        });
+        crate::modes::interactive::handlers::register_slash_command(
+            "echo-cmd-ext",
+            "echo-cmd",
+            |st, _| {
+                st.push_msg("echo-cmd executed".to_string(), MsgLevel::Info);
+                false
+            },
+        );
         crate::core::settings_manager::write_disabled_extensions(&[]).ok();
 
         let mut st = App::new();
@@ -2133,7 +2093,7 @@ mod tests {
             slash_commands()
         );
         assert!(
-            extension_command_handler("skills").is_some(),
+            crate::core::extensions::command_handler("skills").is_some(),
             "on_registered 应装好 /skills 的 TUI handler"
         );
     }

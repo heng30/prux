@@ -19,9 +19,9 @@ use super::shared;
 use crate::{
     core::{
         extensions::{
-            DockSpan, Extension, ExtensionCommand, ExtensionHook, ExtensionMode, ExtensionTool,
-            ExtensionUiRequest, OverlayEvent, OverlayInput, OverlayKey, OverlaySize, OverlayView,
-            next_ui_id, request_ui,
+            CommandHost, DockSpan, Extension, ExtensionCommand, ExtensionHook, ExtensionMode,
+            ExtensionTool, ExtensionUiRequest, OverlayEvent, OverlayInput, OverlayKey, OverlaySize,
+            OverlayView, UiNotifyLevel, next_ui_id, request_ui,
         },
         provider::AgentMessage,
         session_manager::Session,
@@ -30,10 +30,7 @@ use crate::{
         ACCENT, ERROR, EXTENSION_FACTORIES, ExtensionFactory, MUTED, PRIORITY_BTW, command_arg,
         util::{session_id_of, spinner_frame},
     },
-    modes::interactive::{
-        app::{App, MsgLevel},
-        handlers::register_slash_command,
-    },
+    modes::interactive::handlers::register_host_command,
     utils::{display::wrap_text, glyphs::DEF_FAILED},
 };
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
@@ -168,7 +165,7 @@ impl Extension for Btw {
 
     /// 注册 `/btw` 的 handler。
     fn on_registered(&self) {
-        register_slash_command(EXT, "btw", command_btw);
+        register_host_command(EXT, "btw", command_btw);
     }
 
     /// 记住当前会话 id（一次性请求会带上它做提示缓存路由）。
@@ -363,30 +360,32 @@ fn push_question(lines: &mut Vec<Vec<DockSpan>>, question: &str, width: usize) {
 }
 
 /// `/btw` handler：打开面板并问第一个问题。
-fn command_btw(st: &mut App, raw: &str) -> bool {
+fn command_btw(host: &mut dyn CommandHost, raw: &str) -> bool {
     let question = command_arg(raw).trim().to_string();
     if question.is_empty() {
-        st.push_msg(
-            "Usage: /btw <question> (read-only side question; the answer is not added to the conversation)"
-                .to_string(),
-            MsgLevel::Info,
+        host.push_message("Usage: /btw <question> (read-only side question; the answer is not added to the conversation)",
+            UiNotifyLevel::Info,
         );
         return false;
     }
 
-    let Some((provider, model_id)) = shared::current_model(st) else {
-        st.push_msg(
-            "No model is selected yet. Pick one with /model, then ask again.".to_string(),
-            MsgLevel::Warning,
+    let Some((provider, model_id)) = host.current_model() else {
+        host.push_message(
+            "No model is selected yet. Pick one with /model, then ask again.",
+            UiNotifyLevel::Warning,
         );
         return false;
     };
 
     // 扩展若是本会话中途启用，`on_session_start` 没跑过、会话 id 槽是空的；
     // opencode 系 provider 缺 `x-opencode-session` 会直接 400，命令执行时补一次。
-    shared::refresh_session_from_app(st);
+    if let Some(path) = host.session_path()
+        && let Some(id) = session_id_of(Some(&path))
+    {
+        shared::remember_session(Some(id));
+    }
 
-    let excerpt = shared::build_excerpt(&st.messages, EXCERPT_MESSAGES, EXCERPT_CHARS);
+    let excerpt = host.transcript_excerpt(EXCERPT_MESSAGES, EXCERPT_CHARS);
 
     let id = next_ui_id();
     {
@@ -484,6 +483,7 @@ fn build_prompt(st: &State, question: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::modes::interactive::app::App;
     use crate::test_support::AUTH_TEST_LOCK;
 
     /// 全局状态锁（多个用例共享进程级 state 与 UI 队列）。

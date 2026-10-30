@@ -5,8 +5,8 @@
 
 use super::{EXT, clear_grants, config, list_grants, review, session_cwd, set_grant};
 use crate::{
+    core::extensions::{CommandHost, UiNotifyLevel},
     extensions::command_arg,
-    modes::interactive::app::{App, MsgLevel},
 };
 
 /// `/permissions` 的默认日志条数。
@@ -16,7 +16,7 @@ const DEFAULT_LOG_LINES: usize = 10;
 ///
 /// 返回值恒为 `false`（不退出 TUI）：斜杠命令的 `true` 是「立刻结束 TUI」的信号，
 /// 本命令族只是打印/改自身状态，绝不能返回它。
-pub(super) fn handle(st: &mut App, raw: &str) -> bool {
+pub(super) fn handle(host: &mut dyn CommandHost, raw: &str) -> bool {
     let arg = command_arg(raw).trim();
     let (sub, rest) = match arg.split_once(char::is_whitespace) {
         Some((head, tail)) => (head, tail.trim()),
@@ -24,23 +24,23 @@ pub(super) fn handle(st: &mut App, raw: &str) -> bool {
     };
 
     match sub {
-        "" | "show" => show(st),
-        "settings" => settings(st),
-        "allow" => grant(st, rest, true),
-        "drop" => grant(st, rest, false),
-        "allowlist" => list(st),
-        "init" => init(st, rest),
-        "log" => log(st, rest),
+        "" | "show" => show(host),
+        "settings" => settings(host),
+        "allow" => grant(host, rest, true),
+        "drop" => grant(host, rest, false),
+        "allowlist" => list(host),
+        "init" => init(host, rest),
+        "log" => log(host, rest),
         "reset" => {
             let n = clear_grants();
-            st.push_msg(
-                format!("permissions: cleared {n} session grant(s)"),
-                MsgLevel::Success,
+            host.push_message(
+            &                format!("permissions: cleared {n} session grant(s)"),
+                UiNotifyLevel::Success,
             );
         }
-        other => st.push_msg(
-            format!("permissions: unknown subcommand `{other}` (show|settings|allow|drop|allowlist|init|log|reset)"),
-            MsgLevel::Warning,
+        other => host.push_message(
+            &            format!("permissions: unknown subcommand `{other}` (show|settings|allow|drop|allowlist|init|log|reset)"),
+            UiNotifyLevel::Warning,
         ),
     }
     false
@@ -50,16 +50,12 @@ pub(super) fn handle(st: &mut App, raw: &str) -> bool {
 ///
 /// 面板内容来自 [`Extension::settings`]，只有 `reviewLog` / `yoloMode` 两个开关；
 /// 策略表是任意 pattern 字符串，面板的离散选项表达不了，仍走配置文件或 `allow` / `drop`。
-fn settings(st: &mut App) {
-    if st.ext_settings.is_open_for(EXT) {
-        st.ext_settings.close();
-    } else {
-        st.ext_settings.open(EXT);
-    }
+fn settings(host: &mut dyn CommandHost) {
+    host.open_extension_settings(EXT);
 }
 
 /// 打印生效策略：来源文件、通用兜底、各表面、会话放行与告警。
-fn show(st: &mut App) {
+fn show(host: &mut dyn CommandHost) {
     let cwd = session_cwd();
     let settings = config::load(&cwd);
     let policy = &settings.policy;
@@ -159,7 +155,7 @@ fn show(st: &mut App) {
         lines.push(format!("  warning: {warning}"));
     }
 
-    st.push_msg(lines.join("\n"), MsgLevel::Info);
+    host.push_message(&lines.join("\n"), UiNotifyLevel::Info);
 }
 
 /// 把一张 pattern 表压成一行：`* =allow  *.env =deny`。
@@ -178,95 +174,95 @@ fn describe(map: &super::policy::PatternMap) -> String {
 }
 
 /// `/permissions allow|drop <surface> <pattern>`。
-fn grant(st: &mut App, rest: &str, allow: bool) {
+fn grant(host: &mut dyn CommandHost, rest: &str, allow: bool) {
     let Some((surface, pattern)) = rest.split_once(char::is_whitespace) else {
-        st.push_msg(
-            format!(
+        host.push_message(
+            &            format!(
                 "Usage: /permissions {} <surface> <pattern>   (surface: path | external_directory | bash | <tool>, pattern: e.g. \"sudo *\")",
                 if allow { "allow" } else { "drop" }
             ),
-            MsgLevel::Warning,
+            UiNotifyLevel::Warning,
         );
         return;
     };
     let surface = surface.trim();
     let pattern = pattern.trim().trim_matches('"').trim_matches('\'');
     if surface.is_empty() || pattern.is_empty() {
-        st.push_msg(
-            "permissions: surface and pattern are both required".to_string(),
-            MsgLevel::Warning,
+        host.push_message(
+            "permissions: surface and pattern are both required",
+            UiNotifyLevel::Warning,
         );
         return;
     }
 
     if set_grant(surface, pattern, allow) {
         if allow {
-            st.push_msg(
-                format!(
+            host.push_message(
+            &                format!(
                     "permissions: granted `{pattern}` on {surface} for this session — ask the agent to retry"
                 ),
-                MsgLevel::Success,
+                UiNotifyLevel::Success,
             );
         } else {
-            st.push_msg(
-                format!("permissions: revoked `{pattern}` on {surface}"),
-                MsgLevel::Success,
+            host.push_message(
+                &format!("permissions: revoked `{pattern}` on {surface}"),
+                UiNotifyLevel::Success,
             );
         }
     } else if allow {
-        st.push_msg(
-            format!("permissions: `{pattern}` on {surface} was already granted"),
-            MsgLevel::Info,
+        host.push_message(
+            &format!("permissions: `{pattern}` on {surface} was already granted"),
+            UiNotifyLevel::Info,
         );
     } else {
-        st.push_msg(
-            format!("permissions: no such grant: `{pattern}` on {surface}"),
-            MsgLevel::Warning,
+        host.push_message(
+            &format!("permissions: no such grant: `{pattern}` on {surface}"),
+            UiNotifyLevel::Warning,
         );
     }
 }
 
 /// `/permissions allowlist`。
-fn list(st: &mut App) {
+fn list(host: &mut dyn CommandHost) {
     let grants = list_grants();
     if grants.is_empty() {
-        st.push_msg("permissions: no session grants".to_string(), MsgLevel::Info);
+        host.push_message("permissions: no session grants", UiNotifyLevel::Info);
         return;
     }
     let mut lines = vec![format!("permissions: {} session grant(s)", grants.len())];
     for (surface, pattern) in grants {
         lines.push(format!("  {surface}  `{pattern}`"));
     }
-    st.push_msg(lines.join("\n"), MsgLevel::Info);
+    host.push_message(&lines.join("\n"), UiNotifyLevel::Info);
 }
 
 /// `/permissions init [--force]`：写一份保守缺省配置。
-fn init(st: &mut App, rest: &str) {
+fn init(host: &mut dyn CommandHost, rest: &str) {
     let force = rest.split_whitespace().any(|a| a == "--force");
     match config::write_default(force) {
-        Ok(true) => st.push_msg(
-            format!(
+        Ok(true) => host.push_message(
+            &format!(
                 "permissions: wrote default config to {}",
                 config::global_config_path().display()
             ),
-            MsgLevel::Success,
+            UiNotifyLevel::Success,
         ),
-        Ok(false) => st.push_msg(
-            format!(
+        Ok(false) => host.push_message(
+            &format!(
                 "permissions: {} already exists (use /permissions init --force to overwrite)",
                 config::global_config_path().display()
             ),
-            MsgLevel::Info,
+            UiNotifyLevel::Info,
         ),
-        Err(e) => st.push_msg(
-            format!("permissions: cannot write config: {e}"),
-            MsgLevel::Error,
+        Err(e) => host.push_message(
+            &format!("permissions: cannot write config: {e}"),
+            UiNotifyLevel::Error,
         ),
     }
 }
 
 /// `/permissions log [n]`：打印最近 n 条 review log（缺省 [`DEFAULT_LOG_LINES`]）。
-fn log(st: &mut App, rest: &str) {
+fn log(host: &mut dyn CommandHost, rest: &str) {
     let limit = rest
         .split_whitespace()
         .next()
@@ -276,9 +272,9 @@ fn log(st: &mut App, rest: &str) {
     let lines = review::tail(limit);
     let path = config::review_log_path();
     if lines.is_empty() {
-        st.push_msg(
-            format!("permissions: no review log entries at {}", path.display()),
-            MsgLevel::Info,
+        host.push_message(
+            &format!("permissions: no review log entries at {}", path.display()),
+            UiNotifyLevel::Info,
         );
         return;
     }
@@ -288,7 +284,7 @@ fn log(st: &mut App, rest: &str) {
         path.display()
     )];
     out.extend(lines);
-    st.push_msg(out.join("\n"), MsgLevel::Info);
+    host.push_message(&out.join("\n"), UiNotifyLevel::Info);
 }
 
 #[cfg(test)]

@@ -15,16 +15,13 @@
 use crate::{
     APP_NAME,
     core::{
-        extensions::{Extension, ExtensionCommand, ExtensionMode, ExtensionTool},
+        extensions::{
+            CommandHost, Extension, ExtensionCommand, ExtensionMode, ExtensionTool, UiNotifyLevel,
+        },
         system_prompt::documentation_section,
     },
-    extensions::{
-        EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_DOC_HELPER, command_arg, util::send_prompt,
-    },
-    modes::interactive::{
-        app::{App, MsgLevel},
-        handlers::register_slash_command,
-    },
+    extensions::{EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_DOC_HELPER, command_arg},
+    modes::interactive::handlers::register_host_command,
 };
 use std::sync::Arc;
 
@@ -103,7 +100,7 @@ impl Extension for DocHelper {
 
     /// 注册时把 `command_help` 挂到斜杠命令表上。
     fn on_registered(&self) {
-        register_slash_command(EXT, CMD, command_help);
+        register_host_command(EXT, CMD, command_help);
     }
 }
 
@@ -111,28 +108,29 @@ impl Extension for DocHelper {
 /// 一条普通用户消息投出（空闲触发新回合，忙碌作为 steer 注入当前回合）。
 ///
 /// 注意：注入的是**用户消息**而非系统提示词，避免每轮改动前缀、保住缓存命中率。
-fn command_help(st: &mut App, raw: &str) -> bool {
+fn command_help(host: &mut dyn CommandHost, raw: &str) -> bool {
     let question = command_arg(raw).trim();
 
     if question.is_empty() {
-        st.push_msg(
-            format!(
+        host.push_message(
+            &format!(
                 "/help <question> — ask a question about {APP_NAME}; the agent will read its bundled docs.\n\n{}",
                 documentation_section()
             ),
-            MsgLevel::Info,
+            UiNotifyLevel::Info,
         );
         return false;
     }
 
     let text = format!("{}\n\nQuestion: {}", documentation_section(), question);
-    send_prompt(st, text); // 空闲开新回合，忙碌时 steer 进当前回合（不锁 agent）
+    host.send_prompt(&text); // 空闲开新回合，忙碌时并入当前回合（不锁 agent）
     false
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::modes::interactive::app::App;
     use crate::{
         core::{
             extensions::{

@@ -173,6 +173,26 @@ impl GuiApp {
             Trigger::File => self.refresh_suggest(cx),
         }
     }
+    /// 面板里没有候选时按 Enter：把面板输入原样补成 `/命令 参数`（`@` 则是 `@路径`）写回输入框。
+    ///
+    /// 候选面板的分词只认触发符后的那段，`/session 2` 这种带参数的命令永远匹配不到候选；
+    /// 不给这条出口的话，用户敲完参数就卡在「No matches」上，按 Enter 什么也不会发生。
+    pub(super) fn commit_suggest_input(&mut self) {
+        let Some(suggest) = self.suggest.clone() else {
+            return;
+        };
+        let prefix = match suggest.trigger {
+            Trigger::Command => "/",
+            Trigger::File => "@",
+        };
+        let text = format!("{prefix}{} ", self.suggest_input.text());
+        let end = self.editor.cursor_byte();
+        let start = suggest.start.min(end);
+        self.editor.replace_byte_range(start..end, &text);
+        self.suggest = None;
+        self.suggest_dismissed = None;
+    }
+
     /// 点击候选：选中它并写入输入框。
     pub(super) fn pick_suggestion(&mut self, index: usize, cx: &mut Context<Self>) {
         if let Some(suggest) = self.suggest.as_mut() {

@@ -172,6 +172,7 @@ impl GuiApp {
         }
         match &self.overlay {
             Some(Overlay::List(list)) => &list.query,
+            Some(Overlay::Extension(ext)) => &ext.input,
             _ => &self.editor,
         }
     }
@@ -199,6 +200,7 @@ impl GuiApp {
                 list.selected = 0;
                 &mut list.query
             }
+            Some(Overlay::Extension(ext)) => &mut ext.input,
             _ => &mut self.editor,
         }
     }
@@ -275,6 +277,13 @@ impl EntityInputHandler for GuiApp {
                 cx.notify();
                 return;
             }
+        }
+        // 这一个字符是「打开覆盖层输入行」的那个热键，别让它漏进刚出现的输入框
+        if let Some(char) = self.swallow_char.take()
+            && text.chars().eq(std::iter::once(char))
+        {
+            self.marked_range = None;
+            return;
         }
         let bytes = self.ime_range_bytes(range);
         self.ime_target_mut().replace_byte_range(bytes, text);

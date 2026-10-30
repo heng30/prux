@@ -19,8 +19,8 @@ mod theme;
 mod transcript;
 
 use crate::{
-    APP_NAME, cli::startup::Startup, core::settings_manager, embedded_bytes,
-    modes::interactive::agent_actor,
+    APP_NAME, cli::startup::Startup, core, core::settings_manager, embedded_bytes,
+    modes::interactive::agent_actor, utils::async_task,
 };
 use app::GuiApp;
 use gpui::{
@@ -47,6 +47,9 @@ const UI_FONT_BYTES: &[u8] = embedded_bytes!("fonts/SourceHanSansCN.otf");
 pub fn run(startup: Startup, rt: &Handle) {
     theme::set_ui_scale(settings_manager::read_settings_ui_scale());
 
+    // 视图线程没有 tokio 运行时：登记它，扩展的一次性异步任务（`/btw`、`/recap` 等）才能跑起来
+    async_task::install(rt.clone());
+
     // GUI 自己记住的明暗优先；没存过才用 --theme / settings.theme，最后回落暗色
     let gui_theme = settings_manager::read_settings_theme_gui();
     let theme = Theme::new(Theme::is_dark_theme(
@@ -65,6 +68,12 @@ pub fn run(startup: Startup, rt: &Handle) {
     ));
 
     let initial_messages = startup.initial_messages;
+
+    // `-a/--approve` / `--no-approve`：显式给了信任决定就不再弹启动信任面板
+    let trust_override = startup.reload_ctx.trust_override;
+
+    // 扩展的 UI 请求（`ask_prompt` / `ShowOverlay`…）只在 ui_ready 为真时才发出
+    core::extensions::set_ui_ready(true);
 
     Application::new().run(move |cx: &mut App| {
         _ = cx
@@ -88,8 +97,17 @@ pub fn run(startup: Startup, rt: &Handle) {
             ..Default::default()
         };
 
-        let view =
-            cx.new(|cx| GuiApp::new(theme, cmd_tx, event_rx, initial_messages, steer_inbox, cx));
+        let view = cx.new(|cx| {
+            GuiApp::new(
+                theme,
+                cmd_tx,
+                event_rx,
+                initial_messages,
+                steer_inbox,
+                trust_override,
+                cx,
+            )
+        });
 
         _ = cx.open_window(options, move |window, cx| {
             // Wayland 后端不会用 `TitlebarOptions::title` 设标题，得显式设一次
@@ -99,4 +117,6 @@ pub fn run(startup: Startup, rt: &Handle) {
             view
         });
     });
+
+    core::extensions::set_ui_ready(false);
 }

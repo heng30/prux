@@ -13,6 +13,7 @@ mod cancel;
 mod dock;
 mod footer;
 mod hooks;
+mod host;
 mod overlay;
 mod registry;
 mod renderers;
@@ -56,6 +57,10 @@ pub use cancel::{
 pub use dock::{DockLine, DockSection, DockSpan, dock_sections};
 pub use footer::{FooterCtx, FooterExtension, FooterLine, FooterSpan, git_branch};
 pub use hooks::ExtensionHook;
+pub use host::{
+    BoxedHandler, CommandHost, SlashCommandHandler, command_handler, register_command,
+    register_host_command,
+};
 pub use markdown::render as render_markdown_lines;
 pub use overlay::{
     OverlayEditor, OverlayEvent, OverlayInput, OverlayKey, OverlaySize, OverlayView, overlay_event,

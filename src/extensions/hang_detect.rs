@@ -40,6 +40,7 @@
 mod config;
 
 use crate::{
+    core::extensions::CommandHost,
     core::{
         extensions::{
             self, Extension, ExtensionCommand, ExtensionHook, ExtensionMode, ExtensionSetting,
@@ -51,7 +52,7 @@ use crate::{
     extensions::{
         EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_HANG_DETECT, command_arg, util::notify_text,
     },
-    modes::interactive::{app::App, handlers::register_slash_command},
+    modes::interactive::handlers::register_host_command,
 };
 use serde_json::Value;
 use std::{
@@ -410,7 +411,7 @@ impl Extension for HangDetect {
 
     /// 把 `/hang-detect` 的执行入口接线到 TUI 命令注册表。
     fn on_registered(&self) {
-        register_slash_command(EXT, CMD, command_hang_detect);
+        register_host_command(EXT, CMD, command_hang_detect);
     }
 
     /// 启用时物化配置文件并拉起看门狗线程（未启动才首次启动）；
@@ -481,7 +482,7 @@ impl Extension for HangDetect {
 }
 
 /// `/hang-detect` 命令分发。
-fn command_hang_detect(app: &mut App, raw: &str) -> bool {
+fn command_hang_detect(host: &mut dyn CommandHost, raw: &str) -> bool {
     let arg = command_arg(raw).trim();
     let (sub, rest) = match arg.split_once(char::is_whitespace) {
         Some((a, b)) => (a, b.trim()),
@@ -516,14 +517,7 @@ fn command_hang_detect(app: &mut App, raw: &str) -> bool {
             drop(st);
             notify_text(&lines.join("\n"), UiNotifyLevel::Info);
         }
-        "settings" => {
-            if app.ext_settings.is_open_for(EXT) {
-                app.ext_settings.close();
-            } else {
-                app.ext_settings.open(EXT);
-            }
-            app.dirty = true;
-        }
+        "settings" => host.open_extension_settings(EXT),
         "timeout" | "tool-timeout" | "recoveries" => {
             let key = match sub {
                 "timeout" => "timeoutSecs",
@@ -565,6 +559,7 @@ fn command_hang_detect(app: &mut App, raw: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::modes::interactive::app::App;
     use serde_json::json;
 
     /// 与触碰全局注册表 / 配置目录的测试串行，并把进程级看门狗状态复位到缺省。

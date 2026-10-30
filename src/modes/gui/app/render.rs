@@ -3,8 +3,8 @@
 //! 拆自 [`super::app`]：只搬渲染代码，状态与按键分发仍在父模块。
 
 use super::theme::{
-    CONTROL_H_MD, CONTROL_H_SM, FONT_BODY, FONT_CAPTION, FONT_HERO, FONT_SMALL, RADIUS_LG,
-    RADIUS_MD, RADIUS_SM, SPACE_LG, SPACE_MD, SPACE_SM, SPACE_XL, SPACE_XS,
+    CONTROL_H_MD, CONTROL_H_SM, DOCK_MAX_H, FONT_BODY, FONT_CAPTION, FONT_HERO, FONT_SMALL,
+    RADIUS_LG, RADIUS_MD, RADIUS_SM, SPACE_LG, SPACE_MD, SPACE_SM, SPACE_XL, SPACE_XS,
 };
 use super::{icon, status::BLINK_DIM_OPACITY, *};
 
@@ -317,7 +317,9 @@ impl GuiApp {
             let (Some(content), viewport) = (scroll.bounds_for_item(0), scroll.bounds()) else {
                 return;
             };
-            let target = viewport.bottom() - content.bottom();
+            // 内容不足一屏时底边在视口下方，差值才是正的：夹到 0 才算「已经在底部」，
+            // 否则空会话里永远判定为已滚开，新内容来了不跟随。
+            let target = (viewport.bottom() - content.bottom()).min(px(0.));
             let offset = scroll.offset().y;
             // 「上次钉底的偏移」还在原位 = 这仍是我们的地盘；否则是用户滚轮/拖滚动条动过了
             let owned = pinned.get().filter(|last| (*last - offset).abs() <= px(1.));
@@ -540,6 +542,56 @@ impl GuiApp {
     }
 
     /// 主区：空态欢迎页，或对话流 + 输入卡片 + 底部状态。
+    /// 停靠面板：扩展提供的只读状态行（段间空一行），贴在输入卡片上方，超过高度就内部滚动。
+    ///
+    /// 与 TUI 同语义：`dock_visible` 为假或没有扩展提供内容时整块不渲染（不占布局）。
+    fn render_dock(&self, theme: &Theme) -> Option<AnyElement> {
+        if !self.dock_visible {
+            return None;
+        }
+        let sections = crate::core::extensions::dock_sections();
+        if sections.is_empty() {
+            return None;
+        }
+        let mut body = div()
+            .id("dock")
+            .max_h(px(DOCK_MAX_H))
+            .flex()
+            .flex_col()
+            .overflow_y_scroll()
+            .track_scroll(&self.dock_scroll);
+        for (index, section) in sections.iter().enumerate() {
+            if index > 0 {
+                // 段间一行空白（TUI 用空行分隔，段内行不空）
+                body = body.child(div().h(px(SPACE_XS)));
+            }
+            for line in &section.lines {
+                body = body.child(overlay::render_dock_line(line, theme));
+            }
+        }
+        Some(
+            div()
+                .flex_none()
+                .w_full()
+                .px(px(SPACE_XL))
+                .pb(px(SPACE_XS))
+                .child(
+                    div()
+                        .max_w(px(CONTENT_MAX_WIDTH))
+                        .mx_auto()
+                        .rounded(px(RADIUS_MD))
+                        .border_1()
+                        .border_color(theme.border)
+                        .bg(theme.inset)
+                        .px(px(SPACE_MD))
+                        .py(px(SPACE_SM))
+                        .text_size(px(FONT_SMALL))
+                        .child(body),
+                )
+                .into_any_element(),
+        )
+    }
+
     fn render_main(&mut self, transcript: AnyElement, composer_card: gpui::Div) -> AnyElement {
         let theme = self.theme.clone();
         let empty = self.transcript.blocks().is_empty();
@@ -587,6 +639,7 @@ impl GuiApp {
                                         )),
                                 ),
                         )
+                        .children(self.render_dock(&theme))
                         .child(measured_composer(
                             composer_card,
                             self.composer_bounds.clone(),
@@ -612,6 +665,9 @@ impl GuiApp {
                 .child(transcript);
             if let Some(pending) = self.render_pending() {
                 column = column.child(pending);
+            }
+            if let Some(dock) = self.render_dock(&theme) {
+                column = column.child(dock);
             }
             column
                 .child(measured_composer(
@@ -819,6 +875,7 @@ impl GuiApp {
         let root = root.child(self.hover_probe(!empty, cx));
         let root = self.render_dropdown(root, &theme, window, cx);
         let root = self.render_suggest_overlay(root, &theme, cx);
+        let root = self.render_extension_overlay(root, &theme, window, cx);
         let root = self.render_session_menu(root, &theme, cx);
         self.render_dialog(root, &theme, cx)
     }
@@ -830,7 +887,12 @@ impl GuiApp {
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
-        if let Some(overlay) = &self.overlay {
+        // 扩展覆盖层贴在输入框上方（见 `render_extension_overlay`），不走居中模态
+        if let Some(overlay) = self
+            .overlay
+            .as_ref()
+            .filter(|overlay| !matches!(overlay, Overlay::Extension(_)))
+        {
             return root.child(
                 div()
                     .absolute()
@@ -847,7 +909,7 @@ impl GuiApp {
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, _, _, cx| {
-                            this.overlay = None;
+                            this.dismiss_overlay();
                             this.skills_draft = None;
                             this.extensions_draft = None;
                             cx.notify();
@@ -1012,6 +1074,34 @@ impl GuiApp {
             );
         }
         root
+    }
+
+    /// 扩展覆盖层（`ShowOverlay`）：贴在输入卡片上沿弹出，内容由扩展持有。
+    fn render_extension_overlay(
+        &mut self,
+        root: gpui::Div,
+        theme: &Theme,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let (Some(card), Some(overlay)) = (self.composer_bounds.get(), self.overlay.as_ref())
+        else {
+            return root;
+        };
+        if !matches!(overlay, Overlay::Extension(_)) {
+            return root;
+        }
+        // 底边贴着输入卡片上沿：覆盖层高度由内容决定，用 bottom 定位才不会被估高
+        let bottom = window.viewport_size().height - card.origin.y + px(SUGGEST_GAP);
+        root.child(
+            div()
+                .absolute()
+                .left(card.origin.x)
+                .w(card.size.width)
+                .bottom(bottom)
+                .occlude()
+                .child(overlay::render(overlay, theme, cx)),
+        )
     }
 
     /// 会话行右键菜单（重命名 / 删除）。

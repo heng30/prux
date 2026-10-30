@@ -109,6 +109,12 @@ pub struct Tool {
     pub name: String,
     /// 入参摘要（单行 JSON）
     pub args: String,
+    /// 目标文件路径（edit / write：卡片头部显示它，参数摘要里不再重复）
+    pub path: Option<String>,
+    /// edit 工具的 diff（调用阶段是预览，结果回来后换成 `details.diff`）
+    pub diff: Option<String>,
+    /// write 工具要写入的文件正文（调用阶段折叠预览，同 TUI）
+    pub content: Option<String>,
     /// 输出文本
     pub output: String,
     /// 执行状态
@@ -296,8 +302,8 @@ impl Transcript {
         self.push_note(Note::Error("Operation aborted".to_string()));
     }
 
-    /// 从会话历史重建（切会话后渲染既有对话）。
-    pub fn from_messages(messages: &[AgentMessage]) -> Self {
+    /// 从会话历史重建（切会话后渲染既有对话）；`cwd` 用于算 edit 的预览 diff。
+    pub fn from_messages(messages: &[AgentMessage], cwd: &str) -> Self {
         let mut transcript = Self::default();
         for message in messages {
             match message.role.as_str() {
@@ -328,7 +334,7 @@ impl Transcript {
                             ..
                         } = block
                         {
-                            transcript.push_tool(id, name, &summarize_args(arguments));
+                            transcript.push_tool(id, name, arguments, cwd);
                         }
                     }
                 }
@@ -355,6 +361,13 @@ impl Transcript {
                         && let Some(Block::Tool(tool)) = transcript.blocks.get_mut(index)
                     {
                         tool.output = output;
+                        tool.diff = message
+                            .details
+                            .as_ref()
+                            .and_then(|details| details.get("diff"))
+                            .and_then(Value::as_str)
+                            .map(str::to_string)
+                            .or(tool.diff.clone());
                         tool.images = message
                             .content
                             .iter()
@@ -379,8 +392,8 @@ impl Transcript {
         transcript
     }
 
-    /// 应用一条内核 JSON 事件。
-    pub fn apply(&mut self, event: &Value) {
+    /// 应用一条内核 JSON 事件；`cwd` 用于算 edit 调用阶段的预览 diff。
+    pub fn apply(&mut self, event: &Value, cwd: &str) {
         let kind = event.get("type").and_then(Value::as_str).unwrap_or("");
         match kind {
             "message_start" => {
@@ -465,8 +478,8 @@ impl Transcript {
                     .and_then(Value::as_str)
                     .unwrap_or("tool")
                     .to_string();
-                let args = event.get("args").map(summarize_args).unwrap_or_default();
-                self.push_tool(&id, &name, &args);
+                let args = event.get("args").cloned().unwrap_or(Value::Null);
+                self.push_tool(&id, &name, &args, cwd);
                 self.open_assistant = None;
             }
             "tool_execution_update" => {
@@ -529,9 +542,19 @@ impl Transcript {
                             .collect()
                     })
                     .unwrap_or_default();
+                // edit 的最终 diff 在 `result.details.diff`（优先于调用阶段的预览）
+                let diff = event
+                    .get("result")
+                    .and_then(|r| r.get("details"))
+                    .and_then(|d| d.get("diff"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
                 if let Some(Block::Tool(tool)) = self.tool_mut(id) {
                     if !output.is_empty() {
                         tool.output = output;
+                    }
+                    if diff.is_some() {
+                        tool.diff = diff;
                     }
                     if !images.is_empty() {
                         tool.images = images;
@@ -564,11 +587,41 @@ impl Transcript {
         }
     }
 
-    /// 追加一次工具调用。
-    fn push_tool(&mut self, id: &str, name: &str, args: &str) {
+    /// 追加一次工具调用：edit 在这里就算好预览 diff（一次文件读，不必每帧重算）。
+    fn push_tool(&mut self, id: &str, name: &str, args: &Value, cwd: &str) {
+        let path = args
+            .get("path")
+            .or_else(|| args.get("file_path"))
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        // edit / write 的参数体量很大（整段 edits / content），头部只留路径
+        let summary = if matches!(name, "edit" | "write") && path.is_some() {
+            String::new()
+        } else {
+            summarize_args(args)
+        };
+        let content = (name == "write")
+            .then(|| {
+                args.get("content")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+            .flatten();
+        let diff = (name == "edit")
+            .then(|| {
+                crate::core::tools::preview_edit_diff(
+                    path.as_deref().unwrap_or(""),
+                    args.get("edits").unwrap_or(&Value::Null),
+                    cwd,
+                )
+            })
+            .flatten();
         self.blocks.push(Block::Tool(Tool {
             name: name.to_string(),
-            args: args.to_string(),
+            args: summary,
+            path,
+            diff,
+            content,
             output: String::new(),
             status: ToolStatus::Running,
             expanded: None,
@@ -657,9 +710,266 @@ fn line_color(line: &str, theme: &Theme) -> Hsla {
     }
 }
 
+/// diff 的一行：gutter（前缀 + 行号）、配色与内容片段。
+///
+/// 片段上的 `true` 是词级差异标记（单行替换时只有变动的 token 为真）。
+#[derive(Debug)]
+struct DiffRow {
+    /// 行号列文本（含 `-`/`+`/空格前缀；块头行直接放整行）
+    gutter: String,
+    /// 这一行属于哪种改动
+    kind: DiffKind,
+    /// 内容片段
+    spans: Vec<(String, bool)>,
+}
+
+/// diff 行的改动类型，决定配色。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DiffKind {
+    /// 新增行
+    Added,
+    /// 删除行
+    Removed,
+    /// 上下文行 / 块头 / 省略号
+    Context,
+}
+
+/// 把 diff 文本切成带行号与词级标记的行。
+///
+/// 恰好 1 删 1 增（单行替换）时做词级 diff，只有变动片段带标记；
+/// 其余情况整行内容算一个片段。
+fn diff_rows(diff: &str) -> Vec<DiffRow> {
+    let raw: Vec<&str> = diff.split('\n').collect();
+    let mut out: Vec<DiffRow> = Vec::new();
+    let mut i = 0usize;
+    while i < raw.len() {
+        if diff_prefix(raw[i]) == Some('-') {
+            let mut removed: Vec<(&str, &str)> = Vec::new();
+            while i < raw.len() && diff_prefix(raw[i]) == Some('-') {
+                removed.push(split_diff_line(raw[i]));
+                i += 1;
+            }
+            let mut added: Vec<(&str, &str)> = Vec::new();
+            while i < raw.len() && diff_prefix(raw[i]) == Some('+') {
+                added.push(split_diff_line(raw[i]));
+                i += 1;
+            }
+            if removed.len() == 1 && added.len() == 1 {
+                let (num, content) = removed[0];
+                let (anum, acontent) = added[0];
+                let (old_spans, new_spans) = intra_line_spans(content, acontent);
+                out.push(DiffRow {
+                    gutter: format!("-{num}"),
+                    kind: DiffKind::Removed,
+                    spans: old_spans,
+                });
+                out.push(DiffRow {
+                    gutter: format!("+{anum}"),
+                    kind: DiffKind::Added,
+                    spans: new_spans,
+                });
+            } else {
+                for (num, content) in removed {
+                    out.push(DiffRow {
+                        gutter: format!("-{num}"),
+                        kind: DiffKind::Removed,
+                        spans: vec![(content.to_string(), false)],
+                    });
+                }
+                for (num, content) in added {
+                    out.push(DiffRow {
+                        gutter: format!("+{num}"),
+                        kind: DiffKind::Added,
+                        spans: vec![(content.to_string(), false)],
+                    });
+                }
+            }
+            continue;
+        }
+
+        let line = raw[i];
+        i += 1;
+        match diff_prefix(line) {
+            Some('+') => {
+                let (num, content) = split_diff_line(line);
+                out.push(DiffRow {
+                    gutter: format!("+{num}"),
+                    kind: DiffKind::Added,
+                    spans: vec![(content.to_string(), false)],
+                });
+            }
+            Some(' ') => {
+                let (num, content) = split_diff_line(line);
+                out.push(DiffRow {
+                    gutter: num.to_string(),
+                    kind: DiffKind::Context,
+                    spans: vec![(content.to_string(), false)],
+                });
+            }
+            // 块头 / 文件头 / 空行：整行原样，用上下文配色
+            _ => out.push(DiffRow {
+                gutter: String::new(),
+                kind: DiffKind::Context,
+                spans: vec![(line.to_string(), false)],
+            }),
+        }
+    }
+    out
+}
+
+/// diff 行前缀（`-` / `+` / 空格），非 diff 行返回 None。
+fn diff_prefix(line: &str) -> Option<char> {
+    line.chars()
+        .next()
+        .filter(|c| *c == ' ' || *c == '-' || *c == '+')
+}
+
+/// 解析 `前缀 + 行号(含右对齐空格) + 内容`，返回 (行号串, 内容)。
+fn split_diff_line(line: &str) -> (&str, &str) {
+    let rest = line.get(1..).unwrap_or("");
+    let bytes = rest.as_bytes();
+    let mut idx = 0usize;
+    while idx < bytes.len() && bytes[idx] == b' ' {
+        idx += 1;
+    }
+    while idx < bytes.len() && bytes[idx].is_ascii_digit() {
+        idx += 1;
+    }
+    let num = &rest[..idx];
+    let mut content = &rest[idx..];
+    content = content.strip_prefix(' ').unwrap_or(content);
+    (num, content)
+}
+
+/// 词级 diff 的一侧：`(片段, 是否变动)` 列表。
+type DiffSpans = Vec<(String, bool)>;
+
+/// 单词级 diff：按空白/非空白切 token，`similar` 求差，变动片段带标记。
+fn intra_line_spans(old: &str, new: &str) -> (DiffSpans, DiffSpans) {
+    let old_toks = word_tokens(old);
+    let new_toks = word_tokens(new);
+    let diff = similar::TextDiff::from_slices(&old_toks, &new_toks);
+    let mut removed: DiffSpans = Vec::new();
+    let mut added: DiffSpans = Vec::new();
+    let mut first_removed = true;
+    let mut first_added = true;
+    for change in diff.iter_all_changes() {
+        let value: &str = change.value();
+        let is_ws = value.chars().all(char::is_whitespace);
+        match change.tag() {
+            similar::ChangeTag::Delete => {
+                let text = if first_removed {
+                    first_removed = false;
+                    value.trim_start_matches(char::is_whitespace)
+                } else {
+                    value
+                };
+                if !text.is_empty() {
+                    removed.push((text.to_string(), !is_ws));
+                }
+            }
+            similar::ChangeTag::Insert => {
+                let text = if first_added {
+                    first_added = false;
+                    value.trim_start_matches(char::is_whitespace)
+                } else {
+                    value
+                };
+                if !text.is_empty() {
+                    added.push((text.to_string(), !is_ws));
+                }
+            }
+            similar::ChangeTag::Equal => {
+                removed.push((value.to_string(), false));
+                added.push((value.to_string(), false));
+            }
+        }
+    }
+    (removed, added)
+}
+
+/// 按空白/非空白边界切 token。
+fn word_tokens(text: &str) -> Vec<&str> {
+    let mut tokens: Vec<&str> = Vec::new();
+    let mut start = 0usize;
+    let mut last_ws: Option<bool> = None;
+    for (idx, ch) in text.char_indices() {
+        let ws = ch.is_whitespace();
+        if let Some(prev) = last_ws
+            && prev != ws
+        {
+            tokens.push(&text[start..idx]);
+            start = idx;
+        }
+        last_ws = Some(ws);
+    }
+    if start < text.len() {
+        tokens.push(&text[start..]);
+    }
+    tokens
+}
+
+/// edit 工具的 diff 卡片：行号 gutter + 增/删/上下文配色，词级变动加底色。
+fn diff_body(diff: &str, theme: &Theme, max: usize, expanded: bool) -> AnyElement {
+    let rows = diff_rows(diff.trim_end());
+    let total = rows.len();
+    let mut column = div()
+        .w_full()
+        .flex()
+        .flex_col()
+        .overflow_hidden()
+        .text_size(px(FONT_SMALL));
+    for row in rows.into_iter().take(max) {
+        let color = match row.kind {
+            DiffKind::Added => theme.success,
+            DiffKind::Removed => theme.danger,
+            DiffKind::Context => theme.text_secondary,
+        };
+        let tint = match row.kind {
+            DiffKind::Added => theme.success.opacity(0.22),
+            DiffKind::Removed => theme.danger.opacity(0.22),
+            DiffKind::Context => theme.overlay,
+        };
+        let mut line = div().w_full().flex().items_start().gap(px(SPACE_SM));
+        if !row.gutter.is_empty() {
+            line = line.child(
+                div()
+                    .flex_none()
+                    .text_color(color.opacity(0.7))
+                    .child(SharedString::from(row.gutter)),
+            );
+        }
+        let mut content = div()
+            .min_w_0()
+            .flex_1()
+            .text_color(color)
+            .flex()
+            .flex_wrap();
+        for (text, changed) in row.spans {
+            let mut span = div().child(SharedString::from(text));
+            if changed {
+                span = span.rounded(px(2.)).bg(tint);
+            }
+            content = content.child(span);
+        }
+        column = column.child(line.child(content));
+    }
+    if let Some(hint) = output_hint(total.saturating_sub(max), expanded) {
+        column = column.child(
+            div()
+                .text_size(px(FONT_CAPTION))
+                .text_color(theme.text_ghost)
+                .child(SharedString::from(hint)),
+        );
+    }
+    column.into_any_element()
+}
+
 /// 工具输出正文：逐行着色，超过 `max` 行截断（按行截断而不是裁剪像素，
 /// 被裁掉的部分不计入布局高度，会盖住输入卡片），剩下的行数用与用户气泡同样式的提示标出。
-fn output_body(text: &str, theme: &Theme, max: usize, expanded: bool) -> AnyElement {
+///
+/// `colored` 为假时统一用次要色——write 写入的文件正文里 `+`/`-` 开头只是内容，不是 diff。
+fn output_body(text: &str, theme: &Theme, max: usize, expanded: bool, colored: bool) -> AnyElement {
     let mut column = div()
         .w_full()
         .flex()
@@ -674,7 +984,11 @@ fn output_body(text: &str, theme: &Theme, max: usize, expanded: bool) -> AnyElem
             div()
                 .w_full()
                 .truncate()
-                .text_color(line_color(line, theme))
+                .text_color(if colored {
+                    line_color(line, theme)
+                } else {
+                    theme.text_secondary
+                })
                 .child(SharedString::from(shown)),
         );
     }
@@ -936,6 +1250,12 @@ fn tool_block(
         // 点卡片展开/收起这一块的输出
         .on_click(cx.listener(move |this, _, _, cx| this.toggle_tool(index, cx)));
 
+    // edit / write 的参数体量很大，头部改显文件路径（参数摘要为空）
+    let header_text = if tool.args.is_empty() {
+        tool.path.clone().unwrap_or_default()
+    } else {
+        tool.args.clone()
+    };
     card = card.child(
         div()
             .flex()
@@ -957,7 +1277,7 @@ fn tool_block(
                     .text_size(px(FONT_SMALL))
                     // shell 类调用用代码色，跟普通工具区分开
                     .text_color(tool_arg_color(&tool.name, theme))
-                    .child(SharedString::from(tool.args.clone())),
+                    .child(SharedString::from(header_text)),
             )
             .child(
                 div()
@@ -967,15 +1287,23 @@ fn tool_block(
             ),
     );
 
-    if !tool.output.trim().is_empty() {
-        // 按行截断而不是靠 `max_h` 裁剪：被裁掉的那部分不计入布局高度，
-        // 会盖在输入卡片上，也会让钉底算错。
-        let lines = if expanded {
-            EXPANDED_OUTPUT_LINES
-        } else {
-            COLLAPSED_OUTPUT_LINES
-        };
-        card = card.child(output_body(&tool.output, theme, lines, expanded));
+    // 按行截断而不是靠 `max_h` 裁剪：被裁掉的那部分不计入布局高度，
+    // 会盖在输入卡片上，也会让钉底算错。
+    let max_lines = if expanded {
+        EXPANDED_OUTPUT_LINES
+    } else {
+        COLLAPSED_OUTPUT_LINES
+    };
+
+    if let Some(diff) = &tool.diff {
+        card = card.child(diff_body(diff, theme, max_lines, expanded));
+    } else if let Some(content) = &tool.content {
+        // write：先把要写入的正文折起来看一眼，再看工具结果
+        card = card.child(output_body(content, theme, max_lines, expanded, false));
+    }
+
+    if tool.diff.is_none() && !tool.output.trim().is_empty() {
+        card = card.child(output_body(&tool.output, theme, max_lines, expanded, true));
     }
 
     for image in &tool.images {
@@ -1354,7 +1682,7 @@ mod tests {
     #[test]
     fn abort_fails_running_tools_and_notes_interruption() {
         let mut transcript = Transcript::default();
-        transcript.push_tool("t1", "bash", "ls");
+        transcript.push_tool("t1", "bash", &serde_json::json!({ "command": "ls" }), ".");
         transcript.abort();
         let Block::Tool(tool) = &transcript.blocks()[0] else {
             panic!("第一块应是工具块");
@@ -1441,6 +1769,57 @@ mod tests {
     }
 
     use super::*;
+
+    /// diff 解析：单行替换做词级标记、多行删除/新增整行着色、块头归上下文。
+    #[test]
+    fn diff_rows_mark_word_level_changes() {
+        let diff = "-1 old value here\n+1 new value here\n 2 context line";
+        let rows = diff_rows(diff);
+        assert_eq!(rows.len(), 3, "1 删 + 1 增 + 1 上下文");
+        assert_eq!(rows[0].gutter, "-1");
+        assert_eq!(rows[1].gutter, "+1");
+        // 只有一个 token 变了：其余内容不标记
+        let changed: String = rows[0]
+            .spans
+            .iter()
+            .filter(|(_, changed)| *changed)
+            .map(|(text, _)| text.as_str())
+            .collect();
+        assert_eq!(changed, "old");
+        let joined: String = rows[1].spans.iter().map(|(t, _)| t.as_str()).collect();
+        assert_eq!(joined, "new value here");
+        assert_eq!(rows[2].gutter, "2");
+    }
+
+    /// write 调用：正文留给卡片折叠预览，头部只留路径（参数体量太大）。
+    #[test]
+    fn write_tool_keeps_its_content_for_the_card() {
+        let mut transcript = Transcript::default();
+        transcript.push_tool(
+            "w1",
+            "write",
+            &serde_json::json!({ "path": "/tmp/x", "content": "a\nb" }),
+            ".",
+        );
+        let Block::Tool(tool) = &transcript.blocks()[0] else {
+            panic!("第一块应是工具块");
+        };
+        assert_eq!(tool.path.as_deref(), Some("/tmp/x"));
+        assert_eq!(tool.content.as_deref(), Some("a\nb"));
+        assert!(tool.args.is_empty(), "头部只留路径");
+        assert!(tool.diff.is_none(), "write 不是 diff");
+    }
+
+    /// 多行删除/新增不做词级 diff（行数不等时逐行整行着色）。
+    #[test]
+    fn diff_rows_keep_bulk_changes_whole() {
+        let diff = "-1 a\n-2 b\n+1 c";
+        let rows = diff_rows(diff);
+        assert_eq!(rows.len(), 3);
+        assert!(rows.iter().all(|row| row.spans.len() == 1));
+        assert_eq!(rows[0].kind, DiffKind::Removed);
+        assert_eq!(rows[2].kind, DiffKind::Added);
+    }
 
     /// 工具返回的图片：base64 解不开或 MIME 不认识时不落盘。
     #[test]

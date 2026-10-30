@@ -46,7 +46,7 @@ use crate::{
         EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_VET,
         util::{notify_text, truncate_chars},
     },
-    modes::interactive::handlers::register_slash_command,
+    modes::interactive::handlers::register_host_command,
     utils::{glyphs::DEF_TRAILING_ELLIPSIS, paths::cwd, time::format_duration_ms},
 };
 use config::{Announce, Config, EXT};
@@ -248,7 +248,7 @@ impl Extension for Vet {
 
     /// 接线 `/vet` 执行入口。
     fn on_registered(&self) {
-        register_slash_command(EXT, config::CMD, command::handle);
+        register_host_command(EXT, config::CMD, command::handle);
     }
 
     /// 订阅结算边界（自动跑检查）、工具前钩子（记脏标记）与提交通知（复位回合状态）。

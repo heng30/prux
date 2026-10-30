@@ -2,6 +2,37 @@
 
 use super::*;
 
+/// 命令面板不带 `/` 面板的重复条目：只允许 skills / extension / settings 两边都在。
+#[test]
+fn command_palette_keeps_only_the_three_shared_entries() {
+    let allowed = ["skills", "extension", "settings"];
+    for entry in super::actions::command_palette_entries() {
+        assert!(
+            !entry.label.contains("/scoped-models"),
+            "配置类命令不该在面板里: {}",
+            entry.label
+        );
+        let Some(slash) = entry.label.strip_prefix('/') else {
+            continue;
+        };
+        assert!(allowed.contains(&slash), "`/{slash}` 只该出现在 `/` 面板里");
+    }
+    // 允许重复的三个必须都在面板里
+    let labels: Vec<String> = super::actions::command_palette_entries()
+        .into_iter()
+        .map(|entry| entry.label)
+        .collect();
+    for name in allowed {
+        // 面板里的名字是标题大小写（Extensions…），这里按包含关系查
+        assert!(
+            labels
+                .iter()
+                .any(|label| label.to_lowercase().starts_with(&name[..name.len().min(5)])),
+            "面板缺少 {name}: {labels:?}"
+        );
+    }
+}
+
 /// 模型循环按 scope 走：顺序跟 scope，不可用的跳过；scope 为空才用全部模型。
 #[test]
 fn cycle_models_follows_scope_order() {

@@ -63,6 +63,9 @@ pub async fn run(
             _ = sink.send(GuiEvent::Agent(ev));
         }));
         publish(&agent, &events);
+        // 启动时就把已载入的会话历史交给视图：否则续接会话打开后对话区是空的，
+        // 依赖历史的扩展命令（`/btw`、`/recap` 的摘录）也拿不到内容
+        _ = events.send(GuiEvent::History(agent.messages.clone()));
     }
 
     let mut on_round: Option<RoundFuture> = None;
@@ -178,6 +181,15 @@ async fn apply(agent: &mut Agent, cmd: AgentCommand, events: &UnboundedSender<Gu
             };
             _ = events.send(GuiEvent::Notice(message));
         }
+        AgentCommand::SystemPrompt => {
+            let prompt = agent.system_prompt.trim();
+            let message = if prompt.is_empty() {
+                "system prompt is empty".to_string()
+            } else {
+                prompt.to_string()
+            };
+            _ = events.send(GuiEvent::Notice(message));
+        }
         AgentCommand::DebugInfo => {
             let mut lines = vec![
                 format!("provider: {}", agent.model.provider),
@@ -249,6 +261,27 @@ async fn apply(agent: &mut Agent, cmd: AgentCommand, events: &UnboundedSender<Gu
         }
         AgentCommand::NewSession => new_session(agent, events),
         AgentCommand::ResumeSession { path } => resume_session(agent, &path, events),
+        // 登录后立刻用新 key（同 TUI）：当前模型就是这个 provider 时直接换 key
+        AgentCommand::ApplyKey { provider, key } => {
+            if agent.model.provider == provider {
+                agent.model.api_key = key;
+            }
+        }
+        // 扩展 / 信任决策变了要重建工具，否则下一轮还是旧工具集
+        AgentCommand::RebuildTools => agent.rebuild_tools(),
+        // 扩展持久化（`PersistSessionEntry`）：追加自定义条目并回执，扩展据此知道写盘成功
+        AgentCommand::AppendCustomEntry { custom_type, data } => {
+            let id = agent
+                .session
+                .as_mut()
+                .map(|session| session.append_custom_entry(&custom_type, data))
+                .unwrap_or_default();
+            agent.emit(serde_json::json!({
+                "type": "extension:entry_persisted",
+                "customType": custom_type,
+                "entryId": id
+            }));
+        }
         AgentCommand::Rewind => {
             if let Err(e) = agent.rewind_last_user_input() {
                 _ = events.send(GuiEvent::Error(e.to_string()));

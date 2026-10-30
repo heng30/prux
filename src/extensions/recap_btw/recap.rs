@@ -12,7 +12,9 @@
 use super::shared;
 use crate::{
     core::{
-        extensions::{Extension, ExtensionCommand, ExtensionMode, ExtensionTool, UiNotifyLevel},
+        extensions::{
+            CommandHost, Extension, ExtensionCommand, ExtensionMode, ExtensionTool, UiNotifyLevel,
+        },
         provider::AgentMessage,
         session_manager::Session,
     },
@@ -20,10 +22,7 @@ use crate::{
         EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_RECAP,
         util::{notify_text, session_id_of},
     },
-    modes::interactive::{
-        app::{App, MsgLevel},
-        handlers::register_slash_command,
-    },
+    modes::interactive::handlers::register_host_command,
     utils::{glyphs::DEF_RECAP, truncate::truncate_chars},
 };
 use std::sync::Arc;
@@ -96,7 +95,7 @@ impl Extension for Recap {
 
     /// 注册 `/recap` 的 handler。
     fn on_registered(&self) {
-        register_slash_command(EXT, "recap", command_recap);
+        register_host_command(EXT, "recap", command_recap);
     }
 
     /// 记住当前会话 id（一次性请求会带上它做提示缓存路由）。
@@ -111,28 +110,32 @@ impl Extension for Recap {
 }
 
 /// `/recap` handler：把最近摘录交给一次性请求，结果作为系统消息输出。
-fn command_recap(st: &mut App, _raw: &str) -> bool {
+fn command_recap(host: &mut dyn CommandHost, _raw: &str) -> bool {
     // 本会话中途启用时会话钩子没跑过，槽里没有 id（opencode 会报缺 x-opencode-session）
-    shared::refresh_session_from_app(st);
+    if let Some(path) = host.session_path()
+        && let Some(id) = session_id_of(Some(&path))
+    {
+        shared::remember_session(Some(id));
+    }
 
-    let Some((provider, model_id)) = shared::current_model(st) else {
-        st.push_msg(
-            "No model is selected yet. Pick one with /model, then try again.".to_string(),
-            MsgLevel::Warning,
+    let Some((provider, model_id)) = host.current_model() else {
+        host.push_message(
+            "No model is selected yet. Pick one with /model, then try again.",
+            UiNotifyLevel::Warning,
         );
         return false;
     };
 
-    let excerpt = shared::build_excerpt(&st.messages, EXCERPT_MESSAGES, EXCERPT_CHARS);
+    let excerpt = host.transcript_excerpt(EXCERPT_MESSAGES, EXCERPT_CHARS);
     if excerpt.trim().is_empty() {
-        st.push_msg(
-            "Nothing to summarize yet — this session has no messages.".to_string(),
-            MsgLevel::Info,
+        host.push_message(
+            "Nothing to summarize yet — this session has no messages.",
+            UiNotifyLevel::Info,
         );
         return false;
     }
 
-    st.set_status_msg("creating recap…");
+    host.set_status("creating recap…");
 
     if let Err(e) =
         shared::spawn_one_shot(provider, model_id, SYSTEM, excerpt, MAX_TOKENS, |result| {
@@ -172,6 +175,7 @@ fn normalize_recap(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::modes::interactive::app::App;
     use crate::{core::extensions::take_pending_ui, test_support::AUTH_TEST_LOCK};
     use std::sync::MutexGuard;
 

@@ -23,9 +23,9 @@ use crate::{
     APP_NAME,
     core::{
         extensions::{
-            DockLine, DockSpan, Extension, ExtensionCommand, ExtensionHook, ExtensionMode,
-            ExtensionTool, ExtensionUiRequest, OverlayEvent, OverlaySize, OverlayView,
-            SubcommandDef, next_ui_id, request_ui,
+            CommandHost, DockLine, DockSpan, Extension, ExtensionCommand, ExtensionHook,
+            ExtensionMode, ExtensionTool, ExtensionUiRequest, OverlayEvent, OverlaySize,
+            OverlayView, SubcommandDef, UiNotifyLevel, next_ui_id, request_ui,
         },
         model_resolver, runtime, settings_manager,
     },
@@ -33,11 +33,8 @@ use crate::{
         ACCENT, DIM, ERROR, EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_DOCTOR, SUCCESS,
         WARNING, command_arg, util::default_user_agent,
     },
-    modes::interactive::{
-        app::{App, MsgLevel},
-        handlers::register_slash_command,
-    },
-    utils::{glyphs::DEF_ARROW_UP_DOWN, http, proxy},
+    modes::interactive::handlers::register_host_command,
+    utils::{async_task, glyphs::DEF_ARROW_UP_DOWN, http, proxy},
 };
 use futures_util::StreamExt;
 use std::{
@@ -191,7 +188,7 @@ impl Extension for Doctor {
 
     /// 注册 `/doctor` 的 handler 到斜杠命令表。
     fn on_registered(&self) {
-        register_slash_command(EXT, "doctor", command_doctor);
+        register_host_command(EXT, "doctor", command_doctor);
     }
 
     /// 禁用时收起面板并清状态：禁用后框架不再轮询本扩展。
@@ -285,13 +282,13 @@ fn clear(id: Option<u64>) -> bool {
 }
 
 /// `/doctor` handler：解析子命令 → 后台并发探测 → 打开面板。
-fn command_doctor(st: &mut App, raw: &str) -> bool {
+fn command_doctor(host: &mut dyn CommandHost, raw: &str) -> bool {
     match command_arg(raw).trim() {
         "" => start_probe(false),
         "summary" => start_probe(true),
-        other => st.push_msg(
-            format!("Unknown /doctor subcommand: {other}. Use `summary` or no argument."),
-            MsgLevel::Warning,
+        other => host.push_message(
+            &format!("Unknown /doctor subcommand: {other}. Use `summary` or no argument."),
+            UiNotifyLevel::Warning,
         ),
     }
     false
@@ -321,15 +318,15 @@ fn start_probe(summary: bool) {
         return;
     }
 
-    match tokio::runtime::Handle::try_current() {
-        Ok(handle) => {
+    match async_task::handle() {
+        Some(handle) => {
             handle.spawn(async move {
                 let results = run_probes(targets).await;
                 finish_probe(id, results, None);
             });
         }
         // 单测等无 tokio 运行时的路径：不发网络请求，直接提示（不 panic）
-        Err(_) => finish_probe(
+        None => finish_probe(
             id,
             Vec::new(),
             Some("no async runtime: network probes skipped".to_string()),
@@ -634,6 +631,7 @@ fn summary_lines(results: &[ProbeResult]) -> Vec<DockLine> {
 mod tests {
     use super::*;
     use crate::core::extensions::OverlayKey;
+    use crate::modes::interactive::app::App;
     use crate::test_support::{AUTH_TEST_LOCK, AgentDirGuard, run_with_timeout};
     use tokio::{
         io::{AsyncReadExt as _, AsyncWriteExt as _},

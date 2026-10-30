@@ -11,6 +11,7 @@
 //! - [`menus`]：下拉菜单、会话菜单与拖拽；
 //! - [`panels`]：右侧面板与列表选择页；
 //! - [`suggest`]：输入补全面板；
+//! - [`ui`]：扩展 UI 请求（选择弹框 / 扩展覆盖层 / 通知）；
 //! - [`status`]：状态栏文案与驱动它的计时/速率采样。
 
 mod actions;
@@ -22,6 +23,7 @@ mod panels;
 mod render;
 mod status;
 mod suggest;
+mod ui;
 
 #[cfg(test)]
 mod tests;
@@ -52,7 +54,7 @@ use super::{
 use crate::{
     cli::session_picker::ProgressiveMetas,
     core::{
-        extensions::{self, ExtensionMode, git_branch},
+        extensions::{self, ExtensionMode, OverlayKey, dispatch_agent_event, git_branch},
         model_scope::ScopedModel,
         prompt_history::HistoryEntry,
         provider::AgentMessage,
@@ -316,6 +318,8 @@ pub struct GuiApp {
     skills_draft: Option<Vec<String>>,
     /// `/scoped-models` 面板的草稿启用名单（None = 面板没开，Ctrl-S 才落盘）
     scoped_draft: Option<Vec<String>>,
+    /// 扩展命令写的状态栏临时提示（文案 + 过期时刻）；渲染时过期即忽略
+    status_note: Option<(String, Instant)>,
     /// 屏幕右上角的 toast 队列
     toasts: Vec<Toast>,
     /// toast 自增 id
@@ -360,6 +364,16 @@ pub struct GuiApp {
     session_menu: Option<SessionMenu>,
     /// 会话对话框（重命名 / 删除确认）
     dialog: Option<SessionDialog>,
+    /// `-a/--approve` / `--no-approve` 的显式信任覆盖：Some 时启动不弹信任面板
+    trust_override: Option<bool>,
+    /// 停靠面板是否可见（`/dock` 切换或扩展 `ShowDock` 请求置位；无内容时不显示）
+    dock_visible: bool,
+    /// 停靠面板内部滚动（内容超过高度上限时）
+    dock_scroll: ScrollHandle,
+    /// 按下一个「刚把覆盖层输入行打开」的字符键时要吞掉的那个字符：
+    /// 扩展收到 `Char(c)` 后才会把输入行露出来，而 IME 随后又会把同一个字符写进刚出现的输入框
+    /// （表现为 note 输入框里凭空多出一个 `n`）。TUI 只有一条按键通路，没有这个问题。
+    swallow_char: Option<char>,
 }
 
 impl GuiApp {
@@ -370,6 +384,7 @@ impl GuiApp {
         event_rx: UnboundedReceiver<GuiEvent>,
         initial_messages: Vec<AgentMessage>,
         steer_inbox: Arc<Mutex<VecDeque<AgentMessage>>>,
+        trust_override: Option<bool>,
         cx: &mut Context<Self>,
     ) -> Self {
         let focus = cx.focus_handle();
@@ -419,7 +434,9 @@ impl GuiApp {
             show_thinking: true,
             marked_range: None,
             pane_width: Rc::new(Cell::new(px(0.))),
-            pinned_bottom: Rc::new(Cell::new(None)),
+            // 初始就当「正在跟随」：空会话的第一批内容出现时也要滚到底，
+            // 由 `pin_bottom` 在首帧后按实际内容底边纠正。
+            pinned_bottom: Rc::new(Cell::new(Some(px(0.)))),
             flow_height: Rc::new(Cell::new(None)),
             suggest: None,
             files_cache: FilesCache::default(),
@@ -428,6 +445,7 @@ impl GuiApp {
             extensions_draft: None,
             skills_draft: None,
             scoped_draft: None,
+            status_note: None,
             toasts: Vec::new(),
             toast_seq: 0,
             panel_width: PANEL_DEFAULT_WIDTH,
@@ -451,7 +469,13 @@ impl GuiApp {
             sidebar_hovered: false,
             session_menu: None,
             dialog: None,
+            trust_override,
+            dock_visible: false,
+            dock_scroll: ScrollHandle::new(),
+            swallow_char: None,
         };
+        app.start_request_poll(cx);
+        app.maybe_ask_trust(cx);
         app.refresh_branch();
         // 当前目录也算一条「最近用过」，菜单里能直接看到
         remember_cwd(&app.cwd());
@@ -469,6 +493,26 @@ impl GuiApp {
         match event {
             GuiEvent::Agent(event) => {
                 let kind = event.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                // 扩展也要看到 agent 事件（TUI 在事件循环里逐条转发）。不转发的话，
+                // 靠事件驱动的扩展——plan-mode 抽计划步骤、goal 结算、loop/hang 检测、
+                // notify、subagent 状态——在桌面端等于不存在。
+                if kind == "agent_settled" {
+                    // notify 用这个字段区分「真正空闲」与「还有排队输入」
+                    let mut enriched = event.clone();
+                    if let Some(obj) = enriched.as_object_mut() {
+                        obj.insert(
+                            "hasQueuedMessages".to_string(),
+                            serde_json::Value::Bool(
+                                !self.follow_ups.is_empty()
+                                    || !self.steer_inbox.lock().unwrap().is_empty(),
+                            ),
+                        );
+                    }
+                    dispatch_agent_event(&enriched);
+                } else {
+                    dispatch_agent_event(&event);
+                }
+
                 match kind {
                     "agent_start" => {
                         self.busy = true;
@@ -488,17 +532,17 @@ impl GuiApp {
                 let model = self.snapshot.as_ref().map(|s| s.model.clone());
                 self.meter.observe(&event, model.as_deref());
                 self.sample_token_rate();
-                self.transcript.apply(&event);
+                self.transcript.apply(&event, &self.cwd());
                 self.follow_bottom();
             }
             GuiEvent::History(messages) => {
-                self.transcript = Transcript::from_messages(&messages);
+                self.transcript = Transcript::from_messages(&messages, &self.cwd());
                 // 换会话后速率/耗时基线作废（累计用量可能小很多）
                 self.meter = UsageMeter::default();
                 // 上一份内容的实测高度对新内容无效，置空后按新内容重新量
                 self.flow_height.set(None);
                 // 换会话/重载历史总是回到最新内容，重新接管钉底
-                self.pinned_bottom.set(None);
+                self.pinned_bottom.set(Some(px(0.)));
                 self.scroll_to_bottom();
             }
             GuiEvent::Notice(message) => {
@@ -815,6 +859,7 @@ fn keeps_overlay(action: &Action) -> bool {
             | Action::ToggleExtension(_)
             | Action::ToggleSetting(_)
             | Action::ToggleScopedModel(_)
+            | Action::CycleExtensionSetting { .. }
     )
 }
 

@@ -27,6 +27,7 @@ pub mod state;
 
 use super::extensions::ExtensionMode;
 use crate::{
+    core::extensions::{CommandHost, UiNotifyLevel},
     core::{
         extensions::{
             Extension, ExtensionCommand, ExtensionTool, ForkProjectInfo, ToolExecCtx,
@@ -37,10 +38,7 @@ use crate::{
     extensions::{
         EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_COMPUTER, command_arg, tool_search,
     },
-    modes::interactive::{
-        app::{App, MsgLevel},
-        handlers::register_slash_command,
-    },
+    modes::interactive::handlers::register_host_command,
 };
 use futures_util::future::BoxFuture;
 use serde_json::Value;
@@ -111,7 +109,7 @@ impl Extension for Computer {
 
     /// 绑定 `/computer` 的执行入口。
     fn on_registered(&self) {
-        register_slash_command(EXT, CMD, command_computer);
+        register_host_command(EXT, CMD, command_computer);
     }
 
     /// 提供 14 个 `computer_*` 工具（全部声明为延迟工具，见 [`schema::tools`]）。
@@ -161,13 +159,13 @@ fn backend_available() -> bool {
 }
 
 /// `/computer` 命令实现：只读诊断，没有开关。
-fn command_computer(st: &mut App, raw: &str) -> bool {
+fn command_computer(host: &mut dyn CommandHost, raw: &str) -> bool {
     let arg = command_arg(raw).trim();
     match arg.to_ascii_lowercase().as_str() {
-        "" | "status" => st.push_msg(status_text(), MsgLevel::Info),
-        other => st.push_msg(
-            format!("usage: /computer (got {other:?})"),
-            MsgLevel::Warning,
+        "" | "status" => host.push_message(&status_text(), UiNotifyLevel::Info),
+        other => host.push_message(
+            &format!("usage: /computer (got {other:?})"),
+            UiNotifyLevel::Warning,
         ),
     }
     false

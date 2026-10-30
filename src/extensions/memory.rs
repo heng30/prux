@@ -28,6 +28,7 @@ mod recall;
 mod store;
 
 use crate::{
+    core::extensions::{CommandHost, UiNotifyLevel},
     core::{
         auth,
         extensions::{
@@ -45,10 +46,7 @@ use crate::{
         EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_MEMORY, command_arg,
         util::{push_context, session_id_of, split_model},
     },
-    modes::interactive::{
-        app::{App, MsgLevel},
-        handlers::register_slash_command,
-    },
+    modes::interactive::handlers::register_host_command,
     utils::{
         glyphs::DEF_ELLIPSIS,
         time::{now_iso, short_date},
@@ -257,7 +255,7 @@ impl Extension for Memory {
 
     /// 接线 `/memory` 的 handler。
     fn on_registered(&self) {
-        register_slash_command(EXT, config::CMD, command_memory);
+        register_host_command(EXT, config::CMD, command_memory);
     }
 
     /// 启用时加载配置；禁用时清掉运行期状态（配置保留）。
@@ -1262,12 +1260,13 @@ fn merge_into(graph: &mut MemoryGraph, items: &[ExtractedMemory], source: &str) 
 }
 
 /// `/memory` handler：打印状态、列条目、检索、删除，或打开设置面板。
-fn command_memory(st: &mut App, raw: &str) -> bool {
+fn command_memory(host: &mut dyn CommandHost, raw: &str) -> bool {
     let arg = command_arg(raw);
     let mut parts = arg.split_whitespace();
     let sub = parts.next().unwrap_or("status");
     let rest: Vec<&str> = parts.collect();
-    let cwd = Some(st.cwd.as_str()).filter(|dir| !dir.trim().is_empty());
+    let cwd_text = host.cwd().to_string_lossy().into_owned();
+    let cwd = Some(cwd_text.as_str()).filter(|dir| !dir.trim().is_empty());
 
     let text = match sub {
         "status" | "" => memory_status(cwd),
@@ -1291,7 +1290,7 @@ fn command_memory(st: &mut App, raw: &str) -> bool {
         }
     };
 
-    st.push_msg(text, MsgLevel::Info);
+    host.push_message(&text, UiNotifyLevel::Info);
     false
 }
 

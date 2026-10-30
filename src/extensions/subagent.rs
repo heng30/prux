@@ -37,18 +37,18 @@ use super::util::{choice_key, notify, notify_text, opt_string, req_str, type_arg
 use crate::{
     core::{
         extensions::{
-            self, AfterToolCallOutcome, CliFlagDef, Extension, ExtensionCommand, ExtensionHook,
-            ExtensionMode, ExtensionSetting, ExtensionSuggestion, ExtensionSuggestions,
-            ExtensionTool, ExtensionUiRequest, ForkProjectInfo, OverlayEvent, OverlayView,
-            RichSpan, SelectOption, ToolAnnotations, ToolExecCtx, ToolExposure, UiNotifyLevel,
-            UserPromptAction,
+            self, AfterToolCallOutcome, CliFlagDef, CommandHost, Extension, ExtensionCommand,
+            ExtensionHook, ExtensionMode, ExtensionSetting, ExtensionSuggestion,
+            ExtensionSuggestions, ExtensionTool, ExtensionUiRequest, ForkProjectInfo, OverlayEvent,
+            OverlayView, RichSpan, SelectOption, ToolAnnotations, ToolExecCtx, ToolExposure,
+            UiNotifyLevel, UserPromptAction,
         },
         provider::AgentMessage,
         session_manager::Session,
         tools::{ToolError, ToolExecutionMode, ToolResult},
     },
     extensions::{EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_SUBAGENT, command_arg},
-    modes::interactive::{app::App, handlers::register_slash_command},
+    modes::interactive::handlers::register_host_command,
     utils::time::rel_time,
 };
 use agent_types::{DiscoveryOptions, DiscoveryWarning, ResolveError, Roster};
@@ -763,8 +763,8 @@ impl Extension for Subagent {
 
     /// 注册时接线 `/agents` 命令 handler，失效让位缓存，并在扩展此刻生效时播报启动提示。
     fn on_registered(&self) {
-        register_slash_command(EXT, "agents", command_agents);
-        register_slash_command(EXT, "autoresearch", autoresearch::command);
+        register_host_command(EXT, "agents", command_agents);
+        register_host_command(EXT, "autoresearch", autoresearch::command);
         session::invalidate(); // 注册顺序在首个回合之前定下来，正是判让位的时候
 
         // 启动提示只在扩展此刻生效（启用且当前模式可用）时发：Minimal 模式下
@@ -1543,7 +1543,7 @@ fn launch_pending_workflow_file(ctx: &ToolExecCtx) {
 }
 
 /// `/agents [types|result <id>|stop <id>|settings]`：无参打开菜单。
-fn command_agents(_app: &mut App, raw: &str) -> bool {
+fn command_agents(_host: &mut dyn CommandHost, raw: &str) -> bool {
     let arg = command_arg(raw).trim();
     let (sub, rest) = match arg.split_once(char::is_whitespace) {
         Some((a, b)) => (a, b.trim()),
@@ -2368,6 +2368,7 @@ pub(crate) fn agent_session_path(id: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::modes::interactive::app::App;
 
     #[test]
     fn required_args_are_enforced() {

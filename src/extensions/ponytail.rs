@@ -41,6 +41,7 @@
 //! **默认不启用**，声明 `Dev` 模式：它改写的是模型每一轮的写作风格，只能由用户显式打开。
 
 use crate::{
+    core::extensions::{CommandHost, UiNotifyLevel},
     core::{
         config_cache::ConfigCache,
         extensions::{
@@ -54,13 +55,8 @@ use crate::{
     },
     embedded,
     error::Result,
-    extensions::{
-        EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_PONYTAIL, command_arg, util::send_prompt,
-    },
-    modes::interactive::{
-        app::{App, MsgLevel},
-        handlers::register_slash_command,
-    },
+    extensions::{EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_PONYTAIL, command_arg},
+    modes::interactive::handlers::register_host_command,
     utils::paths::{read_json_file, write_json_file},
 };
 use serde_json::{Value, json};
@@ -441,39 +437,39 @@ fn skill_block(name: &str, body: &str, args: &str) -> String {
 }
 
 /// `/ponytail` 命令族入口：换挡 / 报档 / 改默认档。
-fn command_ponytail(st: &mut App, cmd: &str) -> bool {
+fn command_ponytail(host: &mut dyn CommandHost, cmd: &str) -> bool {
     let current = level();
     match parse_cmd(command_arg(cmd), current, default_level()) {
-        Cmd::Status => st.push_msg(
-            format!(
+        Cmd::Status => host.push_message(
+            &format!(
                 "Ponytail: current {} · default {}",
                 current.label(),
                 default_level().label()
             ),
-            MsgLevel::Info,
+            UiNotifyLevel::Info,
         ),
         Cmd::Set(level) => {
             set_level(level);
             persist(level);
-            st.push_msg(
-                format!("Ponytail level set to {}.", level.label()),
-                MsgLevel::Info,
+            host.push_message(
+                &format!("Ponytail level set to {}.", level.label()),
+                UiNotifyLevel::Info,
             );
         }
         Cmd::SetDefault(level) => {
             let path = config_path();
             match store_default(&path, level) {
-                Ok(()) => st.push_msg(
-                    format!(
+                Ok(()) => host.push_message(
+                    &format!(
                         "Default ponytail level set to {} ({}).",
                         level.label(),
                         path.display()
                     ),
-                    MsgLevel::Info,
+                    UiNotifyLevel::Info,
                 ),
-                Err(e) => st.push_msg(
-                    format!("Failed to save default level: {e}"),
-                    MsgLevel::Error,
+                Err(e) => host.push_message(
+                    &format!("Failed to save default level: {e}"),
+                    UiNotifyLevel::Error,
                 ),
             }
         }
@@ -481,15 +477,15 @@ fn command_ponytail(st: &mut App, cmd: &str) -> bool {
             // 清单走与输入框同一条投递路径：空闲开新回合，忙碌时 steer 进当前回合。
             // `help` 在 `parse_cmd` 已分流到 [`Cmd::Help`]，这里取不到 `None`。
             if let Some(body) = action.body() {
-                send_prompt(st, skill_block(&action.skill_name(), body, args));
+                host.send_prompt(&skill_block(&action.skill_name(), body, args));
             }
         }
         Cmd::Help => {
             // 速查卡只给人看：本地按 Markdown 渲染，不进 `messages`、不走 steer 队列。
-            st.push_msg_markdown(skill_body(SKILL_HELP), MsgLevel::Info);
+            host.push_markdown(&skill_body(SKILL_HELP), UiNotifyLevel::Info);
         }
-        Cmd::Invalid => st.push_msg(
-            format!(
+        Cmd::Invalid => host.push_message(
+            &format!(
                 "Unknown /ponytail argument. Usage: /ponytail [{}|status|{}|default <level>]",
                 Level::RUNTIME
                     .iter()
@@ -502,7 +498,7 @@ fn command_ponytail(st: &mut App, cmd: &str) -> bool {
                     .collect::<Vec<_>>()
                     .join("|")
             ),
-            MsgLevel::Warning,
+            UiNotifyLevel::Warning,
         ),
     }
     false
@@ -586,7 +582,7 @@ impl Extension for Ponytail {
 
     /// 注册命令的 TUI 执行入口。
     fn on_registered(&self) {
-        register_slash_command(EXT, CMD, command_ponytail);
+        register_host_command(EXT, CMD, command_ponytail);
     }
 
     /// 声明常驻注入钩子。
@@ -634,6 +630,7 @@ impl Extension for Ponytail {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::modes::interactive::app::App;
 
     #[test]
     fn level_roundtrips_through_strum() {

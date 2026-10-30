@@ -35,7 +35,7 @@ use crate::{
     APP_NAME,
     core::{
         extensions::{
-            Extension, ExtensionCommand, ExtensionHook, ExtensionMode, ExtensionTool,
+            CommandHost, Extension, ExtensionCommand, ExtensionHook, ExtensionMode, ExtensionTool,
             SubcommandDef, UiNotifyLevel,
         },
         provider::AgentMessage,
@@ -44,10 +44,7 @@ use crate::{
     extensions::{
         EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_NOTIFY, command_arg, util::notify_text,
     },
-    modes::interactive::{
-        app::{App, MsgLevel},
-        handlers::register_slash_command,
-    },
+    modes::interactive::handlers::register_host_command,
     utils::time::format_duration,
 };
 use serde_json::Value;
@@ -168,7 +165,7 @@ impl Extension for Notify {
 
     /// 接线 `/notify` 执行入口（命令的"存在性"由已启用扩展的 [`Self::commands`] 声明）。
     fn on_registered(&self) {
-        register_slash_command(EXT, CMD, command_notify);
+        register_host_command(EXT, CMD, command_notify);
     }
 
     /// 启用时物化配置文件（首次加载自动创建并回填缺省键），让用户即使尚未触发
@@ -314,8 +311,10 @@ pub(super) fn build_message(
     format!("{who} · {status} · {dur}")
 }
 
-/// `/notify` 命令分发：`show` 展示当前配置，`settled <command>` 写入配置。
-fn command_notify(st: &mut App, raw: &str) -> bool {
+/// `/notify` 参数处理：返回（级别，给用户看的文本），与实际 UI 无关。
+///
+/// `show` 展示当前配置，`settled <command>` 写入配置，`reset <all|settled>` 清空。
+fn command_result(raw: &str) -> (UiNotifyLevel, String) {
     let arg = command_arg(raw).trim();
     let (sub, rest) = match arg.split_once(char::is_whitespace) {
         Some((a, b)) => (a, b.trim()),
@@ -326,57 +325,66 @@ fn command_notify(st: &mut App, raw: &str) -> bool {
         "show" => {
             let cmd = config::load_config().text("settledCommand");
             if cmd.trim().is_empty() {
-                st.push_msg("notify settledCommand: (unset)".to_string(), MsgLevel::Info);
+                (
+                    UiNotifyLevel::Info,
+                    "notify settledCommand: (unset)".to_string(),
+                )
             } else {
-                st.push_msg(format!("notify settledCommand: {cmd}"), MsgLevel::Info);
+                (UiNotifyLevel::Info, format!("notify settledCommand: {cmd}"))
             }
         }
-        "settled" if rest.is_empty() => st.push_msg(
+        "settled" if rest.is_empty() => (
+            UiNotifyLevel::Warning,
             "Usage: /notify settled <command> (use `${message}` for the notification text)"
                 .to_string(),
-            MsgLevel::Warning,
         ),
         "settled" => {
             config::set_settled_command(rest);
-            st.push_msg(
+            (
+                UiNotifyLevel::Success,
                 format!("notify settledCommand set: {rest}"),
-                MsgLevel::Success,
-            );
+            )
         }
-        "reset" if rest.is_empty() => st.push_msg(
+        "reset" if rest.is_empty() => (
+            UiNotifyLevel::Warning,
             "Usage: /notify reset <all|settled>".to_string(),
-            MsgLevel::Warning,
         ),
         "reset" => match rest {
             "all" => {
                 config::reset_all();
-                st.push_msg(
+                (
+                    UiNotifyLevel::Success,
                     "notify: all commands cleared".to_string(),
-                    MsgLevel::Success,
-                );
+                )
             }
             "settled" => {
                 config::reset_settled_command();
-                st.push_msg(
+                (
+                    UiNotifyLevel::Success,
                     "notify settledCommand cleared".to_string(),
-                    MsgLevel::Success,
-                );
+                )
             }
-            other => st.push_msg(
+            other => (
+                UiNotifyLevel::Warning,
                 format!("Unknown /notify reset target: {other}. Use `all` or `settled`."),
-                MsgLevel::Warning,
             ),
         },
-        "" => st.push_msg(
+        "" => (
+            UiNotifyLevel::Info,
             "Usage: /notify show | /notify settled <command> | /notify reset <all|settled>"
                 .to_string(),
-            MsgLevel::Info,
         ),
-        other => st.push_msg(
+        other => (
+            UiNotifyLevel::Warning,
             format!("Unknown /notify subcommand: {other}. Use `show`, `settled` or `reset`."),
-            MsgLevel::Warning,
         ),
     }
+}
+
+/// `/notify` 执行入口：把结果打到宿主聊天区（TUI 与桌面 GUI 共用）。
+fn command_notify(host: &mut dyn CommandHost, raw: &str) -> bool {
+    let (level, text) = command_result(raw);
+    host.push_message(&text, level);
     false
 }
 
@@ -443,6 +451,7 @@ fn spawn(cmd: &str, message: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::modes::interactive::app::App;
 
     fn assistant(text: &str) -> AgentMessage {
         let mut m = AgentMessage::user_text(text);

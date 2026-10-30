@@ -44,7 +44,7 @@ use crate::{
         EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_SSH_REMOTE,
         ssh_remote::state::RemoteConfig, tool_search,
     },
-    modes::interactive::handlers::register_slash_command,
+    modes::interactive::handlers::register_host_command,
 };
 use futures_util::future::BoxFuture;
 use serde_json::Value;
@@ -122,8 +122,8 @@ impl Extension for SshRemote {
 
     /// 注册 `/ssh` 与 `/tunnel` 的执行入口
     fn on_registered(&self) {
-        register_slash_command(EXT, command::CMD, command::handle);
-        register_slash_command(EXT, command::TUNNEL_CMD, command::handle_tunnel);
+        register_host_command(EXT, command::CMD, command::handle);
+        register_host_command(EXT, command::TUNNEL_CMD, command::handle_tunnel);
     }
 
     /// 启用状态变化：禁用时断开全部连接并停掉隧道

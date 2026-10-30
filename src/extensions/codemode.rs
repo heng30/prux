@@ -14,6 +14,7 @@ use super::{
     util::{notify_text, value_text},
 };
 use crate::{
+    core::extensions::CommandHost,
     core::{
         auth,
         extensions::{
@@ -30,7 +31,7 @@ use crate::{
         tools::{ToolError, ToolResult, ToolResultAttachment},
     },
     extensions::tool_search,
-    modes::interactive::{app::App, handlers::register_slash_command},
+    modes::interactive::handlers::register_host_command,
     utils::{output_files, truncate},
 };
 use base64::Engine as _;
@@ -225,22 +226,15 @@ impl Extension for Codemode {
 
     /// 把 `/codemode` 的执行入口接线到 TUI 命令注册表。
     fn on_registered(&self) {
-        register_slash_command(EXT, CMD, command_codemode);
+        register_host_command(EXT, CMD, command_codemode);
     }
 }
 
 /// `/codemode` 命令处理：无参 / `settings` 开关设置面板，`show` 打印当前配置。
 /// 返回值表示是否退出程序（此命令恒为 `false`）。
-fn command_codemode(app: &mut App, raw: &str) -> bool {
+fn command_codemode(host: &mut dyn CommandHost, raw: &str) -> bool {
     match command_arg(raw).trim() {
-        "" | "settings" => {
-            if app.ext_settings.is_open_for(EXT) {
-                app.ext_settings.close();
-            } else {
-                app.ext_settings.open(EXT);
-            }
-            app.dirty = true;
-        }
+        "" | "settings" => host.open_extension_settings(EXT),
         "show" => {
             let cfg = config::load_config();
             let lines = [
@@ -1347,6 +1341,7 @@ fn spill_output(text: &str) -> std::result::Result<String, String> {
 mod tests {
     use super::*;
     use crate::core::extensions::ExtensionUiRequest;
+    use crate::modes::interactive::app::App;
 
     /// 取临时 agent_dir 并加全局锁（命令 handler 读写全局注册表与配置）。
     fn setup() -> (

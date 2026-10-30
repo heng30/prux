@@ -186,6 +186,12 @@ cargo clippy         # toolchain 已带 clippy 组件
   跨平台改动要自己在本地补跑。
 - `tests/` 下的集成测试依赖 `test-support` feature（`Cargo.toml` 里自身 dev-dependency 打开）。
   新增测试接缝时同步更新 `src/test_support/mod.rs` 的用法说明。
+- **手工跑二进制前先 `cargo build --bin prux --features gui`（或 `make build-gui`）**：`cargo test` 构建
+  集成测试（`--tests`）时会按 dev-dependency 的 feature 统一**重链 `target/debug/prux-gui`**
+  （只跑 `--lib` 不会，哈希不变），那版二进制带 `test-support`，
+  `agent_dir()` 指向测试沙箱 `/tmp/prux-auth-tests`。直接启动它看不到自己的 `settings.json` / 会话 /
+  已启用扩展（模型退回 `deepseek/deepseek-v4-pro`、proxy 不再自动监听、侧栏只剩沙箱里的会话），
+  极易被误诊成「配置丢了」。用 `strings target/debug/prux-gui | grep prux-auth-tests` 可确认是不是这版。
 - 涉及 TUI 的验证优先 `ratatui::backend::TestBackend`（见「本地环境」）；涉及网络的用
   `run_with_timeout` 包住测试体，避免挂起。
 

@@ -171,11 +171,109 @@
   `http(s)://` link opens in the system browser on click. Its values wrap instead of being clipped,
   and the table scrolls inside the card (wheel, arrow keys, `PgUp` / `PgDn`, `Home` / `End`) once it
   is longer than fits. The `Ctrl-,` settings panel is the same kind of table now: `Setting / Value /
-  Notes`, with the current value in its own column. Commands that already have a GUI panel of their
-  own — `/skills`, `/extension`, `/settings`, `/scoped-models` — no longer show up in the `/`
-  completion panel.
+  Notes`, with the current value in its own column.
+
+- **The desktop GUI answers extension questions**: extension UI requests used to be queued and
+  never read, so `ask_user_question` reported "no UI" and the `permissions` / `ssh-remote` prompts
+  silently failed closed. The window now polls that queue and handles every request: a `Select`
+  request opens a list whose highlighted option is the answer (closing the list answers "cancel",
+  so the waiting extension is never left hanging), `ShowOverlay` opens the extension's own panel
+  just above the input card — title, fixed header, selectable rows (the highlighted row is kept in
+  view when the keyboard moves it), key hints and its inline input row, with keys relayed back as
+  overlay events — and `HideOverlay` / window close send `Closed`.
+  Notifications land in the transcript (rich spans flattened, custom message cards through their
+  extension renderer), `Continuation` / `RestartRun` / `AbortRun` / `RebuildTools` /
+  `RewindLastUserInput` map onto the matching agent commands, and `PersistSessionEntry` appends the
+  custom entry and acknowledges it.
+
+- **The desktop GUI shows one extension's settings**: `ShowSettings` used to open the global settings
+  table, which has nothing to do with the extension that asked. It now opens a panel for that
+  extension alone — one row per declared setting with the current value in a `◂ value ▸` cell, `Enter`
+  cycling to the next choice and writing it back through the extension (each extension decides
+  whether that persists). `/settings <extension>` opens the same panel by hand, which is the only way
+  to reach settings whose extension command still needs the terminal.
+
+- **Extension commands are written once and run in both the terminal and the desktop GUI**: a
+  command handler now receives a small host surface instead of the terminal's `App` — append a
+  message, show the dock panel, read the working directory, ask whether a turn is running — so the
+  desktop window executes the same body the terminal does. `/proxy` (toggle the gateway stats dock,
+  `listen` / `provider` / `api-key`), `/notify` (`show`, `settled`, `reset`), `/computer`,
+  `/shake`, `/agents`, `/doctor`, `/mcp`, `/memory`, `/ponytail`, `/jet`, `/cache-usage`,
+  `/hang-detect`, `/codemode`, `/permissions`, `/vet`, `/update`, `/tasks`, `/goal`, `/ssh`,
+  `/tunnel`, `/autoresearch`, `/help`, `/plan`, `/todos`, `/usage`, `/debug`, `/rewind`, `/btw` and
+  `/recap` all work in the window now, with each host deciding how a message looks (terminal
+  system-message stream, window transcript note) and which panel renders a request (`/tasks` opens
+  the task menu, `/codemode` opens that extension's settings, `/doctor` shows its report in an
+  overlay, `/usage` its quota table). The window keeps native panels for exactly three commands —
+  `/skills`, `/extension` and `/settings`, whose browser-style UI exists only there — every other
+  command goes through the one registry both hosts share. No command can be written twice.
+
+- **Extensions receive the agent event stream in the desktop GUI**: only the terminal UI used to feed
+  every `agent_*` / `turn_end` event to the extension registry, so anything event-driven was dead in
+  the desktop window — plan mode never extracted the steps of a plan or asked what to do next, goals
+  never settled, the loop / hang detectors never saw a turn, `notify` never announced anything. The
+  window now forwards the same stream (with the `hasQueuedMessages` flag the notifier needs on
+  `agent_settled`), so those extensions behave as they do in the terminal.
+
+- **Extension one-shot requests run in the desktop GUI**: `/btw`, `/recap`, `/doctor` and `/usage`
+  used to answer "no async runtime" there, because extension hooks run on the window's view thread,
+  which has no tokio runtime. The window now registers its runtime, so those requests (a side
+  question, a recap, provider probes, quota lookups) start and stream their result back into the
+  same overlay or message the terminal shows. Extension overlays also repaint while open, so an
+  answer that arrives later appears on its own instead of waiting for a key press.
+
+- **The desktop GUI shows the conversation when it opens a session**: history is now handed to the
+  view both on startup and after `/resume`, so a reopened session is not an empty window, and
+  commands that read context (`/btw`, `/recap`) see the same excerpt the terminal does.
+
+- **The desktop GUI has the dock panel**: extensions that report running work — subagents, task
+  streams, downloads, a live ssh-remote or browser session — now show in a strip above the input
+  card instead of being invisible. `ShowDock` (what those extensions send when they start) turns it
+  on, `/dock` toggles it, sections are separated by a blank line and scroll inside the strip once it
+  is taller than a few lines. It disappears on its own when no extension has anything to say, and it
+  keeps repainting while something is running, so the subagent elapsed time and counters move. The
+  plan-mode todo list uses it too: `/todos` now opens that section instead of pointing at the
+  terminal UI.
+
+- **The desktop GUI asks about project trust instead of assuming it**: a project with resources that
+  need trust and no saved decision now opens the trust panel at startup (unless `-a` / `--no-approve`
+  was given), and `/trust` shows the same dialog with the saved decision marked as current. Options
+  are `Trust`, `Trust parent folder (…)`, `Trust (this session only)`, `Do not trust`,
+  `Do not trust (this session only)` and `Remove all saved trust decisions` — the last one asks
+  for confirmation. The saved options write `trust.json` and apply on the next launch, the two
+  "this session only" options reload skills, context files and tools right away.
 
 ### Fixed
+
+- **File edits in the desktop GUI render as diffs**: the `edit` card shows the file path in its
+  header and the change itself as a diff — a right-aligned line-number gutter, added lines in the
+  success colour and removed lines in the danger colour, `@@` hunks and context lines muted, and a
+  single-line replacement highlighted word by word. The diff comes from the tool result
+  (`details.diff`) and falls back to a preview computed while the call is still running, so the card
+  fills in before the edit finishes. `write` cards keep the path in the header (instead of dumping
+  the whole file body into the collapsed summary) and preview the content being written in the
+  body — the first few lines plus a "click to expand" hint, the same shape the terminal UI uses.
+
+- **A fresh desktop GUI session follows new output again**: scrolling was only pinned after the
+  view had been seen at the bottom once, and content shorter than the viewport counted as "scrolled
+  away" because the target offset was positive. New output in a brand-new session therefore grew
+  below the fold until you scrolled down once by hand. The pin now starts engaged and clamps the
+  target to the real scroll range, so the first turn follows to the bottom and only a real scroll up
+  stops it.
+
+- **The desktop GUI's `/` panel lists every command it can run**: `hotkeys`, `session`, `changelog`,
+  `trust`, `bug`, `theme`, `reload`, `settings`, `extension`, `skills`, `scoped-models`, `login`,
+  `logout`, `usage` and `debug` were executable but unlisted. `/name <text>`, `/thinking <level>`,
+  `/model <id>`, `/session <n>`, `/export <path>` and `/import <path>` now take their argument
+  instead of being read as an unknown command (`/model` matches inside the scoped model list when one
+  is set, `/session` indexes the session directory in the same most-recent-first order the sidebar
+  uses and reports the valid range otherwise), and `/theme` and `/hotkeys` are aliases for the
+  appearance picker and the keybinding page. Enter in the `/` panel with no candidates completes
+  what was typed instead of doing nothing, which is what made an argument command look stuck on
+  "No matches".
+  The `Ctrl-M` command palette keeps only what the `/` panel does not cover, plus `skills`,
+  `extension` and `settings` — the three with their own panels — so the same action no longer has
+  two entries competing for the same keystrokes.
 
 - **Enter in the settings panel changes the setting instead of closing the panel**: every row now
   keeps the list open (and keeps your filter and highlighted row), so you can flip several settings
@@ -395,10 +493,83 @@
   同样是 `Property / Value` 两列表格，`fork url` 这类 `http(s)://` 链接点一下就交给系统浏览器打开。
   详情页的值按列宽折行、不再截断，内容长过卡片时在卡片内部滚动（滚轮、方向键、`PgUp` / `PgDn`、
   `Home` / `End`）。`Ctrl-,` 设置面板也改成同样的表格：`Setting / Value / Notes` 三列，当前值单独
-  占一列。已有独立 GUI 面板的命令——`/skills`、`/extension`、`/settings`、`/scoped-models`——不再
-  出现在 `/` 补全面板里。
+  占一列。
+
+- **桌面 GUI 能回答扩展的提问了**：扩展发出的 UI 请求以前只入队没人取，`ask_user_question`
+  直接报「没有 UI」，`permissions` / `ssh-remote` 的确认也一律按拒绝处理。窗口现在定时轮询这个
+  队列并处理每一类请求：`Select` 打开一个列表，高亮项就是答案（关掉列表等于取消，发起方不会
+  一直挂着）；`ShowOverlay` 在输入卡片上方弹出扩展自己的面板——标题、固定区、可选行、键位提示与
+  内联输入行（键盘移动选中行时会把它滚进视口；输入行里 `Enter` 保存、`Esc` 只丢弃这次编辑而不是
+  关掉面板，`i` 聚焦输入行、方向键滚动内容等默认语义与终端 UI 一致），按键按覆盖层事件回传；`HideOverlay` 与关窗回传 `Closed`。通知落进对话流（富文本
+  摊平成文本，自定义消息卡走扩展自己的渲染器），`Continuation` / `RestartRun` / `AbortRun` /
+  `RebuildTools` / `RewindLastUserInput` 分别对应到 agent 命令，`PersistSessionEntry` 追加自定义
+  条目并回执。
+
+- **桌面 GUI 能单独显示某个扩展的设置**：`ShowSettings` 以前打开的是全局设置表，跟发起它的扩展
+  毫无关系。现在只为该扩展开一个面板——每个设置项一行，当前值放在 `◂ 值 ▸` 里，`Enter` 循环到
+  下一个候选并回写给扩展（是否落盘由扩展自己决定）。`/settings <扩展名>` 可以手动打开同一个面板，
+  这也是那些「命令仍需终端」的扩展唯一能改设置的地方。
+
+- **扩展命令只写一份，终端与桌面 GUI 都能跑**：命令处理函数现在收到的是一个小小的宿主能力面
+  （追加一条消息、显示停靠面板、读工作目录、问是否正在输出），而不是终端的 `App`，于是窗口执行
+  的就是终端那一份正文。`/proxy`（开关网关状态面板，以及 `listen` / `provider` / `api-key`）、
+  `/notify`（`show` / `settled` / `reset`）、`/computer`、`/shake`、`/agents`、`/doctor`、`/mcp`、
+  `/memory`、`/ponytail`、`/jet`、`/cache-usage`、`/hang-detect`、`/codemode`、`/permissions`、
+  `/vet`、`/update`、`/tasks`、`/goal`、`/ssh`、`/tunnel`、`/autoresearch`、`/help`、`/plan`、
+  `/todos`、`/usage`、`/debug`、`/rewind`、`/btw`、`/recap` 现在在窗口里都能用，消息长什么样由宿主决定
+  （终端是系统消息流，窗口是对话流里的一条提示），要面板时也由宿主渲染（`/tasks` 打开任务菜单、
+  `/codemode` 打开该扩展的设置、`/doctor` 把报告放进覆盖层、`/usage` 显示额度表）。窗口只对三条命令
+  保留原生面板——`/skills`、`/extension`、`/settings`，那种浏览式界面只有窗口有；其余命令一律走两个
+  宿主共用的同一张注册表，任何命令都不必写两遍。
+
+- **桌面 GUI 把 agent 事件流转发给扩展**：以前只有终端 UI 会把每个 `agent_*` / `turn_end` 事件喂给
+  扩展注册表，于是所有「事件驱动」的扩展在桌面端都是死的——plan mode 不会抽取计划步骤、也不会问
+  下一步做什么，目标不会结算，loop / hang 检测看不到回合，`notify` 也不会发通知。现在窗口转发同一份
+  事件流（并在 `agent_settled` 上补 `hasQueuedMessages`，通知扩展要靠它区分「真空闲」与「还有排队
+  输入」），这些扩展的行为与终端一致。
+
+- **扩展的一次性请求在桌面 GUI 里能跑了**：`/btw`、`/recap`、`/doctor`、`/usage` 以前在窗口里只回
+  「no async runtime」——扩展钩子跑在窗口的视图线程上，那里没有 tokio 运行时。现在窗口会登记自己的
+  运行时，这些请求（旁问、回顾、provider 探针、额度查询）能起跑，并把结果送回终端里同一个覆盖层或
+  消息区。扩展覆盖层打开期间也会持续重绘，晚到的答案自己出现，不用等按键。
+
+- **桌面 GUI 打开会话时会显示对话内容**：历史在启动与 `/resume` 之后都会交给视图，重开的会话不再是
+  空窗口；读上下文的命令（`/btw`、`/recap`）拿到的摘录也与终端一致。
+
+- **桌面 GUI 有了停靠面板**：会报告运行中工作的扩展——子代理、任务流、下载、连着的 ssh-remote
+  或浏览器会话——现在显示在输入卡片上方的一条面板里，而不是完全看不见。扩展启动时发的 `ShowDock`
+  会把它打开，`/dock` 切换开关；各段之间空一行，内容超过几行时在面板内部滚动。没有扩展有话要说时
+  它自动消失，运行期间持续重绘，所以子代理的耗时与计数会动。计划模式的待办也走这里：`/todos` 现在
+  直接打开该段，不再提示「去终端 UI 看」。
+
+- **桌面 GUI 会先问项目信任，而不是当作已信任**：项目里有需要信任的资源、又没有存过决策时，
+  启动就弹信任面板（`-a` / `--no-approve` 显式给过决定时不弹），`/trust` 打开同一个对话框并把
+  已保存的决策标成 current。选项有 `Trust`、`Trust parent folder (…)`、`Trust (this session
+  only)`、`Do not trust`、`Do not trust (this session only)` 与 `Remove all saved trust
+  decisions`——最后一项会再确认一次。落盘的选项写进 `trust.json`、下次启动生效，两个「仅本次」
+  选项则立即重载技能、上下文文件与工具。
 
 ## 修复
+
+- **桌面 GUI 的文件修改按 diff 渲染**：`edit` 卡片头部显示文件路径，改动本身按 diff 画——右对齐的
+  行号列、新增行用成功色、删除行用错误色，`@@` 块头与上下文行用弱色，单行替换还会按词标出变动
+  片段。diff 取自工具结果（`details.diff`），还没有结果时用调用阶段算出的预览，所以编辑过程中卡片
+  就有内容。`write` 卡片同样只把路径放在头部，不再把整份文件内容塞进折叠的参数摘要，正文则按
+  终端 UI 的样子折叠预览前几行（可点开看全部）。
+
+- **桌面 GUI 从空白会话开始也跟随新内容了**：以前只有「贴过一次底」之后才会钉住滚动，而内容不足
+  一屏时目标偏移是正数、被判成「用户已滚开」；于是全新会话的第一轮输出一路长到视口下面，得手动
+  滚一次到底才开始跟。现在钉底一开始就是接管的，目标偏移按真实滚动范围夹取，第一轮就贴底，只有
+  真的往上滚才停止跟随。
+
+- **桌面 GUI 的 `/` 面板列全了能执行的命令**：`hotkeys`、`session`、`changelog`、`trust`、`bug`、
+  `theme`、`reload`、`settings`、`extension`、`skills`、`scoped-models`、`login`、`logout`、
+  `usage`、`debug` 以前能执行但不在候选里。`/name <名字>`、`/thinking <级别>`、`/model <id>`、
+  `/session <序号>`、`/export <路径>`、`/import <路径>` 现在会吃掉参数而不是被当成未知命令
+  （`/model` 有 scope 时只在 scope 内匹配，`/session` 按会话目录的序号切换——顺序与侧栏一致，
+  最近修改在前——越界时提示可用范围），`/theme` 与 `/hotkeys` 分别是外观选择器与快捷键页的别名。`/` 面板里没有候选时按 Enter
+  会把已输入的内容补全执行，而不是什么都不做——之前带参数的命令就卡在「No matches」上。`Ctrl-M` 命令面板只保留 `/` 面板没有的功能，外加有独立面板的 `skills`、
+  `extension`、`settings` 三个，同一个动作不再占两个入口。
 
 - **设置面板按 Enter 只改配置、不关面板**：每一行都保留列表（过滤串与高亮行一起留着），可以连着
   改好几项。发送按钮上的停止方块改用品牌强调色，而不再取反色。

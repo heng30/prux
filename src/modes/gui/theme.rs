@@ -49,6 +49,9 @@ pub const FONT_BODY: f32 = 13.;
 /// 大号字：标题、横幅。
 pub const FONT_HERO: f32 = 22.;
 
+/// 停靠面板的高度上限（逻辑像素）：内容超过就在面板内部滚动。
+pub const DOCK_MAX_H: f32 = 200.;
+
 /// 小控件高度：chip、标签、行内小按钮。
 pub const CONTROL_H_SM: f32 = 20.;
 /// 标准控件高度：页签、主按钮、列表行。

@@ -20,6 +20,7 @@ pub mod oauth;
 
 use crate::{
     APP_NAME,
+    core::extensions::CommandHost,
     core::{
         extensions::{
             self, Extension, ExtensionCommand, ExtensionMode, ExtensionTool, ExtensionUiRequest,
@@ -35,10 +36,7 @@ use crate::{
     extensions::{
         EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_MCP, command_arg, util::notify_plain,
     },
-    modes::interactive::{
-        app::{App, MsgLevel},
-        handlers::register_slash_command,
-    },
+    modes::interactive::handlers::register_host_command,
     utils::{glyphs::DEF_ELLIPSIS, paths::cwd, truncate::truncate_chars_within},
 };
 use config::{AuthMode, LoadedConfig, McpExposure, OAuthGrantType, ServerEntry};
@@ -278,7 +276,7 @@ impl Extension for Mcp {
 
     /// 注册 `/mcp` 命令的执行入口。
     fn on_registered(&self) {
-        register_slash_command(EXT, CMD, command_mcp);
+        register_host_command(EXT, CMD, command_mcp);
     }
 
     /// 启用状态变化时丢弃管理器缓存，使下次调用按新配置重建连接。
@@ -979,7 +977,7 @@ fn load_config_with_declarations(cwd: &Path, trusted: bool) -> Result<LoadedConf
 }
 
 /// `/mcp` 命令入口。
-fn command_mcp(st: &mut App, raw: &str) -> bool {
+fn command_mcp(host: &mut dyn CommandHost, raw: &str) -> bool {
     let arg = command_arg(raw).trim();
     let (sub, rest) = match arg.split_once(char::is_whitespace) {
         Some((a, b)) => (a, b.trim()),
@@ -988,30 +986,30 @@ fn command_mcp(st: &mut App, raw: &str) -> bool {
 
     match sub {
         "" | "status" => {
-            st.push_msg(render_status(), MsgLevel::Info);
+            host.push_message(&render_status(), UiNotifyLevel::Info);
         }
         "list" => {
-            st.push_msg(render_list(), MsgLevel::Info);
+            host.push_message(&render_list(), UiNotifyLevel::Info);
         }
         "tools" => {
             let server = (!rest.is_empty()).then_some(rest);
-            st.push_msg(render_cached_tools(server), MsgLevel::Info);
+            host.push_message(&render_cached_tools(server), UiNotifyLevel::Info);
         }
         "reload" => {
             invalidate_manager();
             extensions::request_ui(ExtensionUiRequest::RebuildTools);
-            st.push_msg(
-                "MCP config reloaded; cached connections dropped.".to_string(),
-                MsgLevel::Success,
+            host.push_message(
+                "MCP config reloaded; cached connections dropped.",
+                UiNotifyLevel::Success,
             );
         }
         "enable" | "disable" => {
             let enabled = sub == "enable";
             let mut parts = rest.split_whitespace();
             let Some(server) = parts.next() else {
-                st.push_msg(
-                    format!("Usage: /mcp {sub} <server> [user|project]"),
-                    MsgLevel::Warning,
+                host.push_message(
+                    &format!("Usage: /mcp {sub} <server> [user|project]"),
+                    UiNotifyLevel::Warning,
                 );
                 return false;
             };
@@ -1020,9 +1018,9 @@ fn command_mcp(st: &mut App, raw: &str) -> bool {
                 None | Some("project") => config::ConfigScope::Project,
                 Some("user") => config::ConfigScope::User,
                 Some(other) => {
-                    st.push_msg(
-                        format!("Unknown scope `{other}`; use user or project."),
-                        MsgLevel::Warning,
+                    host.push_message(
+                        &format!("Unknown scope `{other}`; use user or project."),
+                        UiNotifyLevel::Warning,
                     );
                     return false;
                 }
@@ -1031,21 +1029,21 @@ fn command_mcp(st: &mut App, raw: &str) -> bool {
             let loaded = match load_config() {
                 Ok(loaded) => loaded,
                 Err(error) => {
-                    st.push_msg(format!("MCP config error: {error}"), MsgLevel::Error);
+                    host.push_message(&format!("MCP config error: {error}"), UiNotifyLevel::Error);
                     return false;
                 }
             };
 
             if !loaded.config.mcp_servers.contains_key(server) {
-                st.push_msg(
-                    format!("MCP server `{server}` is not configured."),
-                    MsgLevel::Warning,
+                host.push_message(
+                    &format!("MCP server `{server}` is not configured."),
+                    UiNotifyLevel::Warning,
                 );
                 return false;
             }
 
             if let Err(error) = config::set_disabled(&loaded.paths, scope, server, !enabled) {
-                st.push_msg(format!("MCP config error: {error}"), MsgLevel::Error);
+                host.push_message(&format!("MCP config error: {error}"), UiNotifyLevel::Error);
                 return false;
             }
 
@@ -1057,41 +1055,39 @@ fn command_mcp(st: &mut App, raw: &str) -> bool {
             };
 
             if scope == config::ConfigScope::Project && !is_project_trusted(&cwd(), &agent_dir()) {
-                st.push_msg(
-                    "This project is not trusted; the override will not take effect until you approve it."
-                        .to_string(),
-                    MsgLevel::Warning,
+                host.push_message("This project is not trusted; the override will not take effect until you approve it.",
+                    UiNotifyLevel::Warning,
                 );
             }
 
-            st.push_msg(
-                format!(
+            host.push_message(
+                &format!(
                     "MCP server `{server}` {} in {scope_label}.",
                     if enabled { "enabled" } else { "disabled" }
                 ),
-                MsgLevel::Success,
+                UiNotifyLevel::Success,
             );
         }
         "test" => {
             if rest.is_empty() {
-                st.push_msg("Usage: /mcp test <server>".to_string(), MsgLevel::Warning);
+                host.push_message("Usage: /mcp test <server>", UiNotifyLevel::Warning);
                 return false;
             }
             spawn_test(rest.to_string());
-            st.push_msg(
-                format!("Connecting to MCP server `{rest}`…"),
-                MsgLevel::Info,
+            host.push_message(
+                &format!("Connecting to MCP server `{rest}`…"),
+                UiNotifyLevel::Info,
             );
         }
         "logout" => {
             if rest.is_empty() {
-                st.push_msg("Usage: /mcp logout <server>".to_string(), MsgLevel::Warning);
+                host.push_message("Usage: /mcp logout <server>", UiNotifyLevel::Warning);
                 return false;
             }
             spawn_logout(rest.to_string());
-            st.push_msg(
-                format!("Removing MCP OAuth credentials for `{rest}`…"),
-                MsgLevel::Info,
+            host.push_message(
+                &format!("Removing MCP OAuth credentials for `{rest}`…"),
+                UiNotifyLevel::Info,
             );
         }
         "login" => {
@@ -1100,39 +1096,39 @@ fn command_mcp(st: &mut App, raw: &str) -> bool {
                 None => (rest, None),
             };
             if server.is_empty() {
-                st.push_msg(
-                    "Usage: /mcp login <server> [redirect-url]".to_string(),
-                    MsgLevel::Warning,
+                host.push_message(
+                    "Usage: /mcp login <server> [redirect-url]",
+                    UiNotifyLevel::Warning,
                 );
                 return false;
             }
             match http_server(&load_config().unwrap_or_else(|_| empty_loaded()), server) {
                 Ok(entry) => {
                     if entry.auth_mode() != Some(AuthMode::OAuth) {
-                        st.push_msg(
+                        host.push_message(&
                             format!(
                                 "MCP server `{server}` does not use OAuth (set auth=\"oauth\" or an oauth block)."
                             ),
-                            MsgLevel::Warning,
+                            UiNotifyLevel::Warning,
                         );
                         return false;
                     }
                 }
                 Err(error) => {
-                    st.push_msg(error, MsgLevel::Error);
+                    host.push_message(&error, UiNotifyLevel::Error);
                     return false;
                 }
             }
             spawn_login(server.to_string(), callback);
-            st.push_msg(
-                format!("Starting MCP OAuth login for `{server}`…"),
-                MsgLevel::Info,
+            host.push_message(
+                &format!("Starting MCP OAuth login for `{server}`…"),
+                UiNotifyLevel::Info,
             );
         }
         other => {
-            st.push_msg(
-                format!("Unknown MCP subcommand `{other}`. Usage: /mcp [{SUBCOMMAND_NAMES}]"),
-                MsgLevel::Warning,
+            host.push_message(
+                &format!("Unknown MCP subcommand `{other}`. Usage: /mcp [{SUBCOMMAND_NAMES}]"),
+                UiNotifyLevel::Warning,
             );
         }
     }
@@ -1556,6 +1552,7 @@ pub async fn receive_callback(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::modes::interactive::app::App;
     use crate::test_support::{AgentDirGuard, HomeGuard};
 
     /// 配置计数类断言与"扩展声明的服务器"（全局注册表）会相互干扰，用例之间串行化。
