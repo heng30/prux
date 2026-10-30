@@ -7,6 +7,19 @@ use super::theme::{
     RADIUS_LG, RADIUS_MD, RADIUS_SM, SPACE_LG, SPACE_MD, SPACE_SM, SPACE_XL, SPACE_XS,
 };
 use super::{icon, status::BLINK_DIM_OPACITY, *};
+use std::rc::Rc;
+
+impl Render for GuiApp {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let transcript = self.render_transcript(cx);
+        let composer = self.render_composer(window, cx);
+        let main = self.render_main(transcript, composer);
+        let body = self.render_body(main, cx);
+        let sidebar = self.render_sidebar(cx);
+        let root = self.render_root(sidebar, body, cx);
+        self.render_overlays(root, window, cx)
+    }
+}
 
 impl GuiApp {
     /// 补全面板：贴在输入卡片上沿的覆盖层（不占布局空间）。
@@ -39,6 +52,7 @@ impl GuiApp {
                 .text_color(theme.text)
                 .child(composer::render(&self.suggest_input, theme)),
         );
+
         if suggest.items.is_empty() {
             column = column.child(
                 div()
@@ -49,12 +63,14 @@ impl GuiApp {
                     .child(SharedString::from("No matches")),
             );
         }
+
         // 候选区与 Ctrl-M 面板同一套行渲染 + 可滚动容器：条目多时滚轮能翻到
         let mut rows = overlay::rows_container(
             "suggest-rows",
             &self.suggest_scroll,
             SUGGEST_ROW_HEIGHT * SUGGEST_ROWS as f32,
         );
+
         for (index, item) in suggest.items.iter().enumerate() {
             rows = rows.child(overlay::list_row(
                 theme,
@@ -73,12 +89,11 @@ impl GuiApp {
                 cx.listener(move |this, _, _, cx| this.pick_suggestion(index, cx)),
             ));
         }
+
         column = column.child(rows);
         column.into_any_element()
     }
-}
 
-impl GuiApp {
     /// IME（中文/日文组字）只在绘制阶段能挂到窗口：这里放一层透明画布，
     /// 命中区域就是当前输入框，候选窗会贴着它弹。
     pub(super) fn ime_layer(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -96,9 +111,7 @@ impl GuiApp {
         .size_full()
         .into_any_element()
     }
-}
 
-impl GuiApp {
     /// 滚动条：滑块位置按上一帧的滚动状态算，拖动时把鼠标位移换算成内容位移。
     pub(super) fn scrollbar(
         &self,
@@ -109,18 +122,21 @@ impl GuiApp {
         if !self.scrollbar_visible(area) {
             return div().into_any_element();
         }
+
         let scroll = self.scroll_of(area);
         let viewport = f32::from(scroll.bounds().size.height);
         let max = f32::from(scroll.max_offset().height);
         if max <= 0. || viewport <= 0. {
             return div().into_any_element();
         }
+
         let height = geometry::thumb_height(viewport, max, min_thumb());
         let top = geometry::thumb_top(
             f32::from(scroll.offset().y),
             max,
             geometry::thumb_travel(viewport, max, min_thumb()),
         );
+
         div()
             .id(("scrollbar", area.index()))
             .absolute()
@@ -131,9 +147,8 @@ impl GuiApp {
             .cursor_pointer()
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
+                cx.listener(move |this, _event: &gpui::MouseDownEvent, _, cx| {
                     let offset = this.scroll_of(area).offset().y;
-                    let _ = event;
                     this.scroll_drag = Some(ScrollDrag {
                         area,
                         anchor_y: None,
@@ -176,9 +191,7 @@ impl GuiApp {
             )
             .into_any_element()
     }
-}
 
-impl GuiApp {
     /// toast 的堆叠渲染（右上角，不挡输入卡片）。
     pub(super) fn toast_layer(&self, theme: &Theme) -> AnyElement {
         let mut column = div()
@@ -190,12 +203,14 @@ impl GuiApp {
             .flex_col()
             .items_end()
             .gap(px(SPACE_XS));
+
         for toast in &self.toasts {
             let (base, text_color) = match toast.kind {
                 ToastKind::Info => (theme.raised, theme.text),
                 ToastKind::Success => (theme.raised, theme.success),
                 ToastKind::Error => (theme.raised, theme.danger),
             };
+
             column = column.child(
                 div()
                     .w_full()
@@ -212,21 +227,7 @@ impl GuiApp {
         }
         column.into_any_element()
     }
-}
 
-impl Render for GuiApp {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let transcript = self.render_transcript(cx);
-        let composer = self.render_composer(window, cx);
-        let main = self.render_main(transcript, composer);
-        let body = self.render_body(main, cx);
-        let sidebar = self.render_sidebar(cx);
-        let root = self.render_root(sidebar, body, cx);
-        self.render_overlays(root, window, cx)
-    }
-}
-
-impl GuiApp {
     /// 对话流：逐块渲染 + 钉底滚动 + 滚动条。
     fn render_transcript(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.theme.clone();
@@ -239,12 +240,15 @@ impl GuiApp {
         } else {
             px(CONTENT_MAX_WIDTH)
         };
+
         let expand_tools = self.expand_tools;
         let show_thinking = self.show_thinking;
+
         // 行登记每帧重建：行序号/边界/文本必须与本帧渲染结果一致
         self.line_bounds.borrow_mut().clear();
         self.line_text_bounds.borrow_mut().clear();
         self.line_rows.borrow_mut().clear();
+
         let mut lines = transcript::TextLines {
             next: 0,
             selection: self.text_sel,
@@ -256,6 +260,7 @@ impl GuiApp {
             width: flow_width,
             lines: &mut lines,
         };
+
         // 默认行高是 φ（1.618em），行内代码/高亮背景会又高又连在一起，
         // 文字也不在背景里居中；正文统一用更紧的行高
         let mut flow = div().w_full().flex().flex_col().gap(px(SPACE_MD));
@@ -279,6 +284,7 @@ impl GuiApp {
             .px(px(SPACE_XL))
             .pt(px(FLOW_PADDING_TOP))
             .pb(px(FLOW_PADDING_BOTTOM));
+
         // 滚动容器里的内容会被按「无限宽」测量，之后又按实际宽度换行画出来：
         // 长文本的实测高度偏小，往下压到后一个块上、展开时底部还会被截。
         // 用上一帧实测到的对话区宽度把内容定宽，测量和绘制就用同一个换行宽度。
@@ -287,11 +293,13 @@ impl GuiApp {
         } else {
             content.w_full()
         };
+
         // 同一处测量误差也在高度上：内容盒的实测高度会比子块实际占据的还小，
         // 滚到底仍有最后几行被裁掉。按上一帧子块实际的跨度补 min-height。
         if let Some(height) = measured_height.get() {
             content = content.min_h(height);
         }
+
         content =
             content.on_children_prepainted(move |children: Vec<Bounds<Pixels>>, window, _| {
                 let (Some(first), Some(last)) = (children.first(), children.last()) else {
@@ -316,21 +324,26 @@ impl GuiApp {
                 pane_width.set(viewport_bounds.size.width);
                 window.request_animation_frame();
             }
+
             let (Some(content), viewport) = (scroll.bounds_for_item(0), scroll.bounds()) else {
                 return;
             };
+
             // 内容不足一屏时底边在视口下方，差值才是正的：夹到 0 才算「已经在底部」，
             // 否则空会话里永远判定为已滚开，新内容来了不跟随。
             let target = (viewport.bottom() - content.bottom()).min(px(0.));
             let offset = scroll.offset().y;
+
             // 「上次钉底的偏移」还在原位 = 这仍是我们的地盘；否则是用户滚轮/拖滚动条动过了
             let owned = pinned.get().filter(|last| (*last - offset).abs() <= px(1.));
+
             // 用户自己滚回底部时重新接管，这样新内容来了还会继续跟
             let following = owned.is_some() || (offset - target).abs() <= px(1.);
             if following && owned != Some(target) {
                 scroll.set_offset(gpui::point(px(0.), target));
                 window.request_animation_frame();
             }
+
             let next = following.then_some(target);
             if next != pinned.get() {
                 pinned.set(next);
@@ -351,6 +364,7 @@ impl GuiApp {
             .on_scroll_wheel(cx.listener(|_, _, _, cx| cx.notify()))
             // 悬浮探测走全局鼠标监听（见 `hover_probe`）：滚动容器的 hitbox 判定偏宽
             .child(content);
+
         let transcript = div()
             .relative()
             .flex()
@@ -370,6 +384,7 @@ impl GuiApp {
         if lines.is_empty() {
             return None;
         }
+
         let theme = self.theme.clone();
         Some(
             div()
@@ -412,6 +427,7 @@ impl GuiApp {
             .as_ref()
             .and_then(|s| s.thinking.clone())
             .filter(|t| t != "off");
+
         let mut hint = div().flex().items_center().gap(px(SPACE_SM));
         hint = hint.child(
             div()
@@ -461,8 +477,8 @@ impl GuiApp {
             })),
         );
         hint = hint.child(div().flex_1());
+
         let busy = self.busy;
-        // 忙碌时按钮换品牌色（Stop 的语义色），不再用反色
         let send = div()
             .id("send")
             .h(px(CONTROL_H_MD))
@@ -493,6 +509,7 @@ impl GuiApp {
         hint = hint.child(send);
 
         let ime_layer = self.ime_layer(cx);
+
         // 输入框可用内宽：上一帧实测的卡片宽减左右内边距（首帧还没量到时按窗口估算）
         let composer_wrap_width = self
             .composer_bounds
@@ -521,7 +538,7 @@ impl GuiApp {
                 &theme,
                 {
                     let app = cx.entity();
-                    std::rc::Rc::new(move |event, row, col, _, cx| {
+                    Rc::new(move |event, row, col, _, cx| {
                         app.update(cx, |this, cx| {
                             this.set_cursor_at(row, col, event.modifiers.shift, cx);
                         });
@@ -529,7 +546,7 @@ impl GuiApp {
                 },
                 {
                     let app = cx.entity();
-                    std::rc::Rc::new(move |_, row, col, _, cx| {
+                    Rc::new(move |_, row, col, _, cx| {
                         // 拖动选区：锚点留在按下处，光标跟着走
                         app.update(cx, |this, cx| this.set_cursor_at(row, col, true, cx));
                     })
@@ -551,10 +568,12 @@ impl GuiApp {
         if !self.dock_visible {
             return None;
         }
-        let sections = crate::core::extensions::dock_sections();
+
+        let sections = core::extensions::dock_sections();
         if sections.is_empty() {
             return None;
         }
+
         let mut body = div()
             .id("dock")
             .max_h(px(DOCK_MAX_H))
@@ -562,15 +581,18 @@ impl GuiApp {
             .flex_col()
             .overflow_y_scroll()
             .track_scroll(&self.dock_scroll);
+
         for (index, section) in sections.iter().enumerate() {
             if index > 0 {
                 // 段间一行空白（TUI 用空行分隔，段内行不空）
                 body = body.child(div().h(px(SPACE_XS)));
             }
+
             for line in &section.lines {
                 body = body.child(overlay::render_dock_line(line, theme));
             }
         }
+
         Some(
             div()
                 .flex_none()
@@ -598,6 +620,7 @@ impl GuiApp {
         let theme = self.theme.clone();
         let empty = self.transcript.blocks().is_empty();
         let (status_left, status_right) = self.status_text();
+
         // 忙碌指示单独一块：● 与文字一起按闪烁相位上色
         let busy_text = self.busy_text();
         let blink = self.blink;
@@ -637,7 +660,7 @@ impl GuiApp {
                                         .text_size(px(FONT_SMALL))
                                         .text_color(theme.text_tertiary)
                                         .child(SharedString::from(
-                                            "Ctrl+M for commands · Ctrl+, for settings",
+                                            "Ctrl-M for commands · Ctrl-, for settings",
                                         )),
                                 ),
                         )
@@ -652,7 +675,7 @@ impl GuiApp {
                                 .text_size(px(FONT_CAPTION))
                                 .text_color(theme.text_ghost)
                                 .child(SharedString::from(
-                                    "Enter send · Shift+Enter new line · Alt+Enter queue follow-up · Ctrl+P cycle model · Shift+Tab cycle thinking",
+                                    "Enter send · Shift-Enter new line · Alt-Enter queue follow-up",
                                 )),
                         ),
                 )
@@ -665,12 +688,15 @@ impl GuiApp {
                 .min_h_0()
                 .bg(theme.canvas)
                 .child(transcript);
+
             if let Some(pending) = self.render_pending() {
                 column = column.child(pending);
             }
+
             if let Some(dock) = self.render_dock(&theme) {
                 column = column.child(dock);
             }
+
             column
                 .child(measured_composer(
                     div()
@@ -700,7 +726,6 @@ impl GuiApp {
                                 .child({
                                     let mut left = div().flex().items_center();
                                     if let Some(text) = busy_text {
-                                        // 圆点闪（明暗交替），文字恒为品牌色
                                         left = left
                                             .child(
                                                 div()
@@ -717,7 +742,6 @@ impl GuiApp {
                                                     .text_color(theme.accent)
                                                     .child(SharedString::from(text)),
                                             )
-                                            // 分隔圆点保持状态栏原色（不变品牌色）
                                             .child(SharedString::from(" · "));
                                     }
                                     left.child(SharedString::from(status_left))
@@ -736,8 +760,10 @@ impl GuiApp {
         if !self.show_sidebar {
             return gpui::Empty.into_any_element();
         }
-        let theme = self.theme.clone();
+
         let cwd = self.cwd();
+        let theme = self.theme.clone();
+
         div()
             .relative()
             .h_full()
@@ -774,7 +800,6 @@ impl GuiApp {
                 },
             }))
             .child(
-                // 右边框拖拽热区：骑在边框上，指针变左右缩放
                 div()
                     .id("sidebar-resize")
                     .absolute()
@@ -814,12 +839,14 @@ impl GuiApp {
             }),
         );
         body = body.child(main);
+
         if self.panel.visible {
             body = body.child(
                 div()
                     .relative()
                     .h_full()
                     .flex_none()
+                    .min_w_0()
                     .child(giff::render(&theme, &self.panel, self.panel_width, cx))
                     .child(
                         // 左边框拖拽热区：往左拉变宽，指针变左右缩放
@@ -995,12 +1022,14 @@ impl GuiApp {
                     MouseButton::Left,
                     cx.listener(|_, _, _, cx| cx.stop_propagation()),
                 );
+
             if scroll {
                 card = card
                     .max_h(px(DROPDOWN_MAX_HEIGHT))
                     .overflow_y_scroll()
                     .track_scroll(&handle);
             }
+
             for (index, item) in dropdown.items.iter().enumerate() {
                 let action = item.action.clone();
                 let mut row = div()
@@ -1022,10 +1051,12 @@ impl GuiApp {
                             .truncate()
                             .child(SharedString::from(item.label.clone())),
                     );
+
                 // 键盘高亮的行（Ctrl-J/K 与方向键移动）
                 if index == selected {
                     row = row.bg(theme.overlay).text_color(theme.text);
                 }
+
                 if !item.detail.is_empty() {
                     row = row.child(
                         div()
@@ -1035,6 +1066,7 @@ impl GuiApp {
                             .child(SharedString::from(item.detail.clone())),
                     );
                 }
+
                 card = card.child(row.on_click(cx.listener(move |this, _, _, cx| {
                     this.dropdown = None;
                     let action = action.clone();
@@ -1042,6 +1074,7 @@ impl GuiApp {
                     cx.notify();
                 })));
             }
+
             return root.child(
                 div()
                     .absolute()
@@ -1074,6 +1107,7 @@ impl GuiApp {
             // 面板高度 = 输入框 + 行区（行数超上限时只按上限算，其余靠滚动）
             let height = px(SUGGEST_ROW_HEIGHT * rows) + px(SUGGEST_CHROME_HEIGHT);
             let top = (card.origin.y - height - px(SUGGEST_GAP)).max(px(0.));
+
             return root.child(
                 div()
                     .absolute()
@@ -1100,9 +1134,11 @@ impl GuiApp {
         else {
             return root;
         };
+
         if !matches!(overlay, Overlay::Extension(_)) {
             return root;
         }
+
         // 底边贴着输入卡片上沿：覆盖层高度由内容决定，用 bottom 定位才不会被估高
         let bottom = window.viewport_size().height - card.origin.y + px(SUGGEST_GAP);
         root.child(
@@ -1128,6 +1164,7 @@ impl GuiApp {
             let path = menu.path.clone();
             let rename_path = path.clone();
             let selected = menu.selected;
+
             return root.child(
                 div()
                     .absolute()
@@ -1248,6 +1285,7 @@ impl GuiApp {
                 ),
                 None => ("", String::new(), None),
             };
+
             let ime = self.ime_layer(cx);
             let danger = matches!(self.dialog, Some(SessionDialog::Delete { .. }));
             let mut card = div()
@@ -1272,6 +1310,7 @@ impl GuiApp {
                         .text_color(theme.text)
                         .child(SharedString::from(title)),
                 );
+
             if let Some(field) = field {
                 card = card.child(
                     div()
@@ -1292,6 +1331,7 @@ impl GuiApp {
                         .child(SharedString::from(body)),
                 );
             }
+
             card = card
                 .child(
                     div()
@@ -1353,6 +1393,7 @@ impl GuiApp {
                         ),
                 )
                 .child(ime);
+
             return root.child(
                 div()
                     .absolute()

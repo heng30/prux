@@ -3,10 +3,11 @@
 //! 拆自 [`super::app`]：候选数据来自 [`super::suggest`]，这里只管交互状态。
 
 use super::*;
+use crate::core;
 
 /// 扩展命令声明的子命令候选：`(名字, 说明)` 按声明顺序；命令不存在或没声明则为空。
 fn subcommand_defs(command: &str) -> Vec<(String, String)> {
-    crate::core::extensions::registered_commands()
+    core::extensions::registered_commands()
         .into_iter()
         .find(|candidate| candidate.name.eq_ignore_ascii_case(command))
         .map(|candidate| {
@@ -26,16 +27,19 @@ impl GuiApp {
         if self.suggest.is_some() {
             return;
         }
+
         // 右侧 Files 面板的搜索框在吃键时，键入的不是输入卡片的内容，不该弹补全
         if self.panel_search_active() {
             return;
         }
+
         // 历史浏览（↑/↓ 载入 `/model` 这类历史）不该弹面板，否则抢走 ↑/↓ 焦点
         if self.editor.browsing_history() {
             self.suggest = None;
             self.attach_images = false;
             return;
         }
+
         let before = self.editor.text_before_cursor();
         let detected = match suggest_engine::detect(&before) {
             Some((trigger, start, query)) => Some((trigger, start, String::new(), query)),
@@ -51,25 +55,31 @@ impl GuiApp {
                 })
             }
         };
+
         let Some((trigger, start, command, query)) = detected else {
             self.suggest = None;
             self.suggest_dismissed = None;
             self.attach_images = false;
             return;
         };
+
         // 同一次触发被 Esc / 退格手动关掉后不再自动弹回；触发位置变了才重新生效
         if !suggest_allowed(self.suggest_dismissed, start) {
             self.suggest = None;
             return;
         }
+
         self.suggest_dismissed = None;
+
         // 面板输入框显示已输入的前缀，之后继续敲的字符都进它
         self.suggest_input = Editor::new();
         if !query.is_empty() {
             self.suggest_input.insert(&query);
         }
+
         self.rebuild_suggest(trigger, start, command, query, cx);
     }
+
     /// 面板开着时按面板输入框重算候选。
     pub(super) fn refresh_suggest_from_input(&mut self, cx: &mut Context<Self>) {
         let Some((trigger, start, command)) = self
@@ -79,9 +89,11 @@ impl GuiApp {
         else {
             return;
         };
+
         let query = self.suggest_input.text();
         self.rebuild_suggest(trigger, start, command, query, cx);
     }
+
     /// 文件列表到位/输入变化后重算：面板开着按面板输入，否则按主输入框。
     pub(super) fn refresh_suggest_any(&mut self, cx: &mut Context<Self>) {
         if self.suggest.is_some() {
@@ -90,6 +102,7 @@ impl GuiApp {
             self.refresh_suggest(cx);
         }
     }
+
     /// 重算候选并写回面板状态（`start`/`trigger` 由触发时定下，之后不变）。
     pub(super) fn rebuild_suggest(
         &mut self,
@@ -112,16 +125,19 @@ impl GuiApp {
                 {
                     extra.push((format!("skill:{name}"), description));
                 }
+
                 // 执行入口还挂在 TUI 层，这里先按现状列出；有 GUI 面板入口的命令不重复列
-                for command in crate::core::extensions::registered_commands() {
+                for command in core::extensions::registered_commands() {
                     if suggest_engine::PANEL_COMMANDS.contains(&command.name.as_str()) {
                         continue;
                     }
+
                     extra.push((
                         command.name.clone(),
                         format!("{} (extension)", command.description),
                     ));
                 }
+
                 suggest_engine::commands_with(&extra, &query)
             }
             Trigger::File => {
@@ -130,6 +146,7 @@ impl GuiApp {
             }
             Trigger::Subcommand => suggest_engine::subcommands(&subcommand_defs(&command), &query),
         };
+
         // 同一触发词 + 同一前缀：保留选中项，避免每敲一个字符跳回第一行
         let keep = self
             .suggest
@@ -139,6 +156,7 @@ impl GuiApp {
             })
             .map(|old| old.selected)
             .unwrap_or(0);
+
         let selected = keep.min(items.len().saturating_sub(1));
         self.suggest = Some(Suggest {
             trigger,
@@ -149,6 +167,7 @@ impl GuiApp {
             selected,
         });
     }
+
     /// 确保 `@` 补全的文件列表已按当前目录加载（第一次用时后台列一次）。
     pub(super) fn ensure_files(&mut self, cx: &mut Context<Self>) {
         let cwd = self.cwd();
@@ -157,11 +176,13 @@ impl GuiApp {
         {
             return;
         }
+
         self.files_cache = FilesCache {
             cwd: cwd.clone(),
             loading: true,
             paths: Vec::new(),
         };
+
         cx.spawn(async move |this, cx| {
             let paths = cx
                 .background_executor()
@@ -176,6 +197,7 @@ impl GuiApp {
         })
         .detach();
     }
+
     /// 上下移动补全选中项（越界回绕）。
     pub(super) fn move_suggestion(&mut self, delta: i32) {
         // 句柄先克隆：`suggest` 借着自己，滚动跟随还要用另一个字段
@@ -183,38 +205,48 @@ impl GuiApp {
         let Some(suggest) = self.suggest.as_mut() else {
             return;
         };
+
         let len = suggest.items.len();
         if len == 0 {
             return;
         }
+
         let next = suggest.selected as i32 + delta;
         suggest.selected = next.clamp(0, len as i32 - 1) as usize;
+
         // 选中行超出面板时跟着滚，保证它始终在视口里
         overlay::reveal_row(&scroll, suggest.selected);
     }
+
     /// 把选中候选写进输入框：只补全，不执行（执行由 `submit` 负责）。
     /// `/` 命令与 `@` 文件都补一个尾随空格，便于接着输入。
     pub(super) fn apply_suggestion(&mut self, cx: &mut Context<Self>) {
         let Some(suggest) = self.suggest.clone() else {
             return;
         };
+
         let Some(item) = suggest.items.get(suggest.selected) else {
             return;
         };
+
         let end = self.editor.cursor_byte();
         let start = suggest.start.min(end);
+
         // 子命令把 `/命令 查询词` 整段重写：命令名与子命令不会因重复采纳粘在一起
         let insert = match suggest.trigger {
             Trigger::Subcommand => format!("/{} {} ", suggest.command, item.label),
             _ => format!("{} ", item.label),
         };
+
         self.editor.replace_byte_range(start..end, &insert);
         self.suggest = None;
         self.suggest_dismissed = None;
         self.marked_range = None;
+
         // 重算：命令补全完会换成子命令面板，子命令补全完则收起面板
         self.refresh_suggest(cx);
     }
+
     /// 面板里没有候选时按 Enter：把面板输入原样补成 `/命令 参数`（`@` 则是 `@路径`）写回输入框。
     ///
     /// 候选面板的分词只认触发符后的那段，`/session 2` 这种带参数的命令永远匹配不到候选；
@@ -223,12 +255,14 @@ impl GuiApp {
         let Some(suggest) = self.suggest.clone() else {
             return;
         };
+
         let input = self.suggest_input.text();
         let text = match suggest.trigger {
             Trigger::Command => format!("/{input} "),
             Trigger::File => format!("@{input} "),
             Trigger::Subcommand => format!("/{} {input} ", suggest.command),
         };
+
         let end = self.editor.cursor_byte();
         let start = suggest.start.min(end);
         self.editor.replace_byte_range(start..end, &text);
@@ -242,6 +276,7 @@ impl GuiApp {
         if let Some(suggest) = self.suggest.as_mut() {
             suggest.selected = index;
         }
+
         self.apply_suggestion(cx);
         cx.notify();
     }

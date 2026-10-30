@@ -9,11 +9,15 @@ use super::{
     text_edit::Editor,
     theme::{
         CONTROL_H_MD, CONTROL_H_SM, DIFF_GUTTER_W, FONT_CAPTION, FONT_SMALL, HEADER_H, ICON_SIZE,
-        RADIUS_MD, RADIUS_SM, SPACE_MD, SPACE_SM, SPACE_XS, SPACE_XXS, Theme, px,
+        RADIUS_MD, RADIUS_SM, SCROLLBAR_HIT_WIDTH, SCROLLBAR_WIDTH, SPACE_MD, SPACE_SM, SPACE_XS,
+        SPACE_XXS, Theme, min_thumb, px,
     },
 };
-use crate::utils::{color::Rgb, process::run_stdout};
-use gpui::{AnyElement, IntoElement, ParentElement, SharedString, Styled, div, prelude::*};
+use crate::utils::{color::Rgb, geometry, process::run_stdout};
+use gpui::{
+    AnyElement, IntoElement, MouseButton, ParentElement, Pixels, Point, ScrollHandle, SharedString,
+    Styled, div, prelude::*,
+};
 use std::{path::Path, process::Command};
 use syntect::highlighting::Theme as SynTheme;
 
@@ -78,6 +82,28 @@ pub struct PanelData {
     error: Option<String>,
 }
 
+/// 面板里可滚动的两片内容（各自一个滚动句柄）。
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum PanelArea {
+    /// Changes 页的 diff
+    Diff,
+    /// Files 页的文件正文
+    Content,
+}
+
+/// 面板滚动条拖拽状态。
+#[derive(Clone, Copy)]
+pub struct PanelDrag {
+    /// 拖的是哪片内容
+    pub area: PanelArea,
+    /// 拖的是哪根条：`true` = 纵向
+    pub vertical: bool,
+    /// 按下时指针在主轴上的位置（全局坐标；第一次 move 才定锚点）
+    pub anchor: Option<f32>,
+    /// 按下时的滚动偏移
+    pub offset: f32,
+}
+
 /// 右侧面板状态。
 pub struct RightPanel {
     /// 是否可见
@@ -102,6 +128,12 @@ pub struct RightPanel {
     pub selected_file: Option<String>,
     /// 选中文件的正文
     pub content: Option<FileContent>,
+    /// diff 的滚动状态
+    diff_scroll: ScrollHandle,
+    /// 文件正文的滚动状态
+    content_scroll: ScrollHandle,
+    /// 正在拖的滚动条
+    pub scroll_drag: Option<PanelDrag>,
     /// 读取失败时的提示
     pub error: Option<String>,
 }
@@ -120,6 +152,9 @@ impl Default for RightPanel {
             search_focus: false,
             selected_file: None,
             content: None,
+            diff_scroll: ScrollHandle::new(),
+            content_scroll: ScrollHandle::new(),
+            scroll_drag: None,
             error: None,
         }
     }
@@ -174,16 +209,102 @@ impl RightPanel {
     }
 
     /// 换上后台算好的内容（变更列表变短时把选中下标收回范围内）。
+    ///
+    /// 预览对象换了就把滚动位置收回顶部：句柄里留着上一个文件的偏移，
+    /// 新内容一上来就会被顶到面板外（看着像滚动超过窗口）。
     pub fn apply(&mut self, data: PanelData) {
         self.loading = false;
         self.error = data.error;
         self.files = data.files;
         self.changes = data.changes;
+
+        let diff_changed =
+            self.diff.as_ref().map(|(path, _)| path) != data.diff.as_ref().map(|(path, _)| path);
+        let file_changed =
+            self.content.as_ref().map(|c| &c.path) != data.content.as_ref().map(|c| &c.path);
+
+        if diff_changed {
+            self.diff_scroll.set_offset(Point::default());
+        }
+
+        if file_changed {
+            self.content_scroll.set_offset(Point::default());
+        }
+
         self.diff = data.diff;
         self.content = data.content;
+
         if !self.changes.is_empty() {
             self.selected = self.selected.min(self.changes.len() - 1);
         }
+    }
+
+    /// 某个滚动区的句柄。
+    fn scroll_of(&self, area: PanelArea) -> &ScrollHandle {
+        match area {
+            PanelArea::Diff => &self.diff_scroll,
+            PanelArea::Content => &self.content_scroll,
+        }
+    }
+
+    /// 某个滚动区的句柄（可变，拖滚动条写偏移用）。
+    fn scroll_of_mut(&mut self, area: PanelArea) -> &mut ScrollHandle {
+        match area {
+            PanelArea::Diff => &mut self.diff_scroll,
+            PanelArea::Content => &mut self.content_scroll,
+        }
+    }
+
+    /// 拖滚动条：按按下点到当前点的位移换算新偏移（滑块跟着鼠标走）。
+    pub fn drag_scroll(&mut self, position: Point<Pixels>) {
+        let Some(mut drag) = self.scroll_drag else {
+            return;
+        };
+
+        let axis = if drag.vertical {
+            f32::from(position.y)
+        } else {
+            f32::from(position.x)
+        };
+
+        // 锚点取第一次 move 的位置：按下事件与 move 事件的坐标系不一定一致
+        let Some(anchor) = drag.anchor else {
+            drag.anchor = Some(axis);
+            self.scroll_drag = Some(drag);
+            return;
+        };
+
+        let scroll = self.scroll_of(drag.area);
+        let bounds = scroll.bounds().size;
+        let max_offset = scroll.max_offset();
+        let (viewport, max) = if drag.vertical {
+            (f32::from(bounds.height), f32::from(max_offset.height))
+        } else {
+            (f32::from(bounds.width), f32::from(max_offset.width))
+        };
+
+        if max <= 0. || viewport <= 0. {
+            return;
+        }
+
+        let travel = geometry::thumb_travel(viewport, max, min_thumb());
+        // 夹在 [-max, 0]：`set_offset` 不夹范围，不夹就能滚过头（内容被顶出面板）
+        let target = geometry::drag_offset(drag.offset, axis - anchor, max, travel).clamp(-max, 0.);
+        let current = self.scroll_of(drag.area).offset();
+
+        // 偏移是物理像素，只能用 `gpui::px` 写回：再过一次 [`px`] 会乘上界面缩放，
+        // 偏移比鼠标走的快一倍，拖上去反而往回滚
+        self.scroll_of_mut(drag.area).set_offset(if drag.vertical {
+            Point {
+                x: current.x,
+                y: gpui::px(target),
+            }
+        } else {
+            Point {
+                x: gpui::px(target),
+                y: current.y,
+            }
+        });
     }
 
     /// 过滤框命中的文件下标（空框 = 全部，按相对路径包含匹配）。
@@ -347,6 +468,8 @@ pub fn render(
         .flex_none()
         .flex()
         .flex_col()
+        .min_w_0()
+        .overflow_hidden()
         .bg(theme.sidebar)
         .border_l_1()
         .border_color(theme.border);
@@ -378,7 +501,14 @@ pub fn render(
                             .child(SharedString::from(path.clone())),
                     ),
                 );
-                column = column.child(diff_view(theme, diff));
+                column = column.child(scrolled(
+                    theme,
+                    PanelArea::Diff,
+                    panel.diff_scroll.clone(),
+                    SPACE_SM,
+                    diff_view(theme, diff, &panel.diff_scroll),
+                    cx,
+                ));
             }
         }
         PanelTab::Files => {
@@ -529,11 +659,12 @@ fn changes_body(theme: &Theme, panel: &RightPanel, cx: &mut gpui::Context<GuiApp
 }
 
 /// diff 正文：跳过 `diff --git` / `index` 等文件头，逐行带旧/新行号染色（新增绿 / 删除红），最多 400 行。
-fn diff_view(theme: &Theme, diff: &str) -> AnyElement {
+fn diff_view(theme: &Theme, diff: &str, scroll: &ScrollHandle) -> AnyElement {
     let mut diff_box = div()
         .id("diff")
         .flex_1()
         .min_h_0()
+        .min_w_0()
         .mx(px(SPACE_SM))
         .mb(px(SPACE_SM))
         .p(px(SPACE_SM))
@@ -541,7 +672,11 @@ fn diff_view(theme: &Theme, diff: &str) -> AnyElement {
         .bg(theme.inset)
         .flex()
         .flex_col()
-        .overflow_y_scroll();
+        .whitespace_nowrap()
+        // 行按自身宽度排（stretch 会把每行压回容器宽，长行永远溢不出来）
+        .items_start()
+        .overflow_scroll()
+        .track_scroll(scroll);
 
     let (mut old_no, mut new_no) = (0, 0);
     let mut in_hunk = false;
@@ -582,15 +717,11 @@ fn diff_view(theme: &Theme, diff: &str) -> AnyElement {
             div()
                 .flex()
                 .gap(px(SPACE_XS))
+                .whitespace_nowrap()
                 .text_size(px(FONT_CAPTION))
                 .text_color(color)
                 .child(line_no(label))
-                .child(
-                    div()
-                        .min_w_0()
-                        .flex_1()
-                        .child(SharedString::from(body.to_string())),
-                ),
+                .child(div().child(SharedString::from(body.to_string()))),
         );
     }
     diff_box.into_any_element()
@@ -621,6 +752,7 @@ fn files_body(theme: &Theme, panel: &RightPanel, cx: &mut gpui::Context<GuiApp>)
         .flex_col()
         .flex_1()
         .min_h_0()
+        .min_w_0()
         .gap(px(SPACE_XS))
         .p(px(SPACE_SM));
 
@@ -637,7 +769,15 @@ fn files_body(theme: &Theme, panel: &RightPanel, cx: &mut gpui::Context<GuiApp>)
                 .child(SharedString::from(content.path.clone())),
         );
     }
-    column = column.child(content_view(theme, panel));
+
+    column = column.child(scrolled(
+        theme,
+        PanelArea::Content,
+        panel.content_scroll.clone(),
+        0.,
+        content_view(theme, panel, &panel.content_scroll),
+        cx,
+    ));
     column.into_any_element()
 }
 
@@ -760,28 +900,33 @@ fn file_list(theme: &Theme, panel: &RightPanel, cx: &mut gpui::Context<GuiApp>) 
     list.into_any_element()
 }
 
-/// 内容区：语法高亮的文件正文（左侧带行号），可在框内滚动。
-fn content_view(theme: &Theme, panel: &RightPanel) -> AnyElement {
+/// 内容区：语法高亮的文件正文（左侧带行号），长行不折行、交给横向滚动条。
+fn content_view(theme: &Theme, panel: &RightPanel, scroll: &ScrollHandle) -> AnyElement {
     let mut body = div()
         .id("file-content")
         .flex()
         .flex_col()
         .flex_1()
         .min_h_0()
+        .min_w_0()
         .p(px(SPACE_SM))
         .rounded(px(RADIUS_MD))
         .bg(theme.inset)
         .text_size(px(FONT_CAPTION))
         .font_family("monospace")
-        .overflow_y_scroll();
+        .whitespace_nowrap()
+        // 行按自身宽度排（stretch 会把每行压回容器宽，长行永远溢不出来）
+        .items_start()
+        .overflow_scroll()
+        .track_scroll(scroll);
 
     match &panel.content {
         Some(content) => {
             for (index, line) in content.lines.iter().enumerate() {
                 let mut row = div()
-                    .w_full()
                     .flex()
                     .gap(px(SPACE_XS))
+                    .whitespace_nowrap()
                     .text_color(theme.text)
                     .child(
                         div()
@@ -816,6 +961,153 @@ fn content_view(theme: &Theme, panel: &RightPanel) -> AnyElement {
         }
     }
     body.into_any_element()
+}
+
+/// 给一片可滚内容叠两根滚动条：纵向贴右缘、横向贴底缘。
+///
+/// 两根条都是 `relative` 容器的**直接子元素**（和主窗口的滚动条同一套摆法）：套一层
+/// 绝对定位的中间层时，轨道的定位基准会跑偏到窗口上，一拖就拖到面板外面去。
+///
+/// 视口/上限/偏移都取自上一帧的实测值（物理像素），`inset` 是设计像素的外边距：
+/// 轨道长度按 `inset` 让开正文自己的外边距，滑块位置则原样按物理像素摆（见 [`scroll_thumb`]）。
+fn scrolled(
+    theme: &Theme,
+    area: PanelArea,
+    scroll: ScrollHandle,
+    inset: f32,
+    body: AnyElement,
+    cx: &mut gpui::Context<GuiApp>,
+) -> AnyElement {
+    let size = scroll.bounds().size;
+    let max = scroll.max_offset();
+    let offset = scroll.offset();
+    let (viewport_y, limit_y) = (f32::from(size.height), f32::from(max.height));
+    let (viewport_x, limit_x) = (f32::from(size.width), f32::from(max.width));
+
+    let mut wrapper = div()
+        .relative()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_h_0()
+        .min_w_0()
+        .child(body);
+
+    if limit_y > 0. && viewport_y > 0. {
+        let len = geometry::thumb_height(viewport_y, limit_y, min_thumb()).min(viewport_y);
+        let start = geometry::thumb_top(
+            f32::from(offset.y),
+            limit_y,
+            geometry::thumb_travel(viewport_y, limit_y, min_thumb()),
+        );
+        wrapper = wrapper.child(
+            scroll_track(area, true, cx)
+                .absolute()
+                .top_0()
+                // 轨道长度必须等于滚动区可视高：`inset` 是正文自己的外边距，`h_full` 会把余量也算进去
+                .bottom(px(inset))
+                .right(px(inset))
+                .w(px(SCROLLBAR_HIT_WIDTH))
+                .child(scroll_thumb(theme, true, start, len)),
+        );
+    }
+
+    if limit_x > 0. && viewport_x > 0. {
+        let len = geometry::thumb_height(viewport_x, limit_x, min_thumb()).min(viewport_x);
+        let start = geometry::thumb_top(
+            f32::from(offset.x),
+            limit_x,
+            geometry::thumb_travel(viewport_x, limit_x, min_thumb()),
+        );
+        wrapper = wrapper.child(
+            scroll_track(area, false, cx)
+                .absolute()
+                .bottom(px(inset))
+                .left(px(inset))
+                .right(px(inset))
+                .h(px(SCROLLBAR_HIT_WIDTH))
+                .child(scroll_thumb(theme, false, start, len)),
+        );
+    }
+
+    wrapper.into_any_element()
+}
+
+/// 滚动条轨道：整条都能按下去拖（滑块只有 4px，直接拖滑块等于抓不住）。
+fn scroll_track(
+    area: PanelArea,
+    vertical: bool,
+    cx: &mut gpui::Context<GuiApp>,
+) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(("panel-scrollbar", bar_key(area, vertical)))
+        .cursor_pointer()
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, _, _, cx| {
+                let offset = this.panel.scroll_of(area).offset();
+                this.panel.scroll_drag = Some(PanelDrag {
+                    area,
+                    vertical,
+                    anchor: None,
+                    offset: f32::from(if vertical { offset.y } else { offset.x }),
+                });
+                // 别让按下冒泡到主区去清搜索框聚焦
+                cx.stop_propagation();
+                cx.notify();
+            }),
+        )
+        .on_mouse_move(
+            cx.listener(move |this, event: &gpui::MouseMoveEvent, _, cx| {
+                // 轨道上的移动只是破碎的补充：按住不放时的位移由全局鼠标监听（`hover_probe`）接，
+                // 指针跑出轨道也不会断
+                if this.panel.scroll_drag.is_some_and(|drag| drag.area == area) {
+                    this.panel.drag_scroll(event.position);
+                    cx.notify();
+                }
+            }),
+        )
+        .on_mouse_up(
+            MouseButton::Left,
+            cx.listener(|this, _, _, cx| {
+                this.panel.scroll_drag = None;
+                cx.notify();
+            }),
+        )
+        .on_mouse_up_out(
+            MouseButton::Left,
+            cx.listener(|this, _, _, cx| {
+                this.panel.scroll_drag = None;
+                cx.notify();
+            }),
+        )
+}
+
+/// 轨道里的滑块：纵向条按 `start` 往下摆，横向条按 `start` 往右摆（贴轨右/下缘，同侧栏）。
+///
+/// `start` / `len` 是 [`ScrollHandle`] 实测的物理像素，只能用 `gpui::px` 原样传；
+/// 再过一次 [`px`] 会乘上界面缩放，滑块位置和长度都失真（滚到一半就被顶出面板）。
+fn scroll_thumb(theme: &Theme, vertical: bool, start: f32, len: f32) -> AnyElement {
+    let thumb = div().absolute().rounded(px(RADIUS_SM)).bg(theme.text_ghost);
+    let thumb = if vertical {
+        thumb
+            .top(gpui::px(start))
+            .right(px(1.))
+            .w(px(SCROLLBAR_WIDTH))
+            .h(gpui::px(len))
+    } else {
+        thumb
+            .left(gpui::px(start))
+            .bottom(px(1.))
+            .h(px(SCROLLBAR_WIDTH))
+            .w(gpui::px(len))
+    };
+    thumb.into_any_element()
+}
+
+/// 滚动条的稳定 id：两片内容 × 两根条。
+fn bar_key(area: PanelArea, vertical: bool) -> usize {
+    (area as usize) * 2 + usize::from(vertical)
 }
 
 /// git 状态字母 → 颜色。

@@ -111,6 +111,7 @@ impl UsageMeter {
             Some(at) => at.elapsed().as_millis() as u64,
             None => self.frozen_ms,
         };
+
         let (mins, secs) = (ms / 60_000, (ms % 60_000) / 1000);
         if mins > 0 {
             format!("{mins}m {secs:02}s")
@@ -141,6 +142,7 @@ impl GuiApp {
     pub(super) fn status_text(&self) -> (String, String) {
         let messages = self.snapshot.as_ref().map(|s| s.messages).unwrap_or(0);
         let mut left = String::new();
+
         // 扩展命令写的临时提示优先占左侧（过期即不再显示）
         if let Some((text, deadline)) = &self.status_note
             && Instant::now() < *deadline
@@ -148,6 +150,7 @@ impl GuiApp {
             left.push_str(text);
             left.push_str(" · ");
         }
+
         left.push_str(&format!("{messages} messages"));
         let mut right = String::new();
 
@@ -215,6 +218,7 @@ impl GuiApp {
         if self.ticking {
             return;
         }
+
         self.ticking = true;
         cx.spawn(async move |this, cx| {
             loop {

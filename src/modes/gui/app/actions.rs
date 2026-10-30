@@ -1,6 +1,7 @@
 //! 动作与斜杠命令：把面板/菜单的 [`Action`] 与 `/` 命令落到 agent 命令或状态变更上。
 
 use super::*;
+use crate::{cli, core};
 
 impl GuiApp {
     /// 斜杠命令：与命令面板共用同一批动作。
@@ -24,7 +25,7 @@ impl GuiApp {
                 });
             }
             "thinking" if !arg.is_empty() => {
-                if crate::cli::args::VALID_THINKING_LEVELS.contains(&arg) {
+                if cli::args::VALID_THINKING_LEVELS.contains(&arg) {
                     _ = self.cmd_tx.send(AgentCommand::SetThinking {
                         level: arg.to_string(),
                         persist: true,
@@ -32,7 +33,7 @@ impl GuiApp {
                 } else {
                     self.transcript.push_note(Note::Error(format!(
                         "Unknown thinking level: {arg} (valid: {})",
-                        crate::cli::args::VALID_THINKING_LEVELS.join(", ")
+                        cli::args::VALID_THINKING_LEVELS.join(", ")
                     )));
                 }
             }
@@ -55,6 +56,7 @@ impl GuiApp {
                     .map(|snapshot| snapshot.model_cycle.clone())
                     .unwrap_or_default();
                 let needle = arg.to_lowercase();
+
                 if scoped.is_empty() {
                     let provider = self
                         .snapshot
@@ -107,13 +109,8 @@ impl GuiApp {
             "login" => self.open_login_panel(cx),
             "logout" => self.open_logout_panel(cx),
             "changelog" => self.open_changelog(cx),
-            "giff" => {
-                // 桌面端把 giff 的「看未提交改动」落成右侧变更面板：已经开着就关掉
-                self.toggle_panel_tab(PanelTab::Changes, cx);
-            }
-            "tree" => {
-                _ = self.cmd_tx.send(AgentCommand::Tree);
-            }
+            "giff" => self.toggle_panel_tab(PanelTab::Changes, cx),
+            "tree" => _ = self.cmd_tx.send(AgentCommand::Tree),
             "bug" => {
                 let editor = Editor::new();
                 self.dialog = Some(SessionDialog::BugHint { editor });
@@ -186,6 +183,7 @@ impl GuiApp {
             "session" => self.open_info(InfoKind::Session, cx),
             "help" | "hotkeys" => self.open_info(InfoKind::Help, cx),
             "quit" => cx.quit(),
+
             // 与 UI 无关的扩展命令（proxy / notify 等）：扩展自己处理并回通知
             other => {
                 // 扩展命令吃参数（`/proxy listen 1.2.3.4:80`）：命令名是首个 token
@@ -193,14 +191,16 @@ impl GuiApp {
                     Some((name, rest)) => (name, rest.trim()),
                     None => (other, ""),
                 };
+
                 // 扩展命令：与 TUI 共用同一份 handler（参数是宿主能力面，不是 App）
                 let raw = format!("/{command} {rest}");
-                if let Some(handler) = crate::core::extensions::command_handler(command) {
+                if let Some(handler) = core::extensions::command_handler(command) {
                     handler(self, raw.trim_end());
                     cx.notify();
                     return;
                 }
-                if crate::core::extensions::registered_commands()
+
+                if core::extensions::registered_commands()
                     .iter()
                     .any(|registered| registered.name == command)
                 {
@@ -209,6 +209,7 @@ impl GuiApp {
                     )));
                     return;
                 }
+
                 self.run_unknown_slash(other, cx);
             }
         }
@@ -227,6 +228,7 @@ impl GuiApp {
             }
         }
     }
+
     /// 复制最后一条助手回复（`/copy` 与 TUI 的 `app.message.copy` = Ctrl-X 共用）。
     pub(super) fn copy_last_reply(&mut self, cx: &mut Context<Self>) {
         let text = self.transcript.last_assistant_text();
@@ -237,6 +239,7 @@ impl GuiApp {
             self.toast("Copied the last reply", ToastKind::Success, cx);
         }
     }
+
     /// 点击覆盖层列表的第 `visible` 行：先把该行设为选中（后续重建不跳回第一行），再执行。
     pub(crate) fn pick_entry(&mut self, visible: usize, cx: &mut Context<Self>) {
         let action = match &mut self.overlay {
@@ -249,6 +252,7 @@ impl GuiApp {
             }
             _ => None,
         };
+
         if let Some(action) = action {
             // 勾选类动作会重建同一个面板，保留它才能沿用过滤与选中行
             if !keeps_overlay(&action) {
@@ -260,15 +264,15 @@ impl GuiApp {
             }
             self.run_action(action, cx);
         }
+
         cx.notify();
     }
+
     /// 执行覆盖层动作。
     pub(super) fn run_action(&mut self, action: Action, cx: &mut Context<Self>) {
         match action {
             Action::None => {}
-            Action::Command(command) => {
-                _ = self.cmd_tx.send(*command);
-            }
+            Action::Command(command) => _ = self.cmd_tx.send(*command),
             Action::LoadSession(path) => {
                 _ = self.cmd_tx.send(AgentCommand::ResumeSession { path });
             }
@@ -280,7 +284,7 @@ impl GuiApp {
                 ListKind::PanelFiles => self.toggle_panel_tab(PanelTab::Files, cx),
             },
             Action::UiChoice { id, text } => {
-                if let Some(prompt) = crate::core::extensions::submit_ui_choice(id, text) {
+                if let Some(prompt) = core::extensions::submit_ui_choice(id, text) {
                     _ = self.cmd_tx.send(AgentCommand::Prompt(prompt));
                 }
             }
@@ -313,6 +317,7 @@ impl GuiApp {
                     cx.notify();
                     return;
                 }
+
                 self.last_toggle = Some((name.clone(), now));
                 // 草稿里把该技能切到目标态：开 → 去掉 -name、加 +name（压过 !glob），
                 // 关 → 去掉 +name、加 -name。Ctrl-S 才落盘。
@@ -331,7 +336,7 @@ impl GuiApp {
                 cx.notify();
             }
             Action::LogoutProvider(provider) => {
-                match crate::core::auth::remove_auth(&provider) {
+                match core::auth::remove_auth(&provider) {
                     Ok(()) => self
                         .transcript
                         .push_note(Note::Info(format!("Removed API key for {provider}"))),
@@ -356,7 +361,9 @@ impl GuiApp {
                     cx.notify();
                     return;
                 }
+
                 self.last_toggle = Some((name.clone(), now));
+
                 // 与 TUI 面板一致：只改未保存的草稿，Ctrl-S 才应用并写盘
                 if let Some(draft) = self.extensions_draft.as_mut()
                     && let Some(item) = draft.iter_mut().find(|(item, _)| item == &name)
@@ -370,6 +377,7 @@ impl GuiApp {
                 if self.scoped_draft.is_none() {
                     self.scoped_draft = Some(settings_manager::read_enabled_models());
                 }
+
                 if let Some(draft) = self.scoped_draft.as_mut() {
                     match draft.iter().position(|item| item == &pattern) {
                         Some(index) => {
@@ -456,10 +464,12 @@ impl GuiApp {
                     // 数值项走输入框（上面带 guard 的分支），这里不会命中
                     _ => Ok(()),
                 };
+
                 if let Err(error) = result {
                     self.transcript
                         .push_note(Note::Error(format!("Cannot write settings: {error}")));
                 }
+
                 // 重开面板，让标签显示新值
                 self.open_settings_panel(cx);
             }
@@ -513,6 +523,7 @@ impl GuiApp {
             cx.notify();
             return;
         }
+
         // `!cmd`：本地执行，输出作为用户消息进入上下文
         if let Some(command) = text.strip_prefix('!') {
             let output = run_shell_command(command.trim());
@@ -523,6 +534,7 @@ impl GuiApp {
             cx.notify();
             return;
         }
+
         // `/cmd`：GUI 命令
         if let Some(command) = text.strip_prefix('/') {
             self.run_slash(command.trim(), cx);
@@ -531,7 +543,7 @@ impl GuiApp {
         }
 
         // 和 TUI 一样记进项目级 prompt 历史，`/history` 才翻得到
-        crate::core::prompt_history::append(
+        core::prompt_history::append(
             &self.cwd(),
             &text,
             settings_manager::read_settings_history_max_entries(),
@@ -544,6 +556,7 @@ impl GuiApp {
             } else if let Ok(mut inbox) = self.steer_inbox.lock() {
                 inbox.push_back(AgentMessage::user_text(&text));
             }
+
             cx.notify();
             return;
         }
@@ -590,44 +603,54 @@ impl GuiApp {
             cx,
         );
     }
+
     /// 打开/切换右侧面板；`tab` 为 None 时保持当前标签。
     pub(super) fn toggle_panel(&mut self, tab: Option<PanelTab>, cx: &mut Context<Self>) {
         match tab {
             Some(tab) => {
                 self.panel.tab = tab;
                 self.panel.visible = true;
+                self.panel.search_focus = tab == PanelTab::Files;
             }
             None => self.panel.visible = !self.panel.visible,
         }
+
         if !self.panel.visible {
             self.panel.search_focus = false;
+            self.panel.scroll_drag = None;
             cx.notify();
             return;
         }
         self.load_panel(cx);
     }
+
     /// 切到某个页签：已经开着且就在这页就收起，否则打开并 reload。
     pub(super) fn toggle_panel_tab(&mut self, tab: PanelTab, cx: &mut Context<Self>) {
         if self.panel.visible && self.panel.tab == tab {
             self.panel.visible = false;
             self.panel.search_focus = false;
+            self.panel.scroll_drag = None;
             cx.notify();
             return;
         }
         self.toggle_panel(Some(tab), cx);
     }
+
     /// 点页签按钮：切页并重读（文件列表/变更计数也跟着刷新）。
     pub(crate) fn set_panel_tab(&mut self, tab: PanelTab, cx: &mut Context<Self>) {
         self.panel.tab = tab;
-        self.panel.search_focus = false;
+        self.panel.search_focus = tab == PanelTab::Files;
+        self.panel.scroll_drag = None;
         self.load_panel(cx);
         cx.notify();
     }
+
     /// 点 Files 页的搜索框：之后敲的字进过滤框。
     pub(crate) fn focus_panel_search(&mut self, cx: &mut Context<Self>) {
         self.panel.search_focus = true;
         cx.notify();
     }
+
     /// 后台读面板内容（列文件 / git status / git diff / 文件预览都不在主线程跑）。
     pub(super) fn load_panel(&mut self, cx: &mut Context<Self>) {
         let cwd = self.cwd();
@@ -650,12 +673,14 @@ impl GuiApp {
         })
         .detach();
     }
+
     /// 选中某条变更：切下标并在后台重读它的 diff。
     pub(crate) fn select_change(&mut self, index: usize, cx: &mut Context<Self>) {
         self.panel.selected = index;
         self.load_panel(cx);
         cx.notify();
     }
+
     /// Files 页选中某个文件：后台读正文并高亮。
     pub(crate) fn select_file(&mut self, index: usize, cx: &mut Context<Self>) {
         let Some(row) = self.panel.files.get(index) else {
@@ -666,27 +691,30 @@ impl GuiApp {
         self.load_panel(cx);
         cx.notify();
     }
+
     /// 命令面板。
     pub(super) fn open_command_palette(&mut self, _cx: &mut Context<Self>) {
         let list = List::new("Commands", command_palette_entries());
         self.overlay = Some(Overlay::List(list));
     }
+
     /// `/history`：本会话发过的用户消息，Enter 写回输入框（不发出去）。
     pub(super) fn open_history_panel(&mut self, _cx: &mut Context<Self>) {
         let cwd = self.cwd();
         let max = settings_manager::read_settings_history_max_entries();
         // 与 TUI 一致：读项目级 prompt 历史，而不是当前会话上下文
         // （压缩/摘要之后上下文里只剩一两条用户消息，历史记录不该跟着丢）
-        let entries = history_entries(crate::core::prompt_history::load(&cwd, max));
+        let entries = history_entries(core::prompt_history::load(&cwd, max));
         self.overlay = Some(Overlay::List(List::new("History", entries)));
     }
+
     /// 登录面板：列出全部支持的 provider，Enter 填 key。
     pub(super) fn open_login_panel(&mut self, _cx: &mut Context<Self>) {
-        let entries: Vec<Entry> = crate::core::model_resolver::SUPPORTED_PROVIDERS
+        let entries: Vec<Entry> = core::model_resolver::SUPPORTED_PROVIDERS
             .iter()
             .map(|provider| Entry {
                 label: provider.to_string(),
-                detail: if crate::core::auth::has_auth(provider) {
+                detail: if core::auth::has_auth(provider) {
                     "configured".into()
                 } else {
                     String::new()
@@ -697,9 +725,10 @@ impl GuiApp {
             .collect();
         self.overlay = Some(Overlay::List(List::new("Login", entries)));
     }
+
     /// 登出面板：只列已存 key 的 provider。
     pub(super) fn open_logout_panel(&mut self, _cx: &mut Context<Self>) {
-        let mut entries: Vec<Entry> = crate::core::auth::list_auth_providers()
+        let mut entries: Vec<Entry> = core::auth::list_auth_providers()
             .into_iter()
             .map(|provider| Entry {
                 label: provider.clone(),
@@ -708,6 +737,7 @@ impl GuiApp {
                 ..Entry::default()
             })
             .collect();
+
         if entries.is_empty() {
             entries.push(Entry {
                 label: "No saved keys".into(),
@@ -716,17 +746,18 @@ impl GuiApp {
                 ..Entry::default()
             });
         }
+
         self.overlay = Some(Overlay::List(List::new("Logout", entries)));
     }
+
     /// 更新日志：当前版本的内嵌 changelog 前若干行。
     pub(super) fn open_changelog(&mut self, _cx: &mut Context<Self>) {
-        let lines: Vec<String> = crate::core::changelog::CHANGELOG
+        let lines: Vec<String> = core::changelog::CHANGELOG
             .lines()
-            .take(120)
             .map(|line| line.to_string())
             .collect();
         self.overlay = Some(Overlay::Info(Info::new(
-            format!("Changelog v{}", crate::core::changelog::VERSION),
+            format!("Changelog v{}", core::changelog::VERSION),
             lines,
         )));
     }
@@ -770,7 +801,7 @@ pub(super) fn command_palette_entries() -> Vec<Entry> {
         },
         Entry {
             label: "Zoom in".into(),
-            detail: "Ctrl+=".into(),
+            detail: "Ctrl-=".into(),
             action: Action::Scale(theme::ui_scale() + theme::UI_SCALE_STEP),
             ..Entry::default()
         },
@@ -782,13 +813,13 @@ pub(super) fn command_palette_entries() -> Vec<Entry> {
         },
         Entry {
             label: "Reset scale to 100%".into(),
-            detail: "Ctrl+0".into(),
+            detail: "Ctrl-0".into(),
             action: Action::Scale(1.0),
             ..Entry::default()
         },
         Entry {
             label: "Files…".into(),
-            detail: "Ctrl+Shift+F".into(),
+            detail: "Ctrl-Shift-F".into(),
             action: Action::Open(ListKind::PanelFiles),
             ..Entry::default()
         },

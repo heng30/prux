@@ -20,6 +20,7 @@ impl GuiApp {
         self.refresh_suggest(cx);
         cx.notify();
     }
+
     /// 键盘分发：覆盖层打开时只喂覆盖层，否则走输入框。
     pub(super) fn dispatch_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
         let keystroke = event.keystroke.clone();
@@ -38,11 +39,13 @@ impl GuiApp {
             } else {
                 keystroke.key.as_str()
             };
+
             if key == "enter" {
                 self.confirm_dialog(cx);
             } else {
                 self.handle_dialog_key(key, shift);
             }
+
             cx.notify();
             return;
         }
@@ -52,6 +55,7 @@ impl GuiApp {
                 cx.notify();
                 return;
             }
+
             // 其余键：先收菜单再照常处理
             self.session_menu = None;
             if keystroke.key == "escape" {
@@ -97,6 +101,7 @@ impl GuiApp {
                 cx.notify();
                 return;
             }
+
             self.handle_overlay_key(&keystroke, shift, cx);
             cx.notify();
             return;
@@ -240,9 +245,9 @@ impl GuiApp {
         shift: bool,
         cx: &mut Context<Self>,
     ) -> bool {
-        // ── 编辑器键位：与 TUI 的 tui.editor.* 对齐 ─────────────
         let alt = keystroke.modifiers.alt;
         let key = keystroke.key.as_str();
+
         // Alt+Up：把排队的 steer / follow-up 全部取回编辑器（同 TUI 的 app.message.dequeue）
         if alt && key == "up" {
             self.dequeue_queued(cx);

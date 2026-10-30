@@ -147,6 +147,12 @@
   the full counts: the file list and the change list are computed whichever tab is open, so the
   tab labels no longer disagree with what the other tab shows.
 
+- **The desktop GUI's right panel scrolls both ways**: the diff and the file body each keep their
+  own scroll position, with a bar on the right edge and one along the bottom; dragging anywhere on
+  a bar's track moves the content, and the pointer may leave the track mid-drag. Long lines no
+  longer wrap, so the horizontal bar has something to scroll, and opening another file or change
+  starts that area at the top instead of inheriting the previous offsets.
+
 - **The desktop GUI's status bar reports the run, not just the message count**: the left side shows
   messages, the share of the context window in use and the cache hit rate; the right side shows
   input / output tokens, cost, output rate in tokens per second, and whether a goal or plan is
@@ -489,6 +495,11 @@
   这些文件头，直接从第一个 hunk 开始渲染，每行左侧带旧/新行号（新增 `+428`、删除 `-428`、
   上下文 ` 429`），不必从 `@@` 标记往下数。两个页签的计数也都齐了：无论停在哪个页签，文件
   列表与变更列表都会算一遍，标签页上的数字不再和另一个页签对不上。
+
+- **桌面 GUI 的右侧面板能横竖滚动**：diff 与文件正文各自记住自己的滚动位置，右缘一根纵向条、
+  底缘一根横向条；在轨道任意位置按住拖动都能滚，指针中途跑出轨道也不断。长行不再折行，横向条
+  才有的可滚；换文件或换变更时该片内容回到顶部，不再沿用上一个文件的偏移（否则新内容一上来就
+  被顶到面板外）。
 
 - **桌面 GUI 的状态栏汇报这一轮，而不只是消息数**：左侧是消息数、上下文窗口占用率与缓存命中率，
   右侧是 in/out token、费用、每秒输出速率，以及当前是否有目标或计划、已发交互数与本轮耗时。

@@ -17,11 +17,8 @@ impl GuiApp {
         self.editor.set_cursor(row, col, extend);
         cx.notify();
     }
-}
 
-impl GuiApp {
     /// 按窗口坐标找出落在哪一行文字上，返回（行序号, 行内字符下标）。
-    ///
     pub(super) fn line_hit(
         &self,
         position: gpui::Point<Pixels>,
@@ -55,9 +52,7 @@ impl GuiApp {
             self.char_index(&line, text.size.width, local, window),
         ))
     }
-}
 
-impl GuiApp {
     /// 行内某个位置落在第几个字符（字符下标，不是字节）。
     ///
     /// 直接用 gpui 自己的排版结果：`shape_text` 按行宽折行后，每个视觉行带着
@@ -74,32 +69,35 @@ impl GuiApp {
         if line.text.is_empty() || width <= px(0.) {
             return 0;
         }
+
         let system = window.text_system().clone();
         let style = gpui::TextStyle {
             font_family: theme::UI_FONT_FAMILY.into(),
             ..Default::default()
         };
+
         let size = px(line.font_size);
         let runs = [style.to_run(line.text.len())];
         let Ok(lines) = system.shape_text(line.text.clone().into(), size, &runs, Some(width), None)
         else {
             return 0;
         };
+
         let Some(wrapped) = lines.first() else {
             return 0;
         };
+
         let line_height = px((line.font_size * TRANSCRIPT_LINE_HEIGHT).round());
         let byte = match wrapped.index_for_position(local, line_height) {
             Ok(byte) | Err(byte) => byte,
         };
+
         line.text
             .get(..byte.min(line.text.len()))
             .map(|head| head.chars().count())
             .unwrap_or(total)
     }
-}
 
-impl GuiApp {
     /// 鼠标按下：建立选区（`extend` = 按住 Shift 接着扩）。
     pub(super) fn start_text_selection(
         &mut self,
@@ -115,19 +113,19 @@ impl GuiApp {
             }
             return;
         };
+
         let anchor = match (self.text_sel, extend) {
             (Some(selection), true) => selection.anchor,
             _ => (line, col),
         };
+
         self.text_sel = Some(transcript::TextSel {
             anchor,
             focus: (line, col),
         });
         cx.notify();
     }
-}
 
-impl GuiApp {
     /// 拖动：把选区终点挪到鼠标位置。
     pub(super) fn extend_text_selection(
         &mut self,
@@ -138,22 +136,23 @@ impl GuiApp {
         let Some(selection) = self.text_sel else {
             return;
         };
+
         let hit = self.line_hit(position, window);
         let Some((line, col)) = hit else {
             return;
         };
+
         let next = transcript::TextSel {
             anchor: selection.anchor,
             focus: (line, col),
         };
+
         if next != selection {
             self.text_sel = Some(next);
             cx.notify();
         }
     }
-}
 
-impl GuiApp {
     /// IME 写入的目标：覆盖层列表打开时是它的过滤框，右侧文件面板的搜索框聚焦时
     /// 是它，否则是输入卡片。
     pub(super) fn ime_target(&self) -> &Editor {
@@ -168,9 +167,11 @@ impl GuiApp {
         {
             return editor;
         }
+
         if self.suggest.is_some() {
             return &self.suggest_input;
         }
+
         let in_panel = self.panel_search_active();
         match &self.overlay {
             Some(Overlay::List(list)) => &list.query,
@@ -180,9 +181,7 @@ impl GuiApp {
             _ => &self.editor,
         }
     }
-}
 
-impl GuiApp {
     /// 右侧 Files 面板的搜索框是否在吃键盘。
     pub(crate) fn panel_search_active(&self) -> bool {
         self.panel.visible && self.panel.search_focus
@@ -202,9 +201,11 @@ impl GuiApp {
         {
             return editor;
         }
+
         if self.suggest.is_some() {
             return &mut self.suggest_input;
         }
+
         match self.overlay.as_mut() {
             Some(Overlay::List(list)) => {
                 list.selected = 0;
@@ -216,9 +217,7 @@ impl GuiApp {
             _ => &mut self.editor,
         }
     }
-}
 
-impl GuiApp {
     /// IME 报上来的 UTF-16 区间 → 当前目标的字节区间（没给区间就用手上的组字区间/选区）。
     pub(super) fn ime_range_bytes(&self, range: Option<Range<usize>>) -> Range<usize> {
         let target = self.ime_target();
@@ -280,6 +279,7 @@ impl EntityInputHandler for GuiApp {
         {
             let before = self.editor.text_before_cursor();
             let probe = format!("{before}/");
+
             if suggest_engine::detect(&probe)
                 .is_some_and(|(trigger, _, _)| trigger == Trigger::Command)
             {
@@ -290,6 +290,7 @@ impl EntityInputHandler for GuiApp {
                 return;
             }
         }
+
         // 这一个字符是「打开覆盖层输入行」的那个热键，别让它漏进刚出现的输入框
         if let Some(char) = self.swallow_char.take()
             && text.chars().eq(std::iter::once(char))
@@ -297,10 +298,12 @@ impl EntityInputHandler for GuiApp {
             self.marked_range = None;
             return;
         }
+
         let bytes = self.ime_range_bytes(range);
         let typing_search = self.panel_search_active();
         self.ime_target_mut().replace_byte_range(bytes, text);
         self.marked_range = None;
+
         // 搜文件框里敲字不该触发输入卡片的 @ / 命令补全
         if !typing_search {
             self.refresh_suggest_any(cx);
