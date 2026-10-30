@@ -1579,20 +1579,58 @@ fn inline_text(
     theme: &Theme,
     selection: Option<Range<usize>>,
 ) -> StyledText {
-    let (text, mut highlights) = inline_runs(marker, spans, theme);
-    if let Some(range) = selection {
-        let byte = char_range_to_bytes(&text, range);
-        if !byte.is_empty() {
-            highlights.push((
-                byte,
-                HighlightStyle {
-                    background_color: Some(theme.selection),
-                    ..Default::default()
-                },
-            ));
+    let (text, highlights) = inline_runs(marker, spans, theme);
+    let highlights = match selection {
+        Some(range) => merge_selection(
+            highlights,
+            char_range_to_bytes(&text, range),
+            HighlightStyle {
+                background_color: Some(theme.selection),
+                ..Default::default()
+            },
+        ),
+        None => highlights,
+    };
+    StyledText::new(text).with_highlights(highlights)
+}
+
+/// 把选区底色并进已有高亮，切成互不重叠的段。
+///
+/// `StyledText` 要求高亮区间首尾相接、互不重叠：直接把选区当成一段追加进去，
+/// 与行内代码/链接重叠的那部分底色就会画不出来（选中后看着像漏掉了几个词）。
+fn merge_selection(
+    highlights: Vec<(Range<usize>, HighlightStyle)>,
+    selection: Range<usize>,
+    background: HighlightStyle,
+) -> Vec<(Range<usize>, HighlightStyle)> {
+    if selection.is_empty() {
+        return highlights;
+    }
+
+    let mut bounds = vec![selection.start, selection.end];
+    for (range, _) in &highlights {
+        bounds.push(range.start);
+        bounds.push(range.end);
+    }
+    bounds.sort_unstable();
+    bounds.dedup();
+
+    let mut out = Vec::new();
+    for pair in bounds.windows(2) {
+        let (start, end) = (pair[0], pair[1]);
+        let mut style = highlights
+            .iter()
+            .find(|(range, _)| range.start <= start && end <= range.end)
+            .map(|(_, style)| *style)
+            .unwrap_or_default();
+        if selection.start <= start && end <= selection.end {
+            style = style.highlight(background);
+        }
+        if style != HighlightStyle::default() {
+            out.push((start..end, style));
         }
     }
-    StyledText::new(text).with_highlights(highlights)
+    out
 }
 
 /// 行内片段 → (纯文本, 分段高亮)；纯文本用来复制与按字符定位。
@@ -1692,6 +1730,56 @@ mod tests {
             transcript.blocks().last(),
             Some(Block::Note(Note::Error(text))) if text == "Operation aborted"
         ));
+    }
+
+    /// 选区底色与行内样式高亮合并后首尾相接、互不重叠（重叠段画不出底色）。
+    #[test]
+    fn selection_highlight_splits_inline_runs() {
+        let bold = HighlightStyle {
+            font_weight: Some(FontWeight::BOLD),
+            ..Default::default()
+        };
+        // 复用任意非默认样式当“选区底色”，本函数不关心具体是哪个字段
+        let bg = HighlightStyle {
+            font_style: Some(FontStyle::Italic),
+            ..Default::default()
+        };
+
+        // 选区盖住整段行内代码：三段首尾相接、互不重叠
+        let merged = merge_selection(vec![(5..9, bold)], 0..12, bg);
+        assert_eq!(
+            merged,
+            vec![
+                (0..5, bg),
+                (
+                    5..9,
+                    HighlightStyle {
+                        font_weight: Some(FontWeight::BOLD),
+                        font_style: Some(FontStyle::Italic),
+                        ..Default::default()
+                    }
+                ),
+                (9..12, bg),
+            ]
+        );
+
+        // 选区只盖住行内代码的前半段：尾部保留原样式且不带底色
+        let merged = merge_selection(vec![(5..9, bold)], 0..7, bg);
+        assert_eq!(
+            merged,
+            vec![
+                (0..5, bg),
+                (
+                    5..7,
+                    HighlightStyle {
+                        font_weight: Some(FontWeight::BOLD),
+                        font_style: Some(FontStyle::Italic),
+                        ..Default::default()
+                    }
+                ),
+                (7..9, bold),
+            ]
+        );
     }
 
     /// 选区按行切字符区间：跨行、反向拖动、越界都夹住。

@@ -383,6 +383,10 @@
   `SKILL.md` header, source and path. Footer and banner extensions are no longer listed, since only
   the terminal UI renders them.
 
+- **Selecting text keeps the inline styles underneath it**: a transcript highlight has to be split
+  where it meets inline code or a link, so the selection background no longer swallows those words
+  and paint over only part of the selection.
+
 ## 中文
 
 ### 新增
@@ -654,3 +658,5 @@
   `Esc` 丢弃；点过哪一行就是哪一行，列表重建后不再跳回第一条，过滤框也一起保留。`Tab` 打开当前条目
   的只读详情页（`Tab` / `Enter` / `Esc` 返回，草稿还在）——扩展显示描述、模式、工具与 fork 来源，
   技能显示 `SKILL.md` 头信息、来源与路径。底栏与横幅扩展不再列出，它们只在终端界面渲染。
+- **选中文字时行内样式不再盖掉选区底色**：选区底色与行内代码、链接的高亮在交界处切成互不重叠的
+  段落，重叠的那些词不会再把选区底色吞掉，也不会只画出半个选区。
