@@ -243,6 +243,13 @@ pub fn notify_text(text: &str, level: UiNotifyLevel) {
     notify(vec![RichSpan::plain(text.to_string())], level);
 }
 
+/// 状态栏临时提示：发 `Status` 请求，不进聊天区。
+pub fn notify_status(text: &str) {
+    extensions::request_ui(ExtensionUiRequest::Status {
+        text: text.to_string(),
+    });
+}
+
 /// 命令输出通知：把聊天区消息级别映射成 UI 通知级别后发纯文本通知。
 pub fn notify_cmd(text: &str, level: MsgLevel) {
     notify_text(

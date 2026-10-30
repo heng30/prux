@@ -250,7 +250,8 @@
   filter text and the highlighted row, so a search no longer snaps back to the full list. In the
   `/` completion panel a space now completes the command and opens that extension command's declared
   subcommands (`Tab` completes, `Enter` completes and runs), giving `/goal pause`-style second-level
-  candidates in the window as well as in the terminal.
+  candidates in the window as well as in the terminal; the panel's description now sits right after
+  the command name instead of being pushed to the far edge, so there is room to read it.
 
 ### Fixed
 
@@ -562,7 +563,8 @@
   面板、`/extension` 与 `/skills` 现在都用 `Space` 切换一行的取值，不再用 `Enter`；技能与扩展面板的
   详情页改由 `Enter` 打开，`Tab` 这条快捷方式不再保留。扩展设置面板里循环取值会保留过滤框内容与
   高亮行，搜索之后不再跳回完整列表。`/` 补全面板里敲空格会先补全命令名并弹出该扩展命令声明的
-  子命令（`Tab` 只补全，`Enter` 补全并执行），桌面端也有了 `/goal pause` 这样的二级候选。
+  子命令（`Tab` 只补全，`Enter` 补全并执行），桌面端也有了 `/goal pause` 这样的二级候选；
+  面板里的说明紧跟命令名而不是被推到最右边，描述才显示得下。
 
 ## 修复
 

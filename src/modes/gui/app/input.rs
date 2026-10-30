@@ -273,7 +273,7 @@ impl EntityInputHandler for GuiApp {
             {
                 self.suggest_input = Editor::new();
                 let start = self.editor.cursor_byte();
-                self.rebuild_suggest(Trigger::Command, start, String::new(), cx);
+                self.rebuild_suggest(Trigger::Command, start, String::new(), String::new(), cx);
                 cx.notify();
                 return;
             }

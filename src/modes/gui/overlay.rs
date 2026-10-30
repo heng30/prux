@@ -714,8 +714,11 @@ pub(crate) struct RowSpec<'a> {
     pub columns: &'a [Column],
     /// 表格行除第一列以外的单元格（与 `columns` 从第二列起对应）
     pub cells: &'a [String],
-    /// 右侧次要说明（空串表示不显示）
+    /// 次要说明（空串表示不显示）
     pub detail: &'a str,
+    /// 说明是否紧跟主文案（`true` 用于补全面板）：`false` 时主文案撑满、说明右对齐，
+    /// `true` 时说明吃掉剩余宽度并左对齐，命令与说明之间不留大片空白
+    pub detail_inline: bool,
     /// 勾选框状态（`Some` 时行首画方框）
     pub checked: Option<bool>,
     /// 是否为当前选中行
@@ -727,7 +730,7 @@ pub(crate) struct RowSpec<'a> {
 /// 列表里的一行：勾选框 + 主文案 + 对齐列 + 右侧说明（面板与 `/`、`@` 补全面板共用）。
 ///
 /// `columns` 非空时切到表格版式（名称定宽、每列定宽，描述占剩余宽），
-/// 空时保持「名称撑满 + 说明右对齐」。
+/// 空时保持「名称撑满 + 说明右对齐」，`detail_inline` 为真则改成「名称自然宽 + 说明吃剩余宽」。
 ///
 /// `height` 是行高（面板 30、补全面板 26），`id` 的前半段区分不同列表，
 /// 避免两个列表的同一行号抢同一个元素 id。
@@ -742,6 +745,7 @@ pub(crate) fn list_row(
         columns,
         cells,
         detail,
+        detail_inline,
         checked,
         selected,
         height,
@@ -799,24 +803,29 @@ pub(crate) fn list_row(
         return row.into_any_element();
     }
 
-    row = row.child(
-        div()
-            .min_w_0()
-            .flex_1()
-            .truncate()
-            .child(SharedString::from(label.to_string())),
-    );
+    let label_cell = div()
+        .min_w_0()
+        .truncate()
+        .child(SharedString::from(label.to_string()));
+
+    row = row.child(if detail_inline {
+        label_cell.flex_none().max_w(px(DETAIL_MAX_WIDTH))
+    } else {
+        label_cell.flex_1()
+    });
+
     if !detail.is_empty() {
-        row = row.child(
-            div()
-                .flex_none()
-                .max_w(px(DETAIL_MAX_WIDTH))
-                .min_w_0()
-                .truncate()
-                .text_size(px(FONT_CAPTION))
-                .text_color(theme.text_ghost)
-                .child(SharedString::from(detail.to_string())),
-        );
+        let detail_cell = div()
+            .min_w_0()
+            .truncate()
+            .text_size(px(FONT_CAPTION))
+            .text_color(theme.text_ghost)
+            .child(SharedString::from(detail.to_string()));
+        row = row.child(if detail_inline {
+            detail_cell.flex_1()
+        } else {
+            detail_cell.flex_none().max_w(px(DETAIL_MAX_WIDTH))
+        });
     }
     row.into_any_element()
 }
@@ -1001,6 +1010,7 @@ fn render_list(list: &List, theme: &Theme, cx: &mut gpui::Context<GuiApp>) -> An
                 columns: &list.columns,
                 cells: &entry.cells,
                 detail: &entry.detail,
+                detail_inline: false,
                 checked: entry.checked,
                 selected: index == list.selected,
                 height: ROW_HEIGHT,

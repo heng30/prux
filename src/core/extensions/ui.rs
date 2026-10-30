@@ -125,6 +125,9 @@ pub enum ExtensionUiRequest {
         /// 通知级别，决定默认配色与展示样式。
         level: UiNotifyLevel,
     },
+    /// 状态栏临时提示（不进聊天区）：文案写到状态栏，过期自动消失。
+    /// 用于错误这类「一闪而过、不该留在对话里」的反馈。
+    Status { text: String },
     /// 扩展自定义消息块（聊天区卡片）：TUI 按 `custom_type` 反查渲染（见
     /// [`super::Extension::render_custom_message`]），扩展自行决定是否同时
     /// `PersistSessionEntry` 落盘（落盘后由扩展在 `on_session_switched` 重放）。

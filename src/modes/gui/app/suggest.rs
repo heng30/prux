@@ -34,19 +34,20 @@ impl GuiApp {
         }
         let before = self.editor.text_before_cursor();
         let detected = match suggest_engine::detect(&before) {
-            Some(hit) => Some(hit),
+            Some((trigger, start, query)) => Some((trigger, start, String::new(), query)),
             // `/命令 ` 后的第一个词：扩展命令声明了子命令才弹二级候选
             None => {
                 suggest_engine::detect_subcommand(&before).and_then(|(start, command, query)| {
                     (!subcommand_defs(&command).is_empty()).then_some((
                         Trigger::Subcommand,
                         start,
+                        command,
                         query,
                     ))
                 })
             }
         };
-        let Some((trigger, start, query)) = detected else {
+        let Some((trigger, start, command, query)) = detected else {
             self.suggest = None;
             self.suggest_dismissed = None;
             self.attach_images = false;
@@ -63,15 +64,19 @@ impl GuiApp {
         if !query.is_empty() {
             self.suggest_input.insert(&query);
         }
-        self.rebuild_suggest(trigger, start, query, cx);
+        self.rebuild_suggest(trigger, start, command, query, cx);
     }
     /// 面板开着时按面板输入框重算候选。
     pub(super) fn refresh_suggest_from_input(&mut self, cx: &mut Context<Self>) {
-        let Some((trigger, start)) = self.suggest.as_ref().map(|s| (s.trigger, s.start)) else {
+        let Some((trigger, start, command)) = self
+            .suggest
+            .as_ref()
+            .map(|s| (s.trigger, s.start, s.command.clone()))
+        else {
             return;
         };
         let query = self.suggest_input.text();
-        self.rebuild_suggest(trigger, start, query, cx);
+        self.rebuild_suggest(trigger, start, command, query, cx);
     }
     /// 文件列表到位/输入变化后重算：面板开着按面板输入，否则按主输入框。
     pub(super) fn refresh_suggest_any(&mut self, cx: &mut Context<Self>) {
@@ -86,6 +91,7 @@ impl GuiApp {
         &mut self,
         trigger: Trigger,
         start: usize,
+        command: String,
         query: String,
         cx: &mut Context<Self>,
     ) {
@@ -118,13 +124,7 @@ impl GuiApp {
                 self.ensure_files(cx);
                 suggest_engine::files(&self.files_cache.paths, &query, self.attach_images)
             }
-            Trigger::Subcommand => {
-                // 命令名仍写在主输入框里（面板开着时字符只进面板），重新解析拿它
-                let command = suggest_engine::detect_subcommand(&self.editor.text_before_cursor())
-                    .map(|(_, command, _)| command)
-                    .unwrap_or_default();
-                suggest_engine::subcommands(&subcommand_defs(&command), &query)
-            }
+            Trigger::Subcommand => suggest_engine::subcommands(&subcommand_defs(&command), &query),
         };
         // 同一触发词 + 同一前缀：保留选中项，避免每敲一个字符跳回第一行
         let keep = self
@@ -139,6 +139,7 @@ impl GuiApp {
         self.suggest = Some(Suggest {
             trigger,
             start,
+            command,
             query,
             items,
             selected,
@@ -198,15 +199,17 @@ impl GuiApp {
         };
         let end = self.editor.cursor_byte();
         let start = suggest.start.min(end);
-        let insert = format!("{} ", item.label);
+        // 子命令把 `/命令 查询词` 整段重写：命令名与子命令不会因重复采纳粘在一起
+        let insert = match suggest.trigger {
+            Trigger::Subcommand => format!("/{} {} ", suggest.command, item.label),
+            _ => format!("{} ", item.label),
+        };
         self.editor.replace_byte_range(start..end, &insert);
         self.suggest = None;
         self.suggest_dismissed = None;
-        match suggest.trigger {
-            // 命令已补全完：别在同一位置再弹一次命令面板
-            Trigger::Command | Trigger::Subcommand => self.suggest_dismissed = Some(start),
-            Trigger::File => self.refresh_suggest(cx),
-        }
+        self.marked_range = None;
+        // 重算：命令补全完会换成子命令面板，子命令补全完则收起面板
+        self.refresh_suggest(cx);
     }
     /// 面板里没有候选时按 Enter：把面板输入原样补成 `/命令 参数`（`@` 则是 `@路径`）写回输入框。
     ///
@@ -216,18 +219,18 @@ impl GuiApp {
         let Some(suggest) = self.suggest.clone() else {
             return;
         };
-        let prefix = match suggest.trigger {
-            Trigger::Command => "/",
-            Trigger::File => "@",
-            // 子命令的锚点在命令名之后：直接写查询词，不再补命令本身
-            Trigger::Subcommand => "",
+        let input = self.suggest_input.text();
+        let text = match suggest.trigger {
+            Trigger::Command => format!("/{input} "),
+            Trigger::File => format!("@{input} "),
+            Trigger::Subcommand => format!("/{} {input} ", suggest.command),
         };
-        let text = format!("{prefix}{} ", self.suggest_input.text());
         let end = self.editor.cursor_byte();
         let start = suggest.start.min(end);
         self.editor.replace_byte_range(start..end, &text);
         self.suggest = None;
         self.suggest_dismissed = None;
+        self.marked_range = None;
     }
 
     /// 点击候选：选中它并写入输入框。

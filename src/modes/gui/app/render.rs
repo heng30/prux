@@ -63,6 +63,8 @@ impl GuiApp {
                     columns: &[],
                     cells: &[],
                     detail: &item.detail,
+                    // 补全面板：说明紧跟命令名，不在中间留大片空白
+                    detail_inline: true,
                     checked: None,
                     selected: index == suggest.selected,
                     height: SUGGEST_ROW_HEIGHT,

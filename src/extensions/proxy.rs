@@ -36,7 +36,7 @@ use crate::{
     },
     extensions::{
         EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_PROXY, command_arg,
-        util::{self, notify_text},
+        util::{self, notify_status, notify_text},
     },
     modes::interactive::handlers::register_host_command,
     utils::{
@@ -355,7 +355,7 @@ fn set_listen(raw: &str) {
     let addr = match net::normalize_listen(raw) {
         Ok(a) => a,
         Err(e) => {
-            notify_text(&format!("Proxy: {e}"), UiNotifyLevel::Error);
+            notify_status(&format!("Proxy: {e}"));
             return;
         }
     };
@@ -393,10 +393,7 @@ fn spawn_listen(addr: String) {
         let listener = match TcpListener::bind(&addr).await {
             Ok(l) => l,
             Err(e) => {
-                notify_text(
-                    &format!("Proxy: cannot listen on {addr}: {e}"),
-                    UiNotifyLevel::Error,
-                );
+                notify_status(&format!("Proxy: cannot listen on {addr}: {e}"));
                 return;
             }
         };
@@ -440,10 +437,7 @@ fn spawn_listen(addr: String) {
 fn set_provider(raw: &str) {
     let provider = raw.trim();
     if !model_resolver::is_known_provider(provider) {
-        notify_text(
-            &format!("Proxy: unknown provider `{provider}`"),
-            UiNotifyLevel::Error,
-        );
+        notify_status(&format!("Proxy: unknown provider `{provider}`"));
         return;
     }
 
@@ -451,10 +445,9 @@ fn set_provider(raw: &str) {
         .iter()
         .any(|p| p == provider)
     {
-        notify_text(
-            &format!("Proxy: provider `{provider}` has no stored credentials; run /login first"),
-            UiNotifyLevel::Error,
-        );
+        notify_status(&format!(
+            "Proxy: provider `{provider}` has no stored credentials; run /login first"
+        ));
         return;
     }
 

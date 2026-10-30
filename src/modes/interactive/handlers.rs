@@ -2748,6 +2748,27 @@ mod tests {
         crate::core::extensions::unregister_extension("menu-overlay-test-ext");
     }
 
+    /// 状态栏提示（`Status`）只写状态栏，不进聊天区。
+    #[test]
+    fn status_request_sets_status_bar_without_chat_message() {
+        let _g = crate::test_support::AUTH_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        while crate::core::extensions::take_pending_ui().is_some() {}
+
+        let shared = Rc::new(RefCell::new(App::new()));
+        let before = shared.borrow().messages.len();
+        crate::core::extensions::request_ui(crate::core::extensions::ExtensionUiRequest::Status {
+            text: "Proxy: cannot listen on 127.0.0.1:8765".to_string(),
+        });
+        crate::modes::interactive::maybe_handle_extension_ui(&shared);
+
+        let st = shared.borrow();
+        assert_eq!(st.status, "Proxy: cannot listen on 127.0.0.1:8765");
+        assert!(st.status_deadline.is_some(), "状态栏提示应带过期时刻");
+        assert_eq!(st.messages.len(), before, "状态栏提示不进聊天区");
+    }
+
     /// 互斥不变式：任何 ShowOverlay 都必须先收起模态面板（不论面板是如何打开的）。
     #[test]
     fn show_overlay_closes_any_active_panel() {

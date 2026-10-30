@@ -88,8 +88,11 @@ pub struct Item {
 pub struct Suggest {
     /// 触发词类型
     pub trigger: Trigger,
-    /// 触发词在全文中的字节起点（含触发符）
+    /// 替换区间起点（全文字节）：命令/文件是触发符位置，子命令是**整行命令的 `/`**
+    /// （补全时整段重写，重复采纳也不会把命令名和子命令粘在一起）
     pub start: usize,
+    /// 子命令面板所属的命令名（不含 `/`）；其它触发词为空串
+    pub command: String,
     /// 触发符之后已输入的串（过滤用）
     pub query: String,
     /// 候选列表
@@ -155,12 +158,12 @@ pub fn commands_with(extra: &[(String, String)], query: &str) -> Vec<Item> {
     command_candidates(extra, query)
 }
 
-/// 识别 `/命令 <子命令查询>`，返回（锚点字节起点、命令名、查询词）。
+/// 识别 `/命令 <子命令查询>`，返回（整行命令起点、命令名、查询词）。
 ///
 /// 规则同 TUI：命令名后必须有空白；查询只取第一个词，出现第二个空白
 /// （`/goal pause ` 已在写自由参数）就返回 `None`。
-/// 锚点 = 命令名之后的第一个空白：应用时整段（空白 + 查询词）被替换，
-/// 多敲的空格会被归一化（`/goal  p` → `/goal pause `）。
+/// 起点取行首 `/` 而不是命令名后的空白：采纳候选时整段 `/命令 查询词` 一起重写，
+/// 因此命令名与子命令永远不会被拼接成 `/agentssettings`。
 pub fn detect_subcommand(text_before_cursor: &str) -> Option<(usize, String, String)> {
     let line_start = text_before_cursor.rfind('\n').map_or(0, |index| index + 1);
     let rest = text_before_cursor[line_start..].strip_prefix('/')?;
@@ -174,11 +177,7 @@ pub fn detect_subcommand(text_before_cursor: &str) -> Option<(usize, String, Str
         return None;
     }
 
-    Some((
-        line_start + 1 + name.len(),
-        name.to_string(),
-        query.to_string(),
-    ))
+    Some((line_start, name.to_string(), query.to_string()))
 }
 
 /// 子命令候选：`defs` 是命令声明的 `(名字, 说明)`，按声明顺序做模糊匹配。
@@ -272,23 +271,47 @@ mod tests {
     /// 子命令只在行首 `/命令 ` 后第一个词内生效：锚点固定在命令名后的第一个空白（多敲的空格会被归一化）。
     #[test]
     fn detects_subcommand_after_command_name() {
+        // 起点是整行命令的 `/`：采纳候选时整段 `/命令 查询词` 一起重写
         assert_eq!(
             detect_subcommand("/goal p"),
-            Some((5, "goal".to_string(), "p".to_string()))
+            Some((0, "goal".to_string(), "p".to_string()))
         );
-        // 空查询（刚敲完空格）也弹面板；多敲的空格锚点不变
+        // 空查询（刚敲完空格）也弹面板；多敲的空格不影响起点
         assert_eq!(
             detect_subcommand("/goal "),
-            Some((5, "goal".into(), String::new()))
+            Some((0, "goal".into(), String::new()))
         );
         assert_eq!(
             detect_subcommand("/goal  p"),
-            Some((5, "goal".to_string(), "p".to_string()))
+            Some((0, "goal".to_string(), "p".to_string()))
+        );
+        // 第二行上的命令：起点跟着行走（「第一行\n」是 3×3 字节 + 换行）
+        assert_eq!(
+            detect_subcommand("第一行\n/agents se"),
+            Some((10, "agents".to_string(), "se".to_string()))
         );
         // 第二个词已开始（在写自由参数）/ 行中 / 不是斜杠命令：不提示
         assert_eq!(detect_subcommand("/goal pause "), None);
         assert_eq!(detect_subcommand("看下 /goal p"), None);
         assert_eq!(detect_subcommand("@goal p"), None);
+    }
+
+    /// 子命令补全只重写起点之后的命令前缀：重复采纳不会把命令名和子命令粘在一起。
+    #[test]
+    fn subcommand_apply_is_idempotent() {
+        let mut editor = crate::modes::gui::text_edit::Editor::new();
+        for text in ["/agents ", "/agents se", "/agentssettings "] {
+            editor = crate::modes::gui::text_edit::Editor::new();
+            editor.insert(text);
+            let (start, command, _) = detect_subcommand(&editor.text_before_cursor()).unwrap_or((
+                0,
+                "agents".to_string(),
+                String::new(),
+            ));
+            editor.replace_byte_range(start..editor.cursor_byte(), "/agents settings ");
+            assert_eq!(editor.text(), "/agents settings ", "起点: {start}");
+            let _ = command;
+        }
     }
 
     /// 子命令候选按声明顺序模糊匹配，主文本只有子命令名（插入位置在命令名之后）。

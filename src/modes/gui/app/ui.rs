@@ -217,6 +217,10 @@ impl GuiApp {
                     self.dismiss_overlay();
                 }
             }
+            ExtensionUiRequest::Status { text } => {
+                CommandHost::set_status(self, &text);
+                cx.notify();
+            }
             ExtensionUiRequest::Notify { text, level } => {
                 let note = match level {
                     UiNotifyLevel::Error => Note::Error(text),
