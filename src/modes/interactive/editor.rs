@@ -1,5 +1,6 @@
 // 输入编辑器（多行）：光标移动、插入、删除、历史
 
+use crate::utils::display;
 use regex::Regex;
 use std::sync::OnceLock;
 use unicode_segmentation::UnicodeSegmentation;
@@ -586,20 +587,23 @@ impl Editor {
         }
     }
 
-    /// 将光标所在逻辑行按显示宽度拆成视觉行段，返回 (段起 char 索引, 段宽 char)
+    /// 将光标所在逻辑行按显示宽度拆成视觉行段，返回 (段起 char 索引, 段显示宽度)。
+    /// 折行规则与渲染用的 [`crate::utils::display::wrap_line`] 一致，段起点必须是 char 下标，
+    /// 不能拿显示宽度累加（宽字符会让段起点越过行长，光标随之越界）。
     fn visual_segments(&self, line: &str) -> Vec<(usize, usize)> {
         let w = self.visual_width.unwrap_or(usize::MAX);
         let mut segs = Vec::new();
         let mut start = 0usize;
         let mut width = 0usize;
-        for c in line.chars() {
-            let cw = crate::utils::display::char_width(c);
+        for (i, c) in line.chars().enumerate() {
+            let cw = display::char_width(c);
             if cw == 0 {
                 continue;
             }
-            if width + cw > w && start < line.chars().count() {
+
+            if width + cw > w {
                 segs.push((start, width));
-                start += width;
+                start = i;
                 width = 0;
             }
             width += cw;
@@ -1582,6 +1586,26 @@ fn visual_line_navigation_moves_across_wrapped_segments() {
     // move_down：回到第 2 段起点（5）
     e.move_down();
     assert_eq!(e.cursor_col, 5, "前进到下一视觉段起点");
+}
+
+#[test]
+fn cjk_wrap_keeps_cursor_within_line() {
+    // 宽字符每格占 2 列：段起点必须按 char 计数，否则 move_down 会把光标推到行尾之外，
+    // 随后的 Ctrl+U（kill_line_start）按 cursor_col 切片就会 panic。
+    let mut e = Editor::new();
+    e.set_visual_width(4);
+    e.insert_text("中文汉字中文汉字");
+    e.home();
+    for _ in 0..5 {
+        e.move_down();
+    }
+    assert!(
+        e.cursor_col <= e.line_char_len(),
+        "光标越界: cursor_col={} 行长={}",
+        e.cursor_col,
+        e.line_char_len()
+    );
+    assert_eq!(e.kill_line_start(), "中文汉字中文汉字");
 }
 
 #[test]
