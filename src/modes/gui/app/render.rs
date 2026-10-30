@@ -569,7 +569,7 @@ impl GuiApp {
             return None;
         }
 
-        let sections = core::extensions::dock_sections();
+        let sections = extensions::dock_sections();
         if sections.is_empty() {
             return None;
         }

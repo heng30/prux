@@ -1,7 +1,7 @@
 //! 下拉菜单、侧栏会话菜单与拖拽：标题栏/输入区的浮层与宽度调整。
 
 use super::*;
-use crate::{core, utils::path};
+use crate::{core, utils::paths};
 
 impl GuiApp {
     /// 模型下拉菜单：只作用于当前会话，不写配置。
