@@ -63,6 +63,15 @@ pub enum Trigger {
     Command,
     /// `@` 开头的文件路径
     File,
+    /// `/<命令> ` 之后的子命令（扩展命令声明的二级候选）
+    Subcommand,
+}
+
+impl Trigger {
+    /// 采纳候选后是否立即提交：命令与子命令补全即执行，`@` 文件只补全。
+    pub fn submits_after_apply(self) -> bool {
+        matches!(self, Trigger::Command | Trigger::Subcommand)
+    }
 }
 
 /// 一条候选。
@@ -146,6 +155,50 @@ pub fn commands_with(extra: &[(String, String)], query: &str) -> Vec<Item> {
     command_candidates(extra, query)
 }
 
+/// 识别 `/命令 <子命令查询>`，返回（锚点字节起点、命令名、查询词）。
+///
+/// 规则同 TUI：命令名后必须有空白；查询只取第一个词，出现第二个空白
+/// （`/goal pause ` 已在写自由参数）就返回 `None`。
+/// 锚点 = 命令名之后的第一个空白：应用时整段（空白 + 查询词）被替换，
+/// 多敲的空格会被归一化（`/goal  p` → `/goal pause `）。
+pub fn detect_subcommand(text_before_cursor: &str) -> Option<(usize, String, String)> {
+    let line_start = text_before_cursor.rfind('\n').map_or(0, |index| index + 1);
+    let rest = text_before_cursor[line_start..].strip_prefix('/')?;
+    let (name, after) = rest.split_once(char::is_whitespace)?;
+    if name.is_empty() {
+        return None;
+    }
+
+    let query = after.trim_start();
+    if query.contains(char::is_whitespace) {
+        return None;
+    }
+
+    Some((
+        line_start + 1 + name.len(),
+        name.to_string(),
+        query.to_string(),
+    ))
+}
+
+/// 子命令候选：`defs` 是命令声明的 `(名字, 说明)`，按声明顺序做模糊匹配。
+///
+/// 候选只写子命令名（插入位置在命令名之后），说明进右侧灰字。
+pub fn subcommands(defs: &[(String, String)], query: &str) -> Vec<Item> {
+    fuzzy_filter(
+        defs,
+        &query.to_lowercase(),
+        |(name, _): &(String, String)| name.as_str(),
+    )
+    .into_iter()
+    .take(MAX_ITEMS)
+    .map(|(name, detail)| Item {
+        label: name.clone(),
+        detail: detail.clone(),
+    })
+    .collect()
+}
+
 /// 文件候选：路径打分（文件名完全>开头>子串，其次仅路径子串），同分按层级浅、路径短、字典序。
 ///
 /// 查询是子串而非字符顺序匹配（`@sgt` 不命中 `suggest.rs`）。
@@ -214,6 +267,51 @@ mod tests {
             // 「第一行」9 字节 + 换行
             Some((Trigger::File, 10, "lib".to_string()))
         );
+    }
+
+    /// 子命令只在行首 `/命令 ` 后第一个词内生效：锚点固定在命令名后的第一个空白（多敲的空格会被归一化）。
+    #[test]
+    fn detects_subcommand_after_command_name() {
+        assert_eq!(
+            detect_subcommand("/goal p"),
+            Some((5, "goal".to_string(), "p".to_string()))
+        );
+        // 空查询（刚敲完空格）也弹面板；多敲的空格锚点不变
+        assert_eq!(
+            detect_subcommand("/goal "),
+            Some((5, "goal".into(), String::new()))
+        );
+        assert_eq!(
+            detect_subcommand("/goal  p"),
+            Some((5, "goal".to_string(), "p".to_string()))
+        );
+        // 第二个词已开始（在写自由参数）/ 行中 / 不是斜杠命令：不提示
+        assert_eq!(detect_subcommand("/goal pause "), None);
+        assert_eq!(detect_subcommand("看下 /goal p"), None);
+        assert_eq!(detect_subcommand("@goal p"), None);
+    }
+
+    /// 子命令候选按声明顺序模糊匹配，主文本只有子命令名（插入位置在命令名之后）。
+    #[test]
+    fn subcommand_candidates_keep_declared_order() {
+        let defs = vec![
+            ("pause".to_string(), "Pause the goal".to_string()),
+            ("resume".to_string(), "Resume it".to_string()),
+        ];
+        let all = subcommands(&defs, "");
+        assert_eq!(all[0].label, "pause");
+        assert_eq!(all[0].detail, "Pause the goal");
+        assert_eq!(all.len(), 2);
+        assert_eq!(subcommands(&defs, "res")[0].label, "resume");
+        assert!(subcommands(&defs, "zzz").is_empty());
+    }
+
+    /// 命令与子命令采纳后立即提交，`@` 文件只补全。
+    #[test]
+    fn only_command_like_triggers_submit() {
+        assert!(Trigger::Command.submits_after_apply());
+        assert!(Trigger::Subcommand.submits_after_apply());
+        assert!(!Trigger::File.submits_after_apply());
     }
 
     /// 命令候选：字符顺序命中即可，按匹配质量排序，带 `/` 前缀展示。

@@ -160,9 +160,17 @@ impl GuiApp {
                     cx.notify();
                     return true;
                 }
+                // 命令面板里敲空格 = 补全命令名 + 空格，让位给子命令面板（同 TUI 的 `/goal `）
+                "space" if suggest.trigger == Trigger::Command && !suggest.items.is_empty() => {
+                    self.apply_suggestion(cx);
+                    // 这个空格已经补进输入框了，别再让 IME 写一遍
+                    self.swallow_char = Some(' ');
+                    cx.notify();
+                    return true;
+                }
                 // 没有候选（带参数的命令 / 没匹配的路径）：原样补全，命令随即执行
                 "enter" if suggest.items.is_empty() => {
-                    let command = suggest.trigger == Trigger::Command;
+                    let command = suggest.trigger.submits_after_apply();
                     self.commit_suggest_input();
                     if command {
                         self.submit(false, cx);
@@ -172,7 +180,7 @@ impl GuiApp {
                 }
                 // 有候选时 Enter 先补全再提交：`/` 命令随即执行，`@` 文件只补全
                 "enter" if !suggest.items.is_empty() => {
-                    let command = suggest.trigger == Trigger::Command;
+                    let command = suggest.trigger.submits_after_apply();
                     self.apply_suggestion(cx);
                     if command {
                         self.submit(false, cx);
@@ -618,11 +626,11 @@ impl GuiApp {
         }
         let up = key == "up" || (primary && !shift && key == "k");
         let down = key == "down" || (primary && !shift && key == "j");
-        // 详情页只吃 Tab（回列表）与滚动键
+        // 详情页只吃 Enter（回列表）与滚动键
         if let Some(Overlay::List(list)) = self.overlay.as_mut()
             && list.detail.is_some()
         {
-            if key == "tab" || key == "enter" {
+            if key == "enter" {
                 list.detail = None;
             } else if let Some(detail) = list.detail.as_mut() {
                 match key {
@@ -647,17 +655,32 @@ impl GuiApp {
             Overlay::List(list) => {
                 let len = list.filtered().len();
                 match key {
-                    "enter" => {
+                    // 设置 / 扩展 / 技能面板：Space 改值，Enter 看详情
+                    "space" if list.space_activates => {
                         let action = list.take_action().cloned();
                         if let Some(action) = action {
-                            // 同上：勾选类动作要保留面板
                             if !keeps_overlay(&action) {
                                 self.overlay = None;
                             }
                             self.run_action(action, cx);
                         }
+                        // 同一个空格别再被 IME 写进过滤框
+                        self.swallow_char = Some(' ');
                     }
-                    "tab" => self.open_list_detail(),
+                    "enter" => {
+                        if list.detail_source != DetailSource::None {
+                            self.open_list_detail();
+                        } else if !list.space_activates {
+                            let action = list.take_action().cloned();
+                            if let Some(action) = action {
+                                // 同上：勾选类动作要保留面板
+                                if !keeps_overlay(&action) {
+                                    self.overlay = None;
+                                }
+                                self.run_action(action, cx);
+                            }
+                        }
+                    }
                     "pageup" => list.move_selection(-12),
                     "pagedown" => list.move_selection(12),
                     "home" => list.select_index(0),

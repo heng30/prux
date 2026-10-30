@@ -3,7 +3,7 @@
 use super::*;
 
 impl GuiApp {
-    /// 数值型设置：弹输入框，Enter 解析后写入（temperature 留空 = 清除）。
+    /// 数值型设置：弹输入框，Space 触发后 Enter 解析写入（temperature 留空 = 清除）。
     pub(super) fn start_number_setting(&mut self, key: SettingKey, cx: &mut Context<Self>) {
         let current = match key {
             SettingKey::RetryMaxRetries => {
@@ -151,9 +151,10 @@ impl GuiApp {
             }
         }
     }
-    /// 设置面板：`Setting / Value / Notes` 三列表格，Enter 直接改并落盘到 settings.json。
+    /// 设置面板：`Setting / Value / Notes` 三列表格，Space 改值并落盘到 settings.json。
     pub(super) fn open_settings_panel(&mut self, _cx: &mut Context<Self>) {
         let mut list = List::new("Settings", settings_entries(self.theme.is_dark));
+        list.space_activates = true;
         list.columns = vec![
             Column::fixed("Setting", TABLE_SETTING_W),
             Column::fixed("Value", TABLE_VALUE_W),
@@ -161,7 +162,7 @@ impl GuiApp {
         ];
         self.overlay = Some(Overlay::List(list));
     }
-    /// 扩展管理面板：`[x] 名称` 勾选态，Enter/点击切换草稿，Ctrl-S 才落盘，Tab 看详情。
+    /// 扩展管理面板：`[x] 名称` 勾选态，Space/点击切换草稿，Ctrl-S 才落盘，Enter 看详情。
     pub(super) fn open_extension_panel(&mut self, cx: &mut Context<Self>) {
         if self.extensions_draft.is_none() {
             self.extensions_draft = Some(
@@ -212,10 +213,11 @@ impl GuiApp {
                 Column::fixed("Modes", TABLE_MODES_W),
             ],
         );
+        self.mark_space_activates();
         cx.notify();
     }
     /// `/skills`：按 TUI 的技能管理面板实现——列出全部可发现的技能并显示启用态，
-    /// Enter 在草稿里切换启停，Ctrl-S 落盘并重载，Tab 看详情，Esc 丢弃草稿。
+    /// Space 在草稿里切换启停，Ctrl-S 落盘并重载，Enter 看详情，Esc 丢弃草稿。
     pub(super) fn open_skills_panel(&mut self, cx: &mut Context<Self>) {
         if self.skills_draft.is_none() {
             self.skills_draft = Some(settings_manager::read_settings_skills());
@@ -264,7 +266,14 @@ impl GuiApp {
                 Column::flex("Description"),
             ],
         );
+        self.mark_space_activates();
         cx.notify();
+    }
+    /// 当前列表面板改由 Space 触发条目动作（扩展 / 技能面板，详情走 Enter）。
+    pub(super) fn mark_space_activates(&mut self) {
+        if let Some(Overlay::List(list)) = self.overlay.as_mut() {
+            list.space_activates = true;
+        }
     }
     /// 重建当前列表面板：沿用旧的过滤框与选中行（切换勾选后不跳回第一行）。
     pub(super) fn replace_list(
@@ -289,7 +298,7 @@ impl GuiApp {
             }
         }
     }
-    /// Tab：把当前选中项展开成只读详情页（扩展 / 技能），再按 Tab 或 Esc 回列表。
+    /// Enter：把当前选中项展开成只读详情页（扩展 / 技能），再按 Enter 或 Esc 回列表。
     pub(super) fn open_list_detail(&mut self) {
         let Some(Overlay::List(list)) = &self.overlay else {
             return;
@@ -706,7 +715,7 @@ pub(super) fn settings_entries(theme_dark: bool) -> Vec<Entry> {
         row(
             "Theme",
             if theme_dark { "dark" } else { "light" }.into(),
-            "Enter to toggle",
+            "Space to toggle",
             Action::ToggleSetting(SettingKey::GuiTheme),
         ),
         row(
@@ -760,31 +769,31 @@ pub(super) fn settings_entries(theme_dark: bool) -> Vec<Entry> {
         row(
             "Steering mode",
             settings_manager::read_settings_steering_mode(),
-            "Enter to cycle",
+            "Space to cycle",
             Action::ToggleSetting(SettingKey::SteeringMode),
         ),
         row(
             "Follow-up mode",
             settings_manager::read_settings_follow_up_mode(),
-            "Enter to cycle",
+            "Space to cycle",
             Action::ToggleSetting(SettingKey::FollowUpMode),
         ),
         row(
             "Cache warming",
             settings_manager::read_settings_cache_warming(),
-            "Enter to cycle",
+            "Space to cycle",
             Action::ToggleSetting(SettingKey::CacheWarming),
         ),
         row(
             "Quiet startup",
             format!("{:?}", settings_manager::read_settings_quiet_startup()),
-            "Enter to cycle",
+            "Space to cycle",
             Action::ToggleSetting(SettingKey::QuietStartup),
         ),
         row(
             "Max retries",
             settings_manager::read_settings_retry_max_retries().to_string(),
-            "Enter to edit",
+            "Space to edit",
             Action::ToggleSetting(SettingKey::RetryMaxRetries),
         ),
         row(
@@ -792,37 +801,37 @@ pub(super) fn settings_entries(theme_dark: bool) -> Vec<Entry> {
             settings_manager::read_settings_temperature()
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "(model default)".into()),
-            "Enter to edit, empty restores default",
+            "Space to edit, empty restores default",
             Action::ToggleSetting(SettingKey::Temperature),
         ),
         row(
             "Compact reserve tokens",
             settings_manager::read_settings_compact_reserve().to_string(),
-            "Enter to edit",
+            "Space to edit",
             Action::ToggleSetting(SettingKey::CompactReserve),
         ),
         row(
             "Compact keep recent tokens",
             settings_manager::read_settings_compact_keep_recent().to_string(),
-            "Enter to edit",
+            "Space to edit",
             Action::ToggleSetting(SettingKey::CompactKeepRecent),
         ),
         row(
             "UI scale",
             format!("{}%", (theme::ui_scale() * 100.0).round()),
-            "Enter to reset 100%",
+            "Space to reset 100%",
             Action::Scale(1.0),
         ),
         row(
             "Default model",
             String::new(),
-            "Enter to pick",
+            "Space to pick",
             Action::Open(ListKind::Model),
         ),
         row(
             "Thinking level",
             String::new(),
-            "Enter to pick",
+            "Space to pick",
             Action::Open(ListKind::Thinking),
         ),
         row("Config directory", String::new(), &config_dir, Action::None),

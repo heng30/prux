@@ -144,7 +144,7 @@ pub enum SettingKey {
 }
 
 impl SettingKey {
-    /// 是否需要用输入框改数值（而不是 Enter 直接切换）。
+    /// 是否需要用输入框改数值（而不是 Space 直接切换）。
     pub fn is_number(self) -> bool {
         matches!(
             self,
@@ -291,9 +291,9 @@ pub struct List {
     pub entries: Vec<Entry>,
     /// 当前高亮项（在过滤后的列表里的下标）
     pub selected: usize,
-    /// Tab 打开的详情页；`Some` 时面板渲染成只读信息页
+    /// Enter 打开的详情页；`Some` 时面板渲染成只读信息页
     pub detail: Option<Info>,
-    /// 详情页取哪份数据（[`DetailSource::None`] 时 Tab 无效）
+    /// 详情页取哪份数据（[`DetailSource::None`] 时 Enter 无效）
     pub detail_source: DetailSource,
     /// 表格列定义（空 = 普通两列布局）；第一列渲染 [`Entry::label`]
     pub columns: Vec<Column>,
@@ -303,6 +303,8 @@ pub struct List {
     pub choice: Option<u64>,
     /// 底部提示行覆盖（`None` 时按列表种类自动挑一句）
     pub hint: Option<String>,
+    /// Space 是否直接触发条目动作（设置 / 扩展 / 技能面板）：为 true 时空格不再写进过滤框
+    pub space_activates: bool,
 }
 
 impl List {
@@ -319,6 +321,7 @@ impl List {
             scroll: ScrollHandle::new(),
             choice: None,
             hint: None,
+            space_activates: false,
         }
     }
 
@@ -1011,7 +1014,9 @@ fn render_list(list: &List, theme: &Theme, cx: &mut gpui::Context<GuiApp>) -> An
     let hint: String = if let Some(hint) = &list.hint {
         hint.clone()
     } else if list.detail_source != DetailSource::None {
-        "↑↓ select · Enter toggle · Tab detail · Esc close".to_string()
+        "↑↓ select · Space toggle · Enter detail · Esc close".to_string()
+    } else if list.space_activates {
+        "↑↓ select · Space change value · Esc close".to_string()
     } else if list.entries.iter().any(|entry| entry.checked.is_some()) {
         "↑↓ select · Enter toggle · Esc close".to_string()
     } else {

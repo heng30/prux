@@ -645,7 +645,7 @@ fn enabled_count_text(items: &[PanelItem]) -> String {
 fn scoped_footer_text(items: &[PanelItem], dirty: bool) -> String {
     let count_text = enabled_count_text(items);
     let keys =
-        "enter toggle · ctrl+a all · ctrl+x clear · ctrl+p provider · alt+↑/↓ reorder · esc back";
+        "space toggle · ctrl+a all · ctrl+x clear · ctrl+p provider · alt+↑/↓ reorder · esc back";
     if dirty {
         format!("{keys} · {count_text} · (unsaved)")
     } else {
@@ -787,7 +787,7 @@ pub(crate) fn panel_hint(layer: &PanelLayer) -> String {
         }
         PanelKind::ScopedModels => {
             format!(
-                "{DEF_ARROW_UP_DOWN} navigate · enter toggle · ctrl+a all · ctrl+x clear · ctrl+p provider · alt+↑/↓ reorder · esc back"
+                "{DEF_ARROW_UP_DOWN} navigate · space toggle · ctrl+a all · ctrl+x clear · ctrl+p provider · alt+↑/↓ reorder · esc back"
             )
         }
         PanelKind::LoginKey => "Enter API key (enter to save, escape/ctrl+c cancel)".to_string(),
@@ -2281,7 +2281,7 @@ mod tests {
         );
 
         let rows = render_panel_rows(&app, 200);
-        let footers: Vec<&String> = rows.iter().filter(|r| r.contains("enter toggle")).collect();
+        let footers: Vec<&String> = rows.iter().filter(|r| r.contains("space toggle")).collect();
         assert_eq!(footers.len(), 1, "宽终端应一行: {rows:?}");
         assert!(
             !footers[0].contains("ctrl+s"),
@@ -2293,7 +2293,7 @@ mod tests {
         let rows = render_panel_rows(&app, 80);
         let first = rows
             .iter()
-            .position(|r| r.contains("enter toggle"))
+            .position(|r| r.contains("space toggle"))
             .unwrap_or_else(|| panic!("缺 footer 首行: {rows:?}"));
         let second = rows
             .iter()

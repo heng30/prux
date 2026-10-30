@@ -4,6 +4,21 @@
 
 use super::*;
 
+/// 扩展命令声明的子命令候选：`(名字, 说明)` 按声明顺序；命令不存在或没声明则为空。
+fn subcommand_defs(command: &str) -> Vec<(String, String)> {
+    crate::core::extensions::registered_commands()
+        .into_iter()
+        .find(|candidate| candidate.name.eq_ignore_ascii_case(command))
+        .map(|candidate| {
+            candidate
+                .subcommands
+                .into_iter()
+                .map(|sub| (sub.name.to_string(), sub.description.to_string()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 impl GuiApp {
     /// 按输入框当前内容重算补全面板：触发词变了或没有触发词就开关面板。
     pub(super) fn refresh_suggest(&mut self, cx: &mut Context<Self>) {
@@ -18,7 +33,20 @@ impl GuiApp {
             return;
         }
         let before = self.editor.text_before_cursor();
-        let Some((trigger, start, query)) = suggest_engine::detect(&before) else {
+        let detected = match suggest_engine::detect(&before) {
+            Some(hit) => Some(hit),
+            // `/命令 ` 后的第一个词：扩展命令声明了子命令才弹二级候选
+            None => {
+                suggest_engine::detect_subcommand(&before).and_then(|(start, command, query)| {
+                    (!subcommand_defs(&command).is_empty()).then_some((
+                        Trigger::Subcommand,
+                        start,
+                        query,
+                    ))
+                })
+            }
+        };
+        let Some((trigger, start, query)) = detected else {
             self.suggest = None;
             self.suggest_dismissed = None;
             self.attach_images = false;
@@ -89,6 +117,13 @@ impl GuiApp {
             Trigger::File => {
                 self.ensure_files(cx);
                 suggest_engine::files(&self.files_cache.paths, &query, self.attach_images)
+            }
+            Trigger::Subcommand => {
+                // 命令名仍写在主输入框里（面板开着时字符只进面板），重新解析拿它
+                let command = suggest_engine::detect_subcommand(&self.editor.text_before_cursor())
+                    .map(|(_, command, _)| command)
+                    .unwrap_or_default();
+                suggest_engine::subcommands(&subcommand_defs(&command), &query)
             }
         };
         // 同一触发词 + 同一前缀：保留选中项，避免每敲一个字符跳回第一行
@@ -169,7 +204,7 @@ impl GuiApp {
         self.suggest_dismissed = None;
         match suggest.trigger {
             // 命令已补全完：别在同一位置再弹一次命令面板
-            Trigger::Command => self.suggest_dismissed = Some(start),
+            Trigger::Command | Trigger::Subcommand => self.suggest_dismissed = Some(start),
             Trigger::File => self.refresh_suggest(cx),
         }
     }
@@ -184,6 +219,8 @@ impl GuiApp {
         let prefix = match suggest.trigger {
             Trigger::Command => "/",
             Trigger::File => "@",
+            // 子命令的锚点在命令名之后：直接写查询词，不再补命令本身
+            Trigger::Subcommand => "",
         };
         let text = format!("{prefix}{} ", self.suggest_input.text());
         let end = self.editor.cursor_byte();

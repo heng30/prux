@@ -195,7 +195,7 @@ pub struct ExtensionCommand {
     pub busy_safe: bool,
     /// 该命令的子命令（`/goal pause` 的 `pause` 等）。
     ///
-    /// 供 TUI 输入框在 `/<命令> ` 后弹出子命令候选列表；声明顺序 = 候选顺序
+    /// 供输入框在 `/<命令> ` 后弹出子命令候选列表（终端与桌面 GUI 共用）；声明顺序 = 候选顺序
     /// （即空查询时默认选中的第一项）。空表示该命令没有子命令。
     pub subcommands: Vec<SubcommandDef>,
 }

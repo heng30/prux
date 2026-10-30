@@ -243,6 +243,15 @@
   for confirmation. The saved options write `trust.json` and apply on the next launch, the two
   "this session only" options reload skills, context files and tools right away.
 
+- **The desktop GUI changes values with `Space`, and `Enter` shows details**: the `/settings` table,
+  an extension's own `Settings · <name>` panel, `/extension` and `/skills` all cycle or toggle a row
+  with `Space` now instead of `Enter`; the skill and extension panels open their detail page on
+  `Enter` (the `Tab` shortcut is gone). Cycling a value inside an extension's settings keeps the
+  filter text and the highlighted row, so a search no longer snaps back to the full list. In the
+  `/` completion panel a space now completes the command and opens that extension command's declared
+  subcommands (`Tab` completes, `Enter` completes and runs), giving `/goal pause`-style second-level
+  candidates in the window as well as in the terminal.
+
 ### Fixed
 
 - **File edits in the desktop GUI render as diffs**: the `edit` card shows the file path in its
@@ -548,6 +557,12 @@
   only)`、`Do not trust`、`Do not trust (this session only)` 与 `Remove all saved trust
   decisions`——最后一项会再确认一次。落盘的选项写进 `trust.json`、下次启动生效，两个「仅本次」
   选项则立即重载技能、上下文文件与工具。
+
+- **桌面 GUI 改用 `Space` 改值、`Enter` 看详情**：`/settings` 表格、扩展自己的 `Settings · <名称>`
+  面板、`/extension` 与 `/skills` 现在都用 `Space` 切换一行的取值，不再用 `Enter`；技能与扩展面板的
+  详情页改由 `Enter` 打开，`Tab` 这条快捷方式不再保留。扩展设置面板里循环取值会保留过滤框内容与
+  高亮行，搜索之后不再跳回完整列表。`/` 补全面板里敲空格会先补全命令名并弹出该扩展命令声明的
+  子命令（`Tab` 只补全，`Enter` 补全并执行），桌面端也有了 `/goal pause` 这样的二级候选。
 
 ## 修复
 

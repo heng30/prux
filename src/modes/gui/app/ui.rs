@@ -4,10 +4,23 @@
 //! GUI 没有那个事件循环，改为定时轮询 [`drain_requests`]，把请求落到覆盖层 / 对话流 / 命令上。
 
 use super::*;
-use crate::core::extensions::{
-    CommandHost, ExtensionUiRequest, OverlayEvent, OverlayKey, UiNotifyLevel, submit_ui_choice,
+use crate::{
+    core::{
+        self,
+        extensions::{
+            CommandHost, ExtensionUiRequest, OverlayEvent, OverlayKey, SelectOption, UiNotifyLevel,
+            overlay_event, render_custom_message, request_ui, submit_ui_choice, take_pending_ui,
+            wants_redraw,
+        },
+        project_trust, settings_manager,
+    },
+    modes::gui::transcript::Block,
+    utils::truncate::truncate_chars,
 };
-use crate::modes::gui::transcript::Block;
+use std::{
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 
 /// 扩展 UI 请求的轮询间隔（毫秒）：队列没有通知机制，只能定时取。
 const UI_POLL_MS: u64 = 100;
@@ -42,7 +55,7 @@ impl CommandHost for GuiApp {
 
     /// 请求打开某个扩展的设置面板（走 UI 请求队列，由轮询落到覆盖层）。
     fn open_extension_settings(&mut self, ext: &str) {
-        crate::core::extensions::request_ui(ExtensionUiRequest::ShowSettings {
+        request_ui(ExtensionUiRequest::ShowSettings {
             ext: ext.to_string(),
         });
     }
@@ -68,8 +81,8 @@ impl CommandHost for GuiApp {
     }
 
     /// 当前工作目录（会话快照优先）。
-    fn cwd(&self) -> std::path::PathBuf {
-        std::path::PathBuf::from(self.cwd())
+    fn cwd(&self) -> PathBuf {
+        PathBuf::from(self.cwd())
     }
 
     /// 是否正在流式输出。
@@ -79,10 +92,7 @@ impl CommandHost for GuiApp {
 
     /// 状态栏临时提示：写入状态栏左侧，几秒后自行过期。
     fn set_status(&mut self, text: &str) {
-        self.status_note = Some((
-            text.to_string(),
-            std::time::Instant::now() + std::time::Duration::from_secs(6),
-        ));
+        self.status_note = Some((text.to_string(), Instant::now() + Duration::from_secs(6)));
     }
 
     /// 最近一条用户消息正文（从对话流倒着找）。
@@ -122,14 +132,16 @@ impl CommandHost for GuiApp {
                 Block::System(text) => format!("system: {}", text.trim()),
                 Block::Tool(_) | Block::Note(_) => continue,
             };
+
             if line.ends_with(": ") {
                 continue;
             }
             lines.push(line);
         }
+
         let start = lines.len().saturating_sub(max_messages);
         let joined = lines[start..].join("\n");
-        crate::utils::truncate::truncate_chars(&joined, max_chars, None, false)
+        truncate_chars(&joined, max_chars, None, false)
     }
 
     /// 上转型：GUI 侧没有 TUI 面板类命令，取回 `App` 永远失败（命令据此给提示）。
@@ -157,18 +169,20 @@ impl GuiApp {
     /// 轮询并处理全部待办的扩展 UI 请求；返回是否处理了任何一条（调用方据此重绘）。
     pub(super) fn drain_requests(&mut self, cx: &mut Context<Self>) -> bool {
         let mut handled = false;
-        while let Some(request) = crate::core::extensions::take_pending_ui() {
+        while let Some(request) = take_pending_ui() {
             self.apply_request(request, cx);
             handled = true;
         }
+
         // 扩展覆盖层可能正在等后台结果（`/btw` 的答案、`/doctor` 的探针）：每轮重拉一帧，
         // 与 TUI 每帧重绘同一个效果；扩展不再认领时 `refresh` 会把它收起来
         if matches!(self.overlay, Some(Overlay::Extension(_))) {
             self.refresh_extension_overlay();
             cx.notify();
         }
+
         // 停靠面板里的扩展可以声明「需要持续重绘」（网关计数、进度），空闲时也要跟着刷
-        if self.dock_visible && crate::core::extensions::wants_redraw() {
+        if self.dock_visible && wants_redraw() {
             cx.notify();
         }
         handled
@@ -193,7 +207,7 @@ impl GuiApp {
                     self.overlay = Some(Overlay::Extension(overlay));
                 } else {
                     // 扩展已经不认领这个 id：回一个 Closed 让它清掉状态
-                    crate::core::extensions::overlay_event(id, OverlayEvent::Closed);
+                    overlay_event(id, OverlayEvent::Closed);
                 }
             }
             ExtensionUiRequest::HideOverlay { id } => {
@@ -205,7 +219,7 @@ impl GuiApp {
             }
             ExtensionUiRequest::Notify { text, level } => {
                 let note = match level {
-                    crate::core::extensions::UiNotifyLevel::Error => Note::Error(text),
+                    UiNotifyLevel::Error => Note::Error(text),
                     _ => Note::Info(text),
                 };
                 self.transcript.push_note(note);
@@ -214,7 +228,7 @@ impl GuiApp {
             ExtensionUiRequest::NotifyRich { spans, level } => {
                 let text: String = spans.into_iter().map(|span| span.text).collect();
                 let note = match level {
-                    crate::core::extensions::UiNotifyLevel::Error => Note::Error(text),
+                    UiNotifyLevel::Error => Note::Error(text),
                     _ => Note::Info(text),
                 };
                 self.transcript.push_note(note);
@@ -225,7 +239,7 @@ impl GuiApp {
                 custom_type,
                 data,
             } => {
-                let body = crate::core::extensions::render_custom_message(&custom_type, &data)
+                let body = render_custom_message(&custom_type, &data)
                     .map(|spans| spans.into_iter().map(|span| span.text).collect::<String>())
                     .unwrap_or_else(|| data.to_string());
                 self.transcript
@@ -264,19 +278,21 @@ impl GuiApp {
     /// 资源、没存过决策、默认策略是 ask 且命令行没显式给 `-a/--no-approve` 时才弹；
     /// 不弹时若项目确实未被信任，留一条提示（项目资源被忽略，`/trust` 可保存决策）。
     pub(super) fn maybe_ask_trust(&mut self, cx: &mut Context<Self>) {
-        use crate::core::{project_trust, settings_manager};
-        let cwd = std::path::PathBuf::from(self.cwd());
+        let cwd = PathBuf::from(self.cwd());
         if !project_trust::has_trust_requiring_project_resources(&cwd) {
             return;
         }
+
         let agent_dir = settings_manager::agent_dir();
         let ask = self.trust_override.is_none()
             && project_trust::trust_decision(&cwd, &agent_dir).is_none()
             && project_trust::default_project_trust(&agent_dir) == project_trust::ProjectTrust::Ask;
+
         if ask {
             self.open_trust_panel(cx);
             return;
         }
+
         if !project_trust::is_project_trusted(&cwd, &agent_dir) {
             self.transcript.push_note(Note::Info(format!(
                 "This project is not trusted. Project {} resources and packages are ignored.                  Use /trust to save a trust decision, then restart {}.",
@@ -286,7 +302,7 @@ impl GuiApp {
         }
     }
 
-    /// 单个扩展的设置面板：只列该扩展声明的设置项，`Enter` 在预定义选项里循环。
+    /// 单个扩展的设置面板：只列该扩展声明的设置项，`Space` 在预定义选项里循环。
     ///
     /// 设置项来自 [`crate::core::extensions::settings_for`]，写回走
     /// `apply_extension_setting`（扩展自己决定是否落盘）。`select` 是重建时要保持的高亮行。
@@ -301,12 +317,12 @@ impl GuiApp {
         select: Option<usize>,
         cx: &mut Context<Self>,
     ) {
-        let items = crate::core::extensions::settings_for(ext);
+        let items = core::extensions::settings_for(ext);
         let entries: Vec<Entry> = items
             .iter()
             .map(|item| Entry {
                 label: item.label.clone(),
-                // 可循环的项把当前值裹上箭头，提示 Enter 会改它
+                // 可循环的项把当前值裹上箭头，提示 Space 会改它
                 detail: if item.choices.is_empty() {
                     item.value.clone()
                 } else {
@@ -323,30 +339,55 @@ impl GuiApp {
                 ..Entry::default()
             })
             .collect();
+
         let title = if items.is_empty() {
             format!("{ext} · no settings")
         } else {
             format!("Settings · {ext}")
         };
+
+        // Space 在这里是「换一个值」而不是「确认」，提示行照实写
+        let hint = "↑↓ select · Space cycle value · Esc close";
+
+        // 同一个面板重建（循环取值后）：沿用过滤框与高亮行，否则搜索内容一按就丢、列表又变回完整条目
+        if let Some(Overlay::List(list)) = self.overlay.as_mut()
+            && list.title == title
+        {
+            list.refresh(title, entries);
+            list.hint = Some(hint.to_string());
+            list.space_activates = true;
+
+            if let Some(index) = select {
+                list.select_index(index);
+            }
+
+            cx.notify();
+            return;
+        }
+
         let mut list = List::new(title, entries);
-        // Enter 在这里是「换一个值」而不是「确认」，提示行照实写
-        list.hint = Some("↑↓ select · Enter cycle value · Esc close".to_string());
+        list.hint = Some(hint.to_string());
+        list.space_activates = true;
+
         if let Some(index) = select {
             list.select_index(index);
         }
+
         self.overlay = Some(Overlay::List(list));
         cx.notify();
     }
 
     /// 扩展设置项循环到下一个候选值（末项回到首项），成功后按原行重建面板。
     pub(super) fn cycle_extension_setting(&mut self, ext: &str, key: &str, cx: &mut Context<Self>) {
-        let items = crate::core::extensions::settings_for(ext);
+        let items = core::extensions::settings_for(ext);
         let Some(item) = items.iter().find(|item| item.key == key) else {
             return;
         };
+
         if item.choices.is_empty() {
             return;
         }
+
         let position = item
             .choices
             .iter()
@@ -354,7 +395,7 @@ impl GuiApp {
             .map(|index| (index + 1) % item.choices.len())
             .unwrap_or(0);
         let next = item.choices[position].clone();
-        match crate::core::extensions::apply_extension_setting(ext, key, &next) {
+        match core::extensions::apply_extension_setting(ext, key, &next) {
             Ok(()) => {}
             Err(error) => self.toast(
                 format!("Cannot change {ext} setting: {error}"),
@@ -362,6 +403,7 @@ impl GuiApp {
                 cx,
             ),
         }
+
         // 保持当前高亮行（重建后条目顺序不变）
         let selected = self.overlay.as_ref().and_then(|overlay| match overlay {
             Overlay::List(list) => Some(list.selected),
@@ -377,7 +419,7 @@ impl GuiApp {
         let cwd = self.cwd();
         let agent_dir = settings_manager::agent_dir();
         let cwd_path = std::path::Path::new(&cwd);
-        let saved = crate::core::project_trust::trust_decision(cwd_path, &agent_dir);
+        let saved = project_trust::trust_decision(cwd_path, &agent_dir);
         let current = saved.as_ref().map(|(_, trusted)| *trusted);
         let note = match &saved {
             None => "no saved decision".to_string(),
@@ -386,6 +428,7 @@ impl GuiApp {
                 if *trusted { "trusted" } else { "untrusted" }
             ),
         };
+
         let entry = |label: String, detail: String, choice: &str| Entry {
             label,
             detail,
@@ -401,6 +444,7 @@ impl GuiApp {
             },
             "trust",
         )];
+
         if let Some(parent) = cwd_path
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
@@ -411,6 +455,7 @@ impl GuiApp {
                 "trust_parent",
             ));
         }
+
         entries.push(entry(
             "Do not trust".to_string(),
             if current == Some(false) {
@@ -435,8 +480,8 @@ impl GuiApp {
             String::new(),
             "clear",
         ));
+
         let mut list = List::new(format!("Project trust · {cwd} · {note}"), entries);
-        // 已保存决策命中的选项预选中（同 TUI）
         if let Some(index) = list
             .entries
             .iter()
@@ -450,8 +495,7 @@ impl GuiApp {
 
     /// 应用 `/trust` 面板里的选择；`clear` 会先弹一次二次确认。
     pub(super) fn resolve_trust(&mut self, choice: &str, cx: &mut Context<Self>) {
-        use crate::core::project_trust;
-        let cwd = std::path::PathBuf::from(self.cwd());
+        let cwd = PathBuf::from(self.cwd());
         let agent_dir = settings_manager::agent_dir();
         match choice {
             "clear" => {
@@ -535,9 +579,9 @@ impl GuiApp {
         let Some(Overlay::Extension(ext)) = self.overlay.as_ref() else {
             return false;
         };
+
         let input = ext.view.input.as_ref().map(|_| ext.input.text());
-        let consumed =
-            crate::core::extensions::overlay_event(ext.id, OverlayEvent::Key { key, input });
+        let consumed = core::extensions::overlay_event(ext.id, OverlayEvent::Key { key, input });
         if consumed {
             self.refresh_extension_overlay();
         }
@@ -549,6 +593,7 @@ impl GuiApp {
         let Some(Overlay::Extension(ext)) = self.overlay.as_mut() else {
             return;
         };
+
         if !ext.refresh() {
             self.dismiss_overlay();
         }
@@ -559,6 +604,7 @@ impl GuiApp {
         let Some(Overlay::Extension(ext)) = self.overlay.as_ref() else {
             return;
         };
+
         let max = f32::from(ext.scroll.max_offset().height);
         let current = f32::from(ext.scroll.offset().y);
         let next = if rows >= f32::MAX {
@@ -568,6 +614,7 @@ impl GuiApp {
         } else {
             (current + rows * OVERLAY_SCROLL_STEP).clamp(-max, 0.)
         };
+
         ext.scroll
             .set_offset(gpui::point(gpui::px(0.), gpui::px(next)));
     }
@@ -577,9 +624,10 @@ impl GuiApp {
         let Some(Overlay::Extension(ext)) = self.overlay.as_mut() else {
             return;
         };
+
         let text = ext.input.text();
         ext.input.clear();
-        crate::core::extensions::overlay_event(ext.id, OverlayEvent::Submit { text });
+        core::extensions::overlay_event(ext.id, OverlayEvent::Submit { text });
         self.refresh_extension_overlay();
     }
 
@@ -594,7 +642,7 @@ impl GuiApp {
                 }
             }
             Some(Overlay::Extension(ext)) => {
-                crate::core::extensions::overlay_event(ext.id, OverlayEvent::Closed);
+                core::extensions::overlay_event(ext.id, OverlayEvent::Closed);
             }
             _ => {}
         }
@@ -602,7 +650,7 @@ impl GuiApp {
 }
 
 /// `Select` 请求的选项 → 选择面板条目：每条把选项文本作为答案回传给发起方。
-fn select_entries(id: u64, options: Vec<crate::core::extensions::SelectOption>) -> Vec<Entry> {
+fn select_entries(id: u64, options: Vec<SelectOption>) -> Vec<Entry> {
     options
         .into_iter()
         .map(|option| Entry {
