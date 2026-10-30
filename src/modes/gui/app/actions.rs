@@ -828,7 +828,7 @@ pub(super) fn command_palette_entries() -> Vec<Entry> {
         },
         Entry {
             label: "Sidebar".into(),
-            detail: "Ctrl-Shift-S".into(),
+            detail: "Ctrl-Shift-B".into(),
             action: Action::ToggleSidebar,
             ..Entry::default()
         },

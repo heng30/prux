@@ -123,7 +123,7 @@
   (delete) and `Ctrl+G` (next session) as it does in the terminal.
 
 - **The desktop GUI toggles its session list and browses history from the input box**: `/sidebar`
-  shows or hides the left session list (the same state `Ctrl+Shift-S` flips). In the input box
+  shows or hides the left session list (the same state `Ctrl+Shift-B` flips). In the input box
   `Up` / `Down` now walk a multi-line draft line by line and only switch prompt history once the
   cursor sits on the first line at column 0 (or the last line at its end) — landing on a line
   boundary first when it is not there yet — and the draft comes back untouched when you cycle off
@@ -479,7 +479,7 @@
   终端里的 `Ctrl+R`（改名）、`Ctrl+D`（删除）、`Ctrl+G`（下一个会话）。
 
 - **桌面 GUI 能开关会话列表，输入框也能翻历史**：`/sidebar` 显示或收起左侧会话列表（与
-  `Ctrl+Shift-S` 同一状态）。输入框的 `↑` / `↓` 会先逐行走过多行草稿，只有光标在第一行行首
+  `Ctrl+Shift-B` 同一状态）。输入框的 `↑` / `↓` 会先逐行走过多行草稿，只有光标在第一行行首
   （或最后一行行尾，未到位时先归位）才切到提示历史；从最早一条再往上绕回草稿，草稿原样恢复。
   浏览历史时不弹补全面板，翻出 `/model` 这类历史也不会把 `↑` / `↓` 抢走。命令面板里这一项
   叫 `Sidebar`。

@@ -445,7 +445,7 @@ impl GuiApp {
                 self.open_settings_panel(cx);
                 return true;
             }
-            "s" if shift => {
+            "b" if shift => {
                 self.show_sidebar = !self.show_sidebar;
                 cx.notify();
                 return true;

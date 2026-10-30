@@ -704,7 +704,7 @@ impl GuiApp {
                     "Ctrl-M commands · Ctrl-L model · Ctrl-P / Ctrl-Shift-P cycle model".to_string(),
                     "Ctrl-T show/hide thinking · Shift-Tab cycle thinking level".to_string(),
                     "Ctrl-O expand tools · Ctrl-Shift-T toggle light/dark · Ctrl-Shift-G appearance".to_string(),
-                    "Ctrl-Shift-O sessions · Ctrl-Shift-S sidebar · Ctrl-Shift-E right panel".to_string(),
+                    "Ctrl-Shift-O sessions · Ctrl-Shift-B sidebar · Ctrl-Shift-E right panel".to_string(),
                     "Ctrl-Shift-U usage · Ctrl-I skills · Ctrl-, settings · Ctrl-Shift-A select all".to_string(),
                     "Ctrl-N new session · Ctrl-Z undo · Ctrl-Y redo · Ctrl-X copy last reply".to_string(),
                     "Lists: ↑/↓ or Ctrl-K/Ctrl-J move · Home/End first/last · PgUp/PgDn · Ctrl-C close".to_string(),
