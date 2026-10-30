@@ -473,6 +473,9 @@ impl GuiApp {
                 // 重开面板，让标签显示新值
                 self.open_settings_panel(cx);
             }
+            Action::ToggleSidebar => {
+                self.show_sidebar = !self.show_sidebar;
+            }
             Action::Attach { images } => {
                 // 附件就是 `@路径` 引用：插入触发符后让补全面板接着列文件
                 self.attach_images = images;
@@ -821,6 +824,12 @@ pub(super) fn command_palette_entries() -> Vec<Entry> {
             label: "Files…".into(),
             detail: "Ctrl-Shift-F".into(),
             action: Action::Open(ListKind::PanelFiles),
+            ..Entry::default()
+        },
+        Entry {
+            label: "Sidebar".into(),
+            detail: "Ctrl-Shift-S".into(),
+            action: Action::ToggleSidebar,
             ..Entry::default()
         },
         Entry {

@@ -102,6 +102,8 @@ pub enum Action {
         /// 是否只列图片
         images: bool,
     },
+    /// 显示/收起左侧会话列表（同 `/sidebar`）
+    ToggleSidebar,
 }
 
 /// 设置面板里能直接切换的开关项。
