@@ -109,12 +109,7 @@ impl GuiApp {
             "changelog" => self.open_changelog(cx),
             "giff" => {
                 // 桌面端把 giff 的「看未提交改动」落成右侧变更面板：已经开着就关掉
-                if self.panel.visible && self.panel.tab == PanelTab::Changes {
-                    self.panel.visible = false;
-                    cx.notify();
-                } else {
-                    self.toggle_panel(Some(PanelTab::Changes), cx);
-                }
+                self.toggle_panel_tab(PanelTab::Changes, cx);
             }
             "tree" => {
                 _ = self.cmd_tx.send(AgentCommand::Tree);
@@ -282,7 +277,7 @@ impl GuiApp {
                 ListKind::Model => self.open_model_picker(cx),
                 ListKind::Thinking => self.open_thinking_picker(cx),
                 ListKind::Appearance => self.open_appearance_picker(cx),
-                ListKind::PanelFiles => self.toggle_panel(Some(PanelTab::Files), cx),
+                ListKind::PanelFiles => self.toggle_panel_tab(PanelTab::Files, cx),
             },
             Action::UiChoice { id, text } => {
                 if let Some(prompt) = crate::core::extensions::submit_ui_choice(id, text) {
@@ -604,20 +599,49 @@ impl GuiApp {
             }
             None => self.panel.visible = !self.panel.visible,
         }
-        if self.panel.visible {
-            self.load_panel(cx);
+        if !self.panel.visible {
+            self.panel.search_focus = false;
+            cx.notify();
+            return;
         }
+        self.load_panel(cx);
     }
-    /// 后台读面板内容（列文件 / git status / git diff 都不在主线程跑）。
+    /// 切到某个页签：已经开着且就在这页就收起，否则打开并 reload。
+    pub(super) fn toggle_panel_tab(&mut self, tab: PanelTab, cx: &mut Context<Self>) {
+        if self.panel.visible && self.panel.tab == tab {
+            self.panel.visible = false;
+            self.panel.search_focus = false;
+            cx.notify();
+            return;
+        }
+        self.toggle_panel(Some(tab), cx);
+    }
+    /// 点页签按钮：切页并重读（文件列表/变更计数也跟着刷新）。
+    pub(crate) fn set_panel_tab(&mut self, tab: PanelTab, cx: &mut Context<Self>) {
+        self.panel.tab = tab;
+        self.panel.search_focus = false;
+        self.load_panel(cx);
+        cx.notify();
+    }
+    /// 点 Files 页的搜索框：之后敲的字进过滤框。
+    pub(crate) fn focus_panel_search(&mut self, cx: &mut Context<Self>) {
+        self.panel.search_focus = true;
+        cx.notify();
+    }
+    /// 后台读面板内容（列文件 / git status / git diff / 文件预览都不在主线程跑）。
     pub(super) fn load_panel(&mut self, cx: &mut Context<Self>) {
         let cwd = self.cwd();
         let tab = self.panel.tab;
         let selected = self.panel.selected;
+        let file = self.panel.selected_file.clone();
+        let syntect = self.theme.syntect();
         self.panel.loading = true;
         cx.spawn(async move |this, cx| {
             let data = cx
                 .background_executor()
-                .spawn(async move { giff::RightPanel::load(&cwd, tab, selected) })
+                .spawn(async move {
+                    giff::RightPanel::load(&cwd, tab, selected, file.as_deref(), &syntect)
+                })
                 .await;
             _ = this.update(cx, |app, cx| {
                 app.panel.apply(data);
@@ -629,6 +653,16 @@ impl GuiApp {
     /// 选中某条变更：切下标并在后台重读它的 diff。
     pub(crate) fn select_change(&mut self, index: usize, cx: &mut Context<Self>) {
         self.panel.selected = index;
+        self.load_panel(cx);
+        cx.notify();
+    }
+    /// Files 页选中某个文件：后台读正文并高亮。
+    pub(crate) fn select_file(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(row) = self.panel.files.get(index) else {
+            return;
+        };
+        self.panel.selected_file = Some(row.path.clone());
+        self.panel.search_focus = false;
         self.load_panel(cx);
         cx.notify();
     }
@@ -754,7 +788,7 @@ pub(super) fn command_palette_entries() -> Vec<Entry> {
         },
         Entry {
             label: "Files…".into(),
-            detail: String::new(),
+            detail: "Ctrl+Shift+F".into(),
             action: Action::Open(ListKind::PanelFiles),
             ..Entry::default()
         },

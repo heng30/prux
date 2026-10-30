@@ -154,7 +154,8 @@ impl GuiApp {
 }
 
 impl GuiApp {
-    /// IME 写入的目标：覆盖层列表打开时是它的过滤框，否则是输入卡片。
+    /// IME 写入的目标：覆盖层列表打开时是它的过滤框，右侧文件面板的搜索框聚焦时
+    /// 是它，否则是输入卡片。
     pub(super) fn ime_target(&self) -> &Editor {
         if let Some(
             SessionDialog::Rename { editor, .. }
@@ -170,17 +171,26 @@ impl GuiApp {
         if self.suggest.is_some() {
             return &self.suggest_input;
         }
+        let in_panel = self.panel_search_active();
         match &self.overlay {
             Some(Overlay::List(list)) => &list.query,
             Some(Overlay::Extension(ext)) => &ext.input,
+            // 覆盖层优先：弹层打开时敲的字属于弹层
+            _ if in_panel => &self.panel.search,
             _ => &self.editor,
         }
     }
 }
 
 impl GuiApp {
+    /// 右侧 Files 面板的搜索框是否在吃键盘。
+    pub(crate) fn panel_search_active(&self) -> bool {
+        self.panel.visible && self.panel.search_focus
+    }
+
     /// [`Self::ime_target`] 的可变版：写过滤框时把选中项收回第一行。
     pub(super) fn ime_target_mut(&mut self) -> &mut Editor {
+        let in_panel = self.panel_search_active();
         if let Some(
             SessionDialog::Rename { editor, .. }
             | SessionDialog::ApiKey { editor, .. }
@@ -201,6 +211,8 @@ impl GuiApp {
                 &mut list.query
             }
             Some(Overlay::Extension(ext)) => &mut ext.input,
+            // 覆盖层优先于面板搜索框：弹层打开时敲的字属于弹层
+            _ if in_panel => &mut self.panel.search,
             _ => &mut self.editor,
         }
     }
@@ -286,9 +298,13 @@ impl EntityInputHandler for GuiApp {
             return;
         }
         let bytes = self.ime_range_bytes(range);
+        let typing_search = self.panel_search_active();
         self.ime_target_mut().replace_byte_range(bytes, text);
         self.marked_range = None;
-        self.refresh_suggest_any(cx);
+        // 搜文件框里敲字不该触发输入卡片的 @ / 命令补全
+        if !typing_search {
+            self.refresh_suggest_any(cx);
+        }
         cx.notify();
     }
 

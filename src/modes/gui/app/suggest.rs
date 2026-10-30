@@ -26,6 +26,10 @@ impl GuiApp {
         if self.suggest.is_some() {
             return;
         }
+        // 右侧 Files 面板的搜索框在吃键时，键入的不是输入卡片的内容，不该弹补全
+        if self.panel_search_active() {
+            return;
+        }
         // 历史浏览（↑/↓ 载入 `/model` 这类历史）不该弹面板，否则抢走 ↑/↓ 焦点
         if self.editor.browsing_history() {
             self.suggest = None;

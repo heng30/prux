@@ -5,17 +5,29 @@
 
 use super::{
     app::GuiApp,
+    code,
+    text_edit::Editor,
     theme::{
         CONTROL_H_MD, CONTROL_H_SM, DIFF_GUTTER_W, FONT_CAPTION, FONT_SMALL, HEADER_H, ICON_SIZE,
         RADIUS_MD, RADIUS_SM, SPACE_MD, SPACE_SM, SPACE_XS, SPACE_XXS, Theme, px,
     },
 };
-use crate::utils::process::run_stdout;
+use crate::utils::{color::Rgb, process::run_stdout};
 use gpui::{AnyElement, IntoElement, ParentElement, SharedString, Styled, div, prelude::*};
 use std::{path::Path, process::Command};
+use syntect::highlighting::Theme as SynTheme;
 
 /// 文件列表最多展示多少条（再多的仓库里靠搜索，而不是滚一年）。
 const MAX_FILES: usize = 400;
+
+/// 文件预览最多高亮多少行（再长的文件没必要全铺进面板）。
+const MAX_PREVIEW_LINES: usize = 2000;
+
+/// 文件预览的大小上限：超过就不读（二进制/超大文件进内存只会卡界面）。
+const MAX_PREVIEW_BYTES: u64 = 2 * 1024 * 1024;
+
+/// 文件列表的限高：列表再长也不挤掉下面的内容区。
+const FILE_LIST_MAX_H: f32 = 200.;
 
 /// 面板标签页。
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -44,6 +56,14 @@ pub struct ChangeRow {
     pub path: String,
 }
 
+/// 打开的文件正文：路径 + 语法高亮后的逐行片段。
+pub struct FileContent {
+    /// 相对路径（内容区顶部显示）
+    pub path: String,
+    /// 逐行片段：颜色为 None 表示用默认前景色
+    pub lines: Vec<Vec<(Option<Rgb>, String)>>,
+}
+
 /// 后台一次读完的面板内容（纯数据，可在工作线程里算）。
 pub struct PanelData {
     /// 文件列表（两个页签都算，用于显示计数）
@@ -52,6 +72,8 @@ pub struct PanelData {
     changes: Vec<ChangeRow>,
     /// 选中变更的 diff：(路径, 文本)
     diff: Option<(String, String)>,
+    /// Files 页选中文件的正文
+    content: Option<FileContent>,
     /// 读取失败时的提示
     error: Option<String>,
 }
@@ -72,6 +94,14 @@ pub struct RightPanel {
     pub selected: usize,
     /// 选中变更的 diff：(路径, 文本)
     pub diff: Option<(String, String)>,
+    /// Files 页的过滤框（按相对路径包含匹配）
+    pub search: Editor,
+    /// 过滤框是否在吃按键：点搜索框置位，Esc / Enter / 点别的区域清掉
+    pub search_focus: bool,
+    /// Files 页选中的文件（相对路径）
+    pub selected_file: Option<String>,
+    /// 选中文件的正文
+    pub content: Option<FileContent>,
     /// 读取失败时的提示
     pub error: Option<String>,
 }
@@ -86,6 +116,10 @@ impl Default for RightPanel {
             changes: Vec::new(),
             selected: 0,
             diff: None,
+            search: Editor::new(),
+            search_focus: false,
+            selected_file: None,
+            content: None,
             error: None,
         }
     }
@@ -93,8 +127,15 @@ impl Default for RightPanel {
 
 impl RightPanel {
     /// 纯读盘：按 `tab` 算一份面板内容（不碰自身状态，可在工作线程跑）。
-    /// `selected` 是期望展示 diff 的变更下标，越界时不给 diff。
-    pub fn load(cwd: &str, tab: PanelTab, selected: usize) -> PanelData {
+    /// `selected` 是期望展示 diff 的变更下标，`file` 是 Files 页要预览的路径，
+    /// `syn` 是语法高亮主题（高亮也在工作线程做，渲染时不再碰 syntect）。
+    pub fn load(
+        cwd: &str,
+        tab: PanelTab,
+        selected: usize,
+        file: Option<&str>,
+        syn: &SynTheme,
+    ) -> PanelData {
         // 两个页签的计数都要显示，故文件列表恒算一遍
         let files = list_files(Path::new(cwd));
         match tab {
@@ -102,6 +143,7 @@ impl RightPanel {
                 files,
                 changes: git_changes(cwd).unwrap_or_default(),
                 diff: None,
+                content: file.map(|path| read_file(cwd, path, syn)),
                 error: None,
             },
             PanelTab::Changes => match git_changes(cwd) {
@@ -116,6 +158,7 @@ impl RightPanel {
                         files,
                         changes,
                         diff,
+                        content: None,
                         error: None,
                     }
                 }
@@ -123,6 +166,7 @@ impl RightPanel {
                     files,
                     changes: Vec::new(),
                     diff: None,
+                    content: None,
                     error: Some(e),
                 },
             },
@@ -136,9 +180,61 @@ impl RightPanel {
         self.files = data.files;
         self.changes = data.changes;
         self.diff = data.diff;
+        self.content = data.content;
         if !self.changes.is_empty() {
             self.selected = self.selected.min(self.changes.len() - 1);
         }
+    }
+
+    /// 过滤框命中的文件下标（空框 = 全部，按相对路径包含匹配）。
+    pub fn filtered_files(&self) -> Vec<usize> {
+        let query = self.search.text().trim().to_lowercase();
+        self.files
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| query.is_empty() || row.path.to_lowercase().contains(&query))
+            .map(|(index, _)| index)
+            .collect()
+    }
+}
+
+/// 读一个文件并语法高亮。
+///
+/// 非 UTF-8 / 超大 / 读失败都不报错，直接给一行提示当正文（面板里没什么可挽救的）。
+fn read_file(cwd: &str, path: &str, syn: &SynTheme) -> FileContent {
+    let note = |text: String| FileContent {
+        path: path.to_string(),
+        lines: vec![vec![(None, text)]],
+    };
+    let full = Path::new(cwd).join(path);
+    let size = std::fs::metadata(&full).map(|m| m.len()).unwrap_or(0);
+    if size > MAX_PREVIEW_BYTES {
+        return note(format!("(file too large: {} KB)", size / 1024));
+    }
+    let Ok(bytes) = std::fs::read(&full) else {
+        return note("Cannot read file".to_string());
+    };
+    let Ok(text) = String::from_utf8(bytes) else {
+        return note("(binary file)".to_string());
+    };
+
+    let truncated = text.lines().count() > MAX_PREVIEW_LINES;
+    let body: String = text
+        .lines()
+        .take(MAX_PREVIEW_LINES)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let lang = full.extension().and_then(|e| e.to_str());
+    let mut lines = code::highlight(&body, lang, syn);
+    if truncated {
+        lines.push(vec![(
+            None,
+            format!("⋯ truncated at {MAX_PREVIEW_LINES} lines"),
+        )]);
+    }
+    FileContent {
+        path: path.to_string(),
+        lines,
     }
 }
 
@@ -255,7 +351,7 @@ pub fn render(
         .border_l_1()
         .border_color(theme.border);
 
-    column = column.child(tab_bar(theme, panel));
+    column = column.child(tab_bar(theme, panel, cx));
 
     if let Some(error) = &panel.error {
         column = column.child(
@@ -286,7 +382,7 @@ pub fn render(
             }
         }
         PanelTab::Files => {
-            column = column.child(files_body(theme, panel));
+            column = column.child(files_body(theme, panel, cx));
         }
     }
 
@@ -294,28 +390,7 @@ pub fn render(
 }
 
 /// 顶部标签栏：变更 / 文件两个页签 + 加载提示。
-fn tab_bar(theme: &Theme, panel: &RightPanel) -> AnyElement {
-    // 标签栏
-    let tab = |label: &str, active: bool| -> AnyElement {
-        let mut element = div()
-            .h(px(CONTROL_H_MD))
-            .px(px(SPACE_SM))
-            .rounded(px(RADIUS_MD))
-            .flex()
-            .items_center()
-            .text_size(px(FONT_SMALL))
-            .text_color(if active {
-                theme.text
-            } else {
-                theme.text_tertiary
-            });
-        if active {
-            element = element.bg(theme.overlay);
-        }
-        element
-            .child(SharedString::from(label.to_string()))
-            .into_any_element()
-    };
+fn tab_bar(theme: &Theme, panel: &RightPanel, cx: &mut gpui::Context<GuiApp>) -> AnyElement {
     let bar = div()
         .flex_none()
         .flex()
@@ -325,13 +400,19 @@ fn tab_bar(theme: &Theme, panel: &RightPanel) -> AnyElement {
         .h(px(HEADER_H))
         .border_b_1()
         .border_color(theme.border)
-        .child(tab(
+        .child(tab_button(
+            theme,
             &format!("Changes {}", panel.changes.len()),
             panel.tab == PanelTab::Changes,
+            PanelTab::Changes,
+            cx,
         ))
-        .child(tab(
+        .child(tab_button(
+            theme,
             &format!("files {}", panel.files.len()),
             panel.tab == PanelTab::Files,
+            PanelTab::Files,
+            cx,
         ))
         .child(div().flex_1())
         .child(
@@ -346,6 +427,38 @@ fn tab_bar(theme: &Theme, panel: &RightPanel) -> AnyElement {
                 })),
         );
     bar.into_any_element()
+}
+
+/// 一个页签按钮：当前页高亮，点一下切过去。
+fn tab_button(
+    theme: &Theme,
+    label: &str,
+    active: bool,
+    tab: PanelTab,
+    cx: &mut gpui::Context<GuiApp>,
+) -> AnyElement {
+    let mut element = div()
+        .id(("panel-tab", tab as usize))
+        .h(px(CONTROL_H_MD))
+        .px(px(SPACE_SM))
+        .rounded(px(RADIUS_MD))
+        .flex()
+        .items_center()
+        .cursor_pointer()
+        .text_size(px(FONT_SMALL))
+        .text_color(if active {
+            theme.text
+        } else {
+            theme.text_tertiary
+        })
+        .hover(|style| style.bg(theme.overlay).text_color(theme.text))
+        .on_click(cx.listener(move |this, _, _, cx| this.set_panel_tab(tab, cx)));
+    if active {
+        element = element.bg(theme.overlay);
+    }
+    element
+        .child(SharedString::from(label.to_string()))
+        .into_any_element()
 }
 
 /// `Changes` 页的文件列表：git 状态字母 + 路径。
@@ -501,34 +614,118 @@ fn line_no(label: String) -> AnyElement {
         .into_any_element()
 }
 
-/// `Files` 页的目录列表。
-fn files_body(theme: &Theme, panel: &RightPanel) -> AnyElement {
-    let mut body = div()
-        .id("files")
+/// `Files` 页：搜索框 + 文件列表（限高可滚）+ 选中文件的内容区。
+fn files_body(theme: &Theme, panel: &RightPanel, cx: &mut gpui::Context<GuiApp>) -> AnyElement {
+    let mut column = div()
         .flex()
         .flex_col()
         .flex_1()
         .min_h_0()
-        .gap(px(SPACE_XXS))
-        .p(px(SPACE_SM))
-        .overflow_y_scroll();
+        .gap(px(SPACE_XS))
+        .p(px(SPACE_SM));
 
-    for row in &panel.files {
-        body = body.child(
+    column = column.child(search_box(theme, panel, cx));
+    column = column.child(file_list(theme, panel, cx));
+
+    if let Some(content) = &panel.content {
+        column = column.child(
             div()
-                .w_full()
-                .h(px(CONTROL_H_SM))
-                .px(px(SPACE_XS))
-                .rounded(px(RADIUS_SM))
+                .px(px(SPACE_XXS))
+                .text_size(px(FONT_CAPTION))
+                .text_color(theme.text_ghost)
+                .truncate()
+                .child(SharedString::from(content.path.clone())),
+        );
+    }
+    column = column.child(content_view(theme, panel));
+    column.into_any_element()
+}
+
+/// 搜索框：点一下开始输入，框内显示光标。
+fn search_box(theme: &Theme, panel: &RightPanel, cx: &mut gpui::Context<GuiApp>) -> AnyElement {
+    let empty = panel.search.is_empty();
+    let focused = panel.search_focus;
+    div()
+        .id("file-search")
+        .w_full()
+        .h(px(CONTROL_H_MD))
+        .px(px(SPACE_SM))
+        .rounded(px(RADIUS_MD))
+        .flex()
+        .items_center()
+        .bg(theme.inset)
+        .border_1()
+        .border_color(if focused {
+            theme.border_strong
+        } else {
+            theme.border
+        })
+        .text_size(px(FONT_SMALL))
+        .text_color(if empty { theme.text_ghost } else { theme.text })
+        .cursor_pointer()
+        .on_click(cx.listener(|this, _, _, cx| this.focus_panel_search(cx)))
+        .child(
+            div()
                 .flex()
                 .items_center()
-                .gap(px(SPACE_XS))
-                .hover(|style| style.bg(theme.overlay))
+                .child(SharedString::from(if empty {
+                    "Search files…".to_string()
+                } else {
+                    panel.search.text()
+                }))
+                .child(
+                    div()
+                        .w(px(if focused && !empty { 1.5 } else { 0. }))
+                        .h(px(FONT_SMALL))
+                        .ml(px(SPACE_XXS))
+                        .bg(theme.accent),
+                ),
+        )
+        .into_any_element()
+}
+
+/// 文件列表：点一行切内容（超过 [`FILE_LIST_MAX_H`] 就滚）。
+fn file_list(theme: &Theme, panel: &RightPanel, cx: &mut gpui::Context<GuiApp>) -> AnyElement {
+    let mut list = div()
+        .id("files")
+        .flex()
+        .flex_col()
+        .w_full()
+        .max_h(px(FILE_LIST_MAX_H))
+        .gap(px(SPACE_XXS))
+        .overflow_y_scroll();
+
+    let hits = panel.filtered_files();
+
+    for index in hits.iter().copied() {
+        let row = &panel.files[index];
+        let active = panel.selected_file.as_deref() == Some(row.path.as_str());
+        let mut entry = div()
+            .w_full()
+            .h(px(CONTROL_H_SM))
+            .px(px(SPACE_XS))
+            .rounded(px(RADIUS_SM))
+            .flex()
+            .items_center()
+            .gap(px(SPACE_XS))
+            .cursor_pointer()
+            .hover(|style| style.bg(theme.overlay));
+        if active {
+            entry = entry.bg(theme.overlay_strong);
+        }
+        list = list.child(
+            entry
+                .id(("file", index))
+                .on_click(cx.listener(move |this, _, _, cx| this.select_file(index, cx)))
                 .child(
                     div()
                         .flex_none()
                         .text_size(px(FONT_CAPTION))
-                        .text_color(theme.text_tertiary)
+                        .text_color(if active {
+                            theme.text
+                        } else {
+                            theme.text_tertiary
+                        })
                         .child(SharedString::from(row.name.clone())),
                 )
                 .child(
@@ -541,6 +738,82 @@ fn files_body(theme: &Theme, panel: &RightPanel) -> AnyElement {
                         .child(SharedString::from(row.dir.clone())),
                 ),
         );
+    }
+
+    if hits.is_empty() {
+        list = list.child(
+            div()
+                .px(px(SPACE_XS))
+                .text_size(px(FONT_CAPTION))
+                .text_color(theme.text_ghost)
+                .child(SharedString::from(if panel.files.is_empty() {
+                    if panel.loading {
+                        "Reading files…"
+                    } else {
+                        "No files"
+                    }
+                } else {
+                    "No matches"
+                })),
+        );
+    }
+    list.into_any_element()
+}
+
+/// 内容区：语法高亮的文件正文（左侧带行号），可在框内滚动。
+fn content_view(theme: &Theme, panel: &RightPanel) -> AnyElement {
+    let mut body = div()
+        .id("file-content")
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_h_0()
+        .p(px(SPACE_SM))
+        .rounded(px(RADIUS_MD))
+        .bg(theme.inset)
+        .text_size(px(FONT_CAPTION))
+        .font_family("monospace")
+        .overflow_y_scroll();
+
+    match &panel.content {
+        Some(content) => {
+            for (index, line) in content.lines.iter().enumerate() {
+                let mut row = div()
+                    .w_full()
+                    .flex()
+                    .gap(px(SPACE_XS))
+                    .text_color(theme.text)
+                    .child(
+                        div()
+                            .flex_none()
+                            .min_w(px(DIFF_GUTTER_W))
+                            .text_color(theme.text_ghost)
+                            .child(SharedString::from(format!("{:>4}", index + 1))),
+                    );
+                for (color, text) in line {
+                    row = row.child(match color {
+                        Some(rgb) => div()
+                            .text_color(theme.rgb(*rgb))
+                            .child(SharedString::from(text.clone())),
+                        // 空行留一个空格，否则整行高度塌成 0
+                        None => div().child(SharedString::from(if text.is_empty() {
+                            " ".to_string()
+                        } else {
+                            text.clone()
+                        })),
+                    });
+                }
+                body = body.child(row);
+            }
+        }
+        None => {
+            body = body.child(
+                div()
+                    .text_size(px(FONT_SMALL))
+                    .text_color(theme.text_ghost)
+                    .child(SharedString::from("Select a file to preview")),
+            );
+        }
     }
     body.into_any_element()
 }
@@ -596,5 +869,44 @@ mod tests {
         assert_eq!(paths, vec!["README.md", "src/a.rs"]);
         assert_eq!(rows[1].name, "a.rs");
         assert_eq!(rows[1].dir, "src");
+    }
+
+    /// 搜索框按相对路径包含匹配（大小写不敏感），空框给全部。
+    #[test]
+    fn search_filters_files_by_path() {
+        let mut panel = RightPanel {
+            files: ["Cargo.toml", "src/main.rs", "src/app.rs"]
+                .into_iter()
+                .map(|path| FileRow {
+                    name: path.rsplit('/').next().unwrap_or(path).to_string(),
+                    dir: path
+                        .rsplit_once('/')
+                        .map(|(dir, _)| dir.to_string())
+                        .unwrap_or_default(),
+                    path: path.to_string(),
+                })
+                .collect(),
+            ..RightPanel::default()
+        };
+        assert_eq!(panel.filtered_files(), vec![0, 1, 2]);
+
+        panel.search.insert("APP");
+        assert_eq!(panel.filtered_files(), vec![2]);
+
+        panel.search.insert("crate");
+        assert!(panel.filtered_files().is_empty());
+    }
+
+    /// 缺失的文件不会 panic：正文退化成一行提示。
+    #[test]
+    fn missing_file_becomes_a_note() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let syn = Theme::dark().syntect();
+        let content = read_file(&dir.path().to_string_lossy(), "nope.rs", &syn);
+        assert_eq!(content.path, "nope.rs");
+        assert_eq!(
+            content.lines,
+            vec![vec![(None, "Cannot read file".to_string())]]
+        );
     }
 }

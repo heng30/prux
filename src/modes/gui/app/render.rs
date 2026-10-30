@@ -802,7 +802,17 @@ impl GuiApp {
     fn render_body(&mut self, main: AnyElement, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.theme.clone();
 
-        let mut body = div().flex().flex_1().min_h_0().w_full();
+        // 点主区就交回键盘（否则搜索框一直吃键，看着像输入卡片坏了）；面板里的点击是
+        // 先 mouse_down 再 click，搜索框自己的 on_click 会重新聚焦回来
+        let mut body = div().flex().flex_1().min_h_0().w_full().on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|this, _, _, cx| {
+                if this.panel.search_focus {
+                    this.panel.search_focus = false;
+                    cx.notify();
+                }
+            }),
+        );
         body = body.child(main);
         if self.panel.visible {
             body = body.child(

@@ -102,6 +102,15 @@ impl GuiApp {
             return;
         }
 
+        // 右侧 Files 面板的搜索框聚焦时，按键先喂它（可打印字符由 IME 句柄写进去）
+        if self.panel.visible
+            && self.panel.search_focus
+            && self.dispatch_panel_search_key(&keystroke, primary, shift)
+        {
+            cx.notify();
+            return;
+        }
+
         if self.dispatch_editor_key(&keystroke, primary, shift, cx) {
             cx.notify();
             return;
@@ -367,6 +376,11 @@ impl GuiApp {
         cx: &mut Context<Self>,
     ) -> bool {
         match keystroke.key.as_str() {
+            // 右侧 Files 面板（搜索 + 文件列表 + 预览）：再按一次收起
+            "f" if shift => {
+                self.toggle_panel_tab(PanelTab::Files, cx);
+                return true;
+            }
             // GUI 独有的命令面板：Ctrl-K 已经归 TUI 的 deleteToLineEnd
             "m" => {
                 self.open_command_palette(cx);
@@ -490,6 +504,53 @@ impl GuiApp {
         false
     }
 
+    /// Files 面板搜索框的按键：只吃编辑键与 Esc/Enter，其余交回正常分发。
+    ///
+    /// 可打印字符由 IME 句柄写进搜索框（见 `ime_target`），这里不重复插入。
+    pub(super) fn dispatch_panel_search_key(
+        &mut self,
+        keystroke: &gpui::Keystroke,
+        primary: bool,
+        shift: bool,
+    ) -> bool {
+        // Ctrl / Cmd 组合留给全局快捷键
+        if primary {
+            return false;
+        }
+        match keystroke.key.as_str() {
+            // Esc / Enter 先退出搜索（面板本身不关，Esc 再按一次才收起）
+            "escape" | "enter" => {
+                self.panel.search_focus = false;
+                true
+            }
+            "backspace" => {
+                self.panel.search.backspace();
+                true
+            }
+            "delete" => {
+                self.panel.search.delete_forward();
+                true
+            }
+            "left" => {
+                self.panel.search.move_cursor(-1, 0, shift);
+                true
+            }
+            "right" => {
+                self.panel.search.move_cursor(1, 0, shift);
+                true
+            }
+            "home" => {
+                self.panel.search.home(shift);
+                true
+            }
+            "end" => {
+                self.panel.search.end(shift);
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// 无修饰的文字编辑键（Enter / Esc / 方向键 / 退格）。
     pub(super) fn dispatch_text_key(
         &mut self,
@@ -517,6 +578,7 @@ impl GuiApp {
                 } else if self.panel.visible {
                     // 空闲时 Esc 先收右侧面板（giff 等）——之前面板没有关闭途径
                     self.panel.visible = false;
+                    self.panel.search_focus = false;
                 }
                 cx.notify();
             }
