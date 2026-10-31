@@ -10,7 +10,7 @@ use super::{
     markdown,
     theme::{
         DOT_SIZE, FONT_BODY, FONT_CAPTION, FONT_SMALL, RADIUS_MD, SPACE_LG, SPACE_MD, SPACE_SM,
-        SPACE_XS, SPACE_XXS, Theme, px,
+        SPACE_XS, SPACE_XXS, Theme, UI_FONT_FAMILY, px,
     },
 };
 use crate::{
@@ -24,7 +24,7 @@ use crate::{
 use base64::Engine as _;
 use gpui::{
     AnyElement, Bounds, Context, FontStyle, FontWeight, HighlightStyle, Hsla, Image, ImageFormat,
-    ImageSource, IntoElement, ParentElement, Pixels, SharedString, Styled, StyledText, div,
+    ImageSource, IntoElement, ParentElement, Pixels, SharedString, Styled, StyledText, Window, div,
     prelude::*,
 };
 use serde_json::Value;
@@ -1215,12 +1215,13 @@ pub fn render_block(
     flags: (bool, bool),
     index: usize,
     ctx: &mut FlowCtx<'_>,
+    window: &mut Window,
     cx: &mut Context<GuiApp>,
 ) -> AnyElement {
     let (expand_tools, show_thinking) = flags;
     match block {
         // 用户消息：右对齐气泡，与助手正文拉开层级
-        Block::User(message) => user_block(message, theme, expand_tools, index, ctx, cx),
+        Block::User(message) => user_block(message, theme, expand_tools, index, ctx, window, cx),
         // 助手回复：不加卡片，直接正文；思考内容单独一段细边框提示（Ctrl-T 收起）
         Block::Assistant(assistant) => assistant_block(assistant, theme, show_thinking, ctx),
         // 工具调用：带描边的小卡片，状态用圆点表示
@@ -1232,6 +1233,26 @@ pub fn render_block(
     }
 }
 
+/// 一段文字不折行时的宽度（逻辑像素）：取各行里最宽的那一行。
+///
+/// 盒子按内容定宽时，文本框的实测高度会比折行后的实际高度小（背景只剩一行高、
+/// 下面的字露在背景外），所以先量出换行宽度交给文本框，让测量与绘制用同一个宽度。
+fn natural_width(window: &Window, text: &str, font_size: Pixels) -> Pixels {
+    // 正文用的是主题 UI 字体，window 的基础字体不是它：按基础字体量出来的宽度会偏、折行错位
+    let mut style = window.text_style();
+    style.font_family = UI_FONT_FAMILY.into();
+    text.split('\n').fold(px(0.), |widest, line| {
+        let runs = [style.to_run(line.len())];
+        let shaped = window.text_system().shape_line(
+            SharedString::from(line.to_string()),
+            font_size,
+            &runs,
+            None,
+        );
+        widest.max(shaped.width)
+    })
+}
+
 /// 用户消息气泡：右对齐，长消息可点开，`@图片` 引用渲染成缩略图。
 fn user_block(
     message: &UserMessage,
@@ -1239,14 +1260,35 @@ fn user_block(
     expand_tools: bool,
     index: usize,
     ctx: &FlowCtx<'_>,
+    window: &mut Window,
     cx: &mut Context<GuiApp>,
 ) -> AnyElement {
     let text = &message.text;
     let expanded = message.expanded.unwrap_or(expand_tools);
     let (shown, hidden) = user_preview(text, expanded, USER_COLLAPSED_LINES);
-    // 宽度交给布局按内容算：短消息的气泡正好包住文字，右侧不留空白；长消息由 max_w
-    // 封顶，超出就在那里折行。折叠提示与缩略图也是子项，不会比气泡宽。
+
+    // 气泡按内容收缩，但文本框得先拿到折行宽度：盒子按内容定宽时，文本的实测高度比
+    // 折行后的实际高度小，背景会只剩一行高、下面的字露在背景外。
     let cap = ctx.width.min(px(USER_BUBBLE_MAX_WIDTH));
+    let hint = (hidden > 0).then(|| {
+        if expanded {
+            "click to collapse".to_string()
+        } else {
+            format!("⋯ {hidden} more line(s) · click to expand")
+        }
+    });
+
+    let mut inner = natural_width(window, &shown.join("\n"), px(FONT_BODY));
+    if let Some(hint) = &hint {
+        inner = inner.max(natural_width(window, hint, px(FONT_CAPTION)));
+    }
+
+    for path in &message.images {
+        inner = inner.max(px(thumb_size(path).0));
+    }
+
+    let inner = inner.min(cap - px(SPACE_MD * 2.)).ceil();
+
     let mut bubble = div()
         .id(("user", index))
         .max_w(cap)
@@ -1264,18 +1306,19 @@ fn user_block(
         .hover(|style| style.bg(theme.overlay_strong))
         // 点气泡展开/收起长消息
         .on_click(cx.listener(move |this, _, _, cx| this.toggle_user(index, cx)))
-        .child(div().min_w_0().child(SharedString::from(shown.join("\n"))));
+        .child(
+            div()
+                .w(inner)
+                .min_w_0()
+                .child(SharedString::from(shown.join("\n"))),
+        );
 
-    if hidden > 0 {
+    if let Some(hint) = hint {
         bubble = bubble.child(
             div()
                 .text_size(px(FONT_CAPTION))
                 .text_color(theme.text_ghost)
-                .child(SharedString::from(if expanded {
-                    "click to collapse".to_string()
-                } else {
-                    format!("⋯ {hidden} more line(s) · click to expand")
-                })),
+                .child(SharedString::from(hint)),
         );
     }
 

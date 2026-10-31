@@ -11,7 +11,7 @@ use std::rc::Rc;
 
 impl Render for GuiApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let transcript = self.render_transcript(cx);
+        let transcript = self.render_transcript(window, cx);
         let composer = self.render_composer(window, cx);
         let main = self.render_main(transcript, composer);
         let body = self.render_body(main, cx);
@@ -235,7 +235,7 @@ impl GuiApp {
     }
 
     /// 对话流：逐块渲染 + 钉底滚动 + 滚动条。
-    fn render_transcript(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_transcript(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.theme.clone();
 
         let pane_width = self.pane_width.get();
@@ -282,6 +282,7 @@ impl GuiApp {
                 (expand_tools, show_thinking),
                 index,
                 &mut flow_ctx,
+                window,
                 cx,
             ));
         }
