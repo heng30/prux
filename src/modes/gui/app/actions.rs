@@ -37,6 +37,16 @@ impl GuiApp {
                     )));
                 }
             }
+            // `/history [关键词]`：控制词直接弹确认；其余把整行写回输入框，
+            // 让补全面板重新接管搜索（否则关键词会被当成未知命令丢掉）
+            "history" => match arg {
+                "@clear" => self.open_history_clear_confirm(false, cx),
+                "@clear-all" => self.open_history_clear_confirm(true, cx),
+                _ => {
+                    let line = format!("/history {arg}");
+                    self.editor.insert(line.trim_end());
+                }
+            },
             "export" if !arg.is_empty() => {
                 _ = self.cmd_tx.send(AgentCommand::Export {
                     out: Some(arg.to_string()),
@@ -859,7 +869,7 @@ impl GuiApp {
 fn takes_argument(command: &str) -> bool {
     matches!(
         command,
-        "name" | "thinking" | "export" | "import" | "model" | "session" | "settings"
+        "name" | "thinking" | "export" | "import" | "model" | "session" | "settings" | "history"
     )
 }
 

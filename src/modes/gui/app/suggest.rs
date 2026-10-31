@@ -338,6 +338,10 @@ impl GuiApp {
         let end = self.editor.cursor_byte();
         let start = suggest.start.min(end);
 
+        // 控制词（`@clear` / `@clear-all`）：Tab 只把词填进输入框，执行仍归 Enter（同 TUI）
+        let action = suggest.trigger == Trigger::History
+            && suggest_engine::history_action(&item.insert).is_some();
+
         // 子命令把 `/命令 查询词` 整段重写：命令名与子命令不会因重复采纳粘在一起
         let insert = match suggest.trigger {
             Trigger::Subcommand => format!("/{} {} ", suggest.command, item.insert),
@@ -345,14 +349,16 @@ impl GuiApp {
             // 目录不带尾随空格，便于接着补全它的子路径（同 TUI）
             Trigger::File if item.insert.ends_with('/') => format!("@{}", item.insert),
             Trigger::File => format!("@{} ", item.insert),
-            // 历史：整行替换成 prompt 原文，不加尾随空格；控制词不是可填入的文本
-            Trigger::History if suggest_engine::history_action(&item.insert).is_some() => return,
+            // 历史：整行替换成 prompt 原文，不加尾随空格
+            Trigger::History if action => format!("/history {}", item.insert),
             Trigger::History => item.insert.clone(),
         };
 
         self.editor.replace_byte_range(start..end, &insert);
         self.suggest = None;
-        self.suggest_dismissed = None;
+        // 填回去的 `/history @clear` 行首仍是同一个触发词：不压住这一位置，
+        // 紧接着的重算会立刻把面板弹回来
+        self.suggest_dismissed = action.then_some(suggest.start);
         self.marked_range = None;
 
         // 重算：命令补全完会换成子命令面板，子命令补全完则收起面板

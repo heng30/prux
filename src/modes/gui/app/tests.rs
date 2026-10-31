@@ -338,3 +338,14 @@ fn restore_queued_messages_prepends_steer_then_follow_up() {
     // 空队列：不动编辑器
     assert!(restore_text(&inbox, &mut follow_ups, "draft").is_none());
 }
+
+/// 控制词补全后 `/history @clear` 行首仍是触发词：采纳时必须记下 dismissed，
+/// 否则紧接着的重算会把面板立刻弹回来（Enter 弹确认面板时同理）。
+#[test]
+fn filled_history_action_word_is_still_a_trigger() {
+    assert_eq!(
+        suggest_engine::detect_history("/history @clear"),
+        Some((0, "@clear".to_string()))
+    );
+    assert!(suggest_engine::history_action("@clear").is_some());
+}

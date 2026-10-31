@@ -192,6 +192,11 @@ impl GuiApp {
                         match suggest_engine::history_action(&item.insert) {
                             Some((_, _, all)) => {
                                 self.suggest = None;
+                                // 抹掉输入框里的 `/history`（同 TUI 的整行清空，但不动其它行）：
+                                // 留着它会被下一次重算重新当成触发词，把面板弹回确认面板背后
+                                let end = self.editor.cursor_byte();
+                                let start = suggest.start.min(end);
+                                self.editor.replace_byte_range(start..end, "");
                                 self.open_history_clear_confirm(all, cx);
                             }
                             None => self.apply_suggestion(cx),
