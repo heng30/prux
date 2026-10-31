@@ -412,6 +412,7 @@ impl GuiApp {
             // TUI 的 app.tools.expand
             "o" if !shift => {
                 self.expand_tools = !self.expand_tools;
+                self.resized_bottom();
                 cx.notify();
                 return true;
             }

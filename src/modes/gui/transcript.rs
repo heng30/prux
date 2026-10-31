@@ -925,16 +925,16 @@ fn word_tokens(text: &str) -> Vec<&str> {
 }
 
 /// edit 工具的 diff 卡片：行号 gutter + 增/删/上下文配色，词级变动加底色。
-fn diff_body(diff: &str, theme: &Theme, max: usize, expanded: bool) -> AnyElement {
+fn diff_body(diff: &str, theme: &Theme, max: usize) -> (AnyElement, usize) {
     let rows = diff_rows(diff.trim_end());
-    let total = rows.len();
+    let (shown, hidden) = visible_rows(rows.len(), max);
     let mut column = div()
         .w_full()
         .flex()
         .flex_col()
         .overflow_hidden()
         .text_size(px(FONT_SMALL));
-    for row in rows.into_iter().take(max) {
+    for row in rows.into_iter().take(shown) {
         let color = match row.kind {
             DiffKind::Added => theme.success,
             DiffKind::Removed => theme.danger,
@@ -969,28 +969,21 @@ fn diff_body(diff: &str, theme: &Theme, max: usize, expanded: bool) -> AnyElemen
         }
         column = column.child(line.child(content));
     }
-    if let Some(hint) = output_hint(total.saturating_sub(max), expanded) {
-        column = column.child(
-            div()
-                .text_size(px(FONT_CAPTION))
-                .text_color(theme.text_ghost)
-                .child(SharedString::from(hint)),
-        );
-    }
-    column.into_any_element()
+    (column.into_any_element(), hidden)
+}
+
+/// 行数分配：预算内全显，超出部分算隐藏。
+fn visible_rows(total: usize, max: usize) -> (usize, usize) {
+    let shown = total.min(max);
+    (shown, total - shown)
 }
 
 /// 工具输出正文：逐行着色并折行（单行超宽也不截断），超过 `max` 行截断（按行截断而不是
-/// 裁剪像素，被裁掉的部分不计入布局高度，会盖住输入卡片），剩下的行数用与用户气泡同样式的提示标出。
+/// 裁剪像素，被裁掉的部分不计入布局高度，会盖住输入卡片）。
 ///
 /// `paint` 决定每行的颜色：工具输出按 diff 着色，write 正文与 shell 命令统一一色。
-fn output_body(
-    text: &str,
-    paint: impl Fn(&str) -> Hsla,
-    hint_color: Hsla,
-    max: usize,
-    expanded: bool,
-) -> AnyElement {
+/// 返回渲染好的正文与被截掉的行数，“还有 N 行”的提示由卡片统一出（只要一条）。
+fn output_body(text: &str, paint: impl Fn(&str) -> Hsla, max: usize) -> (AnyElement, usize) {
     let mut column = div()
         .w_full()
         .flex()
@@ -998,8 +991,8 @@ fn output_body(
         .overflow_hidden()
         .text_size(px(FONT_SMALL));
     let lines = text.trim().lines();
-    let total = lines.clone().count();
-    for line in lines.take(max) {
+    let (shown, hidden) = visible_rows(lines.clone().count(), max);
+    for line in lines.take(shown) {
         column = column.child(
             div()
                 .w_full()
@@ -1009,20 +1002,7 @@ fn output_body(
         );
     }
 
-    if let Some(hint) = output_hint(total.saturating_sub(max), expanded) {
-        column = column.child(
-            div()
-                .text_size(px(FONT_CAPTION))
-                .text_color(hint_color)
-                .child(SharedString::from(hint)),
-        );
-    }
-    column.into_any_element()
-}
-
-/// shell 命令占掉的行数：命令先渲染、封顶在 `budget`，剩下的预算留给输出。
-fn command_rows(command: &str, budget: usize) -> usize {
-    command.trim().lines().count().min(budget)
+    (column.into_any_element(), hidden)
 }
 
 /// 被截掉的输出行提示：`hidden` 为没显示出来的行数，与用户消息气泡的折叠提示一致。
@@ -1342,40 +1322,42 @@ fn tool_block(
         COLLAPSED_OUTPUT_LINES
     };
 
-    // 执行的命令：整行折行、代码色；它自己封顶在 `max_lines`，占掉的行数从输出预算里扣
+    // 执行的命令：整行折行、代码色；它自己封顶在 `max_lines`，占掉的行数从输出预算里扣。
+    // 命令与输出被截掉的行合并成卡片底部一条提示。
     let mut remaining = max_lines;
+    let mut hidden = 0usize;
     if shell && !tool.args.is_empty() {
-        card = card.child(output_body(
-            &tool.args,
-            |_| theme.code_text,
-            theme.text_ghost,
-            max_lines,
-            expanded,
-        ));
-        remaining = remaining.saturating_sub(command_rows(&tool.args, max_lines));
+        let rows = tool.args.trim().lines().count();
+        let (body, rest) = output_body(&tool.args, |_| theme.code_text, max_lines);
+        remaining = remaining.saturating_sub(rows.min(max_lines));
+        hidden += rest;
+        card = card.child(body);
     }
 
     if let Some(diff) = &tool.diff {
-        card = card.child(diff_body(diff, theme, remaining, expanded));
+        let (body, rest) = diff_body(diff, theme, remaining);
+        hidden += rest;
+        card = card.child(body);
     } else if let Some(content) = &tool.content {
         // write：先把要写入的正文折起来看一眼，再看工具结果
-        card = card.child(output_body(
-            content,
-            |_| theme.text_secondary,
-            theme.text_ghost,
-            remaining,
-            expanded,
-        ));
+        let (body, rest) = output_body(content, |_| theme.text_secondary, remaining);
+        hidden += rest;
+        card = card.child(body);
     }
 
     if tool.diff.is_none() && !tool.output.trim().is_empty() {
-        card = card.child(output_body(
-            &tool.output,
-            |line| line_color(line, theme),
-            theme.text_ghost,
-            remaining,
-            expanded,
-        ));
+        let (body, rest) = output_body(&tool.output, |line| line_color(line, theme), remaining);
+        hidden += rest;
+        card = card.child(body);
+    }
+
+    if let Some(hint) = output_hint(hidden, expanded) {
+        card = card.child(
+            div()
+                .text_size(px(FONT_CAPTION))
+                .text_color(theme.text_ghost)
+                .child(SharedString::from(hint)),
+        );
     }
 
     for image in &tool.images {
@@ -2008,12 +1990,13 @@ mod tests {
         assert_eq!(tool.args, command);
     }
 
-    /// 多行命令占掉输出预算：首尾空行不算，最多只能吃掉整个预算（不会变成负数）。
+    /// 行数分配：预算内全显，超出部分算隐藏（不多不少）。
     #[test]
-    fn command_rows_share_the_line_budget() {
-        assert_eq!(command_rows("ls\npwd\n", 6), 2);
-        assert_eq!(command_rows("\n\n", 6), 0);
-        assert_eq!(command_rows("a\nb\nc", 2), 2);
+    fn visible_rows_split_by_budget() {
+        assert_eq!(visible_rows(3, 6), (3, 0));
+        assert_eq!(visible_rows(0, 6), (0, 0));
+        assert_eq!(visible_rows(8, 6), (6, 2));
+        assert_eq!(visible_rows(3, 0), (0, 3));
     }
 
     /// 多行删除/新增不做词级 diff（行数不等时逐行整行着色）。

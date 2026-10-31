@@ -651,25 +651,71 @@ impl GuiApp {
         }
     }
 
+    /// 展开/收起后内容高度大变：清掉上一帧的实测高度（那会把本帧布局压在旧高度上，
+    /// 下一帧再涨/退一次，贴底时就是一次抖动）。
+    ///
+    /// 这里**不**再 `scroll_to_bottom()`：那会给 `ScrollHandle` 挂一个基于旧内容高度的
+    /// 滚动请求，和下一帧 `pin_bottom` 按新内容算的偏移抢同一个值，一来一回就是抖。
+    fn resized_bottom(&mut self) {
+        self.flow_height.set(None);
+        if self.pinned_bottom.get().is_some() {
+            // 记成当前偏移，钉底逻辑才认得出这是自己的地盘（见 `pin_bottom`）
+            self.pinned_bottom.set(Some(self.scroll.offset().y));
+        }
+    }
+
     /// 点用户气泡：展开/收起过长的那条消息（`None` 时跟随全局 Ctrl-L 开关）。
     pub(super) fn toggle_user(&mut self, index: usize, cx: &mut Context<Self>) {
+        if self.repeat_toggle(&format!("user:{index}")) {
+            cx.notify();
+            return;
+        }
+
         let expand_tools = self.expand_tools;
         if let Some(transcript::Block::User(message)) = self.transcript.blocks_mut().get_mut(index)
         {
             let expanded = message.expanded.unwrap_or(expand_tools);
             message.expanded = Some(!expanded);
+            self.resized_bottom();
         }
         cx.notify();
     }
 
     /// 点工具卡片：展开/收起这一块的输出（`None` 时跟随全局 Ctrl-L 开关）。
     pub(super) fn toggle_tool(&mut self, index: usize, cx: &mut Context<Self>) {
+        if self.repeat_toggle(&format!("tool:{index}")) {
+            cx.notify();
+            return;
+        }
+
         let expand_tools = self.expand_tools;
         if let Some(transcript::Block::Tool(tool)) = self.transcript.blocks_mut().get_mut(index) {
             let expanded = tool.expanded.unwrap_or(expand_tools);
             tool.expanded = Some(!expanded);
+            self.resized_bottom();
         }
         cx.notify();
+    }
+
+    /// 同一条目在 [`TOGGLE_DEBOUNCE`] 内只接受一次切换，返回 true 表示这次要丢掉。
+    ///
+    /// 卡片展开/收起会改高度，鼠标抬起时指针还落在它上面，gpui 会再命中同一个元素、
+    /// 又发一次 click，于是展开与收起反复切换（画面就是抖的）。
+    fn repeat_toggle(&mut self, key: &str) -> bool {
+        let now = Instant::now();
+        if ignore_repeat_toggle(
+            self.last_toggle
+                .as_ref()
+                .map(|(last, at)| (last.as_str(), *at)),
+            key,
+            now,
+            TOGGLE_DEBOUNCE,
+        ) {
+            return true;
+        }
+
+        self.last_toggle = Some((key.to_string(), now));
+        false
     }
 
     /// 取某个滚动区的滚动句柄；覆盖层没打开信息页时为 `None`。

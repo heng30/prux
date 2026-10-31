@@ -476,6 +476,16 @@
   typed used to do nothing while the view was scrolled up; it now re-pins the transcript to the
   bottom.
 
+- **A tool card shows one "N more lines" hint, not one per section**: a `bash` card could stack a
+  hint under the command, another under the diff or written body, and a third under the output,
+  each counting only its own overflow. The hidden lines are now summed and the card ends with a
+  single hint.
+
+- **Expanding a card in the desktop GUI no longer flickers**: the toggle changed the height, the
+  pointer was still over the card when the button came up, and the second hit flipped it straight
+  back. One entry now accepts a single toggle per 250 ms, and a toggle clears the previous frame's
+  measured height so the layout is not pinned to the old one.
+
 ## 中文
 
 ### 新增
@@ -810,3 +820,8 @@
   子节点数计算，相邻块之间凭空多出一段间距；现在渲染时跳过这类空块。
 - **输入框为空时按 `Enter` 回到最新输出**：以前什么都没输入时按 `Enter` 毫无反应，视图停在上面下
   不来；现在会重新钉底。
+- **工具卡片的「还有 N 行」只提示一次**：`bash` 卡片以前在命令下面、diff 或写入正文下面、输出下面
+  各出一条提示，各自只算自己那段的溢出；现在把截掉的行数累加，卡片底部只出一条。
+- **桌面 GUI 展开卡片不再抖动**：展开改变高度后，鼠标抬起时指针仍落在卡片上，会再命中一次把它切
+  回去。同一条目现在 250ms 内只接受一次切换，切换时还会清掉上一帧的实测高度，布局不会压在旧高
+  度上。
