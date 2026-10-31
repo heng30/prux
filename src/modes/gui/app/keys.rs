@@ -92,6 +92,12 @@ impl GuiApp {
             return;
         }
 
+        // Ctrl-Shift-H：聚焦侧栏会话搜索框（先于覆盖层，收起侧栏时也能用）
+        if primary && shift && keystroke.key == "h" {
+            self.focus_session_search(cx);
+            return;
+        }
+
         if self.overlay.is_some() {
             if primary
                 && !shift
@@ -485,7 +491,7 @@ impl GuiApp {
                 return true;
             }
             "b" if shift => {
-                self.show_sidebar = !self.show_sidebar;
+                self.set_sidebar_visible(!self.show_sidebar);
                 cx.notify();
                 return true;
             }

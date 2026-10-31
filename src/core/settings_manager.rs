@@ -875,6 +875,19 @@ pub fn write_settings_theme_gui(name: &str) -> Result<()> {
     write_settings_value("theme-gui", json!(name))
 }
 
+/// settings.json: `sidebar-gui`（GUI 左侧会话栏是否展开；缺失默认 true）。
+pub fn read_settings_sidebar_gui() -> bool {
+    settings_value()
+        .get("sidebar-gui")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true)
+}
+
+/// 写回 settings.json 的 `sidebar-gui`（GUI 展开/收起会话栏时调用，重启后恢复）。
+pub fn write_settings_sidebar_gui(visible: bool) -> Result<()> {
+    write_settings_value("sidebar-gui", json!(visible))
+}
+
 /// 写回**全局** settings.json 的 disabledExtensions（read-modify-write，保留其他键）。
 /// /extension 面板切换启用状态后调用；项目级禁用靠手写项目 `.prux/settings.json`
 /// （读取侧与全局取并集，见 [`read_disabled_extensions`]）。
@@ -2821,6 +2834,18 @@ mod tests {
             json!("synthwave"),
             "TUI 主题不受影响"
         );
+    }
+
+    /// `sidebar-gui`：缺失默认展开，写入后可读回。
+    #[test]
+    fn sidebar_gui_defaults_to_true_and_round_trips() {
+        let _ad = crate::test_support::AgentDirGuard::temp();
+
+        assert!(read_settings_sidebar_gui(), "未设置时默认展开");
+
+        write_settings_sidebar_gui(false).unwrap();
+
+        assert!(!read_settings_sidebar_gui());
     }
 
     /// `uiScale`：f32 直接转 f64 会落成 `2.0999999046325684`，写盘必须是一位小数。

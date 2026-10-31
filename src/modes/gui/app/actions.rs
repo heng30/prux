@@ -181,7 +181,7 @@ impl GuiApp {
                 cx.notify();
             }
             "sidebar" => {
-                self.show_sidebar = !self.show_sidebar;
+                self.set_sidebar_visible(!self.show_sidebar);
                 cx.notify();
             }
             "skills" => self.open_skills_panel(cx),
@@ -487,7 +487,7 @@ impl GuiApp {
                 self.open_settings_panel(cx);
             }
             Action::ToggleSidebar => {
-                self.show_sidebar = !self.show_sidebar;
+                self.set_sidebar_visible(!self.show_sidebar);
             }
             Action::Attach { images } => {
                 // 附件就是 `@路径` 引用：插入触发符后让补全面板接着列文件
@@ -680,8 +680,10 @@ impl GuiApp {
         cx.notify();
     }
 
-    /// 点侧栏搜索框：之后敲的字进会话过滤框（Files 面板的搜索框同时让出焦点）。
+    /// 点侧栏搜索框 / `Ctrl-Shift-H`：之后敲的字进会话过滤框（侧栏收起时一并展开，
+    /// Files 面板的搜索框同时让出焦点）。
     pub(crate) fn focus_session_search(&mut self, cx: &mut Context<Self>) {
+        self.set_sidebar_visible(true);
         self.session_search_focus = true;
         self.panel.search_focus = false;
         cx.notify();

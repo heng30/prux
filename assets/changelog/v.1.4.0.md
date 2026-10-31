@@ -107,6 +107,10 @@
   first, then follow-ups, separated by blank lines and kept ahead of the current draft) and empties
   both queues.
 
+- **The desktop GUI's session search answers to a shortcut**: `Ctrl+Shift+H` focuses the search box
+  above the left session list (expanding the sidebar if it was collapsed, and taking focus from the
+  right panel's search), while `Esc` / `Enter` leave focus and keep the query.
+
 - **The desktop GUI now shares the TUI's keymap**: the command palette moved to `Ctrl+M`, so `Ctrl+K`
   is free to delete to the end of the line the way it does in the terminal. Every key the two
   interfaces have in common now means the same thing: `Ctrl+O` expands tool output, `Ctrl+L` opens
@@ -161,6 +165,10 @@
   keeps the elapsed time and the blink moving even when a long tool call sends no events. The send
   button turns into a stop square during a run. Context usage comes from the estimated history
   instead of the last request, so it shows up in a freshly loaded session too.
+
+- **The desktop GUI remembers whether the session sidebar is open**: `Ctrl-Shift-B`, `/sidebar` and
+  the sidebar search box write the choice to `sidebar-gui` in `settings.json` and restore it on the
+  next launch; with no key set the sidebar starts open.
 
 - **The desktop GUI remembers its own light or dark theme**: `Shift+T` and the appearance panel in
   `/settings` write the choice to `theme-gui` in `settings.json` and restore it on the next
@@ -595,6 +603,9 @@
   跳过目录里已经没有的条目，条目带 thinking 时先设思考级别再换模型）；`Shift+Tab` 循环当前模型
   支持的思考级别。两个键都与 TUI 的默认绑定一致。
 
+- **桌面 GUI 的会话搜索框有了快捷键**：`Ctrl+Shift+H` 聚焦左侧会话列表上方的搜索框（侧栏收起时
+  一并展开，右侧面板的搜索框让出焦点），`Esc` / `Enter` 退出聚焦并保留查询。
+
 - **桌面 GUI 的键位与 TUI 统一了**：命令面板改到 `Ctrl+M`，`Ctrl+K` 因此回到「删到行尾」。两边共有的
   键含义一律对齐：`Ctrl+O` 展开工具输出、`Ctrl+L` 打开模型选择、`Ctrl+T` 显隐思考块、`Ctrl+Shift+T`
   切明暗；桌面独有面板挪到 `Shift` 组合（`Ctrl+Shift+O` 会话、`Ctrl+Shift+G` 外观）。新增 `Ctrl+X`
@@ -635,6 +646,9 @@
   忙碌时行首先亮一个闪烁圆点与 `Working… (Esc to abort, N queued)`，并每半秒重绘一次，长工具
   调用期间没有事件时耗时也照样走；发送按钮在忙碌时变成停止方块。上下文占用改用历史估算而不取
   最后一次请求，刚载入的会话也能看到占用率。
+
+- **桌面 GUI 记住会话栏是否展开**：`Ctrl-Shift-B`、`/sidebar` 与侧栏搜索框把选择写进 `settings.json`
+  的 `sidebar-gui`，下次启动照原样恢复；没写过时默认展开。
 
 - **桌面 GUI 记住自己选的明暗主题**：`Shift+T` 与 `/settings` 的外观面板把选择写进 `settings.json`
   的 `theme-gui`，下次启动照样恢复，选过一次之后窗口主题就不再跟着 `--theme` 走；终端里的 `theme`

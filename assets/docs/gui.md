@@ -46,7 +46,7 @@ prux-gui -c         # 接着最近一个会话
 
 顶部是 `prux` 标题与 `+ New session`，其下是会话搜索框与会话列表，底部是当前分支与工作目录。
 
-- 搜索框按标题过滤列表，大小写不敏感、边敲边筛；点一下开始输入（右侧面板的搜索框同时让出焦点），
+- 搜索框按标题过滤列表，大小写不敏感、边敲边筛；点一下（或 `Ctrl-Shift-H`）开始输入，侧栏收起时会一并展开，右侧面板的搜索框同时让出焦点，
   `Esc` / `Enter` 退出聚焦但保留查询。没有匹配时显示 `No matching sessions`。
 - 会话按最近活动时间分组：`Today` / `This week` / `Older`；每行显示标题（会话名或首条用户消息）、
   相对时间与消息数。
@@ -209,6 +209,7 @@ prux-gui -c         # 接着最近一个会话
 | `Ctrl-O` | 展开 / 收起全部工具输出 |
 | `Ctrl-Shift-O` | 会话选择 |
 | `Ctrl-Shift-B` | 侧栏显隐 |
+| `Ctrl-Shift-H` | 聚焦侧栏会话搜索框（侧栏收起时一并展开） |
 | `Ctrl-Shift-W` | 工作目录选择面板 |
 | `Ctrl-Shift-E` | 右侧面板开关 |
 | `Ctrl-Shift-F` | 右侧面板 → Files |
@@ -278,6 +279,7 @@ prux-gui -c         # 接着最近一个会话
   桌面主题存 `settings.json` 的 `theme-gui`，终端主题存 `theme`，互不覆盖。
 - 界面缩放存 `settings.json` 的 `uiScale`（默认 `1.5`，范围 0.8–5.0，步进 0.1）。`Ctrl-=` / `Ctrl--`
   逐档调整，`Ctrl-0` 回到 100%；外观面板里也能选。
+- 左侧会话栏的显隐存 `settings.json` 的 `sidebar-gui`（默认展开），下次启动照原样恢复。
 - 其余设置（自动压缩、重试、thinking 显示、语法高亮、图片处理、steering / follow-up 模式等）与终端
   界面共用同一份 `settings.json`，改哪边都生效，含义见[设置](settings.md)。
 

@@ -436,7 +436,7 @@ impl GuiApp {
             session_search: Editor::new(),
             session_search_focus: false,
             _session_poll: None,
-            show_sidebar: true,
+            show_sidebar: settings_manager::read_settings_sidebar_gui(),
             overlay: None,
             panel: RightPanel::default(),
             expand_tools: false,
@@ -754,6 +754,12 @@ impl GuiApp {
             .as_ref()
             .map(|s| s.cwd.clone())
             .unwrap_or_else(|| cwd().to_string_lossy().to_string())
+    }
+
+    /// 展开/收起会话栏并写回 `sidebar-gui`，下次启动恢复。
+    fn set_sidebar_visible(&mut self, visible: bool) {
+        self.show_sidebar = visible;
+        _ = settings_manager::write_settings_sidebar_gui(visible);
     }
 
     /// 切换明暗主题并写回 `theme-gui`，下次启动恢复。
