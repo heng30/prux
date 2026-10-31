@@ -4,7 +4,7 @@
 //! 所以 tokio runtime 由本文件手动创建并保持存活，agent worker 跑在它上面。
 //! `--tui` 时不进 GUI，改跑交互 TUI（参数解析仍由 bootstrap 里的 clap 完成）。
 
-use prux::{APP_NAME, cli::startup::bootstrap, modes::interactive};
+use prux::{APP_NAME, cli::startup::bootstrap, modes::tui};
 use std::io::IsTerminal;
 
 fn main() {
@@ -24,7 +24,7 @@ fn main() {
             std::process::exit(1);
         }
 
-        let result = runtime.block_on(interactive::run_interactive(
+        let result = runtime.block_on(tui::run_interactive(
             startup.agent,
             startup.initial_messages,
             startup.prompt_templates,

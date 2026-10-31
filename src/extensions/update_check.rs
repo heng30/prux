@@ -32,7 +32,7 @@ use crate::{
         EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_UPDATE_CHECK, command_arg,
         util::{normalize_version, notify_text, version_greater},
     },
-    modes::interactive::handlers::register_host_command,
+    modes::tui::handlers::register_host_command,
     utils::{
         async_task,
         glyphs::{DEF_ARROW_UP_DOWN, DEF_SELECTED_MARK},
@@ -468,7 +468,7 @@ fn open_download_page() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::modes::interactive::app::App;
+    use crate::modes::tui::app::App;
     use crate::test_support::{AUTH_TEST_LOCK, AgentDirGuard};
 
     fn lock_global() -> MutexGuard<'static, ()> {

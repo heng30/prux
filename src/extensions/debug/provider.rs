@@ -234,7 +234,7 @@ fn peek_events() -> Vec<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::modes::interactive::app::App;
+    use crate::modes::tui::app::App;
     use crate::{
         core::extensions::{Extension, dispatch_provider_stream_event},
         extensions::debug::Debug,
@@ -321,7 +321,7 @@ mod tests {
         command(&mut st, "dump");
         assert!(
             st.system_messages.iter().any(|(_, m)| {
-                let text = crate::modes::interactive::app::sys_spans_text(&m.spans);
+                let text = crate::modes::tui::app::sys_spans_text(&m.spans);
                 text.contains("openai") && text.contains("response.created")
             }),
             "dump 应打印最近一轮已完成的载荷"
@@ -331,7 +331,7 @@ mod tests {
         reset_for_test();
         command(&mut st, "dump");
         assert!(st.system_messages.iter().any(|(_, m)| {
-            crate::modes::interactive::app::sys_spans_text(&m.spans).contains("No captured")
+            crate::modes::tui::app::sys_spans_text(&m.spans).contains("No captured")
         }));
 
         reset_for_test();
@@ -346,7 +346,7 @@ mod tests {
         command(&mut st, "");
         assert!(enabled(), "无参切换为开启");
         assert!(st.system_messages.iter().any(|(_, m)| {
-            crate::modes::interactive::app::sys_spans_text(&m.spans).contains("enabled")
+            crate::modes::tui::app::sys_spans_text(&m.spans).contains("enabled")
         }));
 
         let mut st2 = App::new();
@@ -356,8 +356,7 @@ mod tests {
         let mut st3 = App::new();
         command(&mut st3, "bogus");
         assert!(st3.system_messages.iter().any(|(_, m)| {
-            crate::modes::interactive::app::sys_spans_text(&m.spans)
-                .contains("Usage: /debug provider")
+            crate::modes::tui::app::sys_spans_text(&m.spans).contains("Usage: /debug provider")
         }));
 
         reset_for_test();

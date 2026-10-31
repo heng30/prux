@@ -1,7 +1,7 @@
 //! 启动装配：进程初始化 → 参数解析 → 子命令 → 会话/模型/工具/技能准备 → `Agent`。
 //!
 //! TUI 与 GUI 两个二进制共用这一段；`bootstrap()` 只负责「把一切准备好」，
-//! 运行模式（`modes::interactive` / `modes::gui`）由调用方自己分派。
+//! 运行模式（`modes::tui` / `modes::gui`）由调用方自己分派。
 
 use crate::{
     cli::{
@@ -38,7 +38,7 @@ use crate::{
         tools_manager,
     },
     extensions::{self, skills::bundled_skill_names},
-    modes::interactive::{
+    modes::tui::{
         self,
         app::{ReloadCtx, RepairAction, SessionRepairRequest, ZombieOperationsRequest},
     },
@@ -569,7 +569,7 @@ fn maybe_open_with_zombie_panel(s: Session) -> Option<Session> {
     }
 
     if let Some(path) = s.get_session_file() {
-        interactive::handlers::stage_zombie_operations_global(ZombieOperationsRequest {
+        tui::handlers::stage_zombie_operations_global(ZombieOperationsRequest {
             path: path.to_path_buf(),
             count,
         });
@@ -591,7 +591,7 @@ fn stage_session_repair_for_tui_req(req: SessionRepairRequest) -> Option<Session
         req.plan.error
     );
 
-    interactive::handlers::stage_session_repair_global(req);
+    tui::handlers::stage_session_repair_global(req);
     None
 }
 

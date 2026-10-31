@@ -491,7 +491,7 @@ pub trait Extension: Send + Sync {
     ///
     /// 命令候选列表与分发的"存在性"由这些声明动态决定：
     /// 扩展禁用或当前模式不可用时其命令自动移除。执行入口由扩展在自身初始化处经
-    /// [`crate::modes::interactive::handlers::register_slash_command`] 注册。
+    /// [`crate::modes::tui::handlers::register_slash_command`] 注册。
     fn commands(&self) -> Vec<ExtensionCommand> {
         Vec::new()
     }

@@ -90,7 +90,7 @@ use crate::{
     },
     error::Result,
     extensions::{EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_LOOP_DETECT, command_arg},
-    modes::interactive::handlers::register_host_command,
+    modes::tui::handlers::register_host_command,
     utils::time::now_iso,
 };
 use serde_json::{Value, json};
@@ -1340,7 +1340,7 @@ fn strip_leading_counter(s: &str) -> String {
 mod tests {
     use super::*;
     use crate::core::provider::ContentBlock;
-    use crate::modes::interactive::app::App;
+    use crate::modes::tui::app::App;
     use crate::utils::time::civil_from_days;
 
     /// 重置检测状态与配置（配置在 reset() 里不清，避免会话内 set 被冲掉；测试需要洁净缺省）。

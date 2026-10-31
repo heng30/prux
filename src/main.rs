@@ -1,6 +1,6 @@
 //! prux 入口（TUI 二进制）：`bootstrap()` 装配完成 → 终端检查 → 交互 TUI。
 
-use prux::{APP_NAME, cli::startup::bootstrap, modes::interactive};
+use prux::{APP_NAME, cli::startup::bootstrap, modes::tui};
 use std::io::IsTerminal;
 
 /// 进程入口：会话/模型/工具已由 [`bootstrap`] 装配好，这里只做终端检查与模式分派。
@@ -16,7 +16,7 @@ async fn main() {
         std::process::exit(1);
     }
 
-    if let Err(e) = interactive::run_interactive(
+    if let Err(e) = tui::run_interactive(
         startup.agent,
         startup.initial_messages,
         startup.prompt_templates,

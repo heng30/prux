@@ -19,7 +19,7 @@ use crate::{
         session_manager::{default_session_dir, list_sessions},
         settings_manager::agent_dir,
     },
-    modes::interactive::agent_actor::{AgentCommand, CommandTx},
+    modes::tui::agent_actor::{AgentCommand, CommandTx},
     utils::{display::fit_display, paths::dir_name},
 };
 use gpui::{

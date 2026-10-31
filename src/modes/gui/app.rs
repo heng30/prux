@@ -61,7 +61,7 @@ use crate::{
         settings_manager,
     },
     extensions::extra_themes,
-    modes::interactive::{
+    modes::tui::{
         agent_actor::{AgentCommand, CommandTx},
         handlers::tools::run_shell_command,
     },

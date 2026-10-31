@@ -44,7 +44,7 @@ use crate::{
     extensions::{
         EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_PLAN_MODE, command_arg, util::push_context,
     },
-    modes::interactive::{
+    modes::tui::{
         app::{App, SysSpan},
         handlers::{register_extension_keybinding, register_host_command},
     },
@@ -1517,7 +1517,7 @@ mod tests {
         }
 
         let spans = todo_list_spans().expect("有 todos 应返回 spans");
-        let text = crate::modes::interactive::app::sys_spans_text(&spans);
+        let text = crate::modes::tui::app::sys_spans_text(&spans);
         assert_eq!(
             text.matches("Plan Progress:").count(),
             1,

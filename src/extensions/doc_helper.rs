@@ -21,7 +21,7 @@ use crate::{
         system_prompt::documentation_section,
     },
     extensions::{EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_DOC_HELPER, command_arg},
-    modes::interactive::handlers::register_host_command,
+    modes::tui::handlers::register_host_command,
 };
 use std::sync::Arc;
 
@@ -130,7 +130,7 @@ fn command_help(host: &mut dyn CommandHost, raw: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::modes::interactive::app::App;
+    use crate::modes::tui::app::App;
     use crate::{
         core::{
             extensions::{

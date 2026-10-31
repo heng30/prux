@@ -46,7 +46,7 @@ use crate::{
         EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_VET,
         util::{notify_text, truncate_chars},
     },
-    modes::interactive::handlers::register_host_command,
+    modes::tui::handlers::register_host_command,
     utils::{glyphs::DEF_TRAILING_ELLIPSIS, paths::cwd, time::format_duration_ms},
 };
 use config::{Announce, Config, EXT};

@@ -4,7 +4,7 @@ use crate::{
     core::{export_html::theme::load_theme_vars, session_manager::Session},
     embedded,
     error::{Error, Result},
-    modes::interactive::theme::DEFAULT_THEME_NAME,
+    modes::tui::theme::DEFAULT_THEME_NAME,
     utils::paths::resolve_path,
 };
 use base64::{Engine, engine::general_purpose::STANDARD};

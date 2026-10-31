@@ -19,7 +19,7 @@ use crate::{
         CommandHost, Extension, ExtensionCommand, ExtensionHook, ExtensionMode, ExtensionTool,
         RichSpan, SubcommandDef, UiNotifyLevel,
     },
-    modes::interactive::handlers::register_host_command,
+    modes::tui::handlers::register_host_command,
 };
 use serde_json::Value;
 use std::sync::Arc;
@@ -160,7 +160,7 @@ mod tests {
             ExtensionMode, command_provider, register_extension, set_extension_enabled,
             set_extension_mode, unregister_extension,
         },
-        modes::interactive::{
+        modes::tui::{
             agent_actor::{AgentCommand, WorkerHandle, channels},
             app::{App, sys_spans_text},
         },

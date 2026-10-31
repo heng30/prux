@@ -44,7 +44,7 @@ use crate::{
     },
     error::Result,
     extensions::{EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_GOAL, command_arg},
-    modes::interactive::{app::MsgLevel, handlers::register_host_command},
+    modes::tui::{app::MsgLevel, handlers::register_host_command},
     utils::{
         glyphs::DEF_PAUSED,
         time::{format_elapsed, now_ms},
@@ -1511,7 +1511,7 @@ impl Goal {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::modes::interactive::app::App;
+    use crate::modes::tui::app::App;
     use std::sync::MutexGuard;
 
     fn lock_auth() -> MutexGuard<'static, ()> {

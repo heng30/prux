@@ -64,7 +64,7 @@ async fn main() -> anyhow::Result<()> {
 | `core::compaction` | token 估算、`serialize_conversation`、摘要 prompt 构建、文件清单统计 |
 | `core::export_html` | 会话导出为 HTML（复用内嵌 HTML 模板） |
 | `core::skills` / `core::prompt_templates` | SKILL.md 发现与 `/skill:name`、prompt template 发现与展开 |
-| `cli::args` / `modes::interactive` | CLI 参数解析、交互 TUI（CLI 内部使用） |
+| `cli::args` / `modes::tui` | CLI 参数解析、交互 TUI（CLI 内部使用） |
 
 ## 事件流（流式输出）
 

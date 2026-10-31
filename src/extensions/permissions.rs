@@ -57,7 +57,7 @@ use crate::{
         tools::ToolError,
     },
     extensions::{EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_PERMISSIONS},
-    modes::interactive::handlers::register_host_command,
+    modes::tui::handlers::register_host_command,
     utils::{
         glyphs::DEF_ELLIPSIS,
         paths::{absolutize, cwd, is_outside},

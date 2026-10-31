@@ -25,7 +25,7 @@ use crate::{
     extensions::{
         EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_REWIND, command_arg, util::choice_key,
     },
-    modes::interactive::handlers::register_host_command,
+    modes::tui::handlers::register_host_command,
 };
 use std::sync::{Mutex, OnceLock};
 
@@ -223,7 +223,7 @@ mod tests {
     use super::*;
     use crate::core::extensions::take_pending_ui;
     use crate::core::provider::AgentMessage;
-    use crate::modes::interactive::app::App;
+    use crate::modes::tui::app::App;
 
     #[test]
     fn declares_dev_and_creator_modes_and_default_disabled() {

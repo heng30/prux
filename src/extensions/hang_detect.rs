@@ -52,7 +52,7 @@ use crate::{
     extensions::{
         EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_HANG_DETECT, command_arg, util::notify_text,
     },
-    modes::interactive::handlers::register_host_command,
+    modes::tui::handlers::register_host_command,
 };
 use serde_json::Value;
 use std::{
@@ -559,7 +559,7 @@ fn command_hang_detect(host: &mut dyn CommandHost, raw: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::modes::interactive::app::App;
+    use crate::modes::tui::app::App;
     use serde_json::json;
 
     /// 与触碰全局注册表 / 配置目录的测试串行，并把进程级看门狗状态复位到缺省。

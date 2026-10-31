@@ -52,7 +52,7 @@ use crate::{
     },
     error::Result,
     extensions::util::truncate_chars_with_postfix,
-    modes::interactive::handlers::{register_host_command, tui_host},
+    modes::tui::handlers::{register_host_command, tui_host},
 };
 use config::{ClassifierConfig, JetConfig, RouterConfig, Target};
 use futures_util::future::BoxFuture;
@@ -1010,8 +1010,8 @@ fn command_jet(host: &mut dyn CommandHost, raw: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::modes::interactive::app::App;
-    use crate::modes::interactive::app::sys_spans_text;
+    use crate::modes::tui::app::App;
+    use crate::modes::tui::app::sys_spans_text;
     use std::sync::MutexGuard;
     use tokio::{
         io::{AsyncReadExt as _, AsyncWriteExt as _},

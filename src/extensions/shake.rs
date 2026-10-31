@@ -36,7 +36,7 @@ use crate::{
     extensions::{
         EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_SHAKE, command_arg, util::notify_plain,
     },
-    modes::interactive::handlers::register_host_command,
+    modes::tui::handlers::register_host_command,
     utils::{display::plural, tokens},
 };
 use std::sync::{Arc, Mutex, OnceLock};
@@ -529,7 +529,7 @@ fn xml_open(line: &str) -> Option<&str> {
 mod tests {
     use super::*;
     use crate::core::provider::AgentMessage;
-    use crate::modes::interactive::app::App;
+    use crate::modes::tui::app::App;
 
     /// 造一条足够长的文本（保证 token 估算远超保护预算）。
     fn filler(tag: &str, repeats: usize) -> String {

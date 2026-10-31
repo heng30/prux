@@ -27,7 +27,7 @@ use crate::{
         SUCCESS, command_arg,
         util::{choice_key, download_spinner},
     },
-    modes::interactive::handlers::register_host_command,
+    modes::tui::handlers::register_host_command,
 };
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -416,7 +416,7 @@ fn first_line(text: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::modes::interactive::app::{App, MsgLevel};
+    use crate::modes::tui::app::{App, MsgLevel};
 
     fn snap(
         tool: &str,
@@ -663,7 +663,7 @@ mod tests {
         let msgs: Vec<(MsgLevel, String)> = st
             .system_messages
             .iter()
-            .map(|(_, m)| (m.level, crate::modes::interactive::app::sys_msg_text(m)))
+            .map(|(_, m)| (m.level, crate::modes::tui::app::sys_msg_text(m)))
             .collect();
         assert_eq!(msgs.len(), 2, "{msgs:?}");
         assert_eq!(msgs[0].0, MsgLevel::Error);

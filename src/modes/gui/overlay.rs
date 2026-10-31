@@ -14,7 +14,7 @@ use super::{
 };
 use crate::{
     core::extensions::{self, DockLine, DockSpan, OverlayView},
-    modes::interactive::agent_actor::AgentCommand,
+    modes::tui::agent_actor::AgentCommand,
     utils::geometry,
 };
 use gpui::{

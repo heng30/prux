@@ -1,6 +1,6 @@
 //! agent worker：独占持有 `Agent` 的 tokio 任务（GUI 版）。
 //!
-//! 与 TUI 的 `interactive::worker` 同构但更薄：回合内的状态更新不投给 UI 闭包，
+//! 与 TUI 的 `tui::worker` 同构但更薄：回合内的状态更新不投给 UI 闭包，
 //! 而是把 agent 内核的 JSON 事件原样送进 GUI 的通道，由视图层自己解释；
 //! 回合外的命令（切模型、切会话、压缩…）在这里就地执行，执行完推一份状态快照。
 //! 回合被 `Abort` 打断的方式也与 TUI 一致——直接 drop 底层 prompt future。
@@ -20,7 +20,7 @@ use crate::{
         settings_manager, skills,
     },
     extensions::skills::bundled_skill_names,
-    modes::interactive::{
+    modes::tui::{
         agent_actor::{AgentCommand, CommandRx},
         worker::{session_tree_text, share_via_gist},
     },

@@ -38,7 +38,7 @@ use crate::{
         EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_PROXY, command_arg,
         util::{self, notify_text, notify_toast},
     },
-    modes::interactive::handlers::register_host_command,
+    modes::tui::handlers::register_host_command,
     utils::{
         display::{format_bytes, format_rate},
         glyphs::{DEF_DOT_EMPTY, DEF_DOT_FILLED, DEF_INPUT_TOKENS, DEF_OUTPUT_TOKENS},
@@ -638,7 +638,7 @@ fn api_key_label(cfg: &ProxyConfig) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::modes::interactive::app::App;
+    use crate::modes::tui::app::App;
     use crate::test_support::{AgentDirGuard, env_key_lock};
 
     /// 状态是进程内单例、测试并行：所有触碰它的用例共用一把锁串行

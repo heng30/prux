@@ -32,7 +32,7 @@ use crate::{
         ACCENT, DIM, EXTENSION_FACTORIES, ExtensionFactory, MUTED, PRIORITY_CACHE_USAGE,
         command_arg,
     },
-    modes::interactive::handlers::register_host_command,
+    modes::tui::handlers::register_host_command,
     utils::{
         async_task,
         glyphs::{DEF_ARROW_UP_DOWN, DEF_BAR_EMPTY, DEF_BAR_FULL, DEF_SPARK_BLOCKS},
@@ -828,7 +828,7 @@ fn level_char(percent: f64) -> char {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::modes::interactive::app::App;
+    use crate::modes::tui::app::App;
     use crate::{
         core::{
             extensions::OverlayKey,

@@ -730,7 +730,7 @@ fn lookup_ssh_config(alias: &str) -> Option<SshHost> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::modes::interactive::app::App;
+    use crate::modes::tui::app::App;
 
     /// 串行化「会往进程级 UI 队列推通知」的用例。
     ///

@@ -6,7 +6,7 @@ use crate::{
         provider::AgentMessage,
         tools::{ToolError, ToolResultAttachment},
     },
-    modes::interactive::app::{App, MsgLevel},
+    modes::tui::app::{App, MsgLevel},
     utils::{
         glyphs::{DEF_ELLIPSIS, DEF_SPINNER, DEF_SPINNER_BRAILLE},
         image::{ImageResizeLimits, prepare_image},

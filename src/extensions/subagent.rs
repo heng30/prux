@@ -48,7 +48,7 @@ use crate::{
         tools::{ToolError, ToolExecutionMode, ToolResult},
     },
     extensions::{EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_SUBAGENT, command_arg},
-    modes::interactive::handlers::register_host_command,
+    modes::tui::handlers::register_host_command,
     utils::time::rel_time,
 };
 use agent_types::{DiscoveryOptions, DiscoveryWarning, ResolveError, Roster};
@@ -2368,7 +2368,7 @@ pub(crate) fn agent_session_path(id: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::modes::interactive::app::App;
+    use crate::modes::tui::app::App;
 
     #[test]
     fn required_args_are_enforced() {

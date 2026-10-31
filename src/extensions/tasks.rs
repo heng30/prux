@@ -42,7 +42,7 @@ use crate::{
         EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_TASKS, command_arg,
         util::{SPINNER_TICK_MS, notify_text, push_context, spinner_frame_index},
     },
-    modes::interactive::handlers::register_host_command,
+    modes::tui::handlers::register_host_command,
     utils::{glyphs::DEF_SPINNER, time::now_ms},
 };
 use auto_clear::AutoClearManager;
@@ -1422,7 +1422,7 @@ Set up task dependencies:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::modes::interactive::app::App;
+    use crate::modes::tui::app::App;
     use crate::test_support::AgentDirGuard;
 
     #[test]

@@ -38,7 +38,7 @@ use crate::{
     extensions::{
         EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_COMPUTER, command_arg, tool_search,
     },
-    modes::interactive::handlers::register_host_command,
+    modes::tui::handlers::register_host_command,
 };
 use futures_util::future::BoxFuture;
 use serde_json::Value;

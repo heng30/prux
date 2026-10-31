@@ -22,7 +22,7 @@ use crate::{
         EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_RECAP,
         util::{notify_text, session_id_of},
     },
-    modes::interactive::handlers::register_host_command,
+    modes::tui::handlers::register_host_command,
     utils::{glyphs::DEF_RECAP, truncate::truncate_chars},
 };
 use std::sync::Arc;
@@ -175,7 +175,7 @@ fn normalize_recap(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::modes::interactive::app::App;
+    use crate::modes::tui::app::App;
     use crate::{core::extensions::take_pending_ui, test_support::AUTH_TEST_LOCK};
     use std::sync::MutexGuard;
 

@@ -43,7 +43,7 @@ use crate::{
         ACCENT, DIM, ERROR, EXTENSION_FACTORIES, ExtensionFactory, MUTED, PRIORITY_USAGE, SUCCESS,
         command_arg, util::truncate_chars,
     },
-    modes::interactive::handlers::register_host_command,
+    modes::tui::handlers::register_host_command,
     utils::{
         async_task,
         glyphs::{DEF_ARROW_UP_DOWN, DEF_BAR_EMPTY, DEF_BAR_FULL},
@@ -453,7 +453,7 @@ mod tests {
     use crate::{
         core::auth,
         extensions::WARNING,
-        modes::interactive::app::App,
+        modes::tui::app::App,
         test_support::{AUTH_TEST_LOCK, AgentDirGuard},
         utils::time::now_ms,
     };

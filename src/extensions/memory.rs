@@ -46,7 +46,7 @@ use crate::{
         EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_MEMORY, command_arg,
         util::{push_context, session_id_of, split_model},
     },
-    modes::interactive::handlers::register_host_command,
+    modes::tui::handlers::register_host_command,
     utils::{
         glyphs::DEF_ELLIPSIS,
         time::{now_iso, short_date},

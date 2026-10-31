@@ -1,6 +1,6 @@
 //! GUI 运行模式（gpui）：与 TUI 平行的桌面界面。
 //!
-//! 依赖方向同 `interactive`：只向下依赖 `core` / `cli`，不反向依赖。
+//! 依赖方向同 `tui`：只向下依赖 `core` / `cli`，不反向依赖。
 //! 与 agent 的一切接触都走 [`bridge`]：命令经 `AgentCommand` 下发，
 //! 状态经 agent 的 JSON 事件流上行，因此 `core` 与 TUI 侧都不需要为 GUI 改动。
 
@@ -20,7 +20,7 @@ mod transcript;
 
 use crate::{
     APP_NAME, cli::startup::Startup, core, core::settings_manager, embedded_bytes,
-    modes::interactive::agent_actor, utils::async_task,
+    modes::tui::agent_actor, utils::async_task,
 };
 use app::GuiApp;
 use gpui::{

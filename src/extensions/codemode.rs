@@ -31,7 +31,7 @@ use crate::{
         tools::{ToolError, ToolResult, ToolResultAttachment},
     },
     extensions::tool_search,
-    modes::interactive::handlers::register_host_command,
+    modes::tui::handlers::register_host_command,
     utils::{output_files, truncate},
 };
 use base64::Engine as _;
@@ -1341,7 +1341,7 @@ fn spill_output(text: &str) -> std::result::Result<String, String> {
 mod tests {
     use super::*;
     use crate::core::extensions::ExtensionUiRequest;
-    use crate::modes::interactive::app::App;
+    use crate::modes::tui::app::App;
 
     /// 取临时 agent_dir 并加全局锁（命令 handler 读写全局注册表与配置）。
     fn setup() -> (

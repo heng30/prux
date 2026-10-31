@@ -44,7 +44,7 @@ use crate::{
     extensions::{
         EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_NOTIFY, command_arg, util::notify_text,
     },
-    modes::interactive::handlers::register_host_command,
+    modes::tui::handlers::register_host_command,
     utils::time::format_duration,
 };
 use serde_json::Value;
@@ -275,7 +275,7 @@ impl Notify {
 }
 
 /// `agent_settled` 事件是否表示结算后仍**有排队用户输入**（steer / follow-up）——
-/// 由 UI 在转发前补上（见 `interactive::handlers::events::apply_sink_event`）。
+/// 由 UI 在转发前补上（见 `tui::handlers::events::apply_sink_event`）。
 /// 缺字段时按「无排队」处理（直接调用 `on_agent_event` 的单测即走此路径）。
 fn has_queued_messages(event: &Value) -> bool {
     event
@@ -451,7 +451,7 @@ fn spawn(cmd: &str, message: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::modes::interactive::app::App;
+    use crate::modes::tui::app::App;
 
     fn assistant(text: &str) -> AgentMessage {
         let mut m = AgentMessage::user_text(text);
@@ -740,7 +740,7 @@ mod tests {
     fn last_sys_text(st: &App) -> String {
         st.system_messages
             .last()
-            .map(|(_, m)| crate::modes::interactive::app::sys_msg_text(m))
+            .map(|(_, m)| crate::modes::tui::app::sys_msg_text(m))
             .unwrap_or_default()
     }
 

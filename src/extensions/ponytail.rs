@@ -56,7 +56,7 @@ use crate::{
     embedded,
     error::Result,
     extensions::{EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_PONYTAIL, command_arg},
-    modes::interactive::handlers::register_host_command,
+    modes::tui::handlers::register_host_command,
     utils::paths::{read_json_file, write_json_file},
 };
 use serde_json::{Value, json};
@@ -630,7 +630,7 @@ impl Extension for Ponytail {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::modes::interactive::app::App;
+    use crate::modes::tui::app::App;
 
     #[test]
     fn level_roundtrips_through_strum() {
@@ -875,7 +875,7 @@ mod tests {
                 .1
                 .clone();
             assert!(msg.markdown, "速查卡按 Markdown 渲染（含表格）");
-            let text = crate::modes::interactive::app::sys_msg_text(&msg);
+            let text = crate::modes::tui::app::sys_msg_text(&msg);
             assert!(
                 text.starts_with("# Ponytail Help"),
                 "frontmatter 应已剥掉：{text}"

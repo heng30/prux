@@ -36,7 +36,7 @@ use crate::{
     extensions::{
         EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_MCP, command_arg, util::notify_plain,
     },
-    modes::interactive::handlers::register_host_command,
+    modes::tui::handlers::register_host_command,
     utils::{glyphs::DEF_ELLIPSIS, paths::cwd, truncate::truncate_chars_within},
 };
 use config::{AuthMode, LoadedConfig, McpExposure, OAuthGrantType, ServerEntry};
@@ -1552,7 +1552,7 @@ pub async fn receive_callback(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::modes::interactive::app::App;
+    use crate::modes::tui::app::App;
     use crate::test_support::{AgentDirGuard, HomeGuard};
 
     /// 配置计数类断言与"扩展声明的服务器"（全局注册表）会相互干扰，用例之间串行化。
@@ -1824,7 +1824,7 @@ mod tests {
         let last = |st: &App| {
             st.system_messages
                 .last()
-                .map(|(_, s)| crate::modes::interactive::app::sys_spans_text(&s.spans))
+                .map(|(_, s)| crate::modes::tui::app::sys_spans_text(&s.spans))
                 .unwrap_or_default()
         };
 
@@ -1874,7 +1874,7 @@ mod tests {
         let last = st
             .system_messages
             .last()
-            .map(|(_, s)| crate::modes::interactive::app::sys_spans_text(&s.spans))
+            .map(|(_, s)| crate::modes::tui::app::sys_spans_text(&s.spans))
             .unwrap_or_default();
         assert!(last.contains("Unknown MCP subcommand"), "got: {last}");
     }

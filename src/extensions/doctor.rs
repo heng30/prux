@@ -33,7 +33,7 @@ use crate::{
         ACCENT, DIM, ERROR, EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_DOCTOR, SUCCESS,
         WARNING, command_arg, util::default_user_agent,
     },
-    modes::interactive::handlers::register_host_command,
+    modes::tui::handlers::register_host_command,
     utils::{async_task, glyphs::DEF_ARROW_UP_DOWN, http, proxy},
 };
 use futures_util::StreamExt;
@@ -631,7 +631,7 @@ fn summary_lines(results: &[ProbeResult]) -> Vec<DockLine> {
 mod tests {
     use super::*;
     use crate::core::extensions::OverlayKey;
-    use crate::modes::interactive::app::App;
+    use crate::modes::tui::app::App;
     use crate::test_support::{AUTH_TEST_LOCK, AgentDirGuard, run_with_timeout};
     use tokio::{
         io::{AsyncReadExt as _, AsyncWriteExt as _},

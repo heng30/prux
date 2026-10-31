@@ -30,7 +30,7 @@ use crate::{
         ACCENT, ERROR, EXTENSION_FACTORIES, ExtensionFactory, MUTED, PRIORITY_BTW, command_arg,
         util::{session_id_of, spinner_frame},
     },
-    modes::interactive::handlers::register_host_command,
+    modes::tui::handlers::register_host_command,
     utils::{display::wrap_text, glyphs::DEF_FAILED},
 };
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
@@ -483,7 +483,7 @@ fn build_prompt(st: &State, question: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::modes::interactive::app::App;
+    use crate::modes::tui::app::App;
     use crate::test_support::AUTH_TEST_LOCK;
 
     /// 全局状态锁（多个用例共享进程级 state 与 UI 队列）。
