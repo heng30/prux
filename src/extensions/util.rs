@@ -6,7 +6,7 @@ use crate::{
         provider::AgentMessage,
         tools::{ToolError, ToolResultAttachment},
     },
-    modes::interactive::app::{App, MsgLevel},
+    modes::tui::app::{App, MsgLevel},
     utils::{
         glyphs::{DEF_ELLIPSIS, DEF_SPINNER, DEF_SPINNER_BRAILLE},
         image::{ImageResizeLimits, prepare_image},
@@ -241,6 +241,14 @@ pub fn notify(spans: Vec<RichSpan>, level: UiNotifyLevel) {
 /// 纯文本通知：把 `text` 包成单个无样式 span 走 [`notify`]。
 pub fn notify_text(text: &str, level: UiNotifyLevel) {
     notify(vec![RichSpan::plain(text.to_string())], level);
+}
+
+/// 浮层 toast：发 `Toast` 请求，宿主没有浮层时退回状态栏，不进聊天区。
+pub fn notify_toast(text: &str, level: UiNotifyLevel) {
+    extensions::request_ui(ExtensionUiRequest::Toast {
+        text: text.to_string(),
+        level,
+    });
 }
 
 /// 命令输出通知：把聊天区消息级别映射成 UI 通知级别后发纯文本通知。

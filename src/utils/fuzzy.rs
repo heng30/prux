@@ -120,6 +120,33 @@ pub fn fuzzy_filter<'a, T>(
     results.into_iter().map(|(item, _)| item).collect()
 }
 
+/// 路径候选打分：文件名完全一致 > 文件名开头 > 文件名子串 > 仅完整路径子串，
+/// 命中时目录额外 +10；不命中返回 0。分数越高越靠前。
+pub fn path_score(path: &str, query: &str, is_dir: bool) -> i32 {
+    let lower_path = path.to_lowercase();
+    let lower_query = query.to_lowercase();
+    let name = lower_path.rsplit('/').next().unwrap_or(&lower_path);
+
+    let mut score = if lower_query.is_empty() {
+        1
+    } else if name == lower_query {
+        100
+    } else if name.starts_with(&lower_query) {
+        80
+    } else if name.contains(&lower_query) {
+        50
+    } else if lower_path.contains(&lower_query) {
+        30
+    } else {
+        0
+    };
+
+    if is_dir && score > 0 {
+        score += 10;
+    }
+    score
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -160,5 +187,20 @@ mod tests {
             .collect();
         // login(0 词边界) 在 clone 前面；model/export 不含 lo
         assert_eq!(got, vec!["login", "clone"]);
+    }
+
+    /// 打分优先级：文件名完全匹配=100 > 开头=80 > 子串=50 > 仅完整路径子串=30；目录 +10。
+    #[test]
+    fn score_ranks_filenames_before_paths() {
+        assert_eq!(path_score("main.rs", "main.rs", false), 100);
+        assert_eq!(path_score("main.rs", "main", false), 80);
+        assert_eq!(path_score("xmain.rs", "main", false), 50);
+        assert_eq!(path_score("src/main", "src", false), 30);
+        assert!(path_score("main.rs", "main", false) > path_score("xmain.rs", "main", false));
+        assert!(path_score("xmain.rs", "main", false) > path_score("src/main", "src", false));
+        assert_eq!(path_score("adir", "ad", true), 90);
+        // 不命中 = 0；空查询每条都算命中（排序只剩层级/长度/字典序）
+        assert_eq!(path_score("main.rs", "zzz", false), 0);
+        assert_eq!(path_score("main.rs", "", false), 1);
     }
 }

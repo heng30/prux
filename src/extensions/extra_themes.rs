@@ -19,6 +19,9 @@ use crate::{
 };
 use std::{path::PathBuf, sync::Arc};
 
+/// 扩展名
+pub const EXT: &str = "extra-themes";
+
 /// 额外主题清单：(文件名, 嵌入内容)。
 /// 文件名用 `<name>.json`，与 [`Theme::load`] 的 `themes/<name>.json` 查找约定一致。
 const EXTRA_THEMES: &[(&str, &str)] = &[
@@ -62,7 +65,7 @@ impl ExtraThemes {
 impl Extension for ExtraThemes {
     /// 返回固定扩展名 `extra-themes`。
     fn name(&self) -> &str {
-        "extra-themes"
+        EXT
     }
 
     /// 返回 `/extension` 面板展示的一句话描述。

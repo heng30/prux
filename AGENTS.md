@@ -41,10 +41,14 @@ git 历史以「同步 pi-vX.Y.Z」为节奏推进，与上游保持行为/文�
 | `cli/` | CLI 业务：参数解析（clap）、文件参数、初始消息、会话选择、模型列表、项目信任、`auth` / `mcp` 子命令 | 依赖 `core`、`utils` |
 | `core/` | 核心：模型调用、Agent 循环、会话、压缩、工具、扩展机制、设置 | 见下方三层 |
 | `extensions/` | 内置扩展（编译期静态注册），每个模块一个功能 | 依赖 `core`（trait 面）、`utils` |
-| `modes/` | 运行模式：交互 TUI（`interactive/` 下 `app.rs` / `panel.rs` / `render/` / `handlers/` / `worker.rs`） | **只向下**依赖 `core` 与 `cli` |
+| `modes/` | 运行模式：交互 TUI（`tui/` 下 `app.rs` / `panel.rs` / `render/` / `handlers/` / `worker.rs`）与桌面 GUI（`gui/`，`#[cfg(feature = "gui")]`，二进制 `prux-gui`） | **只向下**依赖 `core` 与 `cli` |
 | `utils/` | 通用工具：diff、mime、路径、截断、终端、网络、图片、cron、zip 等 | **不依赖 `core`** |
 | `mermaid_text/` | 内嵌第三方库：Mermaid 源码 → Unicode 盒图（上游 `mermaid-text` 0.57.0，含其内部 `parser` / `render` / `layout` 子树） | 只依赖 `ascii-dag` / `chrono` / `unicode-width`，不是本仓分层的一部分 |
 | `test_support/` | 测试接缝：线程本地目录/HOME override、超时护栏 | 仅 `cfg(test)` 或 `test-support` feature 编译 |
+| `bin/prux_gui.rs` | GUI 二进制入口：自建 tokio runtime → `cli::startup::bootstrap()` → `modes::gui::run()` | 仅 `--features gui` 构建 |
+
+两个二进制共用 `cli/startup.rs::bootstrap()`（= 进程初始化 + 参数/会话/模型/工具/技能装配），
+启动逻辑只能加在那里：写进 `main.rs` 的 GUI 就看不到。
 
 `core` 内部三层（`src/core.rs` 顶部是唯一真源，此处摘要）：
 
@@ -182,6 +186,12 @@ cargo clippy         # toolchain 已带 clippy 组件
   跨平台改动要自己在本地补跑。
 - `tests/` 下的集成测试依赖 `test-support` feature（`Cargo.toml` 里自身 dev-dependency 打开）。
   新增测试接缝时同步更新 `src/test_support/mod.rs` 的用法说明。
+- **手工跑二进制前先 `cargo build --bin prux --features gui`（或 `make build-gui`）**：`cargo test` 构建
+  集成测试（`--tests`）时会按 dev-dependency 的 feature 统一**重链 `target/debug/prux-gui`**
+  （只跑 `--lib` 不会，哈希不变），那版二进制带 `test-support`，
+  `agent_dir()` 指向测试沙箱 `/tmp/prux-auth-tests`。直接启动它看不到自己的 `settings.json` / 会话 /
+  已启用扩展（模型退回 `deepseek/deepseek-v4-pro`、proxy 不再自动监听、侧栏只剩沙箱里的会话），
+  极易被误诊成「配置丢了」。用 `strings target/debug/prux-gui | grep prux-auth-tests` 可确认是不是这版。
 - 涉及 TUI 的验证优先 `ratatui::backend::TestBackend`（见「本地环境」）；涉及网络的用
   `run_with_timeout` 包住测试体，避免挂起。
 

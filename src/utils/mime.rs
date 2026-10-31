@@ -1,5 +1,7 @@
 //! MIME 检测：魔数检测（仅支持可直接 inline 的格式）。
 
+use std::path::Path;
+
 /// 从 `offset` 处读 4 字节大端整数；越界时返回 0。
 fn u32_be(data: &[u8], offset: usize) -> u32 {
     data.get(offset..offset + 4)
@@ -79,6 +81,16 @@ fn is_bmp(data: &[u8]) -> bool {
         return false;
     };
     planes == 1 && matches!(bpp, 1 | 4 | 8 | 16 | 24 | 32)
+}
+
+/// 按扩展名判断路径是不是图片（`@` 补全的图片过滤与对话流缩略图共用同一份清单）。
+pub fn is_image_path(path: &Path) -> bool {
+    const IMAGE_EXTENSIONS: &[&str] = &[
+        "png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "tif", "tiff",
+    ];
+    path.extension()
+        .map(|ext| ext.to_string_lossy().to_lowercase())
+        .is_some_and(|ext| IMAGE_EXTENSIONS.contains(&ext.as_str()))
 }
 
 /// 通过魔数检测图片 MIME 类型；非图片返回 None

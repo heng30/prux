@@ -211,7 +211,12 @@ pub struct ProcessSnapshot {
 impl ProcessSnapshot {
     /// 扫一次系统进程表（拿不到的信息退化成空串，不会因此报错）。
     pub fn scan() -> Self {
-        let mut system = System::new();
+        let Ok(mut system) = System::new() else {
+            return Self {
+                processes: Vec::new(),
+            };
+        };
+
         system.refresh_processes_specifics(
             ProcessesToUpdate::All,
             true,

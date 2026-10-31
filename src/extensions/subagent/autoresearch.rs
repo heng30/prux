@@ -44,12 +44,11 @@ use super::{
     util_notify, util_notify_spans,
 };
 use crate::{
-    core::extensions::{DockLine, DockSpan, RichSpan, ToolExecCtx, UiNotifyLevel},
+    core::extensions::{CommandHost, DockLine, DockSpan, RichSpan, ToolExecCtx, UiNotifyLevel},
     extensions::{
         command_arg,
         util::{format_tokens, spinner_frame, truncate_chars},
     },
-    modes::interactive::app::App,
     utils::{
         glyphs::{DEF_DONE, DEF_FAILED, DEF_QUEUED, DEF_STOPPED},
         time::format_duration,
@@ -769,7 +768,7 @@ fn list_spans() -> Vec<RichSpan> {
 ///
 /// 无参列出全部作业；`stop <id>` 停一个未终结作业；其余按"目标 + 可选轮次上限"启动。
 /// 返回值与其它扩展命令一致：恒为 `false`（不退出 TUI）。
-pub(crate) fn command(_app: &mut App, raw: &str) -> bool {
+pub(crate) fn command(_host: &mut dyn CommandHost, raw: &str) -> bool {
     let arg = command_arg(raw).trim();
     if arg.is_empty() {
         util_notify_spans(list_spans(), UiNotifyLevel::Info);

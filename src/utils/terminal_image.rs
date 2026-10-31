@@ -128,7 +128,7 @@ pub fn image_bottom_pad(img_w: u32, img_h: u32, cols: u16, rows: u16, font: (u16
 /// 渲染样式里的底色 → [`PadRgb`]：`Rgb` 取原值，`Indexed` 按标准 xterm 调色板近似。
 ///
 /// `Reset`（终端默认色，实际显示什么由终端决定）与命名的 ANSI 色没有可信 RGB，返回 `None`。
-/// 主题色经 [`crate::modes::interactive::theme::color`] 只会得到 `Rgb` / `Indexed` / `Reset`。
+/// 主题色经 [`crate::modes::tui::theme::color`] 只会得到 `Rgb` / `Indexed` / `Reset`。
 pub fn style_bg_rgb(color: Color) -> PadRgb {
     match color {
         Color::Rgb(r, g, b) => Some([r, g, b]),

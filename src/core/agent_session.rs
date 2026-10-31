@@ -1405,7 +1405,7 @@ impl Agent {
     }
 
     /// 设置 thinking 级别但不 emit：worker 的 SetThinking 命令回执已类型化，
-    /// 直接经 run_in_event_loop 调 `crate::modes::interactive::handlers::events::on_thinking_level_changed`，不再走 JSON sink。
+    /// 直接经 run_in_event_loop 调 `crate::modes::tui::handlers::events::on_thinking_level_changed`，不再走 JSON sink。
     /// `persist` 为 true 时，设置成功后才写 defaultThinkingLevel（对齐 pi `setThinkingLevel(level, {persist})`，持久化请求的级别而非钳制后的值）。
     pub fn set_thinking_level_silent(&mut self, level: &str, persist: bool) -> String {
         let effective = self.apply_thinking_level(level).0;

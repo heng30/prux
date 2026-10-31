@@ -218,6 +218,25 @@ pub fn format_rate(bytes_per_s: f64) -> String {
     format!("{}/s", format_bytes(bytes_per_s.max(0.0).round() as u64))
 }
 
+/// 工具耗时格式化：
+/// <60s → `X.Xs`；≥60s → `Xm Ys`；≥1h → `Xh Ym Zs`。
+pub fn format_tool_duration(ms: u64) -> String {
+    let seconds = ms as f64 / 1000.0;
+    if seconds < 60.0 {
+        return format!("{seconds:.1}s");
+    }
+
+    let total = seconds as u64;
+    let minutes = total / 60;
+    let remainder = total % 60;
+
+    if minutes < 60 {
+        return format!("{minutes}m {remainder}s");
+    }
+
+    format!("{}h {}m {remainder}s", minutes / 60, minutes % 60)
+}
+
 /// token 数量的紧凑展示：<1000 原样，否则 `1.2K` / `3.4M`（1 位小数）。
 pub fn format_tokens(value: u64) -> String {
     format_tokens_precise::<1>(value)
@@ -423,6 +442,18 @@ mod tests {
         assert_eq!(format_bytes(1024 * 1024 * 3 / 2), "1.5 MiB");
         assert_eq!(format_rate(2048.0), "2.0 KiB/s");
         assert_eq!(format_rate(0.0), "0 B/s");
+    }
+
+    /// 超出宽度才截断并补省略号；宽度按显示格子算（CJK 占 2）。
+    #[test]
+    fn fit_display_appends_ellipsis_only_when_cut() {
+        assert_eq!(fit_display("abc", 3), "abc");
+        let long = "x".repeat(200);
+        let cut = fit_display(&long, 160);
+        assert_eq!(cut.chars().count(), 160);
+        assert!(cut.ends_with('…'));
+        assert_eq!(fit_display("中文", 4), "中文");
+        assert_eq!(fit_display("中文", 3), "中…");
     }
 
     #[test]

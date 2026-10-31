@@ -910,7 +910,22 @@ impl Extension for MyExtension {
 
 ## 命令 / 快捷键 / CLI flag
 
-- **斜杠命令**：`commands()` 声明「存在性」，`on_registered()` 里用 `register_slash_command` 接线执行入口。`busy_safe` 表示命令在流式输出时能否安全执行（仅 handler 完全不锁 agent 的只读命令置 `true`，如 `/todos`；需读写 agent 的如 `/plan` 置 `false`）。
+- **斜杠命令**：`commands()` 声明「存在性」，`on_registered()` 里接线执行入口，二选一：
+  - `register_host_command(扩展名, 命令名, handler)`：`handler` 形如
+    `fn(&mut dyn CommandHost, &str) -> bool`，正文只用宿主能力面——追加消息（`push_message` /
+    `push_markdown`）、停靠面板（`show_dock` / `dock_visible`）、开扩展设置面板
+    （`open_extension_settings`）、发消息给 agent（`send_prompt`）、模型（`current_model` /
+    `switch_model`）、会话与历史（`session_path` / `transcript_excerpt`）、状态栏提示
+    （`set_status`）、`cwd`、`is_busy`——因此终端与桌面 GUI 执行同一份代码。返回值表示是否退出宿主。
+  - `register_slash_command(扩展名, 命令名, handler)`：`handler` 形如 `fn(&mut App, &str) -> bool`，
+    只给正文必须直接驱动终端界面内部状态（自绘覆盖层、面板、表单）的命令。这类命令在桌面 GUI 里
+    回「仅终端可用」，不要为了凑两宿主而在 GUI 里写空实现。当前只有打开技能面板的 `/skills` 用它
+    （桌面窗口有自己的技能面板，命令在窗口里由该面板接管）。
+  - 需要面板但不关心长什么样的命令（开设置面板、选择列表、覆盖层）不要用上面那条：走
+    `host.open_extension_settings(扩展名)` 或 `request_ui(ExtensionUiRequest::Select / ShowOverlay)`，
+    两个宿主都会渲染。
+  - 两端写同一张注册表，`busy_safe` 仍是「流式输出时能否安全执行」的声明（仅 handler 完全不锁
+    agent 的只读命令置 `true`，如 `/todos`；需读写 agent 的如 `/plan` 置 `false`）。
 - **子命令提示**：`ExtensionCommand.subcommands`（`SubcommandDef { name, description }` 列表）声明二级候选。用户输入 `/<命令> ` 后输入框弹出子命令面板，空格后的第一个词在面板内模糊过滤；Tab 只补全（`/goal pause `），Enter 补全并立即执行（与 `/` 命令面板同语义）。出现第二个空白（已在写自由参数）或查询无匹配即关闭面板。声明顺序 = 候选顺序（空查询时默认选中第一项）；清单只是候选元数据，解析仍在命令 handler 里，两者需保持一致（建议用同一个 `const` 声明并配一致性测试）。
 - **快捷键**：`keybindings()` 声明（如 `plan-mode.toggle` → `alt+p`），`on_registered()` 里用 `register_extension_keybinding` 接线。不进 keybindings.json 定制体系（见 [keybindings.md](keybindings.md)）；内置快捷键优先，扩展快捷键由 TUI 键盘分发兜底遍历，busy 态跳过整段分发。
 - **CLI flag**：`cli_flags()` 声明开关（如 `--plan`），仅已启用扩展注入 clap 解析，`apply_cli_flag` 回传；声明 `takes_value: true` 的会收一个值（如 `--subagents-workflow-file <path>`）并走 `apply_cli_flag_value`。未启用扩展的 flag 不注入，`--xxx` 按未知参数报错。

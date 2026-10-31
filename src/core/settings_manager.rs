@@ -861,6 +861,33 @@ pub fn write_theme(name: &str) -> Result<()> {
     })
 }
 
+/// settings.json: `theme-gui`（GUI 明暗主题名；与 TUI 的 `theme` 各自独立）。
+/// 缺失为 `None`：启动时回落 `--theme`，再回落暗色。
+pub fn read_settings_theme_gui() -> Option<String> {
+    settings_value()
+        .get("theme-gui")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}
+
+/// 写回 settings.json 的 `theme-gui`（GUI 外观面板切换时调用，重启后恢复）。
+pub fn write_settings_theme_gui(name: &str) -> Result<()> {
+    write_settings_value("theme-gui", json!(name))
+}
+
+/// settings.json: `sidebar-gui`（GUI 左侧会话栏是否展开；缺失默认 true）。
+pub fn read_settings_sidebar_gui() -> bool {
+    settings_value()
+        .get("sidebar-gui")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true)
+}
+
+/// 写回 settings.json 的 `sidebar-gui`（GUI 展开/收起会话栏时调用，重启后恢复）。
+pub fn write_settings_sidebar_gui(visible: bool) -> Result<()> {
+    write_settings_value("sidebar-gui", json!(visible))
+}
+
 /// 写回**全局** settings.json 的 disabledExtensions（read-modify-write，保留其他键）。
 /// /extension 面板切换启用状态后调用；项目级禁用靠手写项目 `.prux/settings.json`
 /// （读取侧与全局取并集，见 [`read_disabled_extensions`]）。
@@ -982,6 +1009,31 @@ pub fn write_settings_expose_session_environment(enabled: bool) -> Result<()> {
 /// 写回 settings.json 的 autoCompact（read-modify-write，保留其他键）。
 pub fn write_settings_auto_compact(enabled: bool) -> Result<()> {
     write_settings_value("autoCompact", json!(enabled))
+}
+
+/// settings.json: uiScale（GUI 界面缩放系数；非有限值或 <= 0 视为未设置）。
+/// 缺省 1.5：设计稿按 13px 正文画，直接照搬在高分屏上偏小。
+pub fn read_settings_ui_scale() -> f32 {
+    settings_value()
+        .get("uiScale")
+        .and_then(|v| v.as_f64())
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .map(|v| v as f32)
+        .unwrap_or(1.5)
+}
+
+/// 写回 settings.json 的 uiScale；`None` 删除该键（回落 1.5）。
+/// 按一位小数量化：f32 直接转 f64 会写出 `2.0999999046325684`。
+pub fn write_settings_ui_scale(scale: Option<f32>) -> Result<()> {
+    match scale {
+        Some(scale) => {
+            let rounded = (f64::from(scale) * 10.0).round() / 10.0;
+            write_settings_value("uiScale", json!(rounded))
+        }
+        None => modify_global_settings(|obj| {
+            obj.remove("uiScale");
+        }),
+    }
 }
 
 /// settings.json: exposeSessionEnvironment（默认 true）
@@ -2764,6 +2816,47 @@ mod tests {
 
             let _ = std::fs::remove_file(&path);
         });
+    }
+
+    /// `theme-gui`：GUI 主题与 TUI 的 `theme` 各存一键，互不覆盖。
+    #[test]
+    fn theme_gui_round_trips_independently_of_theme() {
+        let _ad = crate::test_support::AgentDirGuard::temp();
+
+        assert_eq!(read_settings_theme_gui(), None, "未设置时为空");
+
+        write_theme("synthwave").unwrap();
+        write_settings_theme_gui("light").unwrap();
+
+        assert_eq!(read_settings_theme_gui().as_deref(), Some("light"));
+        assert_eq!(
+            settings_value()["theme"],
+            json!("synthwave"),
+            "TUI 主题不受影响"
+        );
+    }
+
+    /// `sidebar-gui`：缺失默认展开，写入后可读回。
+    #[test]
+    fn sidebar_gui_defaults_to_true_and_round_trips() {
+        let _ad = crate::test_support::AgentDirGuard::temp();
+
+        assert!(read_settings_sidebar_gui(), "未设置时默认展开");
+
+        write_settings_sidebar_gui(false).unwrap();
+
+        assert!(!read_settings_sidebar_gui());
+    }
+
+    /// `uiScale`：f32 直接转 f64 会落成 `2.0999999046325684`，写盘必须是一位小数。
+    #[test]
+    fn ui_scale_is_written_with_one_decimal() {
+        let _ad = crate::test_support::AgentDirGuard::temp();
+
+        write_settings_ui_scale(Some(2.1)).unwrap();
+
+        let text = std::fs::read_to_string(agent_dir().join("settings.json")).unwrap();
+        assert!(text.contains("\"uiScale\": 2.1"), "{text}");
     }
 
     /// `showImages`：缺失默认 false（不探测终端、不内联图片），写入后可读回。

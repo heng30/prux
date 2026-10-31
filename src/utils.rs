@@ -2,6 +2,7 @@
 //!
 //! 不依赖 core/，供 core/ 与 cli/、modes/ 使用。
 
+pub mod async_task;
 pub mod clipboard;
 pub mod color;
 pub mod cron;
@@ -11,6 +12,7 @@ pub mod env;
 pub mod file_lock;
 pub mod find;
 pub mod fuzzy;
+pub mod geometry;
 pub mod glyphs;
 pub mod http;
 pub mod ignore;
@@ -18,6 +20,7 @@ pub mod image;
 pub mod mime;
 pub mod net;
 pub mod output_files;
+pub mod path_suggest;
 pub mod paths;
 pub mod process;
 pub mod proxy;

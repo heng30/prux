@@ -8,9 +8,8 @@ use super::{
     record_run, reset_turn_state, run, state,
 };
 use crate::{
-    core::extensions::{SubcommandDef, UiNotifyLevel},
+    core::extensions::{CommandHost, SubcommandDef, UiNotifyLevel},
     extensions::{command_arg, util::notify_text},
-    modes::interactive::app::{App, MsgLevel},
 };
 use config::{Check, Scope};
 
@@ -47,7 +46,7 @@ pub(super) const SUBCOMMANDS: &[SubcommandDef] = &[
 ];
 
 /// `/vet` 命令入口。返回值恒为 `false`（不退出 TUI：斜杠命令的 `true` 是结束 TUI 的信号）。
-pub(super) fn handle(st: &mut App, raw: &str) -> bool {
+pub(super) fn handle(host: &mut dyn CommandHost, raw: &str) -> bool {
     let arg = command_arg(raw).trim();
     let (sub, rest) = match arg.split_once(char::is_whitespace) {
         Some((head, tail)) => (head, tail.trim()),
@@ -55,70 +54,63 @@ pub(super) fn handle(st: &mut App, raw: &str) -> bool {
     };
 
     match sub {
-        "" | "settings" => toggle_settings(st),
-        "run" => run_now(st),
-        "status" => status(st),
-        "detect" => detect(st, rest),
-        "add" => add(st, rest),
-        "remove" => remove(st, rest),
+        "" | "settings" => toggle_settings(host),
+        "run" => run_now(host),
+        "status" => status(host),
+        "detect" => detect(host, rest),
+        "add" => add(host, rest),
+        "remove" => remove(host, rest),
         "reset" => {
             reset_turn_state();
-            st.push_msg(
-                "vet: cleared this turn's check state".to_string(),
-                MsgLevel::Success,
+            host.push_message(
+                "vet: cleared this turn's check state",
+                UiNotifyLevel::Success,
             );
         }
-        other => st.push_msg(
-            format!(
+        other => host.push_message(
+            &format!(
                 "vet: unknown subcommand `{other}` (settings|run|status|detect|add|remove|reset)"
             ),
-            MsgLevel::Warning,
+            UiNotifyLevel::Warning,
         ),
     }
     false
 }
 
 /// `/vet` / `/vet settings`：打开（或关闭）本扩展的设置面板。
-fn toggle_settings(st: &mut App) {
-    if st.ext_settings.is_open_for(EXT) {
-        st.ext_settings.close();
-    } else {
-        st.ext_settings.open(EXT);
-    }
+fn toggle_settings(host: &mut dyn CommandHost) {
+    host.open_extension_settings(EXT);
 }
 
 /// `/vet run`：手动跑一遍全部检查（后台线程，结果回聊天区）。
-fn run_now(st: &mut App) {
+fn run_now(host: &mut dyn CommandHost) {
     let cwd = current_cwd();
     let cfg = config::load(&cwd);
     if cfg.checks.is_empty() {
-        st.push_msg(
-            format!(
+        host.push_message(
+            &format!(
                 "vet: no checks configured. Run /vet detect to see candidates, or /vet add <name> \
                  <command>. Config: {}",
                 config::global_config_path().display()
             ),
-            MsgLevel::Warning,
+            UiNotifyLevel::Warning,
         );
         return;
     }
 
     let Some(guard) = RunGuard::acquire() else {
-        st.push_msg(
-            "vet: checks are already running".to_string(),
-            MsgLevel::Warning,
-        );
+        host.push_message("vet: checks are already running", UiNotifyLevel::Warning);
         return;
     };
 
     let checks = cfg.checks.clone();
     let timeout = cfg.timeout;
-    st.push_msg(
-        format!(
+    host.push_message(
+        &format!(
             "vet: running {} check(s) in the background — results land here when done",
             checks.len()
         ),
-        MsgLevel::Info,
+        UiNotifyLevel::Info,
     );
 
     // 手动路径不能卡住事件循环：扔到独立线程，结果经 UI 队列回聊天区。
@@ -136,7 +128,7 @@ fn run_now(st: &mut App) {
 }
 
 /// `/vet status`：配置来源、开关、检查项、本回合状态与最近结果。
-fn status(st: &mut App) {
+fn status(host: &mut dyn CommandHost) {
     let cwd = current_cwd();
     let cfg = config::load(&cwd);
 
@@ -196,23 +188,23 @@ fn status(st: &mut App) {
     }
     drop(st_state);
 
-    st.push_msg(lines.join("\n"), MsgLevel::Info);
+    host.push_message(&lines.join("\n"), UiNotifyLevel::Info);
 }
 
 /// `/vet detect [--write]`：按项目标记给出候选检查，`--write` 直接写进全局配置。
-fn detect(st: &mut App, rest: &str) {
+fn detect(host: &mut dyn CommandHost, rest: &str) {
     let write = rest.split_whitespace().any(|t| t == DETECT_WRITE);
     let cwd = current_cwd();
     let candidates = config::detect(&cwd);
 
     if candidates.is_empty() {
-        st.push_msg(
-            format!(
+        host.push_message(
+            &format!(
                 "vet: no project markers recognized in {}. Add checks yourself: /vet add <name> \
                  <command>",
                 cwd.display()
             ),
-            MsgLevel::Warning,
+            UiNotifyLevel::Warning,
         );
         return;
     }
@@ -244,32 +236,31 @@ fn detect(st: &mut App, rest: &str) {
         }
     }
 
-    st.push_msg(
-        lines.join("\n"),
+    host.push_message(
+        &lines.join("\n"),
         if write {
-            MsgLevel::Success
+            UiNotifyLevel::Success
         } else {
-            MsgLevel::Info
+            UiNotifyLevel::Info
         },
     );
 }
 
 /// `/vet add [--project] [--optional] <name> <command...>`：新增或覆盖一条检查。
-fn add(st: &mut App, rest: &str) {
+fn add(host: &mut dyn CommandHost, rest: &str) {
     let (flags, positional) = split_flags(rest, &[ADD_PROJECT, ADD_OPTIONAL]);
     let Some(name) = positional.first().cloned() else {
-        st.push_msg(
-            "vet: usage: /vet add [--project] [--optional] <name> <command>".to_string(),
-            MsgLevel::Warning,
+        host.push_message(
+            "vet: usage: /vet add [--project] [--optional] <name> <command>",
+            UiNotifyLevel::Warning,
         );
         return;
     };
     let command = positional[1..].join(" ");
     if command.trim().is_empty() {
-        st.push_msg(
-            "vet: missing command. Usage: /vet add [--project] [--optional] <name> <command>"
-                .to_string(),
-            MsgLevel::Warning,
+        host.push_message(
+            "vet: missing command. Usage: /vet add [--project] [--optional] <name> <command>",
+            UiNotifyLevel::Warning,
         );
         return;
     }
@@ -287,26 +278,26 @@ fn add(st: &mut App, rest: &str) {
 
     let cwd = current_cwd();
     match config::upsert_check(scope, &cwd, &check) {
-        Ok(replaced) => st.push_msg(
-            format!(
+        Ok(replaced) => host.push_message(
+            &format!(
                 "vet: {} `{}` in the {} config",
                 if replaced { "replaced" } else { "added" },
                 check.name,
                 scope.as_str()
             ),
-            MsgLevel::Success,
+            UiNotifyLevel::Success,
         ),
-        Err(err) => st.push_msg(format!("vet: {err}"), MsgLevel::Error),
+        Err(err) => host.push_message(&format!("vet: {err}"), UiNotifyLevel::Error),
     }
 }
 
 /// `/vet remove [--project] <name>`：删除一条检查。
-fn remove(st: &mut App, rest: &str) {
+fn remove(host: &mut dyn CommandHost, rest: &str) {
     let (flags, positional) = split_flags(rest, &[ADD_PROJECT]);
     let Some(name) = positional.first().cloned() else {
-        st.push_msg(
-            "vet: usage: /vet remove [--project] <name>".to_string(),
-            MsgLevel::Warning,
+        host.push_message(
+            "vet: usage: /vet remove [--project] <name>",
+            UiNotifyLevel::Warning,
         );
         return;
     };
@@ -319,18 +310,18 @@ fn remove(st: &mut App, rest: &str) {
 
     let cwd = current_cwd();
     match config::remove_check(scope, &cwd, &name) {
-        Ok(true) => st.push_msg(
-            format!("vet: removed `{name}` from the {} config", scope.as_str()),
-            MsgLevel::Success,
+        Ok(true) => host.push_message(
+            &format!("vet: removed `{name}` from the {} config", scope.as_str()),
+            UiNotifyLevel::Success,
         ),
-        Ok(false) => st.push_msg(
-            format!(
+        Ok(false) => host.push_message(
+            &format!(
                 "vet: no check named `{name}` in the {} config",
                 scope.as_str()
             ),
-            MsgLevel::Warning,
+            UiNotifyLevel::Warning,
         ),
-        Err(err) => st.push_msg(format!("vet: {err}"), MsgLevel::Error),
+        Err(err) => host.push_message(&format!("vet: {err}"), UiNotifyLevel::Error),
     }
 }
 

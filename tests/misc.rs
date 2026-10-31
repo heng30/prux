@@ -1,7 +1,7 @@
-//! 杂项模块集成测试：core::extensions、modes::interactive::editor、core::export_html。
+//! 杂项模块集成测试：core::extensions、modes::tui::editor、core::export_html。
 
 use prux::core::provider::AgentMessage;
-use prux::modes::interactive::editor::Editor;
+use prux::modes::tui::editor::Editor;
 use prux::test_support::HomeGuard;
 
 // ---------- core::extensions ----------
@@ -48,7 +48,7 @@ fn extension_trait_defines_tools_and_dispatch() {
     assert!(ext.execute_tool("nope", &serde_json::json!({})).is_err());
 }
 
-// ---------- modes::interactive::editor ----------
+// ---------- modes::tui::editor ----------
 
 #[test]
 fn editor_basic_editing() {

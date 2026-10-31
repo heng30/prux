@@ -108,7 +108,7 @@ impl russh::server::Handler for TestSession {
     async fn auth_publickey(
         &mut self,
         user: &str,
-        _public_key: &russh::keys::PublicKey,
+        _public_key: russh::server::VerifiedPublicKey<'_>,
     ) -> Result<Auth, Self::Error> {
         if user == PASSWORD_USER {
             return Ok(Auth::Reject {
@@ -555,7 +555,7 @@ async fn connects_runs_remote_tools_and_enforces_host_keys() {
 
     // 1b) `/ssh disconnect <target>`：拼错/半截的 target 不得动别的连接，命中的才断
     // （旧实现用 `command.contains(arg)` 扫 known，`127.0.0` 这种半截串会把连接一并断掉）
-    let mut app = crate::modes::interactive::app::App::new();
+    let mut app = crate::modes::tui::app::App::new();
     command::handle(&mut app, "ssh disconnect 127.0.0");
     assert_eq!(transport::connected().len(), 1, "拼错的 target 断开了连接");
     command::handle(&mut app, &format!("ssh disconnect {key}"));

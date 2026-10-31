@@ -16,6 +16,7 @@
 //! 并由 [`Extension::wants_redraw`] 驱动重绘。
 
 use crate::{
+    core::extensions::{CommandHost, UiNotifyLevel},
     core::{
         extensions::{
             DockLine, DockSpan, Extension, ExtensionCommand, ExtensionHook, ExtensionMode,
@@ -31,11 +32,11 @@ use crate::{
         ACCENT, DIM, EXTENSION_FACTORIES, ExtensionFactory, MUTED, PRIORITY_CACHE_USAGE,
         command_arg,
     },
-    modes::interactive::{
-        app::{App, MsgLevel},
-        handlers::register_slash_command,
+    modes::tui::handlers::register_host_command,
+    utils::{
+        async_task,
+        glyphs::{DEF_ARROW_UP_DOWN, DEF_BAR_EMPTY, DEF_BAR_FULL, DEF_SPARK_BLOCKS},
     },
-    utils::glyphs::{DEF_ARROW_UP_DOWN, DEF_BAR_EMPTY, DEF_BAR_FULL, DEF_SPARK_BLOCKS},
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -241,7 +242,7 @@ impl Extension for CacheUsage {
 
     /// 注册 `/cache-usage` 的 handler 到斜杠命令表。
     fn on_registered(&self) {
-        register_slash_command(EXT, "cache-usage", command_cache_usage);
+        register_host_command(EXT, "cache-usage", command_cache_usage);
     }
 
     /// 启动时记住当前会话文件（空参统计就查它）。
@@ -383,23 +384,23 @@ fn parse_args(raw: &str) -> Result<Args, String> {
 }
 
 /// `/cache-usage` handler：解析参数 → 收集会话文件 → 后台扫描 → 打开面板。
-fn command_cache_usage(st: &mut App, raw: &str) -> bool {
+fn command_cache_usage(host: &mut dyn CommandHost, raw: &str) -> bool {
     let args = match parse_args(command_arg(raw)) {
         Ok(args) => args,
         Err(msg) => {
-            st.push_msg(msg, MsgLevel::Warning);
+            host.push_message(&msg, UiNotifyLevel::Warning);
             return false;
         }
     };
 
     let files = match collect_files(&args) {
         Ok(files) if files.is_empty() => {
-            st.push_msg("No saved sessions to scan yet.".to_string(), MsgLevel::Info);
+            host.push_message("No saved sessions to scan yet.", UiNotifyLevel::Info);
             return false;
         }
         Ok(files) => files,
         Err(msg) => {
-            st.push_msg(msg, MsgLevel::Warning);
+            host.push_message(&msg, UiNotifyLevel::Warning);
             return false;
         }
     };
@@ -470,7 +471,10 @@ fn session_label(path: &Path) -> String {
         .unwrap_or_else(|| path.to_string_lossy().to_string())
 }
 
-/// 打开面板并在后台完成扫描（无 tokio 运行时则就地扫描，便于单测）。
+/// 打开面板并在后台完成扫描（没有可用运行时则就地扫描，便于单测）。
+///
+/// 运行时靠 [`async_task::handle`] 取：GUI 的命令跑在视图线程上，那里没有
+/// `Handle::try_current`，以前会退化成同步扫描——会话一多连面板都弹不出来。
 fn start_scan(args: Args, files: Vec<(String, PathBuf)>) {
     let id = next_ui_id();
     {
@@ -486,11 +490,9 @@ fn start_scan(args: Args, files: Vec<(String, PathBuf)>) {
     let filter = args.provider.clone();
     let scan = move || scan_files(&files, filter.as_deref(), scope);
 
-    match tokio::runtime::Handle::try_current() {
-        Ok(handle) => {
-            handle.spawn_blocking(move || finish_scan(id, scan()));
-        }
-        Err(_) => finish_scan(id, scan()),
+    match async_task::handle() {
+        Some(handle) => _ = handle.spawn_blocking(move || finish_scan(id, scan())),
+        None => finish_scan(id, scan()),
     }
 }
 
@@ -826,6 +828,7 @@ fn level_char(percent: f64) -> char {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::modes::tui::app::App;
     use crate::{
         core::{
             extensions::OverlayKey,

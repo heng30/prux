@@ -4,7 +4,7 @@
 //! - `modes/interactive/render/markdown.rs` → `ratatui::text::Line<Span<Style>>`（聊天区）；
 //! - `core/extensions/markdown.rs` → `DockLine`（扩展覆盖层）。
 //!
-//! 依赖方向单向向上，`core` 不能依赖 `modes::interactive`，两边的**输出类型**也互不相干，
+//! 依赖方向单向向上，`core` 不能依赖 `modes::tui`，两边的**输出类型**也互不相干，
 //! 所以渲染成各自类型的那部分必须各留一份。但"算列宽"是只依赖单元格**文本**的纯算法，
 //! 放在这里共享：两边各自把单元格文本喂进来，拿回每列宽度后各自渲染。
 

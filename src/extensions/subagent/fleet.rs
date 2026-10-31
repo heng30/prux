@@ -1571,7 +1571,7 @@ mod tests {
     /// 定时任务列表：与其它列表一样两端环绕。
     ///
     /// TUI 侧把 Ctrl+J/K 翻成 [`OverlayKey::Down`]/[`Up`]（见
-    /// `modes::interactive::handlers::overlay::to_overlay_key`），所以
+    /// `modes::tui::handlers::overlay::to_overlay_key`），所以
     /// Ctrl+J/K 自动继承这里的环绕行为。
     #[test]
     fn schedules_list_navigation_wraps() {

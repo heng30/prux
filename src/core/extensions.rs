@@ -13,6 +13,7 @@ mod cancel;
 mod dock;
 mod footer;
 mod hooks;
+mod host;
 mod overlay;
 mod registry;
 mod renderers;
@@ -56,6 +57,10 @@ pub use cancel::{
 pub use dock::{DockLine, DockSection, DockSpan, dock_sections};
 pub use footer::{FooterCtx, FooterExtension, FooterLine, FooterSpan, git_branch};
 pub use hooks::ExtensionHook;
+pub use host::{
+    BoxedHandler, CommandHost, SlashCommandHandler, command_handler, register_command,
+    register_host_command,
+};
 pub use markdown::render as render_markdown_lines;
 pub use overlay::{
     OverlayEditor, OverlayEvent, OverlayInput, OverlayKey, OverlaySize, OverlayView, overlay_event,
@@ -190,7 +195,7 @@ pub struct ExtensionCommand {
     pub busy_safe: bool,
     /// 该命令的子命令（`/goal pause` 的 `pause` 等）。
     ///
-    /// 供 TUI 输入框在 `/<命令> ` 后弹出子命令候选列表；声明顺序 = 候选顺序
+    /// 供输入框在 `/<命令> ` 后弹出子命令候选列表（终端与桌面 GUI 共用）；声明顺序 = 候选顺序
     /// （即空查询时默认选中的第一项）。空表示该命令没有子命令。
     pub subcommands: Vec<SubcommandDef>,
 }
@@ -486,7 +491,7 @@ pub trait Extension: Send + Sync {
     ///
     /// 命令候选列表与分发的"存在性"由这些声明动态决定：
     /// 扩展禁用或当前模式不可用时其命令自动移除。执行入口由扩展在自身初始化处经
-    /// [`crate::modes::interactive::handlers::register_slash_command`] 注册。
+    /// [`crate::modes::tui::handlers::register_slash_command`] 注册。
     fn commands(&self) -> Vec<ExtensionCommand> {
         Vec::new()
     }

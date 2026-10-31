@@ -51,3 +51,11 @@ macro_rules! embedded {
         include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/", $rel))
     };
 }
+
+/// 内嵌二进制资源：`assets/` 目录（图片、字体等 `include_str!` 拒收的非 UTF-8 文件）。
+#[macro_export]
+macro_rules! embedded_bytes {
+    ($rel:literal) => {
+        include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/", $rel))
+    };
+}

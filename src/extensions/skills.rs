@@ -26,7 +26,7 @@ use crate::{
         skills,
     },
     extensions::{EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_SKILLS},
-    modes::interactive::{app::App, handlers::register_slash_command},
+    modes::tui::{app::App, handlers::register_slash_command},
 };
 use std::{path::PathBuf, sync::Arc};
 

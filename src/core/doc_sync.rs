@@ -25,6 +25,7 @@ const DOCS: &[(&str, &str)] = &[
     ("skills.md", embedded!("docs/skills.md")),
     ("prompt-templates.md", embedded!("docs/prompt-templates.md")),
     ("tui.md", embedded!("docs/tui.md")),
+    ("gui.md", embedded!("docs/gui.md")),
     ("extensions.md", embedded!("docs/extensions.md")),
     ("virtual-models.md", embedded!("docs/virtual-models.md")),
     (
