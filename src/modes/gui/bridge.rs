@@ -16,6 +16,13 @@ pub enum GuiEvent {
     Notice(String),
     /// 会话历史（切换/新建会话后推一次，GUI 据此重建 transcript）
     History(Vec<AgentMessage>),
+    /// `/rewind` 回退成功：重建 transcript，并按 GUI 记录的选择把输入回填输入框
+    Rewound {
+        /// 回退后的消息历史（回退第一条 user 消息时为空）
+        messages: Vec<AgentMessage>,
+        /// 被回退的用户输入原文（`/rewind` 的「回填编辑器」选项用它）
+        removed_input: String,
+    },
     /// 会话状态快照：每次命令执行后与每个回合结束时推送，GUI 据此刷新顶栏/面板。
     Snapshot(Box<Snapshot>),
 }

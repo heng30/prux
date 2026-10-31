@@ -167,7 +167,6 @@ impl GuiApp {
             "trust" => self.open_trust_panel(cx),
             "name" => self.rename_current_session(cx),
             "copy" => self.copy_last_reply(cx),
-            "rewind" => _ = self.cmd_tx.send(AgentCommand::Rewind),
             "debug" if arg.is_empty() => core::extensions::CommandHost::debug_info(self),
             "compact" => {
                 _ = self

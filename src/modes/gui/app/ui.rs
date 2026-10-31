@@ -258,7 +258,8 @@ impl GuiApp {
                 self.abort_turn(cx);
                 _ = self.cmd_tx.send(AgentCommand::PromptMessage(*message));
             }
-            ExtensionUiRequest::RewindLastUserInput { .. } => {
+            ExtensionUiRequest::RewindLastUserInput { restore_to_editor } => {
+                self.pending_rewind_restore = restore_to_editor;
                 _ = self.cmd_tx.send(AgentCommand::Rewind);
             }
             ExtensionUiRequest::RebuildTools => {

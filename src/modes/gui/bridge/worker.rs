@@ -282,11 +282,21 @@ async fn apply(agent: &mut Agent, cmd: AgentCommand, events: &UnboundedSender<Gu
                 "entryId": id
             }));
         }
-        AgentCommand::Rewind => {
-            if let Err(e) = agent.rewind_last_user_input() {
-                _ = events.send(GuiEvent::Error(e.to_string()));
+        // 回退会改 agent.messages：不推 Rewound，界面上的最后一条输入与它的输出会继续挂着
+        AgentCommand::Rewind => match agent.rewind_last_user_input() {
+            Ok(Some(removed_input)) => {
+                _ = events.send(GuiEvent::Rewound {
+                    messages: agent.messages.clone(),
+                    removed_input,
+                });
             }
-        }
+            Ok(None) => {
+                _ = events.send(GuiEvent::Notice(
+                    "Nothing to rewind: no user input in the current session.".to_string(),
+                ));
+            }
+            Err(e) => _ = events.send(GuiEvent::Error(e.to_string())),
+        },
         // 其余命令（登录、导出、分享、bug report、fork、reload…）尚未在 GUI 侧接线
         _ => {}
     }

@@ -258,6 +258,8 @@ pub struct GuiApp {
     editor: Editor,
     /// 是否有一轮进行中
     busy: bool,
+    /// 待确认的 `/rewind` 回填选择：`true` = 回退后把输入回填输入框，`false` = 丢弃
+    pending_rewind_restore: bool,
     /// 运行中 steer 注入箱（与 agent 共享同一个队列）：忙碌时提交的文本排这里，
     /// run_loop 在回合内注入，不单独开一轮；未注入的条目显示在待发送区
     steer_inbox: Arc<Mutex<VecDeque<AgentMessage>>>,
@@ -421,6 +423,7 @@ impl GuiApp {
             transcript: Transcript::default(),
             editor: Editor::new(),
             busy: false,
+            pending_rewind_restore: false,
             steer_inbox,
             follow_ups: VecDeque::new(),
             meter: UsageMeter::default(),
@@ -546,15 +549,21 @@ impl GuiApp {
                 self.transcript.apply(&event, &self.cwd());
                 self.follow_bottom();
             }
-            GuiEvent::History(messages) => {
-                self.transcript = Transcript::from_messages(&messages, &self.cwd());
-                // 换会话后速率/耗时基线作废（累计用量可能小很多）
-                self.meter = UsageMeter::default();
-                // 上一份内容的实测高度对新内容无效，置空后按新内容重新量
-                self.flow_height.set(None);
-                // 换会话/重载历史总是回到最新内容，重新接管钉底
-                self.pinned_bottom.set(Some(px(0.)));
-                self.scroll_to_bottom();
+            GuiEvent::History(messages) => self.replace_history(messages),
+            GuiEvent::Rewound {
+                messages,
+                removed_input,
+            } => {
+                self.replace_history(messages);
+                if std::mem::take(&mut self.pending_rewind_restore) {
+                    self.editor.clear();
+                    self.editor.insert(&removed_input);
+                }
+                self.transcript.push_note(Note::Info(
+                    "Rewound last user input: it and all later output were removed from the context (history remains in the session tree)."
+                        .into(),
+                ));
+                self.follow_bottom();
             }
             GuiEvent::Notice(message) => {
                 // 命令/压缩/重载的结果常驻对话区（与 TUI 一致），而不是一闪而过的 toast
@@ -579,6 +588,18 @@ impl GuiApp {
                 }
             }
         }
+    }
+
+    /// 用完整消息历史重建对话流（切换/新建会话与 `/rewind` 共用）。
+    fn replace_history(&mut self, messages: Vec<AgentMessage>) {
+        self.transcript = Transcript::from_messages(&messages, &self.cwd());
+        // 换会话后速率/耗时基线作废（累计用量可能小很多）
+        self.meter = UsageMeter::default();
+        // 上一份内容的实测高度对新内容无效，置空后按新内容重新量
+        self.flow_height.set(None);
+        // 换会话/重载历史总是回到最新内容，重新接管钉底
+        self.pinned_bottom.set(Some(px(0.)));
+        self.scroll_to_bottom();
     }
 
     /// 让 transcript 跟随最新内容。

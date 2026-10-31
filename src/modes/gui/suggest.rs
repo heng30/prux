@@ -43,7 +43,6 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("thinking", "Set thinking level"),
     ("compact", "Compact context"),
     ("copy", "Copy last reply"),
-    ("rewind", "Rewind last input"),
     ("session", "Show current session info"),
     ("name", "Rename current session"),
     ("clone", "Clone current branch"),

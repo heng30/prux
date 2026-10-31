@@ -327,6 +327,11 @@
 
 ### Fixed
 
+- **`/rewind` works in the desktop GUI**: the command went straight to the agent, so the branch
+  moved back but the transcript kept showing the input and everything after it. It now runs the same
+  confirmation panel as the terminal UI (rewind & restore the input to the box / rewind & discard /
+  cancel) and rebuilds the transcript from the trimmed history.
+
 - **Images in the desktop GUI keep their aspect ratio**: `@image` references and pictures returned by
   a tool used to sit in a fixed square, so a wide screenshot left empty bars above and below. The
   thumbnail is now sized from the image itself — small pictures render at their own size, large ones
@@ -797,6 +802,10 @@
   路径），目录菜单给当前所在目录标上 `✓ current`。
 
 ## 修复
+
+- **桌面 GUI 的 `/rewind` 生效**：以前命令直接发给 agent，会话分支确实回退了，但对话区还挂着那条
+  输入和它之后的全部输出。现在走与终端 UI 相同的确认面板（回退并把输入还回输入框 / 回退并丢弃 /
+  取消），回退后按裁剪过的历史重建对话区。
 
 - **桌面 GUI 的图片保持原始比例**：`@图片` 引用与工具返回的图片以前固定塞进一个方块，宽截图上
   下会留两条空白。现在按图片自身尺寸算：小图用原尺寸，大图等比缩到 360px 上限、不拉伸，解码器
