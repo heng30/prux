@@ -16,8 +16,14 @@ impl GuiApp {
         cx: &mut Context<Self>,
     ) {
         self.swallow_char = None;
+        let before = self.editor.text();
         self.dispatch_key(event, cx);
-        self.refresh_suggest(cx);
+
+        // 只有输入内容真的变了才重算补全：左右移动光标不该把面板弹出来
+        if self.editor.text() != before {
+            self.refresh_suggest(cx);
+        }
+
         cx.notify();
     }
 

@@ -590,6 +590,11 @@
   back. One entry now accepts a single toggle per 250 ms, and a toggle clears the previous frame's
   measured height so the layout is not pinned to the old one.
 
+- **The desktop GUI's completion panel no longer pops up on cursor movement**: `/command` and
+  `@path` were recomputed after every key, so pressing the arrow keys in the middle of a prompt
+  reopened the panel over text that had not changed. Suggestions are now refreshed only when the
+  editor's text actually changed.
+
 ## 中文
 
 ### 新增
@@ -998,3 +1003,6 @@
   输入框（多行 prompt 就写回多行）但不发送；零匹配时面板留在原地，不会把 `/history …` 当 prompt 发
   出去。`@clear` / `@clear-all`（仅查询以 `@` 开头时现身）删除本项目的历史或所有项目的历史，删前弹
   Yes/Cancel 确认并给出待删条目数。
+
+- **桌面 GUI 的补全面板不再因移动光标弹出**：`/命令` 与 `@路径` 以前每按一个键就重算，在一段
+  没改动的文字中间按左右方向键也会把面板重新弹出来挡住内容。现在只有输入框文本真的变了才重算补全。
