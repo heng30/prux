@@ -2,12 +2,13 @@
 //! 与扩展覆盖层（扩展自持内容，GUI 只负责绘制与回传按键）。
 
 use super::{
-    app::GuiApp,
+    app::{GuiApp, ScrollArea, ScrollDrag},
     composer,
     text_edit::Editor,
     theme::{
         CONTROL_H_LG, FONT_BODY, FONT_CAPTION, FONT_SMALL, ICON_SIZE, RADIUS_LG, RADIUS_MD,
-        RADIUS_SM, SCROLLBAR_WIDTH, SPACE_MD, SPACE_SM, SPACE_XS, SPACE_XXS, Theme, min_thumb, px,
+        RADIUS_SM, SCROLLBAR_HIT_WIDTH, SCROLLBAR_WIDTH, SPACE_MD, SPACE_SM, SPACE_XS, SPACE_XXS,
+        Theme, min_thumb, px,
     },
     transcript,
 };
@@ -17,8 +18,8 @@ use crate::{
     utils::geometry,
 };
 use gpui::{
-    AnyElement, Div, FontWeight, InteractiveElement, IntoElement, ParentElement, ScrollHandle,
-    SharedString, StatefulInteractiveElement, Styled, div,
+    AnyElement, Div, FontWeight, InteractiveElement, IntoElement, MouseButton, ParentElement,
+    ScrollHandle, SharedString, StatefulInteractiveElement, Styled, div,
 };
 
 /// 列表弹层宽度（命令面板 / 模型 / 会话选择 / 思考级别）。
@@ -170,6 +171,8 @@ pub enum ListKind {
     Appearance,
     /// 右侧面板：文件
     PanelFiles,
+    /// 工作目录（最近用过的目录 + 系统选择器）
+    WorkingDirectory,
 }
 
 /// 内置信息页。
@@ -404,6 +407,8 @@ pub struct Info {
     pub lines: Vec<String>,
     /// 两列表格内容（属性 / 值）：非空时按表格渲染，值里是 URL 的可点击
     pub rows: Vec<InfoRow>,
+    /// 表格两列的表头文案（`rows` 非空时生效）
+    pub headers: [String; 2],
     /// [`Self::lines`] 是否按 Markdown 渲染（`/changelog` 这类本身就是 Markdown 的内容）
     pub markdown: bool,
     /// 滚动位置：方向键与滚轮共用同一个句柄
@@ -425,6 +430,7 @@ impl Info {
             title: title.into(),
             lines,
             rows: Vec::new(),
+            headers: ["Property".to_string(), "Value".to_string()],
             markdown: false,
             scroll: ScrollHandle::new(),
         }
@@ -442,9 +448,16 @@ impl Info {
             title: title.into(),
             lines: Vec::new(),
             rows,
+            headers: ["Property".to_string(), "Value".to_string()],
             markdown: false,
             scroll: ScrollHandle::new(),
         }
+    }
+
+    /// 换掉表格的两列表头（拿回 `self`，构建时链式用）。
+    pub fn with_headers(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.headers = [key.into(), value.into()];
+        self
     }
 
     /// 按行滚动：正数向下、负数向上，换算成像素后夹到实际可滚范围。
@@ -606,10 +619,10 @@ fn parse_hex_color(spec: &str) -> Option<gpui::Hsla> {
 pub fn render(overlay: &Overlay, theme: &Theme, cx: &mut gpui::Context<GuiApp>) -> AnyElement {
     match overlay {
         Overlay::List(list) => match &list.detail {
-            Some(detail) => render_info(detail, theme),
+            Some(detail) => render_info(detail, theme, cx),
             None => render_list(list, theme, cx),
         },
-        Overlay::Info(info) => render_info(info, theme),
+        Overlay::Info(info) => render_info(info, theme, cx),
         Overlay::Extension(ext) => render_extension(ext, theme),
     }
 }
@@ -1057,7 +1070,7 @@ fn render_list(list: &List, theme: &Theme, cx: &mut gpui::Context<GuiApp>) -> An
 }
 
 /// 信息卡片：标题 + 可滚动主体（表格或纯文本）+ 底部提示。
-fn render_info(info: &Info, theme: &Theme) -> AnyElement {
+fn render_info(info: &Info, theme: &Theme, cx: &mut gpui::Context<GuiApp>) -> AnyElement {
     let mut column = div()
         .w(px(INFO_W))
         .max_h(px(INFO_MAX_H))
@@ -1093,18 +1106,20 @@ fn render_info(info: &Info, theme: &Theme) -> AnyElement {
         }
 
         // 滚动条贴在主体右边缘（面板本身不留空白，滑块才能贴到卡片内侧）
-        column = column.child(
+        column = column.child(div().relative().w_full().child(body).child(info_scrollbar(
+            &info.scroll,
+            theme,
+            cx,
+        )));
+    } else {
+        // 滚动条与纯文本共用一条：表格同样会超过高度上限（键位表就有几十行）
+        column = column.child(info_header(&info.headers, theme)).child(
             div()
                 .relative()
                 .w_full()
-                .child(body)
-                .child(info_scrollbar(&info.scroll, theme)),
+                .child(info_table(&info.rows, theme, &info.scroll))
+                .child(info_scrollbar(&info.scroll, theme, cx)),
         );
-    } else {
-        column =
-            column
-                .child(info_header(theme))
-                .child(info_table(&info.rows, theme, &info.scroll));
     }
 
     column
@@ -1125,8 +1140,13 @@ fn info_body(scroll: &ScrollHandle) -> gpui::Stateful<Div> {
 
 /// 详情卡片主体的滚动条：内容超出一屏时总显示（面板是临时的，不做悬停隐现）。
 ///
-/// 位置按上一帧记录的滚动状态算；拖动不做，方向键 / 滚轮 / PgUp / PgDn 已能到底。
-fn info_scrollbar(scroll: &ScrollHandle, theme: &Theme) -> AnyElement {
+/// 轨道比滑块宽（[`SCROLLBAR_HIT_WIDTH`]）：4px 的滑块直接抓不住。拖拽状态挂在
+/// [`GuiApp::scroll_drag`] 上，指针离开轨道后由全局鼠标监听（`hover_probe`）接着施加。
+fn info_scrollbar(
+    scroll: &ScrollHandle,
+    theme: &Theme,
+    cx: &mut gpui::Context<GuiApp>,
+) -> AnyElement {
     let viewport = f32::from(scroll.bounds().size.height);
     let max = f32::from(scroll.max_offset().height);
     if max <= 0. || viewport <= 0. {
@@ -1141,16 +1161,47 @@ fn info_scrollbar(scroll: &ScrollHandle, theme: &Theme) -> AnyElement {
     );
 
     div()
+        .id("overlay-info-scrollbar")
         .absolute()
         .top_0()
         .right_0()
         .h_full()
-        .w(px(SCROLLBAR_WIDTH))
+        .w(px(SCROLLBAR_HIT_WIDTH))
+        .cursor_pointer()
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|this, _: &gpui::MouseDownEvent, _, cx| {
+                let offset = this
+                    .scroll_of(ScrollArea::Overlay)
+                    .map_or(px(0.), |scroll| scroll.offset().y);
+                this.scroll_drag = Some(ScrollDrag {
+                    area: ScrollArea::Overlay,
+                    anchor_y: None,
+                    offset,
+                });
+                cx.notify();
+            }),
+        )
+        .on_mouse_up(
+            MouseButton::Left,
+            cx.listener(|this, _, _, cx| {
+                this.scroll_drag = None;
+                cx.notify();
+            }),
+        )
+        .on_mouse_up_out(
+            MouseButton::Left,
+            cx.listener(|this, _, _, cx| {
+                this.scroll_drag = None;
+                cx.notify();
+            }),
+        )
         .child(
             div()
                 .absolute()
                 .top(gpui::px(top))
-                .w_full()
+                .right(px(1.))
+                .w(px(SCROLLBAR_WIDTH))
                 .h(gpui::px(height))
                 .rounded(px(RADIUS_SM))
                 .bg(theme.text_ghost),
@@ -1158,8 +1209,9 @@ fn info_scrollbar(scroll: &ScrollHandle, theme: &Theme) -> AnyElement {
         .into_any_element()
 }
 
-/// 详情表格的表头（属性 / 值）：贴在滚动主体上方，列宽与行内单元格一致。
-fn info_header(theme: &Theme) -> AnyElement {
+/// 详情表格的表头：文案由调用方给（默认属性 / 值，键位表是 Keys / Action），
+/// 贴在滚动主体上方，列宽与行内单元格一致。
+fn info_header(headers: &[String; 2], theme: &Theme) -> AnyElement {
     div()
         .flex()
         .items_center()
@@ -1174,13 +1226,18 @@ fn info_header(theme: &Theme) -> AnyElement {
             div()
                 .flex_none()
                 .w(px(INFO_LABEL_W))
-                .child(SharedString::from("Property")),
+                .child(SharedString::from(headers[0].clone())),
         )
-        .child(div().flex_1().min_w_0().child(SharedString::from("Value")))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .child(SharedString::from(headers[1].clone())),
+        )
         .into_any_element()
 }
 
-/// 详情页表格主体：「属性 / 值」两列，值按列宽折行（不截断），值是 URL 时用链接色。
+/// 详情页表格主体：左列键名（定宽折行）+ 右列值（占满剩余宽度），值是 URL 时用链接色。
 fn info_table(rows: &[InfoRow], theme: &Theme, scroll: &ScrollHandle) -> gpui::Stateful<Div> {
     let mut table = info_body(scroll);
 
@@ -1214,7 +1271,6 @@ fn info_table(rows: &[InfoRow], theme: &Theme, scroll: &ScrollHandle) -> gpui::S
                     div()
                         .flex_none()
                         .w(px(INFO_LABEL_W))
-                        .truncate()
                         .text_color(theme.text_tertiary)
                         .child(SharedString::from(row.key.clone())),
                 )

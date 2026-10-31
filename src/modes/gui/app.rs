@@ -100,11 +100,13 @@ const ALT_WHEEL_MULTIPLIER: f32 = 5.;
 
 /// 可拖拽滚动条所在的滚动区。
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum ScrollArea {
+pub(super) enum ScrollArea {
     /// 对话流
     Transcript = 0,
     /// 侧栏会话列表
     Sidebar = 1,
+    /// 覆盖层信息页（`/changelog` 这类，滚动句柄随覆盖层开关出现）
+    Overlay = 2,
 }
 
 impl ScrollArea {
@@ -210,13 +212,13 @@ enum SessionDialog {
 
 /// 滚动条拖动状态。
 #[derive(Clone, Copy)]
-struct ScrollDrag {
+pub(super) struct ScrollDrag {
     /// 正在拖哪个滚动区
-    area: ScrollArea,
+    pub(super) area: ScrollArea,
     /// 首次鼠标移动时的 y（与施加拖拽的位置同源，`None` = 还没定位）
-    anchor_y: Option<Pixels>,
+    pub(super) anchor_y: Option<Pixels>,
     /// 按下时的滚动偏移
-    offset: Pixels,
+    pub(super) offset: Pixels,
 }
 
 /// toast 级别：决定配色与位置。
@@ -366,7 +368,7 @@ pub struct GuiApp {
     /// 上次把光标滚进视口时的 (行, 列)：光标没动就不抢用户的滚动
     composer_cursor: Rc<Cell<Option<(usize, usize)>>>,
     /// 拖动滚动条的状态
-    scroll_drag: Option<ScrollDrag>,
+    pub(super) scroll_drag: Option<ScrollDrag>,
     /// 鼠标是否在对话流上（滚动条只在悬停时显示）
     transcript_hovered: bool,
     /// 鼠标是否在侧栏列表上
@@ -669,19 +671,29 @@ impl GuiApp {
         cx.notify();
     }
 
-    /// 取某个滚动区的滚动句柄。
-    fn scroll_of(&self, area: ScrollArea) -> &ScrollHandle {
+    /// 取某个滚动区的滚动句柄；覆盖层没打开信息页时为 `None`。
+    pub(super) fn scroll_of(&self, area: ScrollArea) -> Option<&ScrollHandle> {
         match area {
-            ScrollArea::Transcript => &self.scroll,
-            ScrollArea::Sidebar => &self.sessions_scroll,
+            ScrollArea::Transcript => Some(&self.scroll),
+            ScrollArea::Sidebar => Some(&self.sessions_scroll),
+            ScrollArea::Overlay => match self.overlay.as_ref()? {
+                Overlay::Info(info) => Some(&info.scroll),
+                Overlay::List(list) => list.detail.as_ref().map(|info| &info.scroll),
+                Overlay::Extension(_) => None,
+            },
         }
     }
 
     /// [`Self::scroll_of`] 的可变版。
-    fn scroll_of_mut(&mut self, area: ScrollArea) -> &mut ScrollHandle {
+    fn scroll_of_mut(&mut self, area: ScrollArea) -> Option<&mut ScrollHandle> {
         match area {
-            ScrollArea::Transcript => &mut self.scroll,
-            ScrollArea::Sidebar => &mut self.sessions_scroll,
+            ScrollArea::Transcript => Some(&mut self.scroll),
+            ScrollArea::Sidebar => Some(&mut self.sessions_scroll),
+            ScrollArea::Overlay => match self.overlay.as_mut()? {
+                Overlay::Info(info) => Some(&mut info.scroll),
+                Overlay::List(list) => list.detail.as_mut().map(|info| &mut info.scroll),
+                Overlay::Extension(_) => None,
+            },
         }
     }
 
@@ -690,6 +702,7 @@ impl GuiApp {
         let hovered = match area {
             ScrollArea::Transcript => self.transcript_hovered,
             ScrollArea::Sidebar => self.sidebar_hovered,
+            ScrollArea::Overlay => false,
         };
         scrollbar_visible(self.scroll_drag.map(|drag| drag.area), area, hovered)
     }

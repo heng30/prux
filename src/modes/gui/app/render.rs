@@ -123,7 +123,10 @@ impl GuiApp {
             return div().into_any_element();
         }
 
-        let scroll = self.scroll_of(area);
+        let Some(scroll) = self.scroll_of(area) else {
+            return div().into_any_element();
+        };
+
         let viewport = f32::from(scroll.bounds().size.height);
         let max = f32::from(scroll.max_offset().height);
         if max <= 0. || viewport <= 0. {
@@ -148,7 +151,9 @@ impl GuiApp {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _event: &gpui::MouseDownEvent, _, cx| {
-                    let offset = this.scroll_of(area).offset().y;
+                    let offset = this
+                        .scroll_of(area)
+                        .map_or(px(0.), |scroll| scroll.offset().y);
                     this.scroll_drag = Some(ScrollDrag {
                         area,
                         anchor_y: None,

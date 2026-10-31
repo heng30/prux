@@ -685,37 +685,80 @@ impl GuiApp {
                     lines.push(format!("Messages: {}", snapshot.messages));
                     lines.push(format!(
                         "Session file: {}",
-                        snapshot.session_path.as_deref().unwrap_or("(in-memory session)")
+                        snapshot
+                            .session_path
+                            .as_deref()
+                            .unwrap_or("(in-memory session)")
                     ));
                     lines.push(format!("Active tools: {}", snapshot.tools.join(", ")));
                 }
                 Info::new("Sessions", lines)
             }
-            InfoKind::Help => Info::new(
-                "Keybindings",
-                vec![
-                    "Enter to send · Shift+Enter / Ctrl-J new line".to_string(),
-                    "Esc abort turn · Ctrl-C clear input · Ctrl-D quit when empty".to_string(),
-                    "Arrows move · Ctrl-B / Ctrl-F by char · Alt-←/→ or Alt-B/F by word".to_string(),
-                    "Home / Ctrl-A line start · End / Ctrl-E line end".to_string(),
-                    "Ctrl-W / Alt-Backspace delete word back · Alt-D delete word forward".to_string(),
-                    "Ctrl-U delete to line start · Ctrl-K delete to line end · Ctrl-Z undo".to_string(),
-                    "Ctrl-Shift-C copy selection · Alt-C copy input · Ctrl-V paste".to_string(),
-                    "Ctrl-M commands · Ctrl-L model · Ctrl-P / Ctrl-Shift-P cycle model".to_string(),
-                    "Ctrl-T show/hide thinking · Shift-Tab cycle thinking level".to_string(),
-                    "Ctrl-O expand tools · Ctrl-Shift-T toggle light/dark · Ctrl-Shift-G appearance".to_string(),
-                    "Ctrl-Shift-O sessions · Ctrl-Shift-B sidebar · Ctrl-Shift-E right panel".to_string(),
-                    "Ctrl-Shift-U usage · Ctrl-I skills · Ctrl-, settings · Ctrl-Shift-A select all".to_string(),
-                    "Ctrl-N new session · Ctrl-Z undo · Ctrl-Y redo · Ctrl-X copy last reply".to_string(),
-                    "Lists: ↑/↓ or Ctrl-K/Ctrl-J move · Home/End first/last · PgUp/PgDn · Ctrl-C close".to_string(),
-                    "Session list: Ctrl-R rename · Ctrl-D delete · Ctrl-G next session".to_string(),
-                    "Ctrl+= zoom in · Ctrl-Shift+- zoom out · Ctrl+0 reset to 100%".to_string(),
-                    "Ctrl-Q quit".to_string(),
-                ],
-            ),
+            InfoKind::Help => {
+                Info::with_rows("Keybindings", hotkey_rows()).with_headers("Keys", "Action")
+            }
         };
         self.overlay = Some(Overlay::Info(info));
     }
+}
+
+/// `/hotkeys` 表格的行：左列键位（多个组合用 `/` 并列）、右列动作。
+fn hotkey_rows() -> Vec<InfoRow> {
+    let pairs = [
+        ("Enter", "Send message"),
+        ("Shift+Enter / Ctrl-J", "New line"),
+        ("Esc", "Abort turn"),
+        ("Ctrl-C", "Clear input"),
+        ("Ctrl-D", "Quit when input is empty"),
+        ("Arrows", "Move cursor"),
+        ("Ctrl-B / Ctrl-F", "Move by character"),
+        ("Alt-← → / Alt-B F", "Move by word"),
+        ("Home / Ctrl-A", "Line start"),
+        ("End / Ctrl-E", "Line end"),
+        ("Ctrl-W / Alt-Backspace", "Delete word back"),
+        ("Alt-D", "Delete word forward"),
+        ("Ctrl-U", "Delete to line start"),
+        ("Ctrl-K", "Delete to line end"),
+        ("Ctrl-Z / Ctrl-Y", "Undo / redo"),
+        ("Ctrl-Shift-C", "Copy selection"),
+        ("Alt-C", "Copy input"),
+        ("Ctrl-V", "Paste"),
+        ("Ctrl-X", "Copy last reply"),
+        ("Ctrl-M", "Command palette"),
+        ("Ctrl-L", "Model picker"),
+        ("Ctrl-P / Ctrl-Shift-P", "Cycle model"),
+        ("Ctrl-T", "Show/hide thinking"),
+        ("Shift-Tab", "Cycle thinking level"),
+        ("Ctrl-O", "Expand tools"),
+        ("Ctrl-Shift-T", "Toggle light / dark"),
+        ("Ctrl-Shift-G", "Appearance"),
+        ("Ctrl-Shift-O", "Session list"),
+        ("Ctrl-Shift-B", "Toggle sidebar"),
+        ("Ctrl-Shift-W", "Working directory"),
+        ("Ctrl-Shift-E", "Toggle right panel"),
+        ("Ctrl-Shift-U", "Usage"),
+        ("Ctrl-I", "Skills"),
+        ("Ctrl-,", "Settings"),
+        ("Ctrl-Shift-A", "Select all"),
+        ("Ctrl-N", "New session"),
+        ("Ctrl-G", "Next session"),
+        ("Ctrl-= / Ctrl-0", "Zoom in / reset to 100%"),
+        ("Ctrl-Shift--", "Zoom out"),
+        ("Ctrl-Q", "Quit"),
+        ("↑ ↓ / Ctrl-K Ctrl-J", "Move in lists"),
+        ("Home / End", "First / last item"),
+        ("PgUp / PgDn", "Page in lists"),
+        ("Ctrl-C (in list)", "Close list"),
+        ("Ctrl-R (session list)", "Rename session"),
+        ("Ctrl-D (session list)", "Delete session"),
+    ];
+    pairs
+        .into_iter()
+        .map(|(key, value)| InfoRow {
+            key: key.to_string(),
+            value: value.to_string(),
+        })
+        .collect()
 }
 
 /// 扫描技能并返回快照（`rules` 是未落盘的草稿规则，启用态按它实算）。

@@ -65,6 +65,9 @@ pub struct Startup {
     pub reload_ctx: ReloadCtx,
     /// `--verbose`：显示完整诊断输出。
     pub verbose: bool,
+    /// `--tui`：GUI 二进制改跑交互 TUI（仅 `gui` feature 存在该参数）。
+    #[cfg(feature = "gui")]
+    pub tui: bool,
 }
 
 /// 进程初始化 + 启动装配。内部遇到致命错误会打印诊断并直接退出进程。
@@ -535,6 +538,8 @@ pub async fn bootstrap() -> Startup {
         no_themes: parsed.no_themes,
         reload_ctx,
         verbose: parsed.verbose,
+        #[cfg(feature = "gui")]
+        tui: parsed.tui,
     }
 }
 /// 默认回退模型：首个支持 provider 的默认模型（deepseek/deepseek-v4-pro）

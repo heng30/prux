@@ -283,6 +283,7 @@ impl GuiApp {
                 ListKind::Thinking => self.open_thinking_picker(cx),
                 ListKind::Appearance => self.open_appearance_picker(cx),
                 ListKind::PanelFiles => self.toggle_panel_tab(PanelTab::Files, cx),
+                ListKind::WorkingDirectory => self.open_cwd_menu(cx),
             },
             Action::UiChoice { id, text } => {
                 if let Some(prompt) = core::extensions::submit_ui_choice(id, text) {
@@ -830,6 +831,12 @@ pub(super) fn command_palette_entries() -> Vec<Entry> {
             label: "Sidebar".into(),
             detail: "Ctrl-Shift-B".into(),
             action: Action::ToggleSidebar,
+            ..Entry::default()
+        },
+        Entry {
+            label: "Working directory…".into(),
+            detail: "Ctrl-Shift-W".into(),
+            action: Action::Open(ListKind::WorkingDirectory),
             ..Entry::default()
         },
         Entry {

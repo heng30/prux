@@ -165,6 +165,10 @@ pub struct Args {
     /// Append to the system prompt (repeatable)
     #[arg(long = "append-system-prompt", value_name = "TEXT")]
     pub append_system_prompt: Vec<String>,
+    /// Launch the interactive TUI instead of the desktop GUI (prux-gui only)
+    #[cfg(feature = "gui")]
+    #[arg(long)]
+    pub tui: bool,
     /// List loaded startup resources (model/session/tools/context/skills/prompts/themes/extensions)
     #[arg(long)]
     pub verbose: bool,
@@ -448,6 +452,13 @@ mod tests {
         let a = parse(&["@prompt.md", "hello", "@img.png", "world"]);
         assert_eq!(a.file_args(), vec!["prompt.md", "img.png"]);
         assert_eq!(a.messages(), vec!["hello", "world"]);
+    }
+
+    #[test]
+    #[cfg(feature = "gui")]
+    fn parses_tui_flag() {
+        assert!(parse(&["--tui"]).tui);
+        assert!(!parse(&[]).tui);
     }
 
     #[test]

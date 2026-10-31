@@ -23,7 +23,13 @@ use gpui::{
     ParentElement, Pixels, SharedString, Styled, StyledText, div, prelude::*,
 };
 use serde_json::Value;
-use std::{cell::RefCell, collections::HashMap, ops::Range, path::PathBuf, rc::Rc};
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    ops::Range,
+    path::{Path, PathBuf},
+    rc::Rc,
+};
 
 /// 工具输出收起时显示的行数。
 const COLLAPSED_OUTPUT_LINES: usize = 6;
@@ -1017,6 +1023,31 @@ fn output_hint(hidden: usize, expanded: bool) -> Option<String> {
     })
 }
 
+/// 缩略图元素：小图按原始尺寸显示，大图等比缩到 [`IMAGE_THUMB`] 以内，不留白框。
+fn image_thumb(path: &Path) -> AnyElement {
+    let (w, h) = thumb_size(path);
+    div()
+        .w(px(w))
+        .h(px(h))
+        .rounded(px(RADIUS_MD))
+        .overflow_hidden()
+        .child(gpui::img(path.to_path_buf()).w(px(w)).h(px(h)))
+        .into_any_element()
+}
+
+/// 缩略图的显示尺寸（逻辑像素）：按图片像素等比缩放，边长不超过 [`IMAGE_THUMB`]。
+///
+/// 读不出尺寸（svg 等 `image` 不支持解码的格式）时退回 [`IMAGE_THUMB`] 方框。
+fn thumb_size(path: &Path) -> (f32, f32) {
+    let Ok((w, h)) = image::image_dimensions(path) else {
+        return (IMAGE_THUMB, IMAGE_THUMB);
+    };
+
+    let (w, h) = (w.max(1) as f32, h.max(1) as f32);
+    let scale = (IMAGE_THUMB / w).min(IMAGE_THUMB / h).min(1.0);
+    (w * scale, h * scale)
+}
+
 /// 把 base64 图片写成临时文件，供 `gpui::img` 读取；解码失败返回 None。
 fn save_tool_image(data: &str, mime_type: &str) -> Option<PathBuf> {
     let bytes = base64::engine::general_purpose::STANDARD
@@ -1160,18 +1191,7 @@ fn user_block(
     // `@图片` 引用直接渲染成缩略图
     let images = image_refs(text, cwd);
     for path in images {
-        bubble = bubble.child(
-            div()
-                .max_w(px(IMAGE_THUMB))
-                .max_h(px(IMAGE_THUMB))
-                .rounded(px(RADIUS_MD))
-                .overflow_hidden()
-                .child(
-                    gpui::img(path)
-                        .max_w(px(IMAGE_THUMB))
-                        .max_h(px(IMAGE_THUMB)),
-                ),
-        );
+        bubble = bubble.child(image_thumb(&path));
     }
 
     div()
@@ -1307,18 +1327,7 @@ fn tool_block(
     }
 
     for image in &tool.images {
-        card = card.child(
-            div()
-                .max_w(px(IMAGE_THUMB))
-                .max_h(px(IMAGE_THUMB))
-                .rounded(px(RADIUS_MD))
-                .overflow_hidden()
-                .child(
-                    gpui::img(image.clone())
-                        .max_w(px(IMAGE_THUMB))
-                        .max_h(px(IMAGE_THUMB)),
-                ),
-        );
+        card = card.child(image_thumb(image));
     }
     card.into_any_element()
 }
@@ -1920,6 +1929,27 @@ mod tests {
         assert!(rows.iter().all(|row| row.spans.len() == 1));
         assert_eq!(rows[0].kind, DiffKind::Removed);
         assert_eq!(rows[2].kind, DiffKind::Added);
+    }
+
+    /// 缩略图尺寸：小图保持原尺寸，大图等比缩到 [`IMAGE_THUMB`] 以内。
+    #[test]
+    fn thumb_size_keeps_small_images_and_caps_large_ones() {
+        let dir = std::env::temp_dir().join(format!("prux-gui-thumb-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let small = dir.join("small.png");
+        image::RgbaImage::new(1, 1).save(&small).expect("small png");
+        let large = dir.join("large.png");
+        image::RgbaImage::new(800, 400)
+            .save(&large)
+            .expect("large png");
+        assert_eq!(thumb_size(&small), (1.0, 1.0));
+        assert_eq!(thumb_size(&large), (IMAGE_THUMB, IMAGE_THUMB / 2.0));
+        // 读不出尺寸的路径退回方框，不给零尺寸
+        assert_eq!(
+            thumb_size(&dir.join("missing.png")),
+            (IMAGE_THUMB, IMAGE_THUMB)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// 工具返回的图片：base64 解不开或 MIME 不认识时不落盘。

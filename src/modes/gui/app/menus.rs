@@ -264,7 +264,9 @@ impl GuiApp {
         };
 
         let area = drag.area;
-        let scroll = self.scroll_of(area);
+        let Some(scroll) = self.scroll_of(area) else {
+            return;
+        };
         let viewport = f32::from(scroll.bounds().size.height);
         let max = f32::from(scroll.max_offset().height);
         if max <= 0. || viewport <= 0. {
@@ -275,8 +277,9 @@ impl GuiApp {
         let travel = geometry::thumb_travel(viewport, max, min_thumb());
         let dy = f32::from(position.y - anchor_y);
         let target = geometry::drag_offset(f32::from(drag.offset), dy, max, travel);
-        self.scroll_of_mut(area)
-            .set_offset(gpui::point(px(0.), gpui::px(target)));
+        if let Some(scroll) = self.scroll_of_mut(area) {
+            scroll.set_offset(gpui::point(px(0.), gpui::px(target)));
+        }
         cx.notify();
     }
 
@@ -330,6 +333,7 @@ impl GuiApp {
             self.scroll_drag = self.scroll_drag.filter(|drag| match drag.area {
                 ScrollArea::Transcript => transcript,
                 ScrollArea::Sidebar => sidebar,
+                ScrollArea::Overlay => false,
             });
         }
 

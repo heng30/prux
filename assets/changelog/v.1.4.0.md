@@ -277,7 +277,35 @@
   overlay and dialog, the full key table, the slash commands that work in the window, appearance and
   zoom, and the differences from the terminal interface.
 
+- **`prux-gui --tui` starts in the terminal instead**: the same binary runs the interactive terminal
+  interface, reusing the same argument parsing, session and model setup as the GUI. It needs a real
+  terminal on both stdin and stdout — piping it out prints an error and exits instead of rendering
+  nonsense.
+
+- **The desktop GUI switches its working directory from the keyboard**: clicking the working-directory
+  row under the session list always opened the picker; `Ctrl-Shift-W` and a `Working directory…` entry
+  in the command palette now do the same, and the row still works.
+
+- **The desktop GUI's keybinding page is a two-column table**: `/hotkeys` puts each key in a left
+  column and what it does on the right instead of one sentence per line, with the columns named
+  `Keys` / `Action` rather than the generic property / value, and the table scrolls when it outgrows
+  the card.
+
+- **Information overlays scroll by dragging their scrollbar**: the thin bar in `/changelog`,
+  `/hotkeys` and the detail page of list overlays is now draggable, with a wider hit area than the
+  4 px it draws, and the drag keeps working when the pointer leaves the track.
+
 ### Fixed
+
+- **Images in the desktop GUI keep their aspect ratio**: `@image` references and pictures returned by
+  a tool used to sit in a fixed square, so a wide screenshot left empty bars above and below. The
+  thumbnail is now sized from the image itself — small pictures render at their own size, large ones
+  scale down to the 360 px cap without distortion — and formats the decoder cannot measure fall back
+  to the old square.
+
+- **`Ctrl-W` no longer swallows `Ctrl-Shift-W`**: the delete-word-back shortcut matched any
+  `Ctrl-W`, so the new working-directory panel key was eaten by the input box; it now requires the
+  shift key to be up.
 
 - **File edits in the desktop GUI render as diffs**: the `edit` card shows the file path in its
   header and the change itself as a diff — a right-aligned line-number gutter, added lines in the
@@ -633,7 +661,27 @@
   Files / Changes 面板、停靠面板、各类覆盖层与对话框、完整键位表、窗口里能用的斜杠命令、
   外观与缩放，以及与终端界面的差异。
 
+- **`prux-gui --tui` 改为启动终端界面**：同一个二进制能跑交互 TUI，参数解析、会话与模型装配与
+  桌面端完全共用。它要求 stdin 与 stdout 都是真实终端，被管道接走时直接报错退出，不会画出乱八
+  糟的东西。
+
+- **桌面 GUI 用键盘切换工作目录**：会话列表底部那行工作目录一直点得开选择面板，现在 `Ctrl-Shift-W`
+  与命令面板里的 `Working directory…` 也能打开，那一行照旧可点。
+
+- **桌面 GUI 的键位页是两列表格**：`/hotkeys` 把键位放左列、动作放右列，不再一行一句，表头是
+  `Keys` / `Action` 而不是通用的属性 / 值；行数超过卡片高度时表格内部滚动。
+
+- **信息覆盖层的滚动条可以拖动**：`/changelog`、`/hotkeys` 以及列表覆盖层的详情页右侧那根细条
+  现在能抓来拖，命中区比画出来的 4px 宽，指针离开轨道也继续跟着走。
+
 ## 修复
+
+- **桌面 GUI 的图片保持原始比例**：`@图片` 引用与工具返回的图片以前固定塞进一个方块，宽截图上
+  下会留两条空白。现在按图片自身尺寸算：小图用原尺寸，大图等比缩到 360px 上限、不拉伸，解码器
+  量不出尺寸的格式退回原来的方块。
+
+- **`Ctrl-W` 不再吞掉 `Ctrl-Shift-W`**：删除前一个词的快捷键以前匹配任何 `Ctrl-W`，于是输入框把
+  新的工作目录快捷键吃掉了；现在要求 shift 未按下。
 
 - **桌面 GUI 的文件修改按 diff 渲染**：`edit` 卡片头部显示文件路径，改动本身按 diff 画——右对齐的
   行号列、新增行用成功色、删除行用错误色，`@@` 块头与上下文行用弱色，单行替换还会按词标出变动

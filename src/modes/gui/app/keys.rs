@@ -289,7 +289,10 @@ impl GuiApp {
             cx.notify();
             return true;
         }
-        if (primary && (key == "w" || key == "backspace")) || (alt && key == "backspace") {
+        if (primary && !shift && key == "w")
+            || (primary && key == "backspace")
+            || (alt && key == "backspace")
+        {
             self.editor.delete_word_backward();
             cx.notify();
             return true;
@@ -448,6 +451,10 @@ impl GuiApp {
             "b" if shift => {
                 self.show_sidebar = !self.show_sidebar;
                 cx.notify();
+                return true;
+            }
+            "w" if shift => {
+                self.open_cwd_menu(cx);
                 return true;
             }
             "e" if shift => {
