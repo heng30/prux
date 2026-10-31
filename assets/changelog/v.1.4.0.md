@@ -2,6 +2,14 @@
 
 ### Added
 
+- **A bouncing-ball startup banner**: a new `bouncyballs-banner` extension drops the logo art in
+  as bouncing balls — every non-blank art cell falls from above on an ease-out-bounce curve,
+  turns into its real glyph on landing, and the block settles into exactly the static art. The
+  right-hand info column, the divider and the three width tiers are shared with the plain
+  banner, which is still selectable in `/extension` (the two are mutually exclusive; the
+  animated one wins by default). Banner extensions can now ask for redraws, so the animation
+  advances on the TUI's 80ms tick instead of freezing on a half-fallen frame.
+
 - **The `ask-user-question` extension lets the model ask instead of guess**: it adds one
   tool, `ask_user_question`, that opens a panel of up to four questions with two to four
   written options each — single-select, multi-select, a free-text `Type something.` row on
@@ -598,6 +606,12 @@
 ## 中文
 
 ### 新增
+
+- **新增小球落位式启动横幅**：新的 `bouncyballs-banner` 扩展把左侧 logo 拆成一颗颗球——art 的
+  每个非空白字符都从上方按 out-bounce 缓动落下、落位时显形为该格原本的字符，最后定格成与静态版
+  完全相同的 art。右侧信息区、竖线与宽高三档规则与普通 banner 共用，普通 banner 仍可在
+  `/extension` 面板切回（两者互斥，默认生效的是动画版）。banner 扩展新增了「请求重绘」钩子，
+  动画因此跑在 TUI 的 80ms tick 上，不会停在半空的一帧。
 
 - **新增 `ask-user-question` 扩展：让模型问，而不是猜**：只加一个工具 `ask_user_question`，
   弹出最多四题的覆盖层面板，每题 2–4 个写好的选项——单选、多选、每题末尾自动带一行

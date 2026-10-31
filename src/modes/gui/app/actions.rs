@@ -620,18 +620,23 @@ impl GuiApp {
         take_next_batch(&self.steer_inbox, &mut self.follow_ups)
     }
 
-    /// Alt+Up：把排队的消息全部取回编辑器（steer 在前、follow-up 在后，空行分隔，
-    /// 拼在当前草稿之前），队列清空；没有排队时提示一句。
+    /// 把排队的消息全部取回编辑器（steer 在前、follow-up 在后，空行分隔，
+    /// 拼在当前草稿之前），队列清空；返回取回的条数，两个队列都空时返回 None（不动编辑器）。
+    pub(super) fn restore_queued(&mut self) -> Option<usize> {
+        let (combined, count) =
+            restore_text(&self.steer_inbox, &mut self.follow_ups, &self.editor.text())?;
+        self.editor.clear();
+        self.editor.insert(&combined);
+        Some(count)
+    }
+
+    /// Alt+Up：把排队的消息全部取回编辑器（见 [`Self::restore_queued`]）；没有排队时提示一句。
     pub(super) fn dequeue_queued(&mut self, cx: &mut Context<Self>) {
-        let Some((combined, count)) =
-            restore_text(&self.steer_inbox, &mut self.follow_ups, &self.editor.text())
-        else {
+        let Some(count) = self.restore_queued() else {
             self.toast("No queued messages to restore", ToastKind::Info, cx);
             return;
         };
 
-        self.editor.clear();
-        self.editor.insert(&combined);
         self.toast(
             format!(
                 "Restored {count} queued message{}",

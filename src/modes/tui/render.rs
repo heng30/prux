@@ -16,7 +16,6 @@ mod mermaid;
 mod pending;
 mod session_selector;
 mod settings_selector;
-mod status;
 mod suggestion;
 
 pub(crate) mod image;
@@ -24,6 +23,7 @@ pub(crate) mod messages;
 pub(crate) mod overlay;
 pub(crate) mod panel;
 pub(crate) mod startup;
+pub(crate) mod status;
 pub(crate) mod syntax_hl;
 pub(crate) mod trust;
 

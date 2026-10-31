@@ -123,14 +123,26 @@ pub fn collect_footer_lines(app: &App, width: usize) -> Vec<FooterLine> {
     ext.render(&ctx)
 }
 
-/// 收集横幅渲染行：仅“干净启动”时返回 banner 扩展的渲染行——
-/// 用户尚未提交过输入（`banner_hidden` 未置位）、会话无历史消息、无启动初始消息，
-/// 且存在已启用（当前模式可用）的 banner 扩展。
+/// 横幅当前是否会渲染：用户尚未提交过输入（`banner_hidden` 未置位）、
+/// 会话无历史消息、无启动初始消息。
+pub fn banner_visible(app: &App) -> bool {
+    !app.banner_hidden && app.messages.is_empty() && app.initial_queue.is_empty()
+}
+
+/// 横幅是否需要持续重绘（动画）：只在横幅真会显示时问扩展，
+/// 否则动画没在屏幕上，重绘是纯空转（提交过输入后就永远不再置脏）。
+pub fn banner_wants_redraw(app: &App) -> bool {
+    banner_visible(app) && extensions::banner_wants_redraw()
+}
+
+/// 收集横幅渲染行：仅“干净启动”（[`banner_visible`]）且存在已启用
+/// （当前模式可用）的 banner 扩展时返回其渲染行。
 /// 其余情况返回空——banner 不渲染、不留空行（布局不为其保留高度）。
 pub fn collect_banner_lines(app: &App, width: usize, height: usize) -> Vec<BannerLine> {
-    if app.banner_hidden || !app.messages.is_empty() || !app.initial_queue.is_empty() {
+    if !banner_visible(app) {
         return Vec::new();
     }
+
     let banners = extensions::registered_banners();
     let Some(ext) = banners.first() else {
         return Vec::new();

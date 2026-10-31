@@ -137,8 +137,10 @@ pub const PRIORITY_TOOL_SEARCH: u32 = 40;
 pub const PRIORITY_CODEMODE: u32 = 39;
 /// jet 规划/实现双模型路由扩展的注册优先级。
 pub const PRIORITY_JET: u32 = 38;
-/// banner 启动横幅扩展的注册优先级。
+/// banner（静态 art）启动横幅扩展的注册优先级。
 pub const PRIORITY_BANNER: u32 = 30;
+/// bouncyballs-banner 启动横幅扩展的注册优先级：比静态版小一档，后注册故默认生效。
+pub const PRIORITY_BANNER_BOUNCY: u32 = 29;
 /// footer(rich) 底栏布局的注册优先级，三者中值大者先注册。
 pub const PRIORITY_FOOTER_RICH: u32 = 20;
 /// footer(minimal) 底栏布局的注册优先级，只显示模型统计行。

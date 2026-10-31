@@ -376,6 +376,15 @@ impl GuiApp {
                 self.toast("Copied selection", ToastKind::Info, cx);
                 return true;
             }
+
+            // 忙碌且输入框已空：Ctrl-C 中断回合（同 TUI 的 app.clear），
+            // 并把排队的 steer / follow-up 取回编辑器
+            if self.busy && self.editor.is_empty() {
+                self.abort_turn(cx);
+                self.restore_queued();
+                return true;
+            }
+
             self.editor.clear();
             cx.notify();
             return true;
@@ -647,6 +656,8 @@ impl GuiApp {
             "escape" => {
                 if self.busy {
                     self.abort_turn(cx);
+                    // 中断时把排队的 steer / follow-up 取回编辑器（同 TUI 的 handle_cancel_prompt）
+                    self.restore_queued();
                 } else if self.panel.visible {
                     // 空闲时 Esc 先收右侧面板（giff 等）——之前面板没有关闭途径
                     self.panel.visible = false;

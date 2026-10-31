@@ -75,6 +75,13 @@ pub trait BannerExtension: Send + Sync {
         Vec::new()
     }
 
+    /// 是否请求 TUI 持续重绘（动画横幅用：空闲时 TUI 只在 80ms tick 里问一次）。
+    ///
+    /// **必须便宜**（每帧都调）：只做状态判断，别扫盘、别加锁。
+    fn wants_redraw(&self) -> bool {
+        false
+    }
+
     /// 渲染横幅，返回显示行（每行由带主题样式的片段组成；TUI 按行数分配高度）
     fn render(&self, ctx: &BannerCtx) -> Vec<BannerLine>;
 }
@@ -103,6 +110,7 @@ mod tests {
         assert_eq!(copied.height, 24);
         assert_eq!(Spy.modes(), Vec::<ExtensionMode>::new());
         assert!(Spy.description().is_empty());
+        assert!(!Spy.wants_redraw(), "默认不请求重绘");
     }
 
     #[test]

@@ -1312,9 +1312,16 @@ pub fn has_cache_warming_decision_handlers() -> bool {
         .any(|ext| ext.hooks().contains(&ExtensionHook::CacheWarmingDecision))
 }
 
-/// 是否有扩展请求持续重绘（[`Extension::wants_redraw`]；每帧调用，必须便宜）。
+/// 是否有（非 banner）扩展请求持续重绘（[`Extension::wants_redraw`]；每帧调用，必须便宜）。
 pub fn wants_redraw() -> bool {
     registered().iter().any(|ext| ext.wants_redraw())
+}
+
+/// 是否有 banner 扩展请求持续重绘（[`BannerExtension::wants_redraw`]）。
+/// 与 [`wants_redraw`] 分开：banner 只在“干净启动”界面显示，调用方得先确认它真会渲染，
+/// 否则屏上没动画也一直重绘。
+pub fn banner_wants_redraw() -> bool {
+    registered_banners().iter().any(|ext| ext.wants_redraw())
 }
 
 /// 用户输入拦截分发：按注册顺序，首个返回 `Some` 的**已声明

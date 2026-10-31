@@ -34,7 +34,7 @@ use self::{
     },
     render::{
         messages::{CachedMsg, ImageLayout},
-        render_frame, startup,
+        render_frame, startup, status,
     },
     theme::{DEFAULT_THEME_NAME, Theme, theme_load_warnings},
 };
@@ -325,7 +325,7 @@ pub async fn run_interactive(
                 }
 
                 // 后台活儿（后台代理 / 工作流运行）在跑 → dock 里的 spinner 与计数需要动画
-                if core::extensions::wants_redraw() {
+                if core::extensions::wants_redraw() || status::banner_wants_redraw(&st) {
                     st.dirty = true;
                 }
 
