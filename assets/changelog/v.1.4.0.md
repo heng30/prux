@@ -166,6 +166,12 @@
   button turns into a stop square during a run. Context usage comes from the estimated history
   instead of the last request, so it shows up in a freshly loaded session too.
 
+- **The desktop GUI's tool cards show how long the call took**: a running call shows `Elapsed X.Xs`
+  to the left of its status label and keeps counting while the turn runs, and a finished one shows
+  `Took X.Xs` from the event's `durationMs`, which sessions reloaded from disk recover from the
+  stored result. The format matches the terminal UI: seconds under a minute, then `Xm Ys`, then
+  `Xh Ym Zs`.
+
 - **The desktop GUI remembers whether the session sidebar is open**: `Ctrl-Shift-B`, `/sidebar` and
   the sidebar search box write the choice to `sidebar-gui` in `settings.json` and restore it on the
   next launch; with no key set the sidebar starts open.
@@ -664,6 +670,10 @@
   忙碌时行首先亮一个闪烁圆点与 `Working… (Esc to abort, N queued)`，并每半秒重绘一次，长工具
   调用期间没有事件时耗时也照样走；发送按钮在忙碌时变成停止方块。上下文占用改用历史估算而不取
   最后一次请求，刚载入的会话也能看到占用率。
+
+- **桌面 GUI 的工具卡片显示这次调用花了多久**：跑着的调用在状态标签左侧显示 `Elapsed X.Xs`，
+  回合期间一直往上走；结束后定格成事件里的 `durationMs`（`Took X.Xs`），从磁盘重载的会话也能
+  从存档结果里恢复。格式与终端 UI 一致：不到一分钟按秒，再往上 `Xm Ys`、`Xh Ym Zs`。
 
 - **桌面 GUI 记住会话栏是否展开**：`Ctrl-Shift-B`、`/sidebar` 与侧栏搜索框把选择写进 `settings.json`
   的 `sidebar-gui`，下次启动照原样恢复；没写过时默认展开。

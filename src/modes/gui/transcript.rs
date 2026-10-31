@@ -15,7 +15,11 @@ use super::{
 };
 use crate::{
     core::provider::{AgentMessage, ContentBlock},
-    utils::{color::Rgb, display::fit_display, mime, paths},
+    utils::{
+        color::Rgb,
+        display::{fit_display, format_tool_duration},
+        mime, paths,
+    },
 };
 use base64::Engine as _;
 use gpui::{
@@ -31,7 +35,7 @@ use std::{
     path::{Path, PathBuf},
     rc::Rc,
     sync::Arc,
-    time::SystemTime,
+    time::{Instant, SystemTime},
 };
 
 /// 工具输出收起时显示的行数。
@@ -137,6 +141,10 @@ pub struct Tool {
     pub expanded: Option<bool>,
     /// 工具返回的图片（落成临时文件后的路径，按返回顺序）
     pub images: Vec<PathBuf>,
+    /// 开始执行的时刻：仅在跑着的调用上有（用来算实时耗时），结束后为 None
+    pub started_at: Option<Instant>,
+    /// 执行耗时（毫秒）：来自 `tool_execution_end` / `toolResult` 的 `durationMs`，未结束或历史里没有时为 None
+    pub duration_ms: Option<u64>,
 }
 
 /// 非对话提示。
@@ -321,6 +329,7 @@ impl Transcript {
                 && tool.status == ToolStatus::Running
             {
                 tool.status = ToolStatus::Failed;
+                tool.started_at = None;
             }
         }
         self.push_note(Note::Error("Operation aborted".to_string()));
@@ -409,6 +418,7 @@ impl Transcript {
                         } else {
                             ToolStatus::Ok
                         };
+                        tool.duration_ms = message.duration_ms;
                     }
                 }
                 _ => {}
@@ -506,6 +516,11 @@ impl Transcript {
                     .to_string();
                 let args = event.get("args").cloned().unwrap_or(Value::Null);
                 self.push_tool(&id, &name, &args, cwd);
+
+                // 耗时从这一刻算：重建历史时不打点，缺 toolResult 的旧调用不会显示假耗时
+                if let Some(Block::Tool(tool)) = self.blocks.last_mut() {
+                    tool.started_at = Some(Instant::now());
+                }
                 self.open_assistant = None;
             }
             "tool_execution_update" => {
@@ -590,6 +605,8 @@ impl Transcript {
                     } else {
                         ToolStatus::Ok
                     };
+                    tool.duration_ms = event.get("durationMs").and_then(Value::as_u64);
+                    tool.started_at = None;
                 }
             }
             "compaction_start" => self.push_note(Note::Info("Compacting context…".to_string())),
@@ -658,6 +675,8 @@ impl Transcript {
             status: ToolStatus::Running,
             expanded: None,
             images: Vec::new(),
+            started_at: None,
+            duration_ms: None,
         }));
         let index = self.blocks.len() - 1;
         if !id.is_empty() {
@@ -1387,12 +1406,33 @@ fn tool_block(
         header = header.child(div().flex_1());
     }
 
-    card = card.child(
-        header.child(
+    // 耗时放在状态标签左侧：进行中按当前时刻算（忙碌期间每半秒重绘一次，数字跟着走），
+    // 结束后用事件里的 `durationMs` 定格
+    let took = match (tool.duration_ms, tool.started_at) {
+        (Some(ms), _) => Some(format!("Took {}", format_tool_duration(ms))),
+        (None, Some(started)) => Some(format!(
+            "Elapsed {}",
+            format_tool_duration(started.elapsed().as_millis() as u64)
+        )),
+        (None, None) => None,
+    };
+    let mut status = div().flex().items_center().gap(px(SPACE_SM));
+    if let Some(took) = took {
+        status = status.child(
             div()
                 .text_size(px(FONT_CAPTION))
-                .text_color(color)
-                .child(SharedString::from(label)),
+                .text_color(theme.text_ghost)
+                .child(SharedString::from(took)),
+        );
+    }
+    card = card.child(
+        header.child(
+            status.child(
+                div()
+                    .text_size(px(FONT_CAPTION))
+                    .text_color(color)
+                    .child(SharedString::from(label)),
+            ),
         ),
     );
 
@@ -1868,6 +1908,42 @@ mod tests {
             transcript.blocks().last(),
             Some(Block::Note(Note::Error(text))) if text == "Operation aborted"
         ));
+    }
+
+    /// 工具耗时：跑着时有起点，结束后改成事件里的 durationMs 并停掉计时。
+    #[test]
+    fn tool_duration_comes_from_end_event() {
+        let mut transcript = Transcript::default();
+        transcript.apply(
+            &serde_json::json!({
+                "type": "tool_execution_start",
+                "toolCallId": "t1",
+                "toolName": "bash",
+                "args": { "command": "ls" },
+            }),
+            ".",
+        );
+        let Block::Tool(tool) = &transcript.blocks()[0] else {
+            panic!("第一块应是工具块");
+        };
+        assert!(tool.started_at.is_some());
+        assert_eq!(tool.duration_ms, None);
+
+        transcript.apply(
+            &serde_json::json!({
+                "type": "tool_execution_end",
+                "toolCallId": "t1",
+                "isError": false,
+                "durationMs": 1500,
+            }),
+            ".",
+        );
+        let Block::Tool(tool) = &transcript.blocks()[0] else {
+            panic!("第一块应是工具块");
+        };
+        assert_eq!(tool.status, ToolStatus::Ok);
+        assert_eq!(tool.duration_ms, Some(1500));
+        assert!(tool.started_at.is_none());
     }
 
     /// 选区底色与行内样式高亮合并后首尾相接、互不重叠（重叠段画不出底色）。

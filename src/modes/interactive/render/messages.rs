@@ -28,8 +28,8 @@ use crate::{
     },
     utils::{
         display::{
-            char_width, display_width, format_cost_usd, grapheme_width, sanitize_output,
-            truncate_display, wrap_line,
+            char_width, display_width, format_cost_usd, format_tool_duration, grapheme_width,
+            sanitize_output, truncate_display, wrap_line,
         },
         glyphs::{DEF_DONE, DEF_ELLIPSIS, DEF_FAILED, DEF_NESTED},
         terminal_image,
@@ -255,25 +255,6 @@ impl PendingTool {
             started_at_ms,
         }
     }
-}
-
-/// 工具耗时格式化：
-/// <60s → `X.Xs`；≥60s → `Xm Ys`；≥1h → `Xh Ym Zs`。
-fn format_tool_duration(ms: u64) -> String {
-    let seconds = ms as f64 / 1000.0;
-    if seconds < 60.0 {
-        return format!("{seconds:.1}s");
-    }
-
-    let total = seconds as u64;
-    let minutes = total / 60;
-    let remainder = total % 60;
-
-    if minutes < 60 {
-        return format!("{minutes}m {remainder}s");
-    }
-
-    format!("{}h {}m {remainder}s", minutes / 60, minutes % 60)
 }
 
 /// 渲染一条系统消息：`markdown` 为 true 时把片段拼出的文本交给聊天区 Markdown 渲染器

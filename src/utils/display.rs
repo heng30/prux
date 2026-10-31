@@ -218,6 +218,25 @@ pub fn format_rate(bytes_per_s: f64) -> String {
     format!("{}/s", format_bytes(bytes_per_s.max(0.0).round() as u64))
 }
 
+/// 工具耗时格式化：
+/// <60s → `X.Xs`；≥60s → `Xm Ys`；≥1h → `Xh Ym Zs`。
+pub fn format_tool_duration(ms: u64) -> String {
+    let seconds = ms as f64 / 1000.0;
+    if seconds < 60.0 {
+        return format!("{seconds:.1}s");
+    }
+
+    let total = seconds as u64;
+    let minutes = total / 60;
+    let remainder = total % 60;
+
+    if minutes < 60 {
+        return format!("{minutes}m {remainder}s");
+    }
+
+    format!("{}h {}m {remainder}s", minutes / 60, minutes % 60)
+}
+
 /// token 数量的紧凑展示：<1000 原样，否则 `1.2K` / `3.4M`（1 位小数）。
 pub fn format_tokens(value: u64) -> String {
     format_tokens_precise::<1>(value)
