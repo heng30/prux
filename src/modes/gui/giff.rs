@@ -8,9 +8,9 @@ use super::{
     code,
     text_edit::Editor,
     theme::{
-        CONTROL_H_MD, CONTROL_H_SM, DIFF_GUTTER_W, FONT_CAPTION, FONT_SMALL, HEADER_H, ICON_SIZE,
-        RADIUS_MD, RADIUS_SM, SCROLLBAR_HIT_WIDTH, SCROLLBAR_WIDTH, SPACE_MD, SPACE_SM, SPACE_XS,
-        SPACE_XXS, Theme, min_thumb, px,
+        CONTROL_H_LG, CONTROL_H_MD, CONTROL_H_SM, DIFF_GUTTER_W, FONT_CAPTION, FONT_SMALL,
+        HEADER_H, ICON_SIZE, RADIUS_MD, RADIUS_SM, SCROLLBAR_HIT_WIDTH, SCROLLBAR_WIDTH, SPACE_MD,
+        SPACE_SM, SPACE_XS, SPACE_XXS, Theme, min_thumb, px,
     },
 };
 use crate::utils::{color::Rgb, geometry, process::run_stdout};
@@ -780,7 +780,7 @@ fn search_box(theme: &Theme, panel: &RightPanel, cx: &mut gpui::Context<GuiApp>)
     div()
         .id("file-search")
         .w_full()
-        .h(px(CONTROL_H_MD))
+        .h(px(CONTROL_H_LG))
         .px(px(SPACE_SM))
         .rounded(px(RADIUS_MD))
         .flex()

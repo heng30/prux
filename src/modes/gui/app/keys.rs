@@ -116,16 +116,14 @@ impl GuiApp {
         // 右侧 Files 面板的搜索框聚焦时，按键先喂它（可打印字符由 IME 句柄写进去）
         if self.panel.visible
             && self.panel.search_focus
-            && self.dispatch_panel_search_key(&keystroke, primary, shift)
+            && self.dispatch_panel_search_key(&keystroke, primary)
         {
             cx.notify();
             return;
         }
 
         // 侧栏会话搜索框同理（顺序与 `ime_target` 一致：面板优先）
-        if self.session_search_active()
-            && self.dispatch_session_search_key(&keystroke, primary, shift)
-        {
+        if self.session_search_active() && self.dispatch_session_search_key(&keystroke, primary) {
             cx.notify();
             return;
         }
@@ -563,16 +561,12 @@ impl GuiApp {
     ///
     /// 可打印字符由 IME 句柄写进搜索框（见 `ime_target`），这里不重复插入。
     /// `None` 表示没处理；`Some(true)` 表示处理完并且要退出聚焦（Esc / Enter）。
-    fn search_key(
-        editor: &mut Editor,
-        keystroke: &gpui::Keystroke,
-        primary: bool,
-        shift: bool,
-    ) -> Option<bool> {
+    fn search_key(editor: &mut Editor, keystroke: &gpui::Keystroke, primary: bool) -> Option<bool> {
         // Ctrl / Cmd 组合留给全局快捷键
         if primary {
             return None;
         }
+
         match keystroke.key.as_str() {
             // Esc / Enter 先退出搜索（面板本身不关，Esc 再按一次才收起）
             "escape" | "enter" => Some(true),
@@ -584,22 +578,8 @@ impl GuiApp {
                 editor.delete_forward();
                 Some(false)
             }
-            "left" => {
-                editor.move_cursor(-1, 0, shift);
-                Some(false)
-            }
-            "right" => {
-                editor.move_cursor(1, 0, shift);
-                Some(false)
-            }
-            "home" => {
-                editor.home(shift);
-                Some(false)
-            }
-            "end" => {
-                editor.end(shift);
-                Some(false)
-            }
+            // 框内光标恒在末尾（渲染的竖条也只画在末尾），移动键吃掉不响应
+            "left" | "right" | "home" | "end" => Some(false),
             _ => None,
         }
     }
@@ -609,10 +589,8 @@ impl GuiApp {
         &mut self,
         keystroke: &gpui::Keystroke,
         primary: bool,
-        shift: bool,
     ) -> bool {
-        let Some(release) = Self::search_key(&mut self.panel.search, keystroke, primary, shift)
-        else {
+        let Some(release) = Self::search_key(&mut self.panel.search, keystroke, primary) else {
             return false;
         };
 
@@ -627,10 +605,8 @@ impl GuiApp {
         &mut self,
         keystroke: &gpui::Keystroke,
         primary: bool,
-        shift: bool,
     ) -> bool {
-        let Some(release) = Self::search_key(&mut self.session_search, keystroke, primary, shift)
-        else {
+        let Some(release) = Self::search_key(&mut self.session_search, keystroke, primary) else {
             return false;
         };
 
