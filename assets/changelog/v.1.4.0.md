@@ -481,6 +481,24 @@
   each counting only its own overflow. The hidden lines are now summed and the card ends with a
   single hint.
 
+- **The desktop GUI's `@` panel finds files the way the terminal UI does**: it used to filter a
+  one-shot list of files (depth-limited, files only) by substring, so directories, deeper files and
+  hidden files never came up and the order did not match. The panel now runs the same background
+  directory walk with the same path scoring: directories are candidates (completing to `dir/` so you
+  can keep typing into them), `.gitignore` / `.ignore` / `.fdignore` are honoured, hidden files are
+  listed, results rank by score then by depth, length and name, and a path that contains spaces or
+  CJK punctuation is completed as a quoted path. Typing a directory prefix scopes the walk to it
+  (`@src/mo` only walks `src`), a `@` that starts a word after `(`, `` ` `` or CJK punctuation
+  triggers the panel while the one in `user@example.com` does not, and continuing to type cancels the
+  previous walk.
+
+- **The desktop GUI's `/history` panel searches like the terminal UI's**: the filter matched the
+  whole query as one substring against the (truncated) first line only, so `bug fix` found nothing
+  and a prompt whose text sat on later lines could not be found at all. The query is now split on
+  whitespace into case-insensitive substrings that must all appear anywhere in the full prompt, in
+  any order, most recent first — the same rules the terminal UI uses. Entries whose first line is
+  blank fall back to a flattened single-line label instead of a raw multi-line one.
+
 - **Expanding a card in the desktop GUI no longer flickers**: the toggle changed the height, the
   pointer was still over the card when the button came up, and the second hit flipped it straight
   back. One entry now accepts a single toggle per 250 ms, and a toggle clears the previous frame's
@@ -825,3 +843,13 @@
 - **桌面 GUI 展开卡片不再抖动**：展开改变高度后，鼠标抬起时指针仍落在卡片上，会再命中一次把它切
   回去。同一条目现在 250ms 内只接受一次切换，切换时还会清掉上一帧的实测高度，布局不会压在旧高
   度上。
+- **桌面 GUI 的 `@` 面板与终端 UI 用同一套文件搜索**：以前是对一份一次性列出（限深度、只列文件）
+  的路径表做子串过滤，目录、更深的文件、隐藏文件都搜不到，顺序也不一样。现在走同一个后台目录遍历
+  与同一套路径打分：目录也是候选（补全成 `dir/` 便于继续往下敲），`.gitignore` / `.ignore` /
+  `.fdignore` 生效，隐藏文件可见，排序按分数再到层级、长度、名字，含空白或 CJK 标点的路径补全时
+  会加引号。输入目录前缀就把遍历范围收到该目录（`@src/mo` 只扫 `src`），`(`、反引号或 CJK 标点
+  之后的 `@` 会触发面板而 `user@example.com` 里的不会，继续输入会作废上一轮遍历。
+- **桌面 GUI 的 `/history` 面板与终端 UI 用同一套搜索**：以前把整串查询当成一个子串去匹配（被截断
+  的）首行，`bug fix` 这样的多词查询搜不到，正文在第二行以后的 prompt 也永远搜不到。现在查询按空
+  白分词、大小写不敏感，每个词都要出现在整段 prompt 里（词序无关），结果最近优先——与终端 UI 一致；
+  首行为空的条目改用压平后的单行标签，不再把多行原文当标签。

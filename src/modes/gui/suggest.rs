@@ -2,11 +2,12 @@
 //!
 //! 只做「识别触发词 + 给候选」，插入/执行由视图层负责（见 [`super::app`]）。
 //! 匹配规则与 TUI 一致：`/` 按字符顺序模糊匹配（[`crate::utils::fuzzy`]），
-//! `@` 按路径打分（[`crate::utils::fuzzy::path_score`]），都不是简单前缀。
+//! `@` 走同一套后台遍历与路径打分（[`crate::utils::path_suggest`]），都不是简单前缀。
 
 use crate::utils::{
-    fuzzy::{fuzzy_filter, path_score},
+    fuzzy::fuzzy_filter,
     mime::is_image_path,
+    path_suggest::{self, is_at_token_start, is_autocomplete_separator},
 };
 use std::path::Path;
 
@@ -77,10 +78,12 @@ impl Trigger {
 /// 一条候选。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Item {
-    /// 插入/展示的主文本（命令名或路径）
+    /// 展示的主文本（命令名、文件名、子命令名）
     pub label: String,
     /// 右侧灰色说明
     pub detail: String,
+    /// 写回输入框的文本（不含触发符与尾随空格）：命令是 `/名字`，文件是带目录前缀的路径
+    pub insert: String,
 }
 
 /// 当前补全状态。
@@ -108,7 +111,8 @@ fn token_start(text: &str) -> usize {
 
 /// 识别光标前的触发词，返回类型、起点（全文字节）与已输入前缀。
 ///
-/// `/` 只在行首生效（与命令行习惯一致），`@` 可以在行内任意位置。
+/// `/` 只在行首生效（与命令行习惯一致），`@` 可以在行内任意位置，但必须落在 token 起始
+/// （`user@example.com` 不算）且其后到光标为止没有分隔符（空白或 CJK 标点）。
 /// `!` / `!!` 是 shell 命令，没有候选，不触发面板。
 pub fn detect(text_before_cursor: &str) -> Option<(Trigger, usize, String)> {
     let start = token_start(text_before_cursor);
@@ -119,10 +123,17 @@ pub fn detect(text_before_cursor: &str) -> Option<(Trigger, usize, String)> {
         return Some((Trigger::Command, start, rest.to_string()));
     }
 
-    if let Some(rest) = token.strip_prefix('@') {
-        return Some((Trigger::File, start, rest.to_string()));
+    let at = text_before_cursor.rfind('@')?;
+    if !is_at_token_start(text_before_cursor, at) {
+        return None;
     }
-    None
+
+    let rest = &text_before_cursor[at + 1..];
+    if rest.contains(is_autocomplete_separator) {
+        return None;
+    }
+
+    Some((Trigger::File, at, rest.to_string()))
 }
 
 /// 命令候选：内置命令 + `extra`（技能、扩展命令）一起做字符顺序匹配并按匹配质量排序。
@@ -149,6 +160,7 @@ fn command_candidates(extra: &[(String, String)], query: &str) -> Vec<Item> {
     .map(|(name, detail)| Item {
         label: format!("/{name}"),
         detail: (*detail).to_string(),
+        insert: format!("/{name}"),
     })
     .collect()
 }
@@ -194,47 +206,21 @@ pub fn subcommands(defs: &[(String, String)], query: &str) -> Vec<Item> {
     .map(|(name, detail)| Item {
         label: name.clone(),
         detail: detail.clone(),
+        insert: name.clone(),
     })
     .collect()
 }
 
-/// 文件候选：路径打分（文件名完全>开头>子串，其次仅路径子串），同分按层级浅、路径短、字典序。
+/// 后台文件扫描结果 → 候选：主文本取文件名（同 TUI），说明行是路径，补全写回完整路径。
 ///
-/// 查询是子串而非字符顺序匹配（`@sgt` 不命中 `suggest.rs`）。
-/// `images_only` 为真时只列图片（附件按钮选「图片」后）。
-pub fn files(paths: &[String], query: &str, images_only: bool) -> Vec<Item> {
-    let query = query.trim();
-    let mut scored: Vec<(i32, &String)> = paths
-        .iter()
-        .filter(|path| !images_only || is_image_path(Path::new(path)))
-        .map(|path| {
-            let score = if query.is_empty() {
-                1
-            } else {
-                path_score(path, query, false)
-            };
-            (score, path)
-        })
-        .filter(|(score, _)| *score > 0)
-        .collect();
-    scored.sort_by(|(a_score, a_path), (b_score, b_path)| {
-        b_score
-            .cmp(a_score)
-            .then_with(|| {
-                a_path
-                    .matches('/')
-                    .count()
-                    .cmp(&b_path.matches('/').count())
-            })
-            .then_with(|| a_path.len().cmp(&b_path.len()))
-            .then_with(|| a_path.cmp(b_path))
-    });
-    scored
-        .into_iter()
-        .take(MAX_ITEMS)
-        .map(|(_, path)| Item {
-            label: format!("@{path}"),
-            detail: String::new(),
+/// `images_only` 为真时只留图片（附件按钮选「图片」后）。
+pub fn file_items(hits: Vec<path_suggest::Candidate>, images_only: bool) -> Vec<Item> {
+    hits.into_iter()
+        .filter(|candidate| !images_only || is_image_path(Path::new(&candidate.display)))
+        .map(|candidate| Item {
+            label: candidate.name,
+            detail: candidate.display,
+            insert: candidate.insert,
         })
         .collect()
 }
@@ -395,35 +381,48 @@ mod tests {
         assert_eq!(detect("第一行\n/x").map(|d| d.0), Some(Trigger::Command));
     }
 
-    /// 文件候选：文件名命中先于仅路径命中，同分按层级浅、路径短。
+    /// `@` 只在 token 起始触发：邮箱、模式后、已经敲了分隔符的都不算。
     #[test]
-    fn files_prefer_name_hits() {
-        let paths = vec![
-            "src/modes/gui/suggest.rs".to_string(),
-            "docs/suggest.md".to_string(),
-            "src/app.rs".to_string(),
-        ];
-        // 两者文件名都是开头命中（80）：路径更短、层级更浅的 docs 在前
-        let items = files(&paths, "suggest", false);
-        assert_eq!(items[0].label, "@docs/suggest.md");
-        assert!(items.iter().all(|item| item.label.starts_with('@')));
-        // 文件名子串命中（50）排在仅路径命中（30）前
-        let mixed = vec!["a/app.rs".to_string(), "app/x.rs".to_string()];
-        let got: Vec<String> = files(&mixed, "app", false)
-            .into_iter()
-            .map(|item| item.label)
-            .collect();
-        assert_eq!(got, vec!["@a/app.rs", "@app/x.rs"]);
-        // 子串语义：乱序字符不命中（与 `/` 的模糊匹配不同）
-        assert!(files(&paths, "sgt", false).is_empty());
+    fn detect_at_requires_token_start() {
+        // 邮箱里的 `@` 不是补全触发符
+        assert!(detect("user@example.com").is_none());
+        // 包装符后仍算 token 起始（与 TUI 一致）
+        assert_eq!(
+            detect("见 (@sr").map(|d| (d.0, d.2)),
+            Some((Trigger::File, "sr".into()))
+        );
+        // CJK 标点也是分隔符：查询只剩标点之后的部分
+        assert_eq!(
+            detect("看看，@src").map(|d| (d.0, d.2)),
+            Some((Trigger::File, "src".into()))
+        );
+        // 已经敲了分隔符：面板不弹（路径里不允许带空白）
+        assert!(detect("@my dir").is_none());
     }
 
-    /// 附件选「图片」时只列图片。
+    /// 文件候选：主文本是文件名、说明是路径，附件选「图片」时只留图片。
     #[test]
-    fn files_filter_images_only() {
-        let mixed = vec!["a/b.png".to_string(), "a/c.rs".to_string()];
-        let images = files(&mixed, "", true);
+    fn file_items_use_name_and_path() {
+        let hits = vec![
+            path_suggest::Candidate {
+                name: "b.png".into(),
+                display: "a/b.png".into(),
+                insert: "a/b.png".into(),
+            },
+            path_suggest::Candidate {
+                name: "c.rs".into(),
+                display: "a/c.rs".into(),
+                insert: "a/c.rs".into(),
+            },
+        ];
+
+        let all = file_items(hits.clone(), false);
+        assert_eq!(all[0].label, "b.png");
+        assert_eq!(all[0].detail, "a/b.png");
+        assert_eq!(all[0].insert, "a/b.png");
+
+        let images = file_items(hits, true);
         assert_eq!(images.len(), 1);
-        assert_eq!(images[0].label, "@a/b.png");
+        assert_eq!(images[0].label, "b.png");
     }
 }

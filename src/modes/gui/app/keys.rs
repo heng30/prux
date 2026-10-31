@@ -145,6 +145,7 @@ impl GuiApp {
                 "escape" => {
                     self.suggest_dismissed = Some(suggest.start);
                     self.suggest = None;
+                    self.cancel_file_scan();
                     cx.notify();
                     return true;
                 }
@@ -208,6 +209,7 @@ impl GuiApp {
                         // 面板输入已空：收起面板，触发符留在输入框里由用户自己删
                         self.suggest_dismissed = Some(suggest.start);
                         self.suggest = None;
+                        self.cancel_file_scan();
                     } else {
                         self.suggest_input.backspace();
                         self.refresh_suggest_from_input(cx);

@@ -219,6 +219,7 @@ impl GuiApp {
                     action: Action::ToggleExtension(name),
                     checked: Some(enabled),
                     cells: vec![modes_cell], // 表格第二列：扩展可用的模式
+                    ..Entry::default()
                 }
             })
             .collect();
@@ -274,6 +275,7 @@ impl GuiApp {
                     checked: Some(on),
                     // 表格第 2、3 列：来源根目录（超宽截断）+ 描述
                     cells: vec![source, description],
+                    ..Entry::default()
                 }
             })
             .collect();
@@ -396,6 +398,7 @@ impl GuiApp {
                     checked: Some(on),
                     // 表格第 2、3 列：provider + 模型显示名
                     cells: vec![provider, name],
+                    ..Entry::default()
                 }
             })
             .collect();

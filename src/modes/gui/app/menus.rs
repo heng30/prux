@@ -485,9 +485,11 @@ impl GuiApp {
 
             if let Some(path) = picked {
                 _ = this.update(cx, |app, cx| {
-                    _ = app.cmd_tx.send(AgentCommand::SwitchCwd {
-                        path: path.to_string_lossy().to_string(),
-                    });
+                    if !app.cwd_switch_blocked(cx) {
+                        _ = app.cmd_tx.send(AgentCommand::SwitchCwd {
+                            path: path.to_string_lossy().to_string(),
+                        });
+                    }
                     cx.notify();
                 });
             }

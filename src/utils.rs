@@ -20,6 +20,7 @@ pub mod image;
 pub mod mime;
 pub mod net;
 pub mod output_files;
+pub mod path_suggest;
 pub mod paths;
 pub mod process;
 pub mod proxy;

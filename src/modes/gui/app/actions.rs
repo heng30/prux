@@ -301,9 +301,15 @@ impl GuiApp {
                 _ = settings_manager::write_settings_ui_scale(Some(theme::set_ui_scale(scale)));
             }
             Action::SwitchCwdTo(path) => {
-                _ = self.cmd_tx.send(AgentCommand::SwitchCwd { path });
+                if !self.cwd_switch_blocked(cx) {
+                    _ = self.cmd_tx.send(AgentCommand::SwitchCwd { path });
+                }
             }
-            Action::BrowseCwd => self.pick_working_directory(cx),
+            Action::BrowseCwd => {
+                if !self.cwd_switch_blocked(cx) {
+                    self.pick_working_directory(cx);
+                }
+            }
             Action::Settings => self.open_settings_panel(cx),
             Action::ToggleSkill { name, enable } => {
                 let now = std::time::Instant::now();
@@ -486,6 +492,21 @@ impl GuiApp {
             }
         }
         cx.notify();
+    }
+
+    /// 回合进行中不允许切工作目录：worker 会把命令排到回合结束，届时新会话清空上下文，
+    /// 排队中的追问会落到新目录里。返回 `true` 表示已被拦下并给了提示。
+    pub(super) fn cwd_switch_blocked(&mut self, cx: &mut Context<Self>) -> bool {
+        if !self.busy {
+            return false;
+        }
+
+        self.toast(
+            "Wait for the current turn to finish before switching directory",
+            ToastKind::Info,
+            cx,
+        );
+        true
     }
 
     /// 中止当前回合（Esc 与停止按钮共用）。

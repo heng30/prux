@@ -84,7 +84,7 @@ use std::{
     ops::Range,
     path::{Path, PathBuf},
     rc::Rc,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, atomic::AtomicBool},
     time::{Duration, Instant},
 };
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -140,17 +140,6 @@ struct Dropdown {
     handle: ScrollHandle,
     /// 键盘高亮的行（打开时从第一行算起）
     selected: usize,
-}
-
-/// `@` 补全的文件路径缓存。
-#[derive(Default)]
-struct FilesCache {
-    /// 缓存对应的目录
-    cwd: String,
-    /// 是否正在后台列文件
-    loading: bool,
-    /// 相对路径
-    paths: Vec<String>,
 }
 
 /// 侧栏会话行的右键菜单。
@@ -319,8 +308,8 @@ pub struct GuiApp {
     suggest: Option<Suggest>,
     /// 被手动关掉的补全触发位置（Esc / 退格删空）：同一次触发不再自动弹回
     suggest_dismissed: Option<usize>,
-    /// `@` 补全用的文件路径缓存
-    files_cache: FilesCache,
+    /// 进行中的 `@` 补全扫描的中止开关（换查询时作废旧扫描）
+    file_scan_cancel: Option<Arc<AtomicBool>>,
     /// 当前工作目录的 git 分支（非仓库为 None）
     branch: Option<String>,
     /// 上一次切换的条目与时间（面板重建后鼠标抬起会再触发一次 click，挡掉重复）
@@ -454,7 +443,7 @@ impl GuiApp {
             pinned_bottom: Rc::new(Cell::new(Some(px(0.)))),
             flow_height: Rc::new(Cell::new(None)),
             suggest: None,
-            files_cache: FilesCache::default(),
+            file_scan_cancel: None,
             branch: None,
             last_toggle: None,
             extensions_draft: None,
@@ -941,6 +930,8 @@ fn prune_recent_cwds() {
 }
 
 /// prompt 历史 → 面板条目：最新的在前，标签取首行并夹到 [`HISTORY_LABEL_WIDTH`]。
+///
+/// `search` 放整段 prompt：标签只有首行且被截断，多行 prompt 的中文内容得靠它才搜得到。
 fn history_entries(history: Vec<HistoryEntry>) -> Vec<Entry> {
     let mut entries: Vec<Entry> = history
         .into_iter()
@@ -956,12 +947,13 @@ fn history_entries(history: Vec<HistoryEntry>) -> Vec<Entry> {
 
             Entry {
                 label: if label.is_empty() {
-                    item.text.clone()
+                    display::flatten_line(&item.text)
                 } else {
                     label
                 },
                 detail: String::new(),
-                action: Action::InsertText(item.text),
+                action: Action::InsertText(item.text.clone()),
+                search: item.text,
                 ..Entry::default()
             }
         })

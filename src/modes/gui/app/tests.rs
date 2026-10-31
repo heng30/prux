@@ -338,3 +338,36 @@ fn restore_queued_messages_prepends_steer_then_follow_up() {
     // 空队列：不动编辑器
     assert!(restore_text(&inbox, &mut follow_ups, "draft").is_none());
 }
+
+/// `/history` 的搜索与 TUI 同语义：空白分词 AND、大小写不敏感、搜整段 prompt（不只首行）。
+#[test]
+fn history_filter_matches_tokens_in_full_prompt() {
+    let history = vec![
+        HistoryEntry {
+            text: "fix the bug".into(),
+            ts: 0,
+        },
+        HistoryEntry {
+            text: "add tests\nwith BUG cases".into(),
+            ts: 0,
+        },
+    ];
+    let mut list = List::new("History", history_entries(history));
+
+    // 最近优先：两条都在，最新的在前
+    assert_eq!(list.filtered(), vec![0, 1]);
+
+    // 多词 AND + 大小写不敏感：词序无关（条目已倒序，下标 1 是 "fix the bug"）
+    list.query.insert("bug fix");
+    assert_eq!(list.filtered(), vec![1]);
+
+    // 第二行（首行之外）的内容也能搜到：标签只有 "add tests"
+    list.query = Editor::new();
+    list.query.insert("tests bug");
+    assert_eq!(list.filtered(), vec![0]);
+
+    // 零匹配
+    list.query = Editor::new();
+    list.query.insert("zzz");
+    assert!(list.filtered().is_empty());
+}

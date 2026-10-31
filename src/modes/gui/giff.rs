@@ -360,14 +360,6 @@ fn read_file(cwd: &str, path: &str, syn: &SynTheme) -> FileContent {
 }
 
 /// 列出工作区文件（尊重 gitignore，跳过隐藏目录与常见重目录）。
-/// 列文件（供输入框 `@` 补全用），返回相对路径。
-pub(super) fn file_paths(cwd: &str) -> Vec<String> {
-    list_files(Path::new(cwd))
-        .into_iter()
-        .map(|row| row.path)
-        .collect()
-}
-
 fn list_files(cwd: &Path) -> Vec<FileRow> {
     let mut rows = Vec::new();
     let walker = ignore::WalkBuilder::new(cwd)

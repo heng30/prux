@@ -3,7 +3,11 @@
 //! 拆自 [`super::app`]：候选数据来自 [`super::suggest`]，这里只管交互状态。
 
 use super::*;
-use crate::core;
+use crate::{core, utils::path_suggest};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering as AtomicOrdering},
+};
 
 /// 扩展命令声明的子命令候选：`(名字, 说明)` 按声明顺序；命令不存在或没声明则为空。
 fn subcommand_defs(command: &str) -> Vec<(String, String)> {
@@ -37,6 +41,7 @@ impl GuiApp {
         if self.editor.browsing_history() {
             self.suggest = None;
             self.attach_images = false;
+            self.cancel_file_scan();
             return;
         }
 
@@ -60,6 +65,7 @@ impl GuiApp {
             self.suggest = None;
             self.suggest_dismissed = None;
             self.attach_images = false;
+            self.cancel_file_scan();
             return;
         };
 
@@ -94,7 +100,7 @@ impl GuiApp {
         self.rebuild_suggest(trigger, start, command, query, cx);
     }
 
-    /// 文件列表到位/输入变化后重算：面板开着按面板输入，否则按主输入框。
+    /// 输入变化后重算（IME 写入走这条）：面板开着按面板输入，否则按主输入框。
     pub(super) fn refresh_suggest_any(&mut self, cx: &mut Context<Self>) {
         if self.suggest.is_some() {
             self.refresh_suggest_from_input(cx);
@@ -112,6 +118,9 @@ impl GuiApp {
         query: String,
         cx: &mut Context<Self>,
     ) {
+        // 新一轮候选重建：作废还在跑的旧 `@` 扫描（File 分支会再派发新的）
+        self.cancel_file_scan();
+
         let items = match trigger {
             Trigger::Command => {
                 // 命令 + 本会话技能（`/skill:名称`，与 TUI 的技能命令同形）+ 已启用扩展声明的命令，
@@ -141,8 +150,14 @@ impl GuiApp {
                 suggest_engine::commands_with(&extra, &query)
             }
             Trigger::File => {
-                self.ensure_files(cx);
-                suggest_engine::files(&self.files_cache.paths, &query, self.attach_images)
+                // 与 TUI 同一套后台遍历（`utils::path_suggest`）：新结果回来前先留着上一批候选，
+                // 否则每敲一个字都会闪一下「No matches」。
+                self.scan_files(query.clone(), cx);
+                self.suggest
+                    .as_ref()
+                    .filter(|old| old.trigger == Trigger::File)
+                    .map(|old| old.items.clone())
+                    .unwrap_or_default()
             }
             Trigger::Subcommand => suggest_engine::subcommands(&subcommand_defs(&command), &query),
         };
@@ -168,34 +183,57 @@ impl GuiApp {
         });
     }
 
-    /// 确保 `@` 补全的文件列表已按当前目录加载（第一次用时后台列一次）。
-    pub(super) fn ensure_files(&mut self, cx: &mut Context<Self>) {
+    /// `@` 文件候选：派发后台扫描（先作废上一次，用户继续输入时旧 walk 尽快退出），
+    /// 结果回来时若面板还在同一触发词、同一前缀下就填进去。
+    pub(super) fn scan_files(&mut self, query: String, cx: &mut Context<Self>) {
+        self.cancel_file_scan();
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.file_scan_cancel = Some(Arc::clone(&cancel));
+
         let cwd = self.cwd();
-        if self.files_cache.loading
-            || (self.files_cache.cwd == cwd && !self.files_cache.paths.is_empty())
-        {
-            return;
-        }
-
-        self.files_cache = FilesCache {
-            cwd: cwd.clone(),
-            loading: true,
-            paths: Vec::new(),
-        };
-
+        let scanned = query.clone();
+        let images_only = self.attach_images;
         cx.spawn(async move |this, cx| {
-            let paths = cx
+            let hits = cx
                 .background_executor()
-                .spawn(async move { giff::file_paths(&cwd) })
+                .spawn(async move {
+                    path_suggest::candidates(&scanned, &cwd, suggest_engine::MAX_ITEMS, &cancel)
+                })
                 .await;
             _ = this.update(cx, |this, cx| {
-                this.files_cache.loading = false;
-                this.files_cache.paths = paths;
-                this.refresh_suggest_any(cx);
-                cx.notify();
+                this.apply_file_scan(query, hits, images_only, cx);
             });
         })
         .detach();
+    }
+
+    /// 扫描结果到位：面板已不是同一前缀（用户又输了几个字）就丢弃这一批。
+    fn apply_file_scan(
+        &mut self,
+        query: String,
+        hits: Vec<path_suggest::Candidate>,
+        images_only: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(suggest) = self.suggest.as_mut() else {
+            return;
+        };
+
+        if suggest.trigger != Trigger::File || suggest.query != query {
+            return;
+        }
+
+        suggest.items = suggest_engine::file_items(hits, images_only);
+        suggest.selected = suggest.selected.min(suggest.items.len().saturating_sub(1));
+        cx.notify();
+    }
+
+    /// 作废进行中的 `@` 扫描（不阻塞：walk 在下一个条目处退出并丢弃结果）。
+    pub(super) fn cancel_file_scan(&mut self) {
+        if let Some(cancel) = self.file_scan_cancel.take() {
+            cancel.store(true, AtomicOrdering::Relaxed);
+        }
     }
 
     /// 上下移动补全选中项（越界回绕）。
@@ -234,8 +272,11 @@ impl GuiApp {
 
         // 子命令把 `/命令 查询词` 整段重写：命令名与子命令不会因重复采纳粘在一起
         let insert = match suggest.trigger {
-            Trigger::Subcommand => format!("/{} {} ", suggest.command, item.label),
-            _ => format!("{} ", item.label),
+            Trigger::Subcommand => format!("/{} {} ", suggest.command, item.insert),
+            Trigger::Command => format!("{} ", item.insert),
+            // 目录不带尾随空格，便于接着补全它的子路径（同 TUI）
+            Trigger::File if item.insert.ends_with('/') => format!("@{}", item.insert),
+            Trigger::File => format!("@{} ", item.insert),
         };
 
         self.editor.replace_byte_range(start..end, &insert);
