@@ -53,8 +53,6 @@ pub enum Action {
     RefreshSessions,
     /// 设置界面缩放系数（1.0 = 设计稿尺寸）
     Scale(f32),
-    /// 把一段文本写回输入框（历史面板）
-    InsertText(String),
     /// 技能面板：在草稿里把某个技能切到目标启停态
     ToggleSkill {
         /// 技能名
@@ -62,6 +60,8 @@ pub enum Action {
         /// true = 打开，false = 关闭
         enable: bool,
     },
+    /// 确认面板里的 Yes：真的删（`true` = 所有项目）
+    HistoryClear(bool),
     /// 切到某个工作目录（最近目录列表）
     SwitchCwdTo(String),
     /// 打开系统目录选择器
@@ -262,19 +262,12 @@ pub struct Entry {
     /// 表格模式下除第一列以外的单元格（与 [`List::columns`] 从第二列起一一对应）；
     /// 空 = 普通两列布局
     pub cells: Vec<String>,
-    /// 过滤用的原文（与展示无关）：不空时只搜它，空时搜 label / detail / cells。
-    /// `/history` 的 label 只有首行且被截断，搜整段 prompt 必须靠这个字段。
-    pub search: String,
 }
 
 impl Entry {
-    /// 单个（已转小写的）查询词是否命中：有 `search` 就是它，否则 label / detail / cells 任一即可。
+    /// 单个（已转小写的）查询词是否命中：label / detail / cells 任一包含它即可。
     pub fn matches(&self, token: &str) -> bool {
         let hit = |text: &str| text.to_lowercase().contains(token);
-        if !self.search.is_empty() {
-            return hit(&self.search);
-        }
-
         hit(&self.label) || hit(&self.detail) || self.cells.iter().any(|cell| hit(cell))
     }
 }
@@ -287,7 +280,6 @@ impl Default for Entry {
             action: Action::None,
             checked: None,
             cells: Vec::new(),
-            search: String::new(),
         }
     }
 }
@@ -367,17 +359,19 @@ impl List {
     /// 词与词之间是 AND、不是短语匹配：查 `fix bug` 既能命中 `fix the bug`，
     /// 也能命中 `BUG fix`（与 `/history` 的搜索语义一致）。
     pub fn filtered(&self) -> Vec<usize> {
-        let query = self.query.text().to_lowercase();
+        let query = self.query.text().trim().to_lowercase();
         let tokens: Vec<&str> = query.split_whitespace().collect();
+
         if tokens.is_empty() {
             return (0..self.entries.len()).collect();
         }
 
-        self.entries
-            .iter()
-            .enumerate()
-            .filter(|(_, entry)| tokens.iter().all(|token| entry.matches(token)))
-            .map(|(index, _)| index)
+        (0..self.entries.len())
+            .filter(|&index| {
+                tokens
+                    .iter()
+                    .all(|token| self.entries[index].matches(token))
+            })
             .collect()
     }
 

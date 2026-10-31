@@ -4,12 +4,29 @@
 //! 匹配规则与 TUI 一致：`/` 按字符顺序模糊匹配（[`crate::utils::fuzzy`]），
 //! `@` 走同一套后台遍历与路径打分（[`crate::utils::path_suggest`]），都不是简单前缀。
 
-use crate::utils::{
-    fuzzy::fuzzy_filter,
-    mime::is_image_path,
-    path_suggest::{self, is_at_token_start, is_autocomplete_separator},
+use crate::{
+    core::prompt_history::HistoryEntry,
+    utils::{
+        display::flatten_line,
+        fuzzy::fuzzy_filter,
+        mime::is_image_path,
+        path_suggest::{self, is_at_token_start, is_autocomplete_separator},
+    },
 };
 use std::path::Path;
+
+/// `/history` 面板里的控制词：(词, 描述, 是否影响所有项目)。
+///
+/// 加 `@` 前缀是为了与自由文本搜索词**分层**：否则 `clear` 这类很可能会出现在
+/// prompt 里的词（“clear the cache”）会从「搜索词」变成「删除动作」。
+pub const HISTORY_ACTIONS: [(&str, &str, bool); 2] = [
+    ("@clear", "Remove prompt history for this project", false),
+    (
+        "@clear-all",
+        "Remove ALL prompt history files (every project)",
+        true,
+    ),
+];
 
 /// 候选面板最多显示几条。
 pub const MAX_ITEMS: usize = 40;
@@ -66,10 +83,12 @@ pub enum Trigger {
     File,
     /// `/<命令> ` 之后的子命令（扩展命令声明的二级候选）
     Subcommand,
+    /// `/history [关键词]` 的 prompt 历史候选
+    History,
 }
 
 impl Trigger {
-    /// 采纳候选后是否立即提交：命令与子命令补全即执行，`@` 文件只补全。
+    /// 采纳候选后是否立即提交：命令与子命令补全即执行，`@` 文件与历史只补全。
     pub fn submits_after_apply(self) -> bool {
         matches!(self, Trigger::Command | Trigger::Subcommand)
     }
@@ -117,9 +136,16 @@ fn token_start(text: &str) -> usize {
 pub fn detect(text_before_cursor: &str) -> Option<(Trigger, usize, String)> {
     let start = token_start(text_before_cursor);
     let token = &text_before_cursor[start..];
-    let at_line_start = start == 0 || text_before_cursor[..start].ends_with('\n');
 
-    if at_line_start && let Some(rest) = token.strip_prefix('/') {
+    // 只看本行 `/` 之前的部分：行首缩进忽略（同终端 UI），行中出现的 `/` 不算
+    let line_prefix = match text_before_cursor[..start].rfind('\n') {
+        Some(index) => &text_before_cursor[index + 1..start],
+        None => &text_before_cursor[..start],
+    };
+
+    if line_prefix.trim().is_empty()
+        && let Some(rest) = token.strip_prefix('/')
+    {
         return Some((Trigger::Command, start, rest.to_string()));
     }
 
@@ -168,6 +194,75 @@ fn command_candidates(extra: &[(String, String)], query: &str) -> Vec<Item> {
 /// 命令候选（内置 + 技能 + 扩展命令），排序与查询不分来源。
 pub fn commands_with(extra: &[(String, String)], query: &str) -> Vec<Item> {
     command_candidates(extra, query)
+}
+
+/// 识别 `/history [关键词]`：返回（整行起点、关键词）。
+///
+/// 只认行首的 `/history` 及其后紧跟的空白（`/historyfoo` 不算没写完的命令），
+/// 关键词可含空格——历史面板是「整行替换」，所以起点恒为本行行首。
+pub fn detect_history(text_before_cursor: &str) -> Option<(usize, String)> {
+    let start = text_before_cursor.rfind('\n').map_or(0, |index| index + 1);
+    let rest = text_before_cursor[start..].strip_prefix("/history")?;
+    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+
+    Some((start, rest.trim_start().to_string()))
+}
+
+/// 历史条目对应的控制词（`@clear` / `@clear-all`）；普通历史文本返回 `None`。
+pub fn history_action(text: &str) -> Option<(&'static str, &'static str, bool)> {
+    HISTORY_ACTIONS
+        .iter()
+        .find(|(name, _, _)| *name == text)
+        .copied()
+}
+
+/// 控制词候选：查询以 `@` 开头且是某个控制词的**前缀**时才命中。
+///
+/// 无匹配返回 `None`（而不是空列表）：那样 `/history @foo` 会退化成搜历史正文里的
+/// `@foo`，而不是把用户卡在一个空面板上。
+pub fn history_action_items(query: &str) -> Option<Vec<Item>> {
+    let query = query.trim().to_lowercase();
+    if !query.starts_with('@') {
+        return None;
+    }
+
+    let items: Vec<Item> = HISTORY_ACTIONS
+        .iter()
+        .filter(|(name, _, _)| name.starts_with(&query))
+        .map(|(name, detail, _)| Item {
+            label: (*name).to_string(),
+            detail: (*detail).to_string(),
+            insert: (*name).to_string(),
+        })
+        .collect();
+    (!items.is_empty()).then_some(items)
+}
+
+/// 历史候选：**空白分词 + 子串 AND**（大小写不敏感），最近优先；空查询 = 全部。
+///
+/// 主文本压平成单行（多行 prompt 不撑破行高），`insert` 保留原文（多行条目补全后仍是多行）。
+pub fn history_items(history: &[HistoryEntry], query: &str) -> Vec<Item> {
+    let tokens: Vec<String> = query
+        .split_whitespace()
+        .map(|token| token.to_lowercase())
+        .collect();
+
+    history
+        .iter()
+        .rev()
+        .filter(|entry| {
+            let lower = entry.text.to_lowercase();
+            tokens.iter().all(|token| lower.contains(token.as_str()))
+        })
+        .take(MAX_ITEMS)
+        .map(|entry| Item {
+            label: flatten_line(&entry.text),
+            detail: String::new(),
+            insert: entry.text.clone(),
+        })
+        .collect()
 }
 
 /// 识别 `/命令 <子命令查询>`，返回（整行命令起点、命令名、查询词）。
@@ -229,10 +324,15 @@ pub fn file_items(hits: Vec<path_suggest::Candidate>, images_only: bool) -> Vec<
 mod tests {
     use super::*;
 
-    /// 行首的 `/` 才算触发；行中的 `/` 与 shell 的 `!` `!!` 都不触发。
+    /// 行首的 `/` 才算触发（行首缩进忽略）；行中的 `/` 与 shell 的 `!` `!!` 都不触发。
     #[test]
     fn detects_line_start_triggers() {
         assert_eq!(detect("/mo"), Some((Trigger::Command, 0, "mo".to_string())));
+        // 行首缩进：同终端 UI，忽略前导空白但锚点指回原位
+        assert_eq!(
+            detect("   /mo"),
+            Some((Trigger::Command, 3, "mo".to_string()))
+        );
         assert_eq!(detect("看下 /usr 里的东西"), None);
         assert_eq!(detect("!ls"), None);
         assert_eq!(detect("!!ls"), None);
@@ -424,5 +524,81 @@ mod tests {
         let images = file_items(hits, true);
         assert_eq!(images.len(), 1);
         assert_eq!(images[0].label, "b.png");
+    }
+
+    /// `/history` 只在行首、且命令名后是空白或结尾时接管；`/historyfoo` 还得走命令候选。
+    #[test]
+    fn history_triggers_on_exact_command_only() {
+        assert_eq!(detect_history("/history"), Some((0, String::new())));
+        assert_eq!(detect_history("/history "), Some((0, String::new())));
+        assert_eq!(
+            detect_history("/history fix bug"),
+            Some((0, "fix bug".to_string()))
+        );
+        assert_eq!(detect_history("/historyfoo"), None);
+        // 第二行行首：起点跟着行走（「第一行\n」= 3×3 字节 + 换行）
+        assert_eq!(
+            detect_history("第一行\n/history bug"),
+            Some((10, "bug".to_string()))
+        );
+        assert_eq!(detect_history("看下 /history"), None);
+    }
+
+    /// 历史候选：最近优先、空白分词 AND、大小写不敏感、搜整段 prompt（不只首行）。
+    #[test]
+    fn history_items_filter_tokens_and_keep_latest_first() {
+        let history = vec![
+            HistoryEntry {
+                text: "fix the bug".into(),
+                ts: 0,
+            },
+            HistoryEntry {
+                text: "add tests\nwith BUG cases".into(),
+                ts: 0,
+            },
+        ];
+
+        let labels = |query: &str| -> Vec<String> {
+            history_items(&history, query)
+                .into_iter()
+                .map(|item| item.label)
+                .collect()
+        };
+
+        assert_eq!(labels(""), vec!["add tests with BUG cases", "fix the bug"]);
+        assert_eq!(labels("bug fix"), vec!["fix the bug"], "词序无关");
+        assert_eq!(labels("tests bug"), vec!["add tests with BUG cases"]);
+        assert!(labels("zzz").is_empty(), "零匹配");
+        // 多行条目：label 压平成单行，insert 保留换行
+        assert_eq!(
+            history_items(&history, "tests")[0].insert,
+            "add tests\nwith BUG cases"
+        );
+    }
+
+    /// 控制词只在 `@` 前缀下出现；`clear` 这类词仍是普通搜索词。
+    #[test]
+    fn history_control_words_only_for_at_prefix() {
+        let names = |query: &str| -> Vec<String> {
+            history_action_items(query)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|item| item.label)
+                .collect()
+        };
+
+        assert_eq!(names("@cl"), vec!["@clear", "@clear-all"]);
+        assert_eq!(names("@clear-all"), vec!["@clear-all"]);
+        assert!(history_action_items("@foo").is_none(), "退回搜正文");
+        assert!(history_action_items("clear").is_none());
+        assert!(history_action_items("").is_none());
+
+        // 采纳/执行时靠 insert 反查控制词
+        assert_eq!(
+            history_action("@clear-all").map(|(_, _, all)| all),
+            Some(true)
+        );
+        assert_eq!(history_action("@clear").map(|(_, _, all)| all), Some(false));
+        assert!(history_action("fix the bug").is_none());
     }
 }

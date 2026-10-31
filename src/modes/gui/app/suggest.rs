@@ -46,19 +46,23 @@ impl GuiApp {
         }
 
         let before = self.editor.text_before_cursor();
-        let detected = match suggest_engine::detect(&before) {
-            Some((trigger, start, query)) => Some((trigger, start, String::new(), query)),
-            // `/命令 ` 后的第一个词：扩展命令声明了子命令才弹二级候选
-            None => {
-                suggest_engine::detect_subcommand(&before).and_then(|(start, command, query)| {
-                    (!subcommand_defs(&command).is_empty()).then_some((
-                        Trigger::Subcommand,
-                        start,
-                        command,
-                        query,
-                    ))
-                })
-            }
+        // `/history …` 优先：它也是行首 `/`，不先拦就会被当成命令候选（一敲空格就空面板）
+        let detected = match suggest_engine::detect_history(&before) {
+            Some((start, query)) => Some((Trigger::History, start, String::new(), query)),
+            None => match suggest_engine::detect(&before) {
+                Some((trigger, start, query)) => Some((trigger, start, String::new(), query)),
+                // `/命令 ` 后的第一个词：扩展命令声明了子命令才弹二级候选
+                None => suggest_engine::detect_subcommand(&before).and_then(
+                    |(start, command, query)| {
+                        (!subcommand_defs(&command).is_empty()).then_some((
+                            Trigger::Subcommand,
+                            start,
+                            command,
+                            query,
+                        ))
+                    },
+                ),
+            },
         };
 
         let Some((trigger, start, command, query)) = detected else {
@@ -160,7 +164,27 @@ impl GuiApp {
                     .unwrap_or_default()
             }
             Trigger::Subcommand => suggest_engine::subcommands(&subcommand_defs(&command), &query),
+            // 控制词优先；不是控制词就搜项目 prompt 历史。每次按键重读一遍历史文件
+            // （几百条 JSONL，毫秒级），实时过滤比加缓存/失效逻辑简单
+            Trigger::History => match suggest_engine::history_action_items(&query) {
+                Some(items) => items,
+                None => suggest_engine::history_items(
+                    &core::prompt_history::load(
+                        &self.cwd(),
+                        settings_manager::read_settings_history_max_entries(),
+                    ),
+                    &query,
+                ),
+            },
         };
+
+        // 没有候选就收起面板（同终端 UI）：`/` 命令与子命令的空结果不该留一个「No matches」的空框。
+        // `@` 文件候选要等后台扫描回来才知道有没有（见 `apply_file_scan`），历史面板零匹配时
+        // 留在原地当搜索框用。
+        if items.is_empty() && matches!(trigger, Trigger::Command | Trigger::Subcommand) {
+            self.close_empty_suggest();
+            return;
+        }
 
         // 同一触发词 + 同一前缀：保留选中项，避免每敲一个字符跳回第一行
         let keep = self
@@ -225,8 +249,52 @@ impl GuiApp {
         }
 
         suggest.items = suggest_engine::file_items(hits, images_only);
+        // 扫描回来是空：收起面板（同终端 UI），别留一个「No matches」的空框
+        if suggest.items.is_empty() {
+            self.close_empty_suggest();
+            cx.notify();
+            return;
+        }
+
         suggest.selected = suggest.selected.min(suggest.items.len().saturating_sub(1));
         cx.notify();
+    }
+
+    /// 把面板输入框的查询词回填到主输入框（保持触发符 + 前缀的原文）。
+    ///
+    /// 面板开着时继续敲的字符只进面板输入框；面板关闭前不回填，刚敲的字就随面板一起消失。
+    pub(super) fn restore_suggest_input(&mut self) {
+        let Some(suggest) = self.suggest.clone() else {
+            return;
+        };
+
+        let input = self.suggest_input.text();
+        let text = match suggest.trigger {
+            Trigger::Command => format!("/{input}"),
+            Trigger::Subcommand => format!("/{} {input}", suggest.command),
+            Trigger::File => format!("@{input}"),
+            Trigger::History => format!("/history {input}").trim_end().to_string(),
+        };
+
+        let end = self.editor.cursor_byte();
+        let start = suggest.start.min(end);
+        self.editor.replace_byte_range(start..end, &text);
+    }
+
+    /// 空结果收起面板（同终端 UI）：`/`、`@` 没候选就不留一个「No matches」的空框。
+    /// 历史面板例外：零匹配时留在原地当搜索框用。
+    pub(super) fn close_empty_suggest(&mut self) {
+        if self
+            .suggest
+            .as_ref()
+            .is_none_or(|s| s.trigger == Trigger::History)
+        {
+            return;
+        }
+
+        self.restore_suggest_input();
+        self.suggest = None;
+        self.attach_images = false;
     }
 
     /// 作废进行中的 `@` 扫描（不阻塞：walk 在下一个条目处退出并丢弃结果）。
@@ -277,6 +345,9 @@ impl GuiApp {
             // 目录不带尾随空格，便于接着补全它的子路径（同 TUI）
             Trigger::File if item.insert.ends_with('/') => format!("@{}", item.insert),
             Trigger::File => format!("@{} ", item.insert),
+            // 历史：整行替换成 prompt 原文，不加尾随空格；控制词不是可填入的文本
+            Trigger::History if suggest_engine::history_action(&item.insert).is_some() => return,
+            Trigger::History => item.insert.clone(),
         };
 
         self.editor.replace_byte_range(start..end, &insert);
@@ -302,6 +373,8 @@ impl GuiApp {
             Trigger::Command => format!("/{input} "),
             Trigger::File => format!("@{input} "),
             Trigger::Subcommand => format!("/{} {input} ", suggest.command),
+            // 历史面板里没候选时没什么可补的，原样收手（别把 `/history …` 当 prompt 留下）
+            Trigger::History => return,
         };
 
         let end = self.editor.cursor_byte();

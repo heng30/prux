@@ -143,6 +143,8 @@ impl GuiApp {
             let ctrl_k = primary && !shift && keystroke.key == "k";
             match keystroke.key.as_str() {
                 "escape" => {
+                    // 面板输入框里的字符先还给主输入框，再到关闭状态
+                    self.restore_suggest_input();
                     self.suggest_dismissed = Some(suggest.start);
                     self.suggest = None;
                     self.cancel_file_scan();
@@ -183,6 +185,21 @@ impl GuiApp {
                     cx.notify();
                     return true;
                 }
+                // `/history`：Enter 只把选中条目写回输入框（TUI 同语义）；零匹配时吞掉 Enter，
+                // 免得把 `/history 关键词` 当成 prompt 发出去。`@clear` / `@clear-all` 直接弹删除确认。
+                "enter" if suggest.trigger == Trigger::History => {
+                    if let Some(item) = suggest.items.get(suggest.selected) {
+                        match suggest_engine::history_action(&item.insert) {
+                            Some((_, _, all)) => {
+                                self.suggest = None;
+                                self.open_history_clear_confirm(all, cx);
+                            }
+                            None => self.apply_suggestion(cx),
+                        }
+                    }
+                    cx.notify();
+                    return true;
+                }
                 // 没有候选（带参数的命令 / 没匹配的路径）：原样补全，命令随即执行
                 "enter" if suggest.items.is_empty() => {
                     let command = suggest.trigger.submits_after_apply();
@@ -206,10 +223,13 @@ impl GuiApp {
                 // 退格/方向键改的是面板输入框，不动主输入框
                 "backspace" => {
                     if self.suggest_input.text().is_empty() {
-                        // 面板输入已空：收起面板，触发符留在输入框里由用户自己删
-                        self.suggest_dismissed = Some(suggest.start);
+                        // 面板输入已空：先回填触发符再收面板，然后退掉一个字符
+                        // （TUI 里退格改的就是同一段文本，面板跟着前缀变短而关闭）
+                        self.restore_suggest_input();
                         self.suggest = None;
+                        self.attach_images = false;
                         self.cancel_file_scan();
+                        self.editor.backspace();
                     } else {
                         self.suggest_input.backspace();
                         self.refresh_suggest_from_input(cx);

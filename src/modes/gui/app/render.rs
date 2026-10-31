@@ -53,6 +53,7 @@ impl GuiApp {
                 .child(composer::render(&self.suggest_input, theme)),
         );
 
+        // 只有历史面板会以空列表存在（零匹配时留在原地当搜索框）
         if suggest.items.is_empty() {
             column = column.child(
                 div()
@@ -60,7 +61,7 @@ impl GuiApp {
                     .py(px(SPACE_XS))
                     .text_size(px(FONT_SMALL))
                     .text_color(theme.text_ghost)
-                    .child(SharedString::from("No matches")),
+                    .child(SharedString::from("No matching history")),
             );
         }
 

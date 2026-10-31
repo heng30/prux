@@ -340,6 +340,14 @@ impl Editor {
         }
     }
 
+    /// 清空历史列表（`/history @clear` / `@clear-all` 删完文件后同步内存）：
+    /// 浏览态与草稿一并以作废，它们指向的条目已经不存在了。
+    pub fn clear_history(&mut self) {
+        self.history.clear();
+        self.history_index = None;
+        self.history_draft = None;
+    }
+
     /// 上一条历史：列表是环形的（草稿 ↔ 最新…最早 ↔ 草稿）。
     pub fn history_prev(&mut self) {
         if self.history.is_empty() {

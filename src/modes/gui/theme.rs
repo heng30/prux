@@ -85,8 +85,6 @@ pub const SCROLLBAR_MIN_THUMB: f32 = 24.0;
 
 /// 输入卡片每侧的内边距（逻辑像素，与卡片的 `px(SPACE_MD)` 保持一致）：算可用折行宽度时两侧各扣一份
 pub const COMPOSER_H_PADDING: f32 = SPACE_MD;
-/// prompt 历史条目的标签宽度上限（显示宽度，CJK 字符按 2 算）。
-pub const HISTORY_LABEL_WIDTH: usize = 60;
 /// 补全面板里除候选行以外的固定高度（输入框 + 内边距，逻辑像素）
 pub const SUGGEST_CHROME_HEIGHT: f32 = 46.0;
 /// 补全面板最多显示几行。

@@ -492,12 +492,24 @@
   triggers the panel while the one in `user@example.com` does not, and continuing to type cancels the
   previous walk.
 
-- **The desktop GUI's `/history` panel searches like the terminal UI's**: the filter matched the
-  whole query as one substring against the (truncated) first line only, so `bug fix` found nothing
-  and a prompt whose text sat on later lines could not be found at all. The query is now split on
-  whitespace into case-insensitive substrings that must all appear anywhere in the full prompt, in
-  any order, most recent first — the same rules the terminal UI uses. Entries whose first line is
-  blank fall back to a flattened single-line label instead of a raw multi-line one.
+- **The desktop GUI's `/history` lists prompts as you type**: typing `/history` (or `/history bug`)
+  now opens the completion panel above the input box with this project's prompts, most recent
+  first — no Enter needed to see anything. The query is split on whitespace into case-insensitive
+  substrings that must all appear anywhere in the full prompt, in any order, so a prompt whose text
+  sits on later lines is still found. Enter / Tab writes the selected prompt back into the input box
+  (multi-line prompts come back as multiple lines) without sending it, and an empty result keeps the
+  panel open instead of sending `/history …` as a prompt. `@clear` / `@clear-all` (visible only while
+  the query starts with `@`) delete this project's history or every project's, behind a Yes/Cancel
+  confirmation that shows how many entries are at stake.
+
+- **The desktop GUI's completion panel closes when nothing matches**: `/command` and `@path` used
+  to leave an empty `No matches` box on screen, unlike the terminal UI, which hides the panel. It now
+  closes as soon as the command, subcommand or file scan has no candidate, and the characters typed
+  into the panel come back into the input box instead of vanishing with it — `Esc`, backspacing past
+  the prefix and an empty result all leave the box holding what was actually typed. The `/history`
+  panel is the one exception: a query that matches nothing keeps it open as a search box and says
+  `No matching history`. Leading indentation before a `/` now triggers the panel too, as it does in
+  the terminal UI.
 
 - **Expanding a card in the desktop GUI no longer flickers**: the toggle changed the height, the
   pointer was still over the card when the button came up, and the second hit flipped it straight
@@ -849,7 +861,15 @@
   `.fdignore` 生效，隐藏文件可见，排序按分数再到层级、长度、名字，含空白或 CJK 标点的路径补全时
   会加引号。输入目录前缀就把遍历范围收到该目录（`@src/mo` 只扫 `src`），`(`、反引号或 CJK 标点
   之后的 `@` 会触发面板而 `user@example.com` 里的不会，继续输入会作废上一轮遍历。
-- **桌面 GUI 的 `/history` 面板与终端 UI 用同一套搜索**：以前把整串查询当成一个子串去匹配（被截断
-  的）首行，`bug fix` 这样的多词查询搜不到，正文在第二行以后的 prompt 也永远搜不到。现在查询按空
-  白分词、大小写不敏感，每个词都要出现在整段 prompt 里（词序无关），结果最近优先——与终端 UI 一致；
-  首行为空的条目改用压平后的单行标签，不再把多行原文当标签。
+- **桌面 GUI 的补全面板没条目就收起**：`/命令` 与 `@路径` 以前会在一个候选都不剩时留一个
+  `No matches` 的空框，终端 UI 是直接关面板。现在命令、子命令、路径扫描无候选就立刻收起面板；面板里
+  敲的字会先写回输入框再收起，所以 `Esc`、退格退到空、零匹配三种情况都不会让刚敲的字消失。唯一的例外
+  是 `/history`：零匹配时面板留在原地当搜索框，提示文案改成 `No matching history`。`/` 前的行首缩进
+  现在也会触发面板——与终端 UI 一致。
+
+- **桌面 GUI 的 `/history` 边输入边列出历史 prompt**：敲 `/history`（或 `/history bug`）就在输入框
+  上方弹出本项目的历史，最近优先，不必先按 Enter。查询按空白分词、大小写不敏感，每个词都要出现在
+  整段 prompt 里（词序无关），正文在第二行以后的 prompt 也搜得到。Enter / Tab 把选中的 prompt 写回
+  输入框（多行 prompt 就写回多行）但不发送；零匹配时面板留在原地，不会把 `/history …` 当 prompt 发
+  出去。`@clear` / `@clear-all`（仅查询以 `@` 开头时现身）删除本项目的历史或所有项目的历史，删前弹
+  Yes/Cancel 确认并给出待删条目数。

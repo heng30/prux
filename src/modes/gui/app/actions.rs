@@ -130,7 +130,6 @@ impl GuiApp {
                 cx.notify();
             }
             "import" => self.open_import_dialog(cx),
-            "history" => self.open_history_panel(cx),
             "clone" => {
                 _ = self.cmd_tx.send(AgentCommand::ForkClone);
             }
@@ -333,11 +332,7 @@ impl GuiApp {
                 self.skills_draft = Some(skill_rules_with(&rules, &name, enable));
                 self.rebuild_skills_panel(cx);
             }
-            Action::InsertText(text) => {
-                self.editor.insert(&text);
-                self.refresh_suggest(cx);
-                cx.notify();
-            }
+            Action::HistoryClear(all) => self.clear_history_files(all, cx),
             Action::LoginProvider(provider) => {
                 let editor = Editor::new();
                 self.dialog = Some(SessionDialog::ApiKey { provider, editor });
@@ -728,14 +723,82 @@ impl GuiApp {
         self.overlay = Some(Overlay::List(list));
     }
 
-    /// `/history`：本会话发过的用户消息，Enter 写回输入框（不发出去）。
-    pub(super) fn open_history_panel(&mut self, _cx: &mut Context<Self>) {
+    /// `/history @clear` / `@clear-all`（历史补全面板里的控制词）：先弹 Yes/No 确认面板。
+    ///
+    /// 无文件可删时不弹窗，只给一句提示（否则用户会对着一个空确认框发楞）。
+    pub(super) fn open_history_clear_confirm(&mut self, all: bool, cx: &mut Context<Self>) {
         let cwd = self.cwd();
-        let max = settings_manager::read_settings_history_max_entries();
-        // 与 TUI 一致：读项目级 prompt 历史，而不是当前会话上下文
-        // （压缩/摘要之后上下文里只剩一两条用户消息，历史记录不该跟着丢）
-        let entries = history_entries(core::prompt_history::load(&cwd, max));
-        self.overlay = Some(Overlay::List(List::new("History", entries)));
+        let (title, detail) = if all {
+            let (files, entries) = core::prompt_history::all_summary();
+            if files == 0 {
+                self.toast("No prompt history files to clear", ToastKind::Info, cx);
+                return;
+            }
+
+            (
+                "Clear ALL prompt history".to_string(),
+                format!(
+                    "{files} files · {entries} entries (every project) · {}",
+                    core::prompt_history::history_dir().display()
+                ),
+            )
+        } else {
+            match core::prompt_history::project_summary(&cwd) {
+                Some((name, entries)) => (
+                    "Clear prompt history for this project".to_string(),
+                    format!("{name} · {entries} entries"),
+                ),
+                None => {
+                    self.toast("No prompt history for this project", ToastKind::Info, cx);
+                    return;
+                }
+            }
+        };
+
+        let entries = vec![
+            Entry {
+                label: "Yes, delete".to_string(),
+                detail,
+                action: Action::HistoryClear(all),
+                ..Entry::default()
+            },
+            Entry {
+                label: "Cancel".to_string(),
+                detail: String::new(),
+                action: Action::None,
+                ..Entry::default()
+            },
+        ];
+        self.overlay = Some(Overlay::List(List::new(title, entries)));
+        cx.notify();
+    }
+
+    /// 确认后的删除：连内存里的输入历史一起清，否则删除后 ↑ 还能翻出已不存在的条目。
+    fn clear_history_files(&mut self, all: bool, cx: &mut Context<Self>) {
+        let done = if all {
+            core::prompt_history::clear_all()
+        } else {
+            core::prompt_history::clear_project(&self.cwd())
+        };
+        self.editor.clear_history();
+
+        let mut msg = if all {
+            format!(
+                "Cleared all prompt history ({} files, {} entries)",
+                done.files, done.entries
+            )
+        } else {
+            format!(
+                "Cleared prompt history for this project ({} entries)",
+                done.entries
+            )
+        };
+
+        if done.removed_dir {
+            msg.push_str(" · removed empty history directory");
+        }
+
+        self.toast(msg, ToastKind::Success, cx);
     }
 
     /// 登录面板：列出全部支持的 provider，Enter 填 key。

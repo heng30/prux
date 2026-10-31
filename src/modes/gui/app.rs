@@ -43,11 +43,11 @@ use super::{
     text_edit::{self, Editor},
     theme::{
         self, COMPOSER_H_PADDING, CONTENT_MAX_WIDTH, DROPDOWN_MAX_HEIGHT, DROPDOWN_ROW_HEIGHT,
-        FLOW_PADDING_BOTTOM, FLOW_PADDING_TOP, HISTORY_LABEL_WIDTH, MENU_EDGE_MARGIN,
-        PANEL_DEFAULT_WIDTH, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH, SCROLLBAR_HIT_WIDTH,
-        SCROLLBAR_WIDTH, SIDEBAR_DEFAULT_WIDTH, SIDEBAR_HANDLE_WIDTH, SIDEBAR_MAX_WIDTH,
-        SIDEBAR_MIN_WIDTH, SUGGEST_CHROME_HEIGHT, SUGGEST_GAP, SUGGEST_ROW_HEIGHT, SUGGEST_ROWS,
-        TOAST_DURATION, TOAST_MAX, TRANSCRIPT_LINE_HEIGHT, Theme, min_thumb, px,
+        FLOW_PADDING_BOTTOM, FLOW_PADDING_TOP, MENU_EDGE_MARGIN, PANEL_DEFAULT_WIDTH,
+        PANEL_MAX_WIDTH, PANEL_MIN_WIDTH, SCROLLBAR_HIT_WIDTH, SCROLLBAR_WIDTH,
+        SIDEBAR_DEFAULT_WIDTH, SIDEBAR_HANDLE_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH,
+        SUGGEST_CHROME_HEIGHT, SUGGEST_GAP, SUGGEST_ROW_HEIGHT, SUGGEST_ROWS, TOAST_DURATION,
+        TOAST_MAX, TRANSCRIPT_LINE_HEIGHT, Theme, min_thumb, px,
     },
     transcript::{self, Note, Transcript},
 };
@@ -56,7 +56,6 @@ use crate::{
     core::{
         extensions::{self, ExtensionMode, OverlayKey, dispatch_agent_event, git_branch},
         model_scope::ScopedModel,
-        prompt_history::HistoryEntry,
         provider::AgentMessage,
         session_manager::Session,
         settings_manager,
@@ -67,7 +66,7 @@ use crate::{
         handlers::tools::run_shell_command,
     },
     utils::{
-        display, geometry,
+        geometry,
         paths::cwd,
         wheel::{WheelScrollAccelerator, WheelScrollLines},
     },
@@ -927,47 +926,6 @@ fn prune_recent_cwds() {
     if live.len() != list.len() {
         write_recent_cwds(&live);
     }
-}
-
-/// prompt 历史 → 面板条目：最新的在前，标签取首行并夹到 [`HISTORY_LABEL_WIDTH`]。
-///
-/// `search` 放整段 prompt：标签只有首行且被截断，多行 prompt 的中文内容得靠它才搜得到。
-fn history_entries(history: Vec<HistoryEntry>) -> Vec<Entry> {
-    let mut entries: Vec<Entry> = history
-        .into_iter()
-        .rev()
-        .map(|item| {
-            // 首行可能是空行（多行提示常以换行开头），取第一行有内容的
-            let first = item
-                .text
-                .lines()
-                .find(|line| !line.trim().is_empty())
-                .unwrap_or_default();
-            let label = display::fit_display(first, HISTORY_LABEL_WIDTH);
-
-            Entry {
-                label: if label.is_empty() {
-                    display::flatten_line(&item.text)
-                } else {
-                    label
-                },
-                detail: String::new(),
-                action: Action::InsertText(item.text.clone()),
-                search: item.text,
-                ..Entry::default()
-            }
-        })
-        .collect();
-
-    if entries.is_empty() {
-        entries.push(Entry {
-            label: "No prompts in history yet".into(),
-            detail: String::new(),
-            action: Action::None,
-            ..Entry::default()
-        });
-    }
-    entries
 }
 
 /// 勾选/切换类动作会重建同一个面板：执行前别关覆盖层，否则过滤与选中行都丢了。
