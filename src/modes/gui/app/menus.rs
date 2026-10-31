@@ -440,11 +440,16 @@ impl GuiApp {
     /// 底部工作目录：弹输入框，确认后切目录（会顺带在新目录下开会话）。
     /// 目录菜单：最近用过的目录 + 「Browse…」。
     pub(super) fn open_cwd_menu(&mut self, _cx: &mut Context<Self>) {
+        let current = self.cwd();
         let mut entries: Vec<Entry> = recent_cwds()
             .into_iter()
             .map(|path| Entry {
+                detail: if path == current {
+                    "✓ current".into()
+                } else {
+                    String::new()
+                },
                 label: path.clone(),
-                detail: String::new(),
                 action: Action::SwitchCwdTo(path),
                 ..Entry::default()
             })

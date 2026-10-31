@@ -20,7 +20,7 @@ use crate::{
         settings_manager::agent_dir,
     },
     modes::interactive::agent_actor::{AgentCommand, CommandTx},
-    utils::display::fit_display,
+    utils::{display::fit_display, paths::dir_name},
 };
 use gpui::{
     AnyElement, IntoElement, MouseButton, ParentElement, ScrollHandle, SharedString, Styled, div,
@@ -455,7 +455,7 @@ fn footer_block(
                 .gap(px(SPACE_XS))
                 .text_size(px(FONT_CAPTION))
                 .text_color(theme.text_ghost)
-                .child(SharedString::from(" "))
+                .child(SharedString::from("   "))
                 .child(
                     div()
                         .min_w_0()
@@ -487,7 +487,7 @@ fn footer_block(
                     .truncate()
                     .text_size(px(FONT_CAPTION))
                     .text_color(theme.text_secondary)
-                    .child(SharedString::from(cwd.to_string())),
+                    .child(SharedString::from(dir_name(cwd))),
             ),
     );
     footer.into_any_element()

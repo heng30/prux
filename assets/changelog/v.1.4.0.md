@@ -308,6 +308,12 @@
   gives up focus), `Esc` / `Enter` leaves it with the query still applied, and zero matches reads
   `No matching sessions`.
 
+- **The desktop GUI's sidebar is narrower and names its directory**: the default width drops from 252
+  to 180 px and the minimum from 180 to 120, so the session list hugs its titles instead of leaving a
+  gutter. The working-directory row at the bottom now shows only the last path segment (the full path
+  is still what the picker switches to), and the directory menu marks the one you are in with
+  `✓ current`.
+
 ### Fixed
 
 - **Images in the desktop GUI keep their aspect ratio**: `@image` references and pictures returned by
@@ -755,6 +761,10 @@
 - **桌面 GUI 的侧栏可以按标题筛会话**：会话列表上方多了一个搜索框，边敲边按标题大小写不敏感
   过滤。点它开始输入（Files 面板的搜索框同时让出焦点），`Esc` / `Enter` 退出聚焦但查询仍然生效，
   零匹配显示 `No matching sessions`。
+
+- **桌面 GUI 的侧栏更窄，底部目录只显示末级名**：默认宽度从 252 降到 180px，最窄从 180 降到
+  120px，会话列表不再留一条空白。底部那行工作目录只显示路径的最后一段（选择面板切换的仍是完整
+  路径），目录菜单给当前所在目录标上 `✓ current`。
 
 ## 修复
 

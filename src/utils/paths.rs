@@ -104,6 +104,16 @@ pub fn walk_files(root: &Path, max_files: usize) -> Result<Vec<PathBuf>, String>
     Ok(out)
 }
 
+/// 工作目录的末级目录名（根目录等无末级名时退回原路径）。
+///
+/// 只做字符串处理，不碰文件系统；结尾多余的 `/` 先被剥掉。
+pub fn dir_name(cwd: &str) -> String {
+    Path::new(cwd.trim_end_matches('/'))
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| cwd.to_string())
+}
+
 /// 取路径的最后一段文件名；`/`、`..` 这类没有文件名的路径返回 `Err`（文案带原路径）。
 pub fn file_name_of(path: &Path) -> Result<String, String> {
     path.file_name()
@@ -531,6 +541,14 @@ mod tests {
         assert_eq!(expand_home("~user/work"), "~user/work");
         assert_eq!(expand_home("/a/$HOME/b"), "/a/$HOME/b");
         assert_eq!(expand_home("work"), "work");
+    }
+
+    /// 目录名取末级：去掉结尾斜杠，根目录退回原路径。
+    #[test]
+    fn dir_name_takes_last_component() {
+        assert_eq!(dir_name("/data/Code/rust/prux"), "prux");
+        assert_eq!(dir_name("/data/Code/rust/prux/"), "prux");
+        assert_eq!(dir_name("/"), "/");
     }
 
     #[test]
