@@ -384,9 +384,8 @@ mod tests {
     /// 子命令补全只重写起点之后的命令前缀：重复采纳不会把命令名和子命令粘在一起。
     #[test]
     fn subcommand_apply_is_idempotent() {
-        let mut editor = crate::modes::gui::text_edit::Editor::new();
         for text in ["/agents ", "/agents se", "/agentssettings "] {
-            editor = crate::modes::gui::text_edit::Editor::new();
+            let mut editor = crate::modes::gui::text_edit::Editor::new();
             editor.insert(text);
             let (start, command, _) = detect_subcommand(&editor.text_before_cursor()).unwrap_or((
                 0,
