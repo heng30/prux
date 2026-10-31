@@ -82,7 +82,7 @@ use std::{
     cell::{Cell, RefCell},
     collections::{HashMap, VecDeque},
     ops::Range,
-    path::PathBuf,
+    path::{Path, PathBuf},
     rc::Rc,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -492,7 +492,9 @@ impl GuiApp {
         app.start_request_poll(cx);
         app.maybe_ask_trust(cx);
         app.refresh_branch();
+
         // 当前目录也算一条「最近用过」，菜单里能直接看到
+        prune_recent_cwds();
         remember_cwd(&app.cwd());
         app.reload_sessions(cx);
         app
@@ -572,16 +574,15 @@ impl GuiApp {
                 self.follow_bottom();
             }
             GuiEvent::Snapshot(snapshot) => {
-                let cwd_changed = self
-                    .snapshot
-                    .as_ref()
-                    .is_some_and(|old| old.cwd != snapshot.cwd);
-                if cwd_changed {
+                let previous = self.cwd();
+                self.snapshot = Some(snapshot);
+
+                let cwd = self.cwd();
+                if cwd != previous {
                     self.reload_sessions(cx);
                     self.refresh_branch();
-                    remember_cwd(&snapshot.cwd);
+                    remember_cwd(&cwd);
                 }
-                self.snapshot = Some(snapshot);
             }
         }
     }
@@ -865,13 +866,31 @@ fn remember_cwd(path: &str) {
     list.retain(|item| item != path);
     list.insert(0, path.to_string());
     list.truncate(RECENT_CWD_LIMIT);
+    write_recent_cwds(&list);
+}
 
+/// 写回最近目录清单（清单目录不存在时先建）。
+fn write_recent_cwds(list: &[String]) {
     if let Some(dir) = recent_cwds_path().parent() {
         _ = std::fs::create_dir_all(dir);
     }
 
-    if let Ok(text) = serde_json::to_string_pretty(&list) {
+    if let Ok(text) = serde_json::to_string_pretty(list) {
         _ = std::fs::write(recent_cwds_path(), text);
+    }
+}
+
+/// 启动时清清单：已经不存在的目录移除并写回，免得菜单里留下点不开的条目。
+fn prune_recent_cwds() {
+    let list = recent_cwds();
+    let live: Vec<String> = list
+        .iter()
+        .filter(|path| Path::new(path).is_dir())
+        .cloned()
+        .collect();
+
+    if live.len() != list.len() {
+        write_recent_cwds(&live);
     }
 }
 

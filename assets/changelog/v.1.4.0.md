@@ -457,6 +457,12 @@
   auto-compaction and retry, working directory, session); the `/debug info` / `provider` /
   `system-prompt` subcommands stay with the `debug` extension.
 
+- **The desktop GUI forgets working directories that no longer exist**: the recently-used list in
+  the working-directory picker only ever grew, so moved or deleted projects stayed in the menu as
+  entries that could not be opened. Startup now drops the paths that are gone and writes the list
+  back, and a directory change is detected against the incoming snapshot's `cwd` before that
+  snapshot replaces the old one.
+
 ## 中文
 
 ### 新增
@@ -782,3 +788,6 @@
   `system-prompt` 子命令仍由 `debug` 扩展提供。
 - **选中文字时行内样式不再盖掉选区底色**：选区底色与行内代码、链接的高亮在交界处切成互不重叠的
   段落，重叠的那些词不会再把选区底色吞掉，也不会只画出半个选区。
+- **桌面 GUI 会忘掉已不存在的工作目录**：工作目录选择里的最近列表以前只进不出，删掉或挪走的项目
+  一直留在菜单里点不开。现在启动时剔除已经不存在的路径并写回清单；切换工作目录时先落地新快照，
+  再拿它的 `cwd` 和旧值比较，不会漏掉变化。
