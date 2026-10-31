@@ -830,16 +830,21 @@ impl GuiApp {
             .iter()
             .map(|provider| Entry {
                 label: provider.to_string(),
-                detail: if core::auth::has_auth(provider) {
+                cells: vec![if core::auth::has_auth(provider) {
                     "configured".into()
                 } else {
                     String::new()
-                },
+                }],
                 action: Action::LoginProvider(provider.to_string()),
                 ..Entry::default()
             })
             .collect();
-        self.overlay = Some(Overlay::List(List::new("Login", entries)));
+        let mut list = List::new("Login", entries);
+        list.columns = vec![
+            Column::flex("Provider"),
+            Column::fixed("Status", TABLE_STATUS_W),
+        ];
+        self.overlay = Some(Overlay::List(list));
     }
 
     /// 登出面板：只列已存 key 的 provider。

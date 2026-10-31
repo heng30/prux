@@ -325,6 +325,12 @@
   is still what the picker switches to), and the directory menu marks the one you are in with
   `✓ current`.
 
+- **The desktop GUI's pickers are tables instead of one-line entries**: `/models` splits into
+  `Model` / `Provider` / `Name` columns, the login panel into `Provider` / `Status` with the
+  `configured` mark, and the session picker into `Title` / `Updated` / `Messages`, so the values line
+  up down the panel instead of being glued into one label and its grey detail line. `/usage` and
+  `/session` read their `key: value` lines into the same two-column table.
+
 ### Fixed
 
 - **Desktop GUI slash commands keep their arguments**: `/compact <instructions>` and `/bug <hint>`
@@ -808,6 +814,10 @@
 - **桌面 GUI 的侧栏更窄，底部目录只显示末级名**：默认宽度从 252 降到 200px，最窄从 180 降到
   150px，会话列表不再留一条空白。底部那行工作目录只显示路径的最后一段（选择面板切换的仍是完整
   路径），目录菜单给当前所在目录标上 `✓ current`。
+
+- **桌面 GUI 的选择面板改成分列表格**：`/models` 拆成 `Model` / `Provider` / `Name` 三列，登录面板是
+  `Provider` / `Status`（`configured` 标记），会话选择器是 `Title` / `Updated` / `Messages`——各项沿列对齐，
+  不再把值挤进一行标题加一行灰色详情。`/usage` 与 `/session` 的 `key: value` 行也归到同一套两列表格里。
 
 ## 修复
 

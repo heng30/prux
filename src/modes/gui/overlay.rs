@@ -223,6 +223,15 @@ pub(crate) const TABLE_MODES_W: f32 = 150.0;
 /// 表格 provider 列宽度（逻辑像素）：模型名单面板的 provider 名。
 pub(crate) const TABLE_PROVIDER_W: f32 = 110.0;
 
+/// 表格年龄列宽度（逻辑像素）：会话面板的「多久以前」（`now` / `12m` / `3d`）。
+pub(crate) const TABLE_AGE_W: f32 = 80.0;
+
+/// 表格计数列宽度（逻辑像素）：会话面板的消息条数。
+pub(crate) const TABLE_COUNT_W: f32 = 110.0;
+
+/// 表格状态列宽度（逻辑像素）：登录面板的 `configured` 标记。
+pub(crate) const TABLE_STATUS_W: f32 = 110.0;
+
 /// 表格列：表头标题 + 固定宽度。
 pub struct Column {
     /// 表头文字

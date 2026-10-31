@@ -454,8 +454,8 @@ impl GuiApp {
                 let mut entries: Vec<Entry> = models
                     .into_iter()
                     .map(|(provider, id, name)| Entry {
-                        label: format!("{provider} / {id}"),
-                        detail: name,
+                        label: id.clone(),
+                        cells: vec![provider.clone(), name],
                         action: Action::Command(Box::new(AgentCommand::SwitchModel {
                             provider,
                             model_id: id,
@@ -468,13 +468,19 @@ impl GuiApp {
                 if entries.is_empty() {
                     entries.push(Entry {
                         label: "No configured models".into(),
-                        detail: "Run `prux auth` first".into(),
+                        cells: vec![String::new(), "Run `prux auth` first".into()],
                         action: Action::None,
                         ..Entry::default()
                     });
                 }
 
-                app.overlay = Some(Overlay::List(List::new("Model", entries)));
+                let mut list = List::new("Model", entries);
+                list.columns = vec![
+                    Column::fixed("Model", TABLE_NAME_W),
+                    Column::fixed("Provider", TABLE_PROVIDER_W),
+                    Column::flex("Name"),
+                ];
+                app.overlay = Some(Overlay::List(list));
                 cx.notify();
             });
         })
@@ -617,7 +623,7 @@ impl GuiApp {
             .iter()
             .map(|row| Entry {
                 label: row.title.clone(),
-                detail: format!("{} · {} messages", row.age, row.messages),
+                cells: vec![row.age.clone(), row.messages.to_string()],
                 action: Action::LoadSession(row.path.clone()),
                 ..Entry::default()
             })
@@ -631,12 +637,17 @@ impl GuiApp {
                 } else {
                     "No sessions yet".to_string()
                 },
-                detail: String::new(),
                 action: Action::None,
                 ..Entry::default()
             });
         }
-        self.overlay = Some(Overlay::List(List::new("Sessions", entries)));
+        let mut list = List::new("Sessions", entries);
+        list.columns = vec![
+            Column::flex("Title"),
+            Column::fixed("Updated", TABLE_AGE_W),
+            Column::fixed("Messages", TABLE_COUNT_W),
+        ];
+        self.overlay = Some(Overlay::List(list));
     }
 
     /// 外观选择器（明/暗）。
@@ -674,7 +685,7 @@ impl GuiApp {
                 } else {
                     lines.push("No usage yet".to_string());
                 }
-                Info::new("Usage", lines)
+                Info::with_rows("Usage", info_rows(lines))
             }
             // `/session`：当前会话概要（对齐 TUI 的 /session）
             InfoKind::Session => {
@@ -695,7 +706,7 @@ impl GuiApp {
                     ));
                     lines.push(format!("Active tools: {}", snapshot.tools.join(", ")));
                 }
-                Info::new("Sessions", lines)
+                Info::with_rows("Sessions", info_rows(lines))
             }
             InfoKind::Help => {
                 Info::with_rows("Keybindings", hotkey_rows()).with_headers("Keys", "Action")
