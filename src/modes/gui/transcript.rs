@@ -1220,7 +1220,7 @@ pub fn render_block(
     let (expand_tools, show_thinking) = flags;
     match block {
         // 用户消息：右对齐气泡，与助手正文拉开层级
-        Block::User(message) => user_block(message, theme, expand_tools, index, ctx.width, cx),
+        Block::User(message) => user_block(message, theme, expand_tools, index, ctx, cx),
         // 助手回复：不加卡片，直接正文；思考内容单独一段细边框提示（Ctrl-T 收起）
         Block::Assistant(assistant) => assistant_block(assistant, theme, show_thinking, ctx),
         // 工具调用：带描边的小卡片，状态用圆点表示
@@ -1238,19 +1238,18 @@ fn user_block(
     theme: &Theme,
     expand_tools: bool,
     index: usize,
-    width: Pixels,
+    ctx: &FlowCtx<'_>,
     cx: &mut Context<GuiApp>,
 ) -> AnyElement {
     let text = &message.text;
     let expanded = message.expanded.unwrap_or(expand_tools);
     let (shown, hidden) = user_preview(text, expanded, USER_COLLAPSED_LINES);
-    // 宽度显式给出：带 padding 的盒子里，文本实测用的宽度和绘制用的不一致，
-    // 会少算换行高度、底部被截
-    let bubble_w = width.min(px(USER_BUBBLE_MAX_WIDTH));
-    let inner_w = bubble_w - px(SPACE_MD * 2.);
+    // 宽度交给布局按内容算：短消息的气泡正好包住文字，右侧不留空白；长消息由 max_w
+    // 封顶，超出就在那里折行。折叠提示与缩略图也是子项，不会比气泡宽。
+    let cap = ctx.width.min(px(USER_BUBBLE_MAX_WIDTH));
     let mut bubble = div()
         .id(("user", index))
-        .w(bubble_w)
+        .max_w(cap)
         .min_w_0()
         .px(px(SPACE_MD))
         .py(px(SPACE_SM))
@@ -1265,12 +1264,7 @@ fn user_block(
         .hover(|style| style.bg(theme.overlay_strong))
         // 点气泡展开/收起长消息
         .on_click(cx.listener(move |this, _, _, cx| this.toggle_user(index, cx)))
-        .child(
-            div()
-                .w(inner_w)
-                .min_w_0()
-                .child(SharedString::from(shown.join("\n"))),
-        );
+        .child(div().min_w_0().child(SharedString::from(shown.join("\n"))));
 
     if hidden > 0 {
         bubble = bubble.child(

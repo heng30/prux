@@ -172,6 +172,11 @@
   stored result. The format matches the terminal UI: seconds under a minute, then `Xm Ys`, then
   `Xh Ym Zs`.
 
+- **The desktop GUI sizes a message bubble to its text**: a short message no longer stretches to the
+  full bubble width and leaves the right side empty; the bubble wraps its content, still capped at
+  the old maximum so long messages wrap where they used to. The collapse hint and image thumbnails
+  count towards that width, so they are never clipped.
+
 - **The desktop GUI remembers whether the session sidebar is open**: `Ctrl-Shift-B`, `/sidebar` and
   the sidebar search box write the choice to `sidebar-gui` in `settings.json` and restore it on the
   next launch; with no key set the sidebar starts open.
@@ -674,6 +679,9 @@
 - **桌面 GUI 的工具卡片显示这次调用花了多久**：跑着的调用在状态标签左侧显示 `Elapsed X.Xs`，
   回合期间一直往上走；结束后定格成事件里的 `durationMs`（`Took X.Xs`），从磁盘重载的会话也能
   从存档结果里恢复。格式与终端 UI 一致：不到一分钟按秒，再往上 `Xm Ys`、`Xh Ym Zs`。
+
+- **桌面 GUI 的消息气泡按文字长度收缩**：短消息不再撑满整个气泡宽度、右侧留一大片空白；气泡宽度
+  由内容决定，上限不变，长消息照旧在那里折行。折叠提示与图片缩略图也是气泡的子项，不会被裁。
 
 - **桌面 GUI 记住会话栏是否展开**：`Ctrl-Shift-B`、`/sidebar` 与侧栏搜索框把选择写进 `settings.json`
   的 `sidebar-gui`，下次启动照原样恢复；没写过时默认展开。
