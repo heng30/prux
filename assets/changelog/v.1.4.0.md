@@ -295,6 +295,11 @@
   `/hotkeys` and the detail page of list overlays is now draggable, with a wider hit area than the
   4 px it draws, and the drag keeps working when the pointer leaves the track.
 
+- **The desktop GUI's sidebar filters sessions by title**: a search box sits above the session list and
+  narrows it case-insensitively as you type. Click it to start typing (the Files panel's search box
+  gives up focus), `Esc` / `Enter` leaves it with the query still applied, and zero matches reads
+  `No matching sessions`.
+
 ### Fixed
 
 - **Images in the desktop GUI keep their aspect ratio**: `@image` references and pictures returned by
@@ -732,6 +737,10 @@
 
 - **信息覆盖层的滚动条可以拖动**：`/changelog`、`/hotkeys` 以及列表覆盖层的详情页右侧那根细条
   现在能抓来拖，命中区比画出来的 4px 宽，指针离开轨道也继续跟着走。
+
+- **桌面 GUI 的侧栏可以按标题筛会话**：会话列表上方多了一个搜索框，边敲边按标题大小写不敏感
+  过滤。点它开始输入（Files 面板的搜索框同时让出焦点），`Esc` / `Enter` 退出聚焦但查询仍然生效，
+  零匹配显示 `No matching sessions`。
 
 ## 修复
 

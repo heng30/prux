@@ -283,6 +283,10 @@ pub struct GuiApp {
     sessions_loader: Option<ProgressiveMetas>,
     /// 侧栏是否还有会话元数据在读
     sessions_loading: bool,
+    /// 侧栏顶部的会话搜索框内容（按标题过滤列表）
+    session_search: Editor,
+    /// 会话搜索框是否在吃键盘
+    session_search_focus: bool,
     /// 侧栏轮询任务的持有者（丢弃即取消）
     _session_poll: Option<Task<()>>,
     /// 侧栏是否可见
@@ -429,6 +433,8 @@ impl GuiApp {
             sessions: Vec::new(),
             sessions_loader: None,
             sessions_loading: false,
+            session_search: Editor::new(),
+            session_search_focus: false,
             _session_poll: None,
             show_sidebar: true,
             overlay: None,

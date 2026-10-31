@@ -776,17 +776,30 @@ impl GuiApp {
 
         let cwd = self.cwd();
         let theme = self.theme.clone();
+        let query = self.session_search.text();
 
         div()
             .relative()
             .h_full()
             .flex_none()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    if this.session_search_focus {
+                        this.session_search_focus = false;
+                        cx.notify();
+                    }
+                }),
+            )
             .child(sidebar::render(sidebar::SidebarCtx {
                 theme: &theme,
                 cwd: &cwd,
                 branch: self.branch.as_deref(),
                 width: self.sidebar_width,
                 rows: &self.sessions,
+                query: &query,
+                search_focused: self.session_search_focus,
+                focus_search: Box::new(cx.listener(|this, _, _, cx| this.focus_session_search(cx))),
                 current: self
                     .snapshot
                     .as_ref()
@@ -845,8 +858,9 @@ impl GuiApp {
         let mut body = div().flex().flex_1().min_h_0().w_full().on_mouse_down(
             MouseButton::Left,
             cx.listener(|this, _, _, cx| {
-                if this.panel.search_focus {
+                if this.panel.search_focus || this.session_search_focus {
                     this.panel.search_focus = false;
+                    this.session_search_focus = false;
                     cx.notify();
                 }
             }),

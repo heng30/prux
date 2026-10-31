@@ -1,5 +1,7 @@
 //! 侧栏：会话列表（读 `agent_dir()/sessions`），按修改时间分组。
 //!
+//! 顶部的搜索框按标题过滤列表。
+//!
 //! 列表分两段算：目录列举（[`paths`]，只看 mtime，快）留在主线程，
 //! 逐条解析会话元数据（整文件读，慢）交给 [`ProgressiveMetas`] 的后台线程，
 //! 渲染时只取已就绪的那部分。
@@ -7,8 +9,8 @@
 use super::{
     components::{dot, section_label},
     theme::{
-        CONTROL_H_SM, DOT_SIZE, FONT_CAPTION, FONT_SMALL, HEADER_H, RADIUS_MD, RADIUS_SM, SPACE_MD,
-        SPACE_SM, SPACE_XS, SPACE_XXS, Theme, px,
+        CONTROL_H_LG, CONTROL_H_SM, DOT_SIZE, FONT_CAPTION, FONT_SMALL, HEADER_H, RADIUS_MD,
+        RADIUS_SM, SPACE_MD, SPACE_SM, SPACE_XS, SPACE_XXS, Theme, px,
     },
 };
 use crate::{
@@ -117,7 +119,7 @@ fn group_of(age: &str) -> Group {
 }
 
 /// 当前会话在列表中的下标（按文件路径匹配）。
-pub fn current_index(rows: &[SessionRow], current: Option<&str>) -> Option<usize> {
+pub fn current_index(rows: &[&SessionRow], current: Option<&str>) -> Option<usize> {
     let current = current?;
     rows.iter().position(|row| row.path == current)
 }
@@ -137,6 +139,12 @@ pub struct SidebarCtx<'a> {
     pub width: f32,
     /// 会话行
     pub rows: &'a [SessionRow],
+    /// 搜索框内容（空串显示占位文案）
+    pub query: &'a str,
+    /// 搜索框是否聚焦（显示光标与高亮边框）
+    pub search_focused: bool,
+    /// 点搜索框：聚焦它
+    pub focus_search: ClickHandler,
     /// 当前会话文件路径
     pub current: Option<&'a str>,
     /// 是否还有会话元数据在读
@@ -165,6 +173,9 @@ pub fn render(ctx: SidebarCtx<'_>) -> AnyElement {
         rows,
         current,
         loading,
+        query,
+        search_focused,
+        focus_search,
         scroll,
         scrollbar,
         cmd_tx,
@@ -172,7 +183,7 @@ pub fn render(ctx: SidebarCtx<'_>) -> AnyElement {
         context_menu,
         change_cwd,
     } = ctx;
-    let active = current_index(rows, current);
+
     let mut column = div()
         .w(px(width))
         .h_full()
@@ -186,6 +197,13 @@ pub fn render(ctx: SidebarCtx<'_>) -> AnyElement {
     // 品牌行
     column = column.child(brand_row(theme, new_session));
 
+    // 会话搜索框
+    column = column.child(search_box(theme, query, search_focused, focus_search));
+
+    let needle = query.trim().to_lowercase();
+    let rows = filter(rows, &needle);
+    let active = current_index(&rows, current);
+
     // 会话列表：与滚动条同放一层相对容器，滚动条盖在列表右侧、不占布局宽度
     column = column.child(
         div()
@@ -196,9 +214,10 @@ pub fn render(ctx: SidebarCtx<'_>) -> AnyElement {
             .w_full()
             .child(session_list(
                 theme,
-                rows,
+                &rows,
                 active,
                 loading,
+                query,
                 scroll,
                 cmd_tx,
                 context_menu,
@@ -248,12 +267,63 @@ fn brand_row(theme: &Theme, new_session: ClickHandler) -> AnyElement {
     bar.into_any_element()
 }
 
+/// 按标题过滤会话行（大小写不敏感）；`needle` 需已 trim + 转小写，空串不过滤。
+fn filter<'a>(rows: &'a [SessionRow], needle: &str) -> Vec<&'a SessionRow> {
+    rows.iter()
+        .filter(|row| needle.is_empty() || row.title.to_lowercase().contains(needle))
+        .collect()
+}
+
+/// 会话搜索框：点一下开始输入，框内显示光标。
+fn search_box(theme: &Theme, query: &str, focused: bool, focus: ClickHandler) -> AnyElement {
+    let empty = query.is_empty();
+    div()
+        .id("session-search")
+        .mx(px(SPACE_XS))
+        .mb(px(SPACE_XS))
+        .h(px(CONTROL_H_LG))
+        .px(px(SPACE_SM))
+        .rounded(px(RADIUS_MD))
+        .flex()
+        .items_center()
+        .bg(theme.inset)
+        .border_1()
+        .border_color(if focused {
+            theme.border_strong
+        } else {
+            theme.border
+        })
+        .text_size(px(FONT_SMALL))
+        .text_color(if empty { theme.text_ghost } else { theme.text })
+        .cursor_pointer()
+        .on_click(focus)
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .child(SharedString::from(if empty {
+                    "Search sessions…".to_string()
+                } else {
+                    query.to_string()
+                }))
+                .child(
+                    div()
+                        .w(px(if focused && !empty { 1.5 } else { 0. }))
+                        .h(px(FONT_SMALL))
+                        .ml(px(SPACE_XXS))
+                        .bg(theme.accent),
+                ),
+        )
+        .into_any_element()
+}
+
 /// 会话列表：按时间分组，点击切会话、右键弹行菜单。
 fn session_list(
     theme: &Theme,
-    rows: &[SessionRow],
+    rows: &[&SessionRow],
     active: Option<usize>,
     loading: bool,
+    query: &str,
     scroll: &ScrollHandle,
     cmd_tx: CommandTx,
     context_menu: ContextHandler,
@@ -273,8 +343,6 @@ fn session_list(
         .overflow_y_scroll()
         .track_scroll(scroll);
 
-    list = list.child(section_label(theme, "Sessions"));
-
     if rows.is_empty() {
         list = list.child(
             div()
@@ -282,7 +350,9 @@ fn session_list(
                 .py(px(SPACE_XS))
                 .text_size(px(FONT_SMALL))
                 .text_color(theme.text_ghost)
-                .child(SharedString::from(if loading {
+                .child(SharedString::from(if !query.trim().is_empty() {
+                    "No matching sessions"
+                } else if loading {
                     "Loading sessions…"
                 } else {
                     "No sessions yet"
@@ -421,4 +491,30 @@ fn footer_block(
             ),
     );
     footer.into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 造一行会话（只填过滤用到的字段）。
+    fn row(title: &str) -> SessionRow {
+        SessionRow {
+            path: String::new(),
+            title: title.to_string(),
+            age: "now".to_string(),
+            messages: 0,
+            group: Group::Today,
+        }
+    }
+
+    /// 标题过滤：大小写不敏感，空查询全留。
+    #[test]
+    fn filter_matches_titles_ignoring_case() {
+        let rows = vec![row("git commit"), row("Refactor Sidebar")];
+        assert_eq!(filter(&rows, "").len(), 2);
+        assert_eq!(filter(&rows, "git")[0].title, "git commit");
+        assert_eq!(filter(&rows, "sidebar")[0].title, "Refactor Sidebar");
+        assert!(filter(&rows, "nope").is_empty());
+    }
 }

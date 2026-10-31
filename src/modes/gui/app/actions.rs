@@ -680,9 +680,17 @@ impl GuiApp {
         cx.notify();
     }
 
+    /// 点侧栏搜索框：之后敲的字进会话过滤框（Files 面板的搜索框同时让出焦点）。
+    pub(crate) fn focus_session_search(&mut self, cx: &mut Context<Self>) {
+        self.session_search_focus = true;
+        self.panel.search_focus = false;
+        cx.notify();
+    }
+
     /// 点 Files 页的搜索框：之后敲的字进过滤框。
     pub(crate) fn focus_panel_search(&mut self, cx: &mut Context<Self>) {
         self.panel.search_focus = true;
+        self.session_search_focus = false;
         cx.notify();
     }
 

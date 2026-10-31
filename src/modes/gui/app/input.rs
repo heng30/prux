@@ -173,11 +173,13 @@ impl GuiApp {
         }
 
         let in_panel = self.panel_search_active();
+        let in_sidebar = self.session_search_active();
         match &self.overlay {
             Some(Overlay::List(list)) => &list.query,
             Some(Overlay::Extension(ext)) => &ext.input,
             // 覆盖层优先：弹层打开时敲的字属于弹层
             _ if in_panel => &self.panel.search,
+            _ if in_sidebar => &self.session_search,
             _ => &self.editor,
         }
     }
@@ -187,9 +189,15 @@ impl GuiApp {
         self.panel.visible && self.panel.search_focus
     }
 
+    /// 侧栏会话搜索框是否在吃键盘。
+    pub(crate) fn session_search_active(&self) -> bool {
+        self.show_sidebar && self.session_search_focus
+    }
+
     /// [`Self::ime_target`] 的可变版：写过滤框时把选中项收回第一行。
     pub(super) fn ime_target_mut(&mut self) -> &mut Editor {
         let in_panel = self.panel_search_active();
+        let in_sidebar = self.session_search_active();
         if let Some(
             SessionDialog::Rename { editor, .. }
             | SessionDialog::ApiKey { editor, .. }
@@ -214,6 +222,7 @@ impl GuiApp {
             Some(Overlay::Extension(ext)) => &mut ext.input,
             // 覆盖层优先于面板搜索框：弹层打开时敲的字属于弹层
             _ if in_panel => &mut self.panel.search,
+            _ if in_sidebar => &mut self.session_search,
             _ => &mut self.editor,
         }
     }
@@ -300,7 +309,7 @@ impl EntityInputHandler for GuiApp {
         }
 
         let bytes = self.ime_range_bytes(range);
-        let typing_search = self.panel_search_active();
+        let typing_search = self.panel_search_active() || self.session_search_active();
         self.ime_target_mut().replace_byte_range(bytes, text);
         self.marked_range = None;
 

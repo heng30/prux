@@ -116,6 +116,14 @@ impl GuiApp {
             return;
         }
 
+        // 侧栏会话搜索框同理（顺序与 `ime_target` 一致：面板优先）
+        if self.session_search_active()
+            && self.dispatch_session_search_key(&keystroke, primary, shift)
+        {
+            cx.notify();
+            return;
+        }
+
         if self.dispatch_editor_key(&keystroke, primary, shift, cx) {
             cx.notify();
             return;
@@ -544,51 +552,87 @@ impl GuiApp {
         false
     }
 
-    /// Files 面板搜索框的按键：只吃编辑键与 Esc/Enter，其余交回正常分发。
+    /// 搜索框（侧栏会话搜索 / Files 面板）的编辑键：只吃编辑键与 Esc/Enter，
+    /// 其余交回正常分发。
     ///
     /// 可打印字符由 IME 句柄写进搜索框（见 `ime_target`），这里不重复插入。
+    /// `None` 表示没处理；`Some(true)` 表示处理完并且要退出聚焦（Esc / Enter）。
+    fn search_key(
+        editor: &mut Editor,
+        keystroke: &gpui::Keystroke,
+        primary: bool,
+        shift: bool,
+    ) -> Option<bool> {
+        // Ctrl / Cmd 组合留给全局快捷键
+        if primary {
+            return None;
+        }
+        match keystroke.key.as_str() {
+            // Esc / Enter 先退出搜索（面板本身不关，Esc 再按一次才收起）
+            "escape" | "enter" => Some(true),
+            "backspace" => {
+                editor.backspace();
+                Some(false)
+            }
+            "delete" => {
+                editor.delete_forward();
+                Some(false)
+            }
+            "left" => {
+                editor.move_cursor(-1, 0, shift);
+                Some(false)
+            }
+            "right" => {
+                editor.move_cursor(1, 0, shift);
+                Some(false)
+            }
+            "home" => {
+                editor.home(shift);
+                Some(false)
+            }
+            "end" => {
+                editor.end(shift);
+                Some(false)
+            }
+            _ => None,
+        }
+    }
+
+    /// Files 面板搜索框的按键。
     pub(super) fn dispatch_panel_search_key(
         &mut self,
         keystroke: &gpui::Keystroke,
         primary: bool,
         shift: bool,
     ) -> bool {
-        // Ctrl / Cmd 组合留给全局快捷键
-        if primary {
+        let Some(release) = Self::search_key(&mut self.panel.search, keystroke, primary, shift)
+        else {
             return false;
+        };
+
+        if release {
+            self.panel.search_focus = false;
         }
-        match keystroke.key.as_str() {
-            // Esc / Enter 先退出搜索（面板本身不关，Esc 再按一次才收起）
-            "escape" | "enter" => {
-                self.panel.search_focus = false;
-                true
-            }
-            "backspace" => {
-                self.panel.search.backspace();
-                true
-            }
-            "delete" => {
-                self.panel.search.delete_forward();
-                true
-            }
-            "left" => {
-                self.panel.search.move_cursor(-1, 0, shift);
-                true
-            }
-            "right" => {
-                self.panel.search.move_cursor(1, 0, shift);
-                true
-            }
-            "home" => {
-                self.panel.search.home(shift);
-                true
-            }
-            "end" => {
-                self.panel.search.end(shift);
-                true
-            }
-            _ => false,
+        true
+    }
+
+    /// 侧栏会话搜索框的按键（规则同上）。
+    pub(super) fn dispatch_session_search_key(
+        &mut self,
+        keystroke: &gpui::Keystroke,
+        primary: bool,
+        shift: bool,
+    ) -> bool {
+        let Some(release) = Self::search_key(&mut self.session_search, keystroke, primary, shift)
+        else {
+            return false;
+        };
+
+        if release {
+            self.session_search_focus = false;
         }
+
+        true
     }
 
     /// 无修饰的文字编辑键（Enter / Esc / 方向键 / 退格）。
