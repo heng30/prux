@@ -29,7 +29,7 @@ mod ui;
 mod tests;
 
 use super::{
-    bridge::{GuiEvent, Snapshot},
+    bridge::{GuiEvent, Snapshot, UsageTotals},
     components::chip,
     composer,
     giff::{self, PanelTab, RightPanel},
@@ -267,6 +267,8 @@ pub struct GuiApp {
     follow_ups: VecDeque<String>,
     /// 本轮用量计时与 token 速率（状态栏用）
     meter: UsageMeter,
+    /// 会话累计用量与上下文占用：每个快照整体覆盖，回合中间由 agent 事件增量推进
+    usage: UsageTotals,
     /// 忙碌期的重绘任务是否在跑（状态栏耗时走字与忙碌指示闪烁靠它）
     ticking: bool,
     /// 忙碌指示的闪烁相位：tick 每半秒翻转一次，乒乓出「正在忙」的脉冲
@@ -427,6 +429,7 @@ impl GuiApp {
             steer_inbox,
             follow_ups: VecDeque::new(),
             meter: UsageMeter::default(),
+            usage: UsageTotals::default(),
             ticking: false,
             blink: false,
             scroll: ScrollHandle::new(),
@@ -545,6 +548,7 @@ impl GuiApp {
                 }
                 let model = self.snapshot.as_ref().map(|s| s.model.clone());
                 self.meter.observe(&event, model.as_deref());
+                self.observe_usage(&event);
                 self.sample_token_rate();
                 self.transcript.apply(&event, &self.cwd());
                 self.follow_bottom();
@@ -582,6 +586,10 @@ impl GuiApp {
                     .snapshot
                     .as_ref()
                     .and_then(|snapshot| snapshot.session_name.clone());
+
+                // 快照是回合边界的权威用量（含压缩、嵌套调用等事件看不到的部分）
+                let mut snapshot = snapshot;
+                self.usage = std::mem::take(&mut snapshot.usage);
                 self.snapshot = Some(snapshot);
 
                 // `/name` 改的标题只写在会话文件里：不重读会话列表，侧栏还是旧标题

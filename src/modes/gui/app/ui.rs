@@ -95,6 +95,15 @@ impl CommandHost for GuiApp {
         self.status_note = Some((text.to_string(), Instant::now() + Duration::from_secs(6)));
     }
 
+    /// toast 走 UI 请求队列回环：`toast` 需要 `Context` 才能挂过期定时器，
+    /// 这里只能排队，由 `drain_requests` 下一次轮询取到 `cx` 再真正弹出。
+    fn toast(&mut self, text: &str, level: UiNotifyLevel) {
+        request_ui(ExtensionUiRequest::Toast {
+            text: text.to_string(),
+            level,
+        });
+    }
+
     /// 最近一条用户消息正文（从对话流倒着找）。
     fn last_user_message(&self) -> Option<String> {
         self.transcript
@@ -220,6 +229,14 @@ impl GuiApp {
             ExtensionUiRequest::Status { text } => {
                 CommandHost::set_status(self, &text);
                 cx.notify();
+            }
+            ExtensionUiRequest::Toast { text, level } => {
+                let kind = match level {
+                    UiNotifyLevel::Error => ToastKind::Error,
+                    UiNotifyLevel::Success => ToastKind::Success,
+                    UiNotifyLevel::Info | UiNotifyLevel::Warning => ToastKind::Info,
+                };
+                self.toast(text, kind, cx);
             }
             ExtensionUiRequest::Notify { text, level } => {
                 let note = match level {

@@ -243,10 +243,11 @@ pub fn notify_text(text: &str, level: UiNotifyLevel) {
     notify(vec![RichSpan::plain(text.to_string())], level);
 }
 
-/// 状态栏临时提示：发 `Status` 请求，不进聊天区。
-pub fn notify_status(text: &str) {
-    extensions::request_ui(ExtensionUiRequest::Status {
+/// 浮层 toast：发 `Toast` 请求，宿主没有浮层时退回状态栏，不进聊天区。
+pub fn notify_toast(text: &str, level: UiNotifyLevel) {
+    extensions::request_ui(ExtensionUiRequest::Toast {
         text: text.to_string(),
+        level,
     });
 }
 

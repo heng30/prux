@@ -36,7 +36,7 @@ use crate::{
     },
     extensions::{
         EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_PROXY, command_arg,
-        util::{self, notify_status, notify_text},
+        util::{self, notify_text, notify_toast},
     },
     modes::interactive::handlers::register_host_command,
     utils::{
@@ -355,7 +355,7 @@ fn set_listen(raw: &str) {
     let addr = match net::normalize_listen(raw) {
         Ok(a) => a,
         Err(e) => {
-            notify_status(&format!("Proxy: {e}"));
+            notify_toast(&format!("Proxy: {e}"), UiNotifyLevel::Error);
             return;
         }
     };
@@ -393,7 +393,10 @@ fn spawn_listen(addr: String) {
         let listener = match TcpListener::bind(&addr).await {
             Ok(l) => l,
             Err(e) => {
-                notify_status(&format!("Proxy: cannot listen on {addr}: {e}"));
+                notify_toast(
+                    &format!("Proxy: cannot listen on {addr}: {e}"),
+                    UiNotifyLevel::Error,
+                );
                 return;
             }
         };
@@ -411,15 +414,18 @@ fn spawn_listen(addr: String) {
         stats::reset();
 
         let provider_missing = lock(state()).config.provider.is_none();
-        notify_status(&format!(
-            "Proxy: listening on {addr} · Base URL: {}{}",
-            net::base_url(&addr),
-            if provider_missing {
-                " (no provider configured yet: /proxy provider <provider>)"
-            } else {
-                ""
-            }
-        ));
+        notify_toast(
+            &format!(
+                "Proxy: listening on {addr} · Base URL: {}{}",
+                net::base_url(&addr),
+                if provider_missing {
+                    " (no provider configured yet: /proxy provider <provider>)"
+                } else {
+                    ""
+                }
+            ),
+            UiNotifyLevel::Info,
+        );
 
         server::serve(listener, runtime, rx).await;
     });
@@ -430,7 +436,10 @@ fn spawn_listen(addr: String) {
 fn set_provider(raw: &str) {
     let provider = raw.trim();
     if !model_resolver::is_known_provider(provider) {
-        notify_status(&format!("Proxy: unknown provider `{provider}`"));
+        notify_toast(
+            &format!("Proxy: unknown provider `{provider}`"),
+            UiNotifyLevel::Error,
+        );
         return;
     }
 
@@ -438,9 +447,10 @@ fn set_provider(raw: &str) {
         .iter()
         .any(|p| p == provider)
     {
-        notify_status(&format!(
-            "Proxy: provider `{provider}` has no stored credentials; run /login first"
-        ));
+        notify_toast(
+            &format!("Proxy: provider `{provider}` has no stored credentials; run /login first"),
+            UiNotifyLevel::Error,
+        );
         return;
     }
 

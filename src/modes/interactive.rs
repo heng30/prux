@@ -1113,7 +1113,8 @@ fn reconcile_ask_panel(shared: &Rc<RefCell<App>>) {
 /// 扩展 UI 请求处理：
 /// - Select → 打开通用自定义面板（Enter/Esc 结果经 on_ui_choice 按请求 id 回传扩展）；
 /// - Notify → 聊天区系统消息；
-/// - Status → 状态栏临时提示（不进聊天区）。
+/// - Status → 状态栏临时提示（不进聊天区）；
+/// - Toast → 同上（TUI 没浮层，与 Status 同位置）。
 fn maybe_handle_extension_ui(shared: &Rc<RefCell<App>>) {
     let Some(req) = core::extensions::take_pending_ui() else {
         return;
@@ -1133,6 +1134,10 @@ fn maybe_handle_extension_ui(shared: &Rc<RefCell<App>>) {
             st.panel.open(PanelKind::Custom(id), title, items);
         }
         core::extensions::ExtensionUiRequest::Status { text } => {
+            st.set_status_msg(text);
+        }
+        // TUI 没有浮层：toast 落在状态栏（与 Status 同一个位置）
+        core::extensions::ExtensionUiRequest::Toast { text, .. } => {
             st.set_status_msg(text);
         }
         core::extensions::ExtensionUiRequest::Notify { text, level } => {

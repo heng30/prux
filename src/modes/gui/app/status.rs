@@ -8,8 +8,9 @@
 
 use super::GuiApp;
 use crate::{
+    core::provider::{AgentMessage, calculate_context_tokens, estimate_tokens, usable_usage},
     extensions::{footer::format_tokens, goal, plan_mode},
-    modes::gui::transcript::Block,
+    modes::gui::{bridge::UsageTotals, transcript::Block},
     utils::tokens::{self, TokenMeter},
 };
 use gpui::Context;
@@ -129,6 +130,24 @@ impl UsageMeter {
     }
 }
 
+/// 把一条消息计入会话用量：携带 usage 的累加计费（工具结果上的嵌套调用开销也挂在自己身上）；
+/// 可用 usage 的 assistant 同时重置上下文锚点，其余消息只按文本估算记入锚点之后。
+fn apply_message_usage(usage: &mut UsageTotals, message: &AgentMessage) {
+    if let Some(u) = &message.usage {
+        usage.input += u64::from(u.input);
+        usage.output += u64::from(u.output);
+        usage.cache_read += u64::from(u.cache_read);
+        usage.cache_write += u64::from(u.cache_write);
+        usage.cost += u.cost.total;
+    }
+
+    if let Some(u) = usable_usage(message) {
+        usage.context_tokens = u64::from(calculate_context_tokens(u));
+    } else {
+        usage.context_tokens += u64::from(estimate_tokens(message));
+    }
+}
+
 impl GuiApp {
     /// 忙碌指示文案（`Working… (Esc to abort, N queued)`，不含前面的圆点）；空闲时为 None。
     /// 圆点由渲染层单独画（它才是闪的那个），文字只换品牌色。
@@ -156,38 +175,35 @@ impl GuiApp {
         }
 
         let mut right = String::new();
+        let u = &self.usage;
+        let pct = if u.context_window > 0 {
+            u.context_tokens as f64 / u.context_window as f64 * 100.0
+        } else {
+            0.0
+        };
 
-        if let Some(snapshot) = &self.snapshot {
-            let u = &snapshot.usage;
-            let pct = if u.context_window > 0 {
-                u.context_tokens as f64 / u.context_window as f64 * 100.0
-            } else {
-                0.0
-            };
+        left_parts.push(format!("CW {:.0}%", pct));
 
-            left_parts.push(format!("CW {:.0}%", pct));
+        let billed = u.cache_read + u.input;
+        let hit = if billed > 0 {
+            u.cache_read as f64 / billed as f64 * 100.0
+        } else {
+            0.0
+        };
 
-            let billed = u.cache_read + u.input;
-            let hit = if billed > 0 {
-                u.cache_read as f64 / billed as f64 * 100.0
-            } else {
-                0.0
-            };
+        left_parts.push(format!("CH {:.0}%", hit));
 
-            left_parts.push(format!("CH {:.0}%", hit));
+        right.push_str(&format!(
+            "{}t/s · ",
+            format_tokens(self.meter.tok_per_sec.round() as u64)
+        ));
 
-            right.push_str(&format!(
-                "{}t/s · ",
-                format_tokens(self.meter.tok_per_sec.round() as u64)
-            ));
-
-            right.push_str(&format!(
-                "{} in · {} out",
-                format_tokens(u.input),
-                format_tokens(u.output)
-            ));
-            right.push_str(&format!(" · ${:.4}", u.cost));
-        }
+        right.push_str(&format!(
+            "{} in · {} out",
+            format_tokens(u.input),
+            format_tokens(u.output)
+        ));
+        right.push_str(&format!(" · ${:.4}", u.cost));
 
         let mut tail = String::new();
 
@@ -212,11 +228,41 @@ impl GuiApp {
         (left_parts.join(" · "), right)
     }
 
-    /// 按快照里的累计 output 与在途流式输出打一个 ≥1s 的速率采样点
+    /// 按累计 output 与在途流式输出打一个 ≥1s 的速率采样点
     /// （与 TUI rich footer 同口径；事件流本身就是采样时钟）。
     pub(super) fn sample_token_rate(&mut self) {
-        let usage_out = self.snapshot.as_ref().map(|s| s.usage.output).unwrap_or(0) as f64;
-        self.meter.sample_rate(usage_out);
+        self.meter.sample_rate(self.usage.output as f64);
+    }
+
+    /// 按 agent 事件推进会话用量：快照只在回合结束才推来，回合中间的流式与工具执行
+    /// 期间状态栏（CW / CH / in / out / 费用）靠这里走字。
+    pub(super) fn observe_usage(&mut self, event: &Value) {
+        match event.get("type").and_then(Value::as_str).unwrap_or("") {
+            "message_end" => {
+                if let Some(message) = event
+                    .get("message")
+                    .and_then(|m| serde_json::from_value::<AgentMessage>(m.clone()).ok())
+                {
+                    apply_message_usage(&mut self.usage, &message);
+                }
+            }
+            "turn_end" => {
+                if let Some(tools) = event.get("toolResults").and_then(Value::as_array) {
+                    for tool in tools {
+                        if let Ok(message) = serde_json::from_value::<AgentMessage>(tool.clone()) {
+                            apply_message_usage(&mut self.usage, &message);
+                        }
+                    }
+                }
+            }
+            // 压缩摘要本身不带 usage：上下文规模以事件携带的估算为准
+            "compaction_end" => {
+                if let Some(after) = event.get("estimatedTokensAfter").and_then(Value::as_u64) {
+                    self.usage.context_tokens = after;
+                }
+            }
+            _ => {}
+        }
     }
 
     /// 忙碌期间每半秒重绘一次：事件驱动的刷新在长时间工具调用里会断流，
@@ -242,9 +288,7 @@ impl GuiApp {
                         }
 
                         app.blink = !app.blink;
-                        let usage_out =
-                            app.snapshot.as_ref().map(|s| s.usage.output).unwrap_or(0) as f64;
-                        app.meter.sample_rate(usage_out);
+                        app.meter.sample_rate(app.usage.output as f64);
                         cx.notify();
                         true
                     })
@@ -319,5 +363,40 @@ mod tests {
         meter.sample_rate(0.0);
         assert_eq!(meter.tok_per_sec, 0.0, "清零后速率归零而非负数");
         assert_eq!(meter.peak, before, "进度上界保留");
+    }
+
+    /// 回合中间的 assistant 落地就把 in/out/费用与上下文锚点推上去；
+    /// 其后的工具结果只累加尾部估算，上下文不因重置锚点而回退。
+    #[test]
+    fn usage_moves_before_snapshot_arrives() {
+        let mut usage = UsageTotals::default();
+        let mut assistant = AgentMessage::user_text("");
+        assistant.role = "assistant".to_string();
+        assistant.usage = Some(crate::core::provider::Usage {
+            input: 1000,
+            output: 200,
+            cache_read: 300,
+            cost: crate::core::provider::Cost {
+                total: 0.5,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        apply_message_usage(&mut usage, &assistant);
+        assert_eq!(usage.input, 1000);
+        assert_eq!(usage.output, 200);
+        assert!((usage.cost - 0.5).abs() < 1e-9);
+        let anchored = usage.context_tokens;
+        assert_eq!(anchored, 1500, "锚点 = 该次请求的上下文规模");
+
+        let mut tool = AgentMessage::user_text("tool output text");
+        tool.role = "toolResult".to_string();
+        apply_message_usage(&mut usage, &tool);
+        assert!(
+            usage.context_tokens > anchored,
+            "锚点之后的消息计入尾部估算: {}",
+            usage.context_tokens
+        );
+        assert_eq!(usage.output, 200, "工具结果不带 usage 时不动计费");
     }
 }

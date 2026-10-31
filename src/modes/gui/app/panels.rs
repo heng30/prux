@@ -662,9 +662,9 @@ impl GuiApp {
     pub(super) fn open_info(&mut self, kind: InfoKind, _cx: &mut Context<Self>) {
         let info = match kind {
             InfoKind::Usage => {
-                let usage = self.snapshot.as_ref().map(|s| &s.usage);
+                let usage = &self.usage;
                 let mut lines = Vec::new();
-                if let Some(usage) = usage {
+                if usage.input + usage.output + usage.cache_read + usage.cache_write > 0 {
                     lines.push(format!("input tokens: {}", usage.input));
                     lines.push(format!("output tokens: {}", usage.output));
                     lines.push(format!("cache read: {}", usage.cache_read));

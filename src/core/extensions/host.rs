@@ -61,6 +61,14 @@ pub trait CommandHost {
     /// 在状态栏显示一条临时提示（`creating recap…` 这类进度文案）。
     fn set_status(&mut self, text: &str);
 
+    /// 弹一条 toast（几秒自动消失的浮层提示，不进聊天区），`level` 决定配色。
+    ///
+    /// 宿主没有浮层时默认退回 [`Self::set_status`]（状态栏一行）；
+    /// 桌面 GUI 覆写成排队一条 [`super::ExtensionUiRequest::Toast`]，由轮询画到右上角。
+    fn toast(&mut self, text: &str, _level: UiNotifyLevel) {
+        self.set_status(text);
+    }
+
     /// 最近一条用户消息的正文（`/rewind` 的确认预览用）；没有则 `None`。
     fn last_user_message(&self) -> Option<String>;
 

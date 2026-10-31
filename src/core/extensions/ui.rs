@@ -128,6 +128,14 @@ pub enum ExtensionUiRequest {
     /// 状态栏临时提示（不进聊天区）：文案写到状态栏，过期自动消失。
     /// 用于错误这类「一闪而过、不该留在对话里」的反馈。
     Status { text: String },
+    /// 浮层 toast：几秒后自动消失的角标提示，`level` 决定配色。
+    /// 宿主有浮层就画浮层（桌面 GUI），没有就退回状态栏（TUI）。
+    Toast {
+        /// 提示正文。
+        text: String,
+        /// 通知级别，决定浮层配色。
+        level: UiNotifyLevel,
+    },
     /// 扩展自定义消息块（聊天区卡片）：TUI 按 `custom_type` 反查渲染（见
     /// [`super::Extension::render_custom_message`]），扩展自行决定是否同时
     /// `PersistSessionEntry` 落盘（落盘后由扩展在 `on_session_switched` 重放）。

@@ -351,9 +351,12 @@
   whole content — the old "length + first byte" name collided between different pictures and kept
   showing the stale one.
 
-- **The desktop GUI's status bar drops empty numbers**: context window and cache hit rate stay hidden
-  until there is usage to report (a fresh session read `0% · CH 0%`), and the message count steps
-  aside while a turn runs because `Working…` already leads the row.
+- **The desktop GUI's status bar keeps moving while a turn runs**: usage used to arrive only with the
+  end-of-turn snapshot, so context window, cache hit rate, in/out and cost stood still through the
+  whole turn — a fresh session read `0% · CH 0%` until the turn finished. They are now advanced from
+  agent events as each message lands: the assistant's usage anchors the context size, later messages
+  and tool results are estimated on top, and a compaction resets the anchor to the size it reports.
+  The message count still steps aside while a turn runs because `Working…` already leads the row.
 
 - **`Ctrl-W` no longer swallows `Ctrl-Shift-W`**: the delete-word-back shortcut matched any
   `Ctrl-W`, so the new working-directory panel key was eaten by the input box; it now requires the
@@ -824,8 +827,10 @@
   字节建图片源，缓存键跟着内容走而不是路径；临时文件也改成按整份内容的哈希命名——原来的「长度 +
   首字节」会在不同图片之间撞名，撞上就一直显示旧图。
 
-- **桌面 GUI 的状态栏不再显示空数字**：没有用量数据时（刚开的会话）以前写 `0% · CH 0%`，现在两项
-  都不显示；忙碌时消息数也省掉，行首已经是 `Working…`。
+- **桌面 GUI 的状态栏在回合中间也走字**：用量以前只随回合结束的快照更新，流式与长时间的工具调用
+  期间上下文占用、缓存命中率、in/out 与费用一直停着——新会话整轮读到的都是 `0% · CH 0%`。现在
+  按 agent 事件随每条消息落地推进：assistant 的 usage 作为上下文锚点，其后的消息与工具结果在锚点上
+  估算，压缩后按压缩事件给出的规模重置锚点。忙碌时消息数仍省掉，行首已经是 `Working…`。
 
 - **`Ctrl-W` 不再吞掉 `Ctrl-Shift-W`**：删除前一个词的快捷键以前匹配任何 `Ctrl-W`，于是输入框把
   新的工作目录快捷键吃掉了；现在要求 shift 未按下。
