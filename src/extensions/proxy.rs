@@ -411,22 +411,15 @@ fn spawn_listen(addr: String) {
         stats::reset();
 
         let provider_missing = lock(state()).config.provider.is_none();
-        notify_text(
-            &format!(
-                "Proxy: listening on {addr} · Base URL: {}{}",
-                net::base_url(&addr),
-                if provider_missing {
-                    " (no provider configured yet: /proxy provider <provider>)"
-                } else {
-                    ""
-                }
-            ),
+        notify_status(&format!(
+            "Proxy: listening on {addr} · Base URL: {}{}",
+            net::base_url(&addr),
             if provider_missing {
-                UiNotifyLevel::Warning
+                " (no provider configured yet: /proxy provider <provider>)"
             } else {
-                UiNotifyLevel::Success
-            },
-        );
+                ""
+            }
+        ));
 
         server::serve(listener, runtime, rx).await;
     });
