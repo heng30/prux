@@ -19,8 +19,9 @@ use crate::{
 };
 use base64::Engine as _;
 use gpui::{
-    AnyElement, Bounds, Context, FontStyle, FontWeight, HighlightStyle, Hsla, IntoElement,
-    ParentElement, Pixels, SharedString, Styled, StyledText, div, prelude::*,
+    AnyElement, Bounds, Context, FontStyle, FontWeight, HighlightStyle, Hsla, Image, ImageFormat,
+    ImageSource, IntoElement, ParentElement, Pixels, SharedString, Styled, StyledText, div,
+    prelude::*,
 };
 use serde_json::Value;
 use std::{
@@ -29,6 +30,8 @@ use std::{
     ops::Range,
     path::{Path, PathBuf},
     rc::Rc,
+    sync::Arc,
+    time::SystemTime,
 };
 
 /// 工具输出收起时显示的行数。
@@ -41,6 +44,13 @@ const USER_BUBBLE_MAX_WIDTH: f32 = 560.;
 const USER_COLLAPSED_LINES: usize = 6;
 /// 缩略图最大边长（逻辑像素）
 const IMAGE_THUMB: f32 = 360.0;
+
+thread_local! {
+    /// 缩略图图片源缓存：`(路径, (文件长度, 修改时间)) → 图片源`，免掉每帧重读缩略图文件。
+    /// `ImageSource` 不是 `Send`，而渲染只在 UI 线程上，故用线程本地变量。
+    static IMAGE_SOURCES: RefCell<Vec<(PathBuf, (u64, Option<SystemTime>), ImageSource)>> =
+        RefCell::new(Vec::new());
+}
 
 /// 工具调用的执行状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -228,6 +238,8 @@ pub struct TextLines {
 pub struct UserMessage {
     /// 消息正文
     pub text: String,
+    /// 发送时拍的图片快照（内容命名的临时文件路径）：同路径文件后来被改写，这条消息仍显示当时那张图
+    pub images: Vec<PathBuf>,
     /// 单块展开态：`None` 跟随全局开关
     pub expanded: Option<bool>,
 }
@@ -264,6 +276,7 @@ impl Transcript {
         self.blocks.clear();
         self.open_assistant = None;
         self.tools.clear();
+        clear_image_sources();
     }
 
     /// 当前块列表。
@@ -277,9 +290,16 @@ impl Transcript {
     }
 
     /// 追加一条用户消息（本地回显，agent 自己也会发 user 消息但不重复渲染）。
-    pub fn push_user(&mut self, text: String) {
+    ///
+    /// `@图片` 引用在这里按内容拍快照：同一路径的图后来被改写，已发出的这条仍显示当时那张。
+    pub fn push_user(&mut self, text: String, cwd: &str) {
+        let images = image_refs(&text, cwd)
+            .iter()
+            .filter_map(|path| snapshot_image(path))
+            .collect();
         self.blocks.push(Block::User(UserMessage {
             text,
+            images,
             expanded: None,
         }));
         self.open_assistant = None;
@@ -308,13 +328,15 @@ impl Transcript {
 
     /// 从会话历史重建（切会话后渲染既有对话）；`cwd` 用于算 edit 的预览 diff。
     pub fn from_messages(messages: &[AgentMessage], cwd: &str) -> Self {
+        clear_image_sources();
+
         let mut transcript = Self::default();
         for message in messages {
             match message.role.as_str() {
                 "user" => {
                     let text = user_text(message);
                     if !text.is_empty() {
-                        transcript.push_user(text);
+                        transcript.push_user(text, cwd);
                     }
                 }
                 "assistant" => {
@@ -469,7 +491,7 @@ impl Transcript {
                 {
                     return;
                 }
-                self.push_user(text);
+                self.push_user(text, cwd);
             }
             "tool_execution_start" => {
                 let id = event
@@ -1026,8 +1048,56 @@ fn image_thumb(path: &Path) -> AnyElement {
         .h(px(h))
         .rounded(px(RADIUS_MD))
         .overflow_hidden()
-        .child(gpui::img(path.to_path_buf()).w(px(w)).h(px(h)))
+        .child(gpui::img(image_source(path)).w(px(w)).h(px(h)))
         .into_any_element()
+}
+
+/// 丢掉缩略图图片源缓存：新会话/切会话时调，不然上一份会话的图会一直占着内存。
+fn clear_image_sources() {
+    IMAGE_SOURCES.with_borrow_mut(Vec::clear);
+}
+
+/// 缩略图的图片源：按文件内容建 `Image`。
+///
+/// `gpui::img(路径)` 走的是资源路径缓存（`Resource::Path`），文件被改写后缓存**不会失效**，
+/// 同一路径换了截图仍显示第一张；按内容建 `Image` 才能让缓存键跟着内容走。
+/// 读不出字节或认不出格式（如 svg）时退回按路径加载。
+fn image_source(path: &Path) -> ImageSource {
+    let metadata = std::fs::metadata(path).ok();
+    let key = (
+        metadata.as_ref().map(|m| m.len()).unwrap_or(0),
+        metadata.and_then(|m| m.modified().ok()),
+    );
+
+    let cached = IMAGE_SOURCES.with_borrow(|cache| {
+        cache
+            .iter()
+            .find(|(cached_path, ..)| cached_path == path)
+            .map(|(_, cached_key, source)| (*cached_key, source.clone()))
+    });
+
+    if let Some((cached_key, source)) = cached
+        && cached_key == key
+    {
+        return source;
+    }
+
+    let source = std::fs::read(path)
+        .ok()
+        .and_then(|bytes| {
+            let mime = mime::detect_image_mime(&bytes)?;
+            let format = ImageFormat::from_mime_type(&mime)?;
+            Some(ImageSource::from(Arc::new(Image::from_bytes(
+                format, bytes,
+            ))))
+        })
+        .unwrap_or_else(|| ImageSource::from(path.to_path_buf()));
+
+    IMAGE_SOURCES.with_borrow_mut(|cache| {
+        cache.retain(|(cached_path, ..)| cached_path != path);
+        cache.push((path.to_path_buf(), key, source.clone()));
+    });
+    source
 }
 
 /// 缩略图的显示尺寸（逻辑像素）：按图片像素等比缩放，边长不超过 [`IMAGE_THUMB`]。
@@ -1043,6 +1113,13 @@ fn thumb_size(path: &Path) -> (f32, f32) {
     (w * scale, h * scale)
 }
 
+/// 图片字节的 FNV-1a 哈希：只用于拼临时文件名，不要求密码学强度。
+fn image_hash(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3)
+    })
+}
+
 /// 把 base64 图片写成临时文件，供 `gpui::img` 读取；解码失败返回 None。
 fn save_tool_image(data: &str, mime_type: &str) -> Option<PathBuf> {
     let bytes = base64::engine::general_purpose::STANDARD
@@ -1056,20 +1133,28 @@ fn save_tool_image(data: &str, mime_type: &str) -> Option<PathBuf> {
         "bmp" => "bmp",
         _ => return None,
     };
+    write_image_file(&bytes, ext)
+}
 
+/// 把图片文件按内容拍成快照（内容命名的临时文件）：发送时定住这张图，
+/// 同路径文件后来被改写也不会把旧消息的缩略图换掉。
+fn snapshot_image(path: &Path) -> Option<PathBuf> {
+    let bytes = std::fs::read(path).ok()?;
+    let ext = path.extension()?.to_string_lossy().to_lowercase();
+    write_image_file(&bytes, &ext)
+}
+
+/// 把图片字节按内容哈希命名落到临时目录（同名即同内容），返回文件路径。
+fn write_image_file(bytes: &[u8], ext: &str) -> Option<PathBuf> {
     let dir = std::env::temp_dir().join("prux-gui-images");
     std::fs::create_dir_all(&dir).ok()?;
 
-    // 名字用内容长度 + 首字节凑合：同一张图重复出现时复用同一个文件
-    let name = format!(
-        "{}-{:x}.{ext}",
-        bytes.len(),
-        bytes.first().copied().unwrap_or(0)
-    );
+    // 名字带内容哈希：同一张图重复出现时复用同一个文件，不同内容又不会撞名（撞名会看到旧图）
+    let name = format!("{:016x}.{ext}", image_hash(bytes));
 
     let path = dir.join(name);
     if !path.exists() {
-        std::fs::write(&path, &bytes).ok()?;
+        std::fs::write(&path, bytes).ok()?;
     }
 
     Some(path)
@@ -1110,14 +1195,13 @@ pub fn render_block(
     theme: &Theme,
     flags: (bool, bool),
     index: usize,
-    cwd: &str,
     ctx: &mut FlowCtx<'_>,
     cx: &mut Context<GuiApp>,
 ) -> AnyElement {
     let (expand_tools, show_thinking) = flags;
     match block {
         // 用户消息：右对齐气泡，与助手正文拉开层级
-        Block::User(message) => user_block(message, theme, expand_tools, index, cwd, ctx.width, cx),
+        Block::User(message) => user_block(message, theme, expand_tools, index, ctx.width, cx),
         // 助手回复：不加卡片，直接正文；思考内容单独一段细边框提示（Ctrl-T 收起）
         Block::Assistant(assistant) => assistant_block(assistant, theme, show_thinking, ctx),
         // 工具调用：带描边的小卡片，状态用圆点表示
@@ -1135,7 +1219,6 @@ fn user_block(
     theme: &Theme,
     expand_tools: bool,
     index: usize,
-    cwd: &str,
     width: Pixels,
     cx: &mut Context<GuiApp>,
 ) -> AnyElement {
@@ -1183,10 +1266,9 @@ fn user_block(
         );
     }
 
-    // `@图片` 引用直接渲染成缩略图
-    let images = image_refs(text, cwd);
-    for path in images {
-        bubble = bubble.child(image_thumb(&path));
+    // `@图片` 引用直接渲染成缩略图（用发送时的快照，不跟路径重读）
+    for path in &message.images {
+        bubble = bubble.child(image_thumb(path));
     }
 
     div()
@@ -2041,6 +2123,10 @@ mod tests {
         let path = save_tool_image(png, "image/png").expect("png 应该落盘");
         assert!(path.is_file());
         assert_eq!(path.extension().unwrap(), "png");
+        // 同长度、同首字节的不同图片不能撞名（撞名会一直显示旧图）
+        let other = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+        let other_path = save_tool_image(other, "image/png").expect("png 应该落盘");
+        assert_ne!(path, other_path);
     }
 
     /// 只把存在的图片 `@引用` 挑成缩略图：非图片、找不到的路径都跳过。
@@ -2062,6 +2148,99 @@ mod tests {
         let rs = dir.join("a.rs");
         std::fs::write(&rs, b"").expect("write");
         assert!(image_refs(&format!("@{}", rs.display()), "/").is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 同一路径的图换过内容后，先前那条消息仍显示发送时那张（各自一份内容快照）。
+    #[test]
+    fn user_images_snapshot_at_send_time() {
+        let dir = std::env::temp_dir().join(format!("prux-gui-img-snap-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("shot.png");
+        let png = |side: u32| {
+            let mut buf = Vec::new();
+            image::RgbaImage::new(side, side)
+                .write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
+                .expect("png");
+            buf
+        };
+        let cwd = dir.to_str().expect("utf8 dir");
+        let text = format!("看 @{}", path.display());
+
+        std::fs::write(&path, png(2)).expect("write");
+        let mut transcript = Transcript::default();
+        transcript.push_user(text.clone(), cwd);
+
+        std::fs::write(&path, png(3)).expect("write");
+        transcript.push_user(text, cwd);
+
+        let snapshots: Vec<&PathBuf> = transcript
+            .blocks()
+            .iter()
+            .filter_map(|block| match block {
+                Block::User(message) => message.images.first(),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(snapshots.len(), 2);
+        assert_ne!(snapshots[0], snapshots[1], "两条消息不能共用一张快照");
+        assert_eq!(std::fs::read(snapshots[0]).unwrap(), png(2));
+        assert_eq!(std::fs::read(snapshots[1]).unwrap(), png(3));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 清空/重建会话时把图片源缓存一并丢掉（否则旧会话的图一直占着内存）。
+    #[test]
+    fn clearing_transcript_drops_image_sources() {
+        let dir = std::env::temp_dir().join(format!("prux-gui-img-clear-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("shot.png");
+        let mut buf = Vec::new();
+        image::RgbaImage::new(2, 2)
+            .write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
+            .expect("png");
+        std::fs::write(&path, &buf).expect("write");
+
+        _ = image_source(&path);
+        assert!(IMAGE_SOURCES.with_borrow(|cache| !cache.is_empty()));
+
+        Transcript::default().clear();
+        assert!(IMAGE_SOURCES.with_borrow(|cache| cache.is_empty()));
+
+        _ = image_source(&path);
+        _ = Transcript::from_messages(&[], "/");
+        assert!(IMAGE_SOURCES.with_borrow(|cache| cache.is_empty()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 同路径换图后图片源要跟着换（gpui 的路径缓存不会失效），内容不变时复用缓存。
+    #[test]
+    fn image_source_follows_file_changes() {
+        let dir = std::env::temp_dir().join(format!("prux-gui-img-src-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("shot.png");
+        let png = |side: u32| {
+            let mut buf = Vec::new();
+            image::RgbaImage::new(side, side)
+                .write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
+                .expect("png");
+            buf
+        };
+        let write = |bytes: &[u8]| std::fs::write(&path, bytes).expect("write");
+        let image_id = || match image_source(&path) {
+            ImageSource::Image(image) => image.id(),
+            _ => panic!("png 应按内容生成 Image"),
+        };
+
+        write(&png(2));
+        let first = image_id();
+        write(&png(3));
+        assert_ne!(first, image_id(), "改图后应换成新图片源");
+        write(&png(2));
+        assert_eq!(first, image_id(), "改回原内容应命中内容缓存");
+
+        write(b"not-really-a-png");
+        assert!(matches!(image_source(&path), ImageSource::Resource(_)));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

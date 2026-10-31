@@ -237,7 +237,6 @@ impl GuiApp {
     /// 对话流：逐块渲染 + 钉底滚动 + 滚动条。
     fn render_transcript(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.theme.clone();
-        let cwd = self.cwd();
 
         let pane_width = self.pane_width.get();
         // 内容的可用内宽：对话区宽度减去左右内边距（首帧还没量到时按最大宽度估）
@@ -282,7 +281,6 @@ impl GuiApp {
                 &theme,
                 (expand_tools, show_thinking),
                 index,
-                &cwd,
                 &mut flow_ctx,
                 cx,
             ));

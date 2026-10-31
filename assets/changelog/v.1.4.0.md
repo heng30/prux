@@ -309,7 +309,7 @@
   `No matching sessions`.
 
 - **The desktop GUI's sidebar is narrower and names its directory**: the default width drops from 252
-  to 180 px and the minimum from 180 to 120, so the session list hugs its titles instead of leaving a
+  to 200 px and the minimum from 180 to 150, so the session list hugs its titles instead of leaving a
   gutter. The working-directory row at the bottom now shows only the last path segment (the full path
   is still what the picker switches to), and the directory menu marks the one you are in with
   `✓ current`.
@@ -321,6 +321,18 @@
   thumbnail is now sized from the image itself — small pictures render at their own size, large ones
   scale down to the 360 px cap without distortion — and formats the decoder cannot measure fall back
   to the old square.
+
+- **An image in the desktop GUI stays the picture it was when sent**: `@image` references used to be
+  re-read from their path on every frame, so rewriting that file (saving a screenshot under the same
+  name) swapped the thumbnail in messages that had already gone out. Each user message now keeps a
+  content-addressed snapshot taken when it was sent, thumbnails are built from the file bytes so the
+  image cache keys on the content instead of the path, and temporary files are named by a hash of the
+  whole content — the old "length + first byte" name collided between different pictures and kept
+  showing the stale one.
+
+- **The desktop GUI's status bar drops empty numbers**: context window and cache hit rate stay hidden
+  until there is usage to report (a fresh session read `0% · CH 0%`), and the message count steps
+  aside while a turn runs because `Working…` already leads the row.
 
 - **`Ctrl-W` no longer swallows `Ctrl-Shift-W`**: the delete-word-back shortcut matched any
   `Ctrl-W`, so the new working-directory panel key was eaten by the input box; it now requires the
@@ -762,8 +774,8 @@
   过滤。点它开始输入（Files 面板的搜索框同时让出焦点），`Esc` / `Enter` 退出聚焦但查询仍然生效，
   零匹配显示 `No matching sessions`。
 
-- **桌面 GUI 的侧栏更窄，底部目录只显示末级名**：默认宽度从 252 降到 180px，最窄从 180 降到
-  120px，会话列表不再留一条空白。底部那行工作目录只显示路径的最后一段（选择面板切换的仍是完整
+- **桌面 GUI 的侧栏更窄，底部目录只显示末级名**：默认宽度从 252 降到 200px，最窄从 180 降到
+  150px，会话列表不再留一条空白。底部那行工作目录只显示路径的最后一段（选择面板切换的仍是完整
   路径），目录菜单给当前所在目录标上 `✓ current`。
 
 ## 修复
@@ -771,6 +783,14 @@
 - **桌面 GUI 的图片保持原始比例**：`@图片` 引用与工具返回的图片以前固定塞进一个方块，宽截图上
   下会留两条空白。现在按图片自身尺寸算：小图用原尺寸，大图等比缩到 360px 上限、不拉伸，解码器
   量不出尺寸的格式退回原来的方块。
+
+- **桌面 GUI 的图片定在发送那一刻**：`@图片` 原来每帧都去路径重读，同名文件一改（再存一次截图），
+  已经发出去的那条消息的缩略图就跟着换。现在每条用户消息在发送时按内容拍一份快照，缩略图改按文件
+  字节建图片源，缓存键跟着内容走而不是路径；临时文件也改成按整份内容的哈希命名——原来的「长度 +
+  首字节」会在不同图片之间撞名，撞上就一直显示旧图。
+
+- **桌面 GUI 的状态栏不再显示空数字**：没有用量数据时（刚开的会话）以前写 `0% · CH 0%`，现在两项
+  都不显示；忙碌时消息数也省掉，行首已经是 `Working…`。
 
 - **`Ctrl-W` 不再吞掉 `Ctrl-Shift-W`**：删除前一个词的快捷键以前匹配任何 `Ctrl-W`，于是输入框把
   新的工作目录快捷键吃掉了；现在要求 shift 未按下。

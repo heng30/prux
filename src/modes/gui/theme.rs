@@ -95,9 +95,9 @@ pub const SUGGEST_ROW_HEIGHT: f32 = 24.0;
 pub const SUGGEST_GAP: f32 = 8.0;
 
 /// 侧栏默认宽度（逻辑像素）
-pub const SIDEBAR_DEFAULT_WIDTH: f32 = 180.0;
+pub const SIDEBAR_DEFAULT_WIDTH: f32 = 200.0;
 /// 侧栏最窄：再窄标题就全被截断
-pub const SIDEBAR_MIN_WIDTH: f32 = 120.0;
+pub const SIDEBAR_MIN_WIDTH: f32 = 150.0;
 /// 侧栏最宽：留出主区
 pub const SIDEBAR_MAX_WIDTH: f32 = 460.0;
 /// 拖拽热区宽度（骑在右边框上）

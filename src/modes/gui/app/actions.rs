@@ -563,7 +563,8 @@ impl GuiApp {
         if let Some(command) = text.strip_prefix('!') {
             let output = run_shell_command(command.trim());
             let message = format!("$ {}\n{output}", command.trim());
-            self.transcript.push_user(message.clone());
+            let cwd = self.cwd();
+            self.transcript.push_user(message.clone(), &cwd);
             _ = self.cmd_tx.send(AgentCommand::Prompt(message));
             self.scroll_to_bottom();
             cx.notify();
@@ -597,7 +598,8 @@ impl GuiApp {
         }
 
         self.busy = true;
-        self.transcript.push_user(text.clone());
+        let cwd = self.cwd();
+        self.transcript.push_user(text.clone(), &cwd);
         _ = self.cmd_tx.send(AgentCommand::Prompt(text));
         self.scroll_to_bottom();
     }

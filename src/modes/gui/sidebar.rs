@@ -455,7 +455,7 @@ fn footer_block(
                 .gap(px(SPACE_XS))
                 .text_size(px(FONT_CAPTION))
                 .text_color(theme.text_ghost)
-                .child(SharedString::from("   "))
+                .child(SharedString::from("    "))
                 .child(
                     div()
                         .min_w_0()

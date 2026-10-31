@@ -141,38 +141,47 @@ impl GuiApp {
     /// 右侧 in/out + 费用 + 速率 + 标记 + 交互数 + 耗时。
     pub(super) fn status_text(&self) -> (String, String) {
         let messages = self.snapshot.as_ref().map(|s| s.messages).unwrap_or(0);
-        let mut left = String::new();
+        let mut left_parts: Vec<String> = Vec::new();
 
         // 扩展命令写的临时提示优先占左侧（过期即不再显示）
         if let Some((text, deadline)) = &self.status_note
             && Instant::now() < *deadline
         {
-            left.push_str(text);
-            left.push_str(" · ");
+            left_parts.push(text.clone());
         }
 
-        left.push_str(&format!("{messages} messages"));
+        // 忙碌时左侧已被 Working… 占住，只省掉消息数
+        if !self.busy {
+            left_parts.push(format!("{messages} messages"));
+        }
+
         let mut right = String::new();
 
-        if let Some(u) = self.snapshot.as_ref().map(|s| &s.usage) {
-            if u.context_window > 0 && u.context_tokens > 0 {
-                let pct = u.context_tokens as f64 / u.context_window as f64 * 100.0;
-                left.push_str(&format!(" · {:.0}%", pct));
-            }
-            if u.cache_read + u.input > 0 {
-                let hit = u.cache_read as f64 / (u.cache_read + u.input) as f64 * 100.0;
-                left.push_str(&format!(" · CH {:.0}%", hit));
-            }
-            if u.input + u.output > 0 {
-                right.push_str(&format!(
-                    "{} in · {} out",
-                    format_tokens(u.input),
-                    format_tokens(u.output)
-                ));
-            }
-            if u.cost > 0.0 {
-                right.push_str(&format!(" · ${:.4}", u.cost));
-            }
+        if let Some(snapshot) = &self.snapshot {
+            let u = &snapshot.usage;
+            let pct = if u.context_window > 0 {
+                u.context_tokens as f64 / u.context_window as f64 * 100.0
+            } else {
+                0.0
+            };
+
+            left_parts.push(format!("CW {:.0}%", pct));
+
+            let billed = u.cache_read + u.input;
+            let hit = if billed > 0 {
+                u.cache_read as f64 / billed as f64 * 100.0
+            } else {
+                0.0
+            };
+
+            left_parts.push(format!("CH {:.0}%", hit));
+
+            right.push_str(&format!(
+                "{} in · {} out",
+                format_tokens(u.input),
+                format_tokens(u.output)
+            ));
+            right.push_str(&format!(" · ${:.4}", u.cost));
         }
 
         let mut tail = format!(
@@ -202,7 +211,7 @@ impl GuiApp {
         }
 
         right.push_str(&tail);
-        (left, right)
+        (left_parts.join(" · "), right)
     }
 
     /// 按快照里的累计 output 与在途流式输出打一个 ≥1s 的速率采样点
