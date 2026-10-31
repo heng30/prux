@@ -64,7 +64,7 @@ webbrowser = { version = "1.0", default-features = false }
 tokio-util = { version = "0.7", default-features = false }
 html2text = { version = "0.17", default-features = false }
 async-trait = { version = "0.1", default-features = false }
-jsonschema = { version = "0.59", default-features = false }
+jsonschema = { version = "0.60", default-features = false }
 pdf-extract = { version = "0.12", default-features = false }
 tiktoken-rs = { version = "0.12", default-features = false }
 futures-util = { version = "0.3", default-features = false }
@@ -187,9 +187,9 @@ tokio-tungstenite = { version = "0.30", default-features = false, features = [
 ] }
 
 gpui = { version = "0.2", optional = true, default-features = false, features = [
-  "font-kit",         # 文本系统：关掉会退化成 NoopTextSystem，界面无字
-  "wayland",          # Linux 渲染后端；x11 / wayland 二者都要留（用户环境都可能有）
   "x11",
+  "wayland",          # Linux 渲染后端；x11 / wayland 二者都要留（用户环境都可能有）
+  "font-kit",         # 文本系统：关掉会退化成 NoopTextSystem，界面无字
   "windows-manifest", # Windows 可执行文件的资源清单（build.rs 生成）
 ] }
 
