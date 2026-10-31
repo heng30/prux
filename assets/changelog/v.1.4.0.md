@@ -463,6 +463,19 @@
   back, and a directory change is detected against the incoming snapshot's `cwd` before that
   snapshot replaces the old one.
 
+- **Commands in the desktop GUI's `bash` cards wrap instead of being cut**: the command sat in the
+  header as a one-line summary with a `command=` prefix, truncated and squeezed against the status
+  label. It now takes the second line of the card, wraps, and uses the code colour; the lines it
+  occupies come out of the output line budget.
+
+- **Blank assistant turns leave no gap**: a turn that made a tool call but produced neither text nor
+  thinking rendered as an empty block, and the flow's `gap` still counted it, so neighbouring blocks
+  floated apart. Empty turns are skipped when rendering.
+
+- **`Enter` on an empty composer jumps back to the newest output**: pressing `Enter` with nothing
+  typed used to do nothing while the view was scrolled up; it now re-pins the transcript to the
+  bottom.
+
 ## 中文
 
 ### 新增
@@ -791,3 +804,9 @@
 - **桌面 GUI 会忘掉已不存在的工作目录**：工作目录选择里的最近列表以前只进不出，删掉或挪走的项目
   一直留在菜单里点不开。现在启动时剔除已经不存在的路径并写回清单；切换工作目录时先落地新快照，
   再拿它的 `cwd` 和旧值比较，不会漏掉变化。
+- **桌面 GUI 的 `bash` 卡片不再截断命令**：命令以前挤在头部当一行摘要（带 `command=` 前缀、会被
+  截断、还和状态标签抢宽度），现在占卡片第二行、整行折行、用代码色，它占掉的行数从输出行数预算里扣除。
+- **空助手块不再撑出空白**：只发起工具调用、正文和思考都为空的回合以前渲染成空块，流的 `gap` 仍按
+  子节点数计算，相邻块之间凭空多出一段间距；现在渲染时跳过这类空块。
+- **输入框为空时按 `Enter` 回到最新输出**：以前什么都没输入时按 `Enter` 毫无反应，视图停在上面下
+  不来；现在会重新钉底。

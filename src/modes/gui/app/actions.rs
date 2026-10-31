@@ -516,6 +516,10 @@ impl GuiApp {
     /// 否则排进 steer 注入箱（回合内注入）；两者都不立即发送，也不回显进对话流。
     pub(super) fn submit(&mut self, follow_up: bool, cx: &mut Context<Self>) {
         let Some(text) = self.take_input() else {
+            // 空输入按 Enter：把对话流拉回最新的输出（重新接管钉底）
+            self.pinned_bottom.set(Some(gpui::px(0.)));
+            self.scroll_to_bottom();
+            cx.notify();
             return;
         };
 

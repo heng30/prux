@@ -35,8 +35,6 @@ use std::{
 const COLLAPSED_OUTPUT_LINES: usize = 6;
 /// 工具输出展开时显示的行数上限。
 const EXPANDED_OUTPUT_LINES: usize = 200;
-/// 工具输出每一行最多保留的显示宽度（CJK 字符按 2 算）。
-const OUTPUT_LINE_CHARS: usize = 160;
 /// 用户气泡的最大宽度（逻辑像素）
 const USER_BUBBLE_MAX_WIDTH: f32 = 560.;
 /// 用户消息折叠时显示的行数（超过就截断，点击气泡展开）
@@ -600,8 +598,14 @@ impl Transcript {
             .or_else(|| args.get("file_path"))
             .and_then(Value::as_str)
             .map(str::to_string);
-        // edit / write 的参数体量很大（整段 edits / content），头部只留路径
-        let summary = if matches!(name, "edit" | "write") && path.is_some() {
+        // edit / write 的参数体量很大（整段 edits / content），头部只留路径；
+        // shell 类只留命令本身（不带 `command=` 前缀），卡片第二行整行折行显示
+        let summary = if is_shell_tool(name) {
+            args.get("command")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .unwrap_or_default()
+        } else if matches!(name, "edit" | "write") && path.is_some() {
             String::new()
         } else {
             summarize_args(args)
@@ -658,6 +662,14 @@ impl Transcript {
     }
 }
 
+/// 空助手块：只有 tool call、没正文也没思考，渲染出来高度为 0。
+///
+/// 它仍会被流的 `gap` 算一份，相邻块之间会凭空多出一段空白，所以渲染时跳过。
+pub fn is_blank_assistant(block: &Block) -> bool {
+    matches!(block, Block::Assistant(assistant)
+        if assistant.text.trim().is_empty() && assistant.thinking.trim().is_empty())
+}
+
 /// 入参压成一行摘要（过长截断）。
 fn summarize_args(args: &Value) -> String {
     let text = match args {
@@ -695,12 +707,9 @@ fn tool_result_text(content: &[ContentBlock]) -> String {
         .join("\n")
 }
 
-/// 工具调用的入参颜色：shell 类用代码色，其余用次要色。
-fn tool_arg_color(name: &str, theme: &Theme) -> Hsla {
-    match name {
-        "bash" | "shell" | "execute" | "sh" => theme.code_text,
-        _ => theme.text_tertiary,
-    }
+/// 是不是 shell 类工具（命令单独占一行、用代码色）。
+fn is_shell_tool(name: &str) -> bool {
+    matches!(name, "bash" | "shell" | "execute" | "sh" | "powershell")
 }
 
 /// 工具输出的着色行：diff 的增/删/块头各有颜色，其余用次要色。
@@ -971,11 +980,17 @@ fn diff_body(diff: &str, theme: &Theme, max: usize, expanded: bool) -> AnyElemen
     column.into_any_element()
 }
 
-/// 工具输出正文：逐行着色，超过 `max` 行截断（按行截断而不是裁剪像素，
-/// 被裁掉的部分不计入布局高度，会盖住输入卡片），剩下的行数用与用户气泡同样式的提示标出。
+/// 工具输出正文：逐行着色并折行（单行超宽也不截断），超过 `max` 行截断（按行截断而不是
+/// 裁剪像素，被裁掉的部分不计入布局高度，会盖住输入卡片），剩下的行数用与用户气泡同样式的提示标出。
 ///
-/// `colored` 为假时统一用次要色——write 写入的文件正文里 `+`/`-` 开头只是内容，不是 diff。
-fn output_body(text: &str, theme: &Theme, max: usize, expanded: bool, colored: bool) -> AnyElement {
+/// `paint` 决定每行的颜色：工具输出按 diff 着色，write 正文与 shell 命令统一一色。
+fn output_body(
+    text: &str,
+    paint: impl Fn(&str) -> Hsla,
+    hint_color: Hsla,
+    max: usize,
+    expanded: bool,
+) -> AnyElement {
     let mut column = div()
         .w_full()
         .flex()
@@ -985,17 +1000,12 @@ fn output_body(text: &str, theme: &Theme, max: usize, expanded: bool, colored: b
     let lines = text.trim().lines();
     let total = lines.clone().count();
     for line in lines.take(max) {
-        let shown = crate::utils::display::fit_display(line, OUTPUT_LINE_CHARS);
         column = column.child(
             div()
                 .w_full()
-                .truncate()
-                .text_color(if colored {
-                    line_color(line, theme)
-                } else {
-                    theme.text_secondary
-                })
-                .child(SharedString::from(shown)),
+                .min_w_0()
+                .text_color(paint(line))
+                .child(SharedString::from(line.to_string())),
         );
     }
 
@@ -1003,11 +1013,16 @@ fn output_body(text: &str, theme: &Theme, max: usize, expanded: bool, colored: b
         column = column.child(
             div()
                 .text_size(px(FONT_CAPTION))
-                .text_color(theme.text_ghost)
+                .text_color(hint_color)
                 .child(SharedString::from(hint)),
         );
     }
     column.into_any_element()
+}
+
+/// shell 命令占掉的行数：命令先渲染、封顶在 `budget`，剩下的预算留给输出。
+fn command_rows(command: &str, budget: usize) -> usize {
+    command.trim().lines().count().min(budget)
 }
 
 /// 被截掉的输出行提示：`hidden` 为没显示出来的行数，与用户消息气泡的折叠提示一致。
@@ -1270,41 +1285,53 @@ fn tool_block(
         // 点卡片展开/收起这一块的输出
         .on_click(cx.listener(move |this, _, _, cx| this.toggle_tool(index, cx)));
 
-    // edit / write 的参数体量很大，头部改显文件路径（参数摘要为空）
-    let header_text = if tool.args.is_empty() {
-        tool.path.clone().unwrap_or_default()
+    // shell 类的命令放在卡片第二行，头部只留名字与状态
+    let shell = is_shell_tool(&tool.name);
+
+    // 头部：圆点 + 工具名 + 入参摘要（shell 例外）+ 状态
+    let mut header = div()
+        .w_full()
+        .flex()
+        .items_center()
+        .gap(px(SPACE_SM))
+        .child(dot(color, DOT_SIZE))
+        .child(
+            div()
+                .text_size(px(FONT_SMALL))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(theme.text)
+                .child(SharedString::from(tool.name.clone())),
+        );
+
+    // 中间的弹性区：非 shell 放入参摘要，shell 用空白占位（把状态标签推到右侧）
+    if !shell {
+        // edit / write 的参数体量很大，头部改显文件路径（参数摘要为空）
+        let header_text = if tool.args.is_empty() {
+            tool.path.clone().unwrap_or_default()
+        } else {
+            tool.args.clone()
+        };
+
+        header = header.child(
+            div()
+                .min_w_0()
+                .flex_1()
+                .truncate()
+                .text_size(px(FONT_SMALL))
+                .text_color(theme.text_tertiary)
+                .child(SharedString::from(header_text)),
+        );
     } else {
-        tool.args.clone()
-    };
+        header = header.child(div().flex_1());
+    }
+
     card = card.child(
-        div()
-            .flex()
-            .items_center()
-            .gap(px(SPACE_SM))
-            .child(dot(color, DOT_SIZE))
-            .child(
-                div()
-                    .text_size(px(FONT_SMALL))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme.text)
-                    .child(SharedString::from(tool.name.clone())),
-            )
-            .child(
-                div()
-                    .min_w_0()
-                    .flex_1()
-                    .truncate()
-                    .text_size(px(FONT_SMALL))
-                    // shell 类调用用代码色，跟普通工具区分开
-                    .text_color(tool_arg_color(&tool.name, theme))
-                    .child(SharedString::from(header_text)),
-            )
-            .child(
-                div()
-                    .text_size(px(FONT_CAPTION))
-                    .text_color(color)
-                    .child(SharedString::from(label)),
-            ),
+        header.child(
+            div()
+                .text_size(px(FONT_CAPTION))
+                .text_color(color)
+                .child(SharedString::from(label)),
+        ),
     );
 
     // 按行截断而不是靠 `max_h` 裁剪：被裁掉的那部分不计入布局高度，
@@ -1315,15 +1342,40 @@ fn tool_block(
         COLLAPSED_OUTPUT_LINES
     };
 
+    // 执行的命令：整行折行、代码色；它自己封顶在 `max_lines`，占掉的行数从输出预算里扣
+    let mut remaining = max_lines;
+    if shell && !tool.args.is_empty() {
+        card = card.child(output_body(
+            &tool.args,
+            |_| theme.code_text,
+            theme.text_ghost,
+            max_lines,
+            expanded,
+        ));
+        remaining = remaining.saturating_sub(command_rows(&tool.args, max_lines));
+    }
+
     if let Some(diff) = &tool.diff {
-        card = card.child(diff_body(diff, theme, max_lines, expanded));
+        card = card.child(diff_body(diff, theme, remaining, expanded));
     } else if let Some(content) = &tool.content {
         // write：先把要写入的正文折起来看一眼，再看工具结果
-        card = card.child(output_body(content, theme, max_lines, expanded, false));
+        card = card.child(output_body(
+            content,
+            |_| theme.text_secondary,
+            theme.text_ghost,
+            remaining,
+            expanded,
+        ));
     }
 
     if tool.diff.is_none() && !tool.output.trim().is_empty() {
-        card = card.child(output_body(&tool.output, theme, max_lines, expanded, true));
+        card = card.child(output_body(
+            &tool.output,
+            |line| line_color(line, theme),
+            theme.text_ghost,
+            remaining,
+            expanded,
+        ));
     }
 
     for image in &tool.images {
@@ -1880,6 +1932,25 @@ mod tests {
 
     use super::*;
 
+    /// 空助手块（只有 tool call）不该占位；带正文或思考的都算有内容。
+    #[test]
+    fn blank_assistant_blocks_are_skipped() {
+        let blank = Block::Assistant(Assistant::default());
+        assert!(is_blank_assistant(&blank));
+
+        let with_text = Block::Assistant(Assistant {
+            text: "hi".to_string(),
+            ..Assistant::default()
+        });
+        assert!(!is_blank_assistant(&with_text));
+
+        let with_thinking = Block::Assistant(Assistant {
+            thinking: "hmm".to_string(),
+            ..Assistant::default()
+        });
+        assert!(!is_blank_assistant(&with_thinking));
+    }
+
     /// diff 解析：单行替换做词级标记、多行删除/新增整行着色、块头归上下文。
     #[test]
     fn diff_rows_mark_word_level_changes() {
@@ -1918,6 +1989,31 @@ mod tests {
         assert_eq!(tool.content.as_deref(), Some("a\nb"));
         assert!(tool.args.is_empty(), "头部只留路径");
         assert!(tool.diff.is_none(), "write 不是 diff");
+    }
+
+    /// bash 调用：命令整条留在 `args` 里——不带 `command=` 前缀，也不按宽度截断（卡片第二行折行）。
+    #[test]
+    fn shell_tool_keeps_the_whole_command() {
+        let mut transcript = Transcript::default();
+        let command = format!("rg '{}' src", "x".repeat(200));
+        transcript.push_tool(
+            "b1",
+            "bash",
+            &serde_json::json!({ "command": command }),
+            ".",
+        );
+        let Block::Tool(tool) = &transcript.blocks()[0] else {
+            panic!("第一块应是工具块");
+        };
+        assert_eq!(tool.args, command);
+    }
+
+    /// 多行命令占掉输出预算：首尾空行不算，最多只能吃掉整个预算（不会变成负数）。
+    #[test]
+    fn command_rows_share_the_line_budget() {
+        assert_eq!(command_rows("ls\npwd\n", 6), 2);
+        assert_eq!(command_rows("\n\n", 6), 0);
+        assert_eq!(command_rows("a\nb\nc", 2), 2);
     }
 
     /// 多行删除/新增不做词级 diff（行数不等时逐行整行着色）。
@@ -1997,13 +2093,5 @@ mod tests {
         // `+++` / `---` 是文件头，不算增删行
         assert_eq!(line_color("+++ b/a.rs", &theme), theme.text_secondary);
         assert_eq!(line_color("--- a/a.rs", &theme), theme.text_secondary);
-    }
-
-    /// shell 类工具的入参用代码色高亮。
-    #[test]
-    fn shell_calls_use_code_color() {
-        let theme = Theme::dark();
-        assert_eq!(tool_arg_color("bash", &theme), theme.code_text);
-        assert_eq!(tool_arg_color("edit", &theme), theme.text_tertiary);
     }
 }
