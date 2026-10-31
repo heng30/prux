@@ -327,6 +327,11 @@
 
 ### Fixed
 
+- **Desktop GUI slash commands keep their arguments**: `/compact <instructions>` and `/bug <hint>`
+  used to be swallowed as an unknown command, `/history` parked its text back in the input box
+  instead of reopening the search panel, and `/name <name>` renamed the session while the sidebar
+  kept showing the old title.
+
 - **`/rewind` works in the desktop GUI**: the command went straight to the agent, so the branch
   moved back but the transcript kept showing the input and everything after it. It now runs the same
   confirmation panel as the terminal UI (rewind & restore the input to the box / rewind & discard /
@@ -802,6 +807,9 @@
   路径），目录菜单给当前所在目录标上 `✓ current`。
 
 ## 修复
+
+- **桌面 GUI 的斜杠命令不再吞掉参数**：`/compact <指令>` 与 `/bug <提示>` 以前被当成未知命令丢弃，
+  `/history` 把文本塞回输入框而不重新弹搜索面板，`/name <名称>` 改名后侧栏还显示旧标题。
 
 - **桌面 GUI 的 `/rewind` 生效**：以前命令直接发给 agent，会话分支确实回退了，但对话区还挂着那条
   输入和它之后的全部输出。现在走与终端 UI 相同的确认面板（回退并把输入还回输入框 / 回退并丢弃 /

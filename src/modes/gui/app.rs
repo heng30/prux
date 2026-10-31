@@ -578,13 +578,26 @@ impl GuiApp {
             }
             GuiEvent::Snapshot(snapshot) => {
                 let previous = self.cwd();
+                let previous_name = self
+                    .snapshot
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.session_name.clone());
                 self.snapshot = Some(snapshot);
+
+                // `/name` 改的标题只写在会话文件里：不重读会话列表，侧栏还是旧标题
+                let renamed = self
+                    .snapshot
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.session_name.clone())
+                    != previous_name;
 
                 let cwd = self.cwd();
                 if cwd != previous {
                     self.reload_sessions(cx);
                     self.refresh_branch();
                     remember_cwd(&cwd);
+                } else if renamed {
+                    self.reload_sessions(cx);
                 }
             }
         }

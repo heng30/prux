@@ -177,6 +177,11 @@ impl GuiApp {
             left_parts.push(format!("CH {:.0}%", hit));
 
             right.push_str(&format!(
+                "{}t/s · ",
+                format_tokens(self.meter.tok_per_sec.round() as u64)
+            ));
+
+            right.push_str(&format!(
                 "{} in · {} out",
                 format_tokens(u.input),
                 format_tokens(u.output)
@@ -184,10 +189,7 @@ impl GuiApp {
             right.push_str(&format!(" · ${:.4}", u.cost));
         }
 
-        let mut tail = format!(
-            "{}t/s",
-            format_tokens(self.meter.tok_per_sec.round() as u64)
-        );
+        let mut tail = String::new();
 
         if goal::is_active() {
             tail.push_str(" · 🎯 goal");
@@ -205,10 +207,6 @@ impl GuiApp {
             .count();
         tail.push_str(&format!(" · 💬 {interactions}"));
         tail.push_str(&format!(" · ⌛ {}", self.meter.elapsed_text()));
-
-        if !right.is_empty() {
-            right.push_str(" · ");
-        }
 
         right.push_str(&tail);
         (left_parts.join(" · "), right)

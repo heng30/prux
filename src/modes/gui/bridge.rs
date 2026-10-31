@@ -42,6 +42,8 @@ pub struct Snapshot {
     pub model_cycle: Vec<ScopedModel>,
     /// 会话文件路径；内存会话（`--no-session`）为 None。
     pub session_path: Option<String>,
+    /// 会话名（`/name` 设置过才有；未命名或内存会话为 None）——侧栏行标题随它变
+    pub session_name: Option<String>,
     /// 会话中的消息条数。
     pub messages: usize,
     /// 当前会话树的叶子条目 id（`/label` 等按 id 操作时用）；

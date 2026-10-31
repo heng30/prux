@@ -45,6 +45,7 @@ impl GuiApp {
                 _ => {
                     let line = format!("/history {arg}");
                     self.editor.insert(line.trim_end());
+                    self.refresh_suggest(cx);
                 }
             },
             "export" if !arg.is_empty() => {
@@ -122,7 +123,8 @@ impl GuiApp {
             "giff" => self.toggle_panel_tab(PanelTab::Changes, cx),
             "tree" => _ = self.cmd_tx.send(AgentCommand::Tree),
             "bug" => {
-                let editor = Editor::new();
+                let mut editor = Editor::new();
+                editor.insert(arg);
                 self.dialog = Some(SessionDialog::BugHint { editor });
                 cx.notify();
             }
@@ -169,9 +171,9 @@ impl GuiApp {
             "copy" => self.copy_last_reply(cx),
             "debug" if arg.is_empty() => core::extensions::CommandHost::debug_info(self),
             "compact" => {
-                _ = self
-                    .cmd_tx
-                    .send(AgentCommand::Compact { instructions: None });
+                _ = self.cmd_tx.send(AgentCommand::Compact {
+                    instructions: (!arg.is_empty()).then(|| arg.to_string()),
+                });
             }
             "appearance" | "theme" => self.open_appearance_picker(cx),
             "panel" => self.toggle_panel(None, cx),
@@ -880,7 +882,16 @@ impl GuiApp {
 fn takes_argument(command: &str) -> bool {
     matches!(
         command,
-        "name" | "thinking" | "export" | "import" | "model" | "session" | "settings" | "history"
+        "name"
+            | "thinking"
+            | "export"
+            | "import"
+            | "model"
+            | "session"
+            | "settings"
+            | "history"
+            | "compact"
+            | "bug"
     )
 }
 

@@ -552,7 +552,14 @@ fn start(agent: &Arc<Mutex<Agent>>, task: Task, events: &UnboundedSender<GuiEven
             Task::Navigate {
                 target_id,
                 summarize,
-            } => agent.navigate_tree(&target_id, summarize).await.map(|_| ()),
+            } => {
+                let result = agent.navigate_tree(&target_id, summarize).await.map(|_| ());
+                // 导航换了活动分支：对话区必须按新分支重建，否则界面上还是旧分支的内容
+                if result.is_ok() {
+                    _ = events.send(GuiEvent::History(agent.messages.clone()));
+                }
+                result
+            }
         };
 
         if let Err(e) = result {
@@ -599,6 +606,7 @@ fn snapshot(agent: &Agent) -> Snapshot {
             .as_ref()
             .and_then(|s| s.get_session_file())
             .map(|p| p.to_string_lossy().to_string()),
+        session_name: agent.session.as_ref().and_then(|s| s.name.clone()),
         messages: agent.messages.len(),
         leaf_entry_id: agent.session.as_ref().and_then(|s| s.clone_target_id()),
         tools: agent.get_active_tools(),
