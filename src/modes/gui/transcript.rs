@@ -36,7 +36,7 @@ const USER_BUBBLE_MAX_WIDTH: f32 = 560.;
 /// 用户消息折叠时显示的行数（超过就截断，点击气泡展开）
 const USER_COLLAPSED_LINES: usize = 6;
 /// 缩略图最大边长（逻辑像素）
-const IMAGE_THUMB: f32 = 180.0;
+const IMAGE_THUMB: f32 = 360.0;
 
 /// 工具调用的执行状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1400,6 +1400,19 @@ fn note_block(note: &Note, theme: &Theme) -> AnyElement {
                 })),
         )
         .into_any_element()
+}
+
+/// Markdown 文本 → 元素（覆盖层面板用：只要排版与配色，不登记选区/行位置）。
+pub fn markdown_body(text: &str, theme: &Theme) -> AnyElement {
+    let rows = parse_rows(text, theme);
+    let mut lines = TextLines {
+        next: 0,
+        selection: None,
+        bounds: Rc::new(RefCell::new(HashMap::new())),
+        text_bounds: Rc::new(RefCell::new(HashMap::new())),
+        rows: Rc::new(RefCell::new(Vec::new())),
+    };
+    render_rows(&rows, theme, &mut lines)
 }
 
 /// Markdown 文本 → 预解析行（代码块的高亮只在解析时做一次）。

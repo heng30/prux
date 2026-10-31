@@ -158,6 +158,8 @@ impl GuiApp {
             "trust" => self.open_trust_panel(cx),
             "name" => self.rename_current_session(cx),
             "copy" => self.copy_last_reply(cx),
+            "rewind" => _ = self.cmd_tx.send(AgentCommand::Rewind),
+            "debug" if arg.is_empty() => core::extensions::CommandHost::debug_info(self),
             "compact" => {
                 _ = self
                     .cmd_tx
@@ -165,7 +167,6 @@ impl GuiApp {
             }
             "appearance" | "theme" => self.open_appearance_picker(cx),
             "panel" => self.toggle_panel(None, cx),
-            // 停靠面板：扩展提供的状态行（内容为空时整块不渲染）
             "dock" => {
                 self.dock_visible = !self.dock_visible;
                 cx.notify();
@@ -753,16 +754,15 @@ impl GuiApp {
         self.overlay = Some(Overlay::List(List::new("Logout", entries)));
     }
 
-    /// 更新日志：当前版本的内嵌 changelog 前若干行。
+    /// 更新日志：当前版本的内嵌 changelog，按 Markdown 渲染在信息面板里。
     pub(super) fn open_changelog(&mut self, _cx: &mut Context<Self>) {
         let lines: Vec<String> = core::changelog::CHANGELOG
             .lines()
             .map(|line| line.to_string())
             .collect();
-        self.overlay = Some(Overlay::Info(Info::new(
-            format!("Changelog v{}", core::changelog::VERSION),
-            lines,
-        )));
+        self.overlay = Some(Overlay::Info(
+            Info::new(format!("Changelog v{}", core::changelog::VERSION), lines).as_markdown(),
+        ));
     }
 }
 

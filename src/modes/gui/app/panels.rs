@@ -699,7 +699,7 @@ impl GuiApp {
                     "Arrows move · Ctrl-B / Ctrl-F by char · Alt-←/→ or Alt-B/F by word".to_string(),
                     "Home / Ctrl-A line start · End / Ctrl-E line end".to_string(),
                     "Ctrl-W / Alt-Backspace delete word back · Alt-D delete word forward".to_string(),
-                    "Ctrl-U delete to line start · Ctrl-K delete to line end · Ctrl-- undo".to_string(),
+                    "Ctrl-U delete to line start · Ctrl-K delete to line end · Ctrl-Z undo".to_string(),
                     "Ctrl-Shift-C copy selection · Alt-C copy input · Ctrl-V paste".to_string(),
                     "Ctrl-M commands · Ctrl-L model · Ctrl-P / Ctrl-Shift-P cycle model".to_string(),
                     "Ctrl-T show/hide thinking · Shift-Tab cycle thinking level".to_string(),

@@ -33,7 +33,10 @@ use crate::{
         command_arg,
     },
     modes::interactive::handlers::register_host_command,
-    utils::glyphs::{DEF_ARROW_UP_DOWN, DEF_BAR_EMPTY, DEF_BAR_FULL, DEF_SPARK_BLOCKS},
+    utils::{
+        async_task,
+        glyphs::{DEF_ARROW_UP_DOWN, DEF_BAR_EMPTY, DEF_BAR_FULL, DEF_SPARK_BLOCKS},
+    },
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -468,7 +471,10 @@ fn session_label(path: &Path) -> String {
         .unwrap_or_else(|| path.to_string_lossy().to_string())
 }
 
-/// 打开面板并在后台完成扫描（无 tokio 运行时则就地扫描，便于单测）。
+/// 打开面板并在后台完成扫描（没有可用运行时则就地扫描，便于单测）。
+///
+/// 运行时靠 [`async_task::handle`] 取：GUI 的命令跑在视图线程上，那里没有
+/// `Handle::try_current`，以前会退化成同步扫描——会话一多连面板都弹不出来。
 fn start_scan(args: Args, files: Vec<(String, PathBuf)>) {
     let id = next_ui_id();
     {
@@ -484,11 +490,9 @@ fn start_scan(args: Args, files: Vec<(String, PathBuf)>) {
     let filter = args.provider.clone();
     let scan = move || scan_files(&files, filter.as_deref(), scope);
 
-    match tokio::runtime::Handle::try_current() {
-        Ok(handle) => {
-            handle.spawn_blocking(move || finish_scan(id, scan()));
-        }
-        Err(_) => finish_scan(id, scan()),
+    match async_task::handle() {
+        Some(handle) => _ = handle.spawn_blocking(move || finish_scan(id, scan())),
+        None => finish_scan(id, scan()),
     }
 }
 

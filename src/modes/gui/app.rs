@@ -66,7 +66,11 @@ use crate::{
         agent_actor::{AgentCommand, CommandTx},
         handlers::tools::run_shell_command,
     },
-    utils::{display, geometry, paths::cwd},
+    utils::{
+        display, geometry,
+        paths::cwd,
+        wheel::{WheelScrollAccelerator, WheelScrollLines},
+    },
 };
 use gpui::{
     AnyElement, App, Bounds, Context, ElementInputHandler, EntityInputHandler, FocusHandle,
@@ -90,6 +94,9 @@ const RECENT_CWD_LIMIT: usize = 30;
 
 /// 同一行两次切换要间隔多久才算两次操作（长按重建后会再弹一次 click）。
 const TOGGLE_DEBOUNCE: Duration = Duration::from_millis(250);
+
+/// Alt+滚轮加速倍数：按住 Alt 滚消息区时步长 ×5，用于快速跳过长回复。
+const ALT_WHEEL_MULTIPLIER: f32 = 5.;
 
 /// 可拖拽滚动条所在的滚动区。
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -274,6 +281,10 @@ pub struct GuiApp {
     blink: bool,
     /// 对话流滚动句柄
     scroll: ScrollHandle,
+    /// 对话流滚轮的连滚加速（与 TUI 同源的速度换算）
+    wheel_accel: WheelScrollAccelerator,
+    /// 滚轮加速的时间基准（单调时钟，启动时固定）
+    wheel_epoch: Instant,
     /// 侧栏会话列表滚动句柄
     sessions_scroll: ScrollHandle,
     /// 侧栏会话列表
@@ -422,6 +433,8 @@ impl GuiApp {
             ticking: false,
             blink: false,
             scroll: ScrollHandle::new(),
+            wheel_accel: WheelScrollAccelerator::new(WheelScrollLines::Auto, true),
+            wheel_epoch: Instant::now(),
             sessions_scroll: ScrollHandle::new(),
             sessions: Vec::new(),
             sessions_loader: None,
@@ -588,6 +601,42 @@ impl GuiApp {
         // 偏移是物理像素，这里不能再走 `px()`（那是「设计像素 × 缩放」）
         self.scroll
             .set_offset(gpui::point(gpui::px(0.), gpui::px(next)));
+    }
+
+    /// 滚轮滚消息区：步长与 TUI 同源（[`WheelScrollAccelerator::next`]：孤立一格 1 份，
+    /// 快滚最多 10 份），按住 Alt 再 ×[`ALT_WHEEL_MULTIPLIER`]。返回是否已自行滚过。
+    ///
+    /// 加速系数乘在系统给的增量上（触控板的小增量仍然平滑），不用「一格 = 固定行数」去
+    /// 覆盖它。返回 true 时调用方要吞掉事件——原生滚动在 bubble 阶段，否则会再滚一遍。
+    fn wheel_transcript(&mut self, event: &gpui::ScrollWheelEvent, line_height: Pixels) -> bool {
+        // shortcut: 只按对话区 bounds 判定，盖住它的面板/菜单不单独算，
+        // 面板变多或与对话区大面积重叠时改成按各自 bounds 判定
+        if self.overlay.is_some()
+            || self.dialog.is_some()
+            || self.session_menu.is_some()
+            || self.dropdown.is_some()
+        {
+            return false;
+        }
+
+        let dy = f32::from(event.delta.pixel_delta(line_height).y);
+        if dy == 0. {
+            return false;
+        }
+
+        let direction = if dy < 0. { 1 } else { -1 };
+        let now_ms = self.wheel_epoch.elapsed().as_millis() as u64;
+        let mut factor = self.wheel_accel.next(direction, now_ms) as f32;
+        if event.modifiers.alt {
+            factor *= ALT_WHEEL_MULTIPLIER;
+        }
+
+        let max = f32::from(self.scroll.max_offset().height);
+        let next = (f32::from(self.scroll.offset().y) + dy * factor).clamp(-max, 0.);
+        // 偏移是物理像素，不能再走 `px()`（那是「设计像素 × 缩放」）
+        self.scroll
+            .set_offset(gpui::point(gpui::px(0.), gpui::px(next)));
+        true
     }
 
     /// 新内容来了才跟随到底：用户滚上去看历史时不能每来一条事件就把他拽回底部。

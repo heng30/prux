@@ -259,6 +259,24 @@
   candidates in the window as well as in the terminal; the panel's description now sits right after
   the command name instead of being pushed to the far edge, so there is room to read it.
 
+- **The desktop GUI accelerates wheel scrolling in the conversation**: the wheel uses the same
+  velocity mapping as the terminal UI — an isolated notch scrolls at the system's own step, a fast
+  spin multiplies it (up to 10×), and holding `Alt` multiplies it by 5 for jumping through a long
+  reply. Only the conversation is affected; menus, panels and the sidebar keep their own scrolling.
+
+- **`/changelog` opens as rendered Markdown**: the update log is laid out like an assistant reply
+  — headings, lists, inline code and code blocks instead of one flat block of text — and the panel
+  carries a scrollbar, so you can see how far in you are and jump around with `↑` / `↓` / `PgUp` /
+  `PgDn` / `Home` / `End`.
+
+- **Images in the desktop GUI are twice as large**: `@image` references and pictures returned by a
+  tool render at up to 360 px instead of 180, so a screenshot is readable without opening it.
+
+- **The desktop GUI ships its own documentation**: `docs/gui.md` covers launching it, the layout,
+  the sidebar and the conversation area, the right-hand Files / Changes panel, the dock, every
+  overlay and dialog, the full key table, the slash commands that work in the window, appearance and
+  zoom, and the differences from the terminal interface.
+
 ### Fixed
 
 - **File edits in the desktop GUI render as diffs**: the `edit` card shows the file path in its
@@ -392,6 +410,24 @@
 - **Selecting text keeps the inline styles underneath it**: a transcript highlight has to be split
   where it meets inline code or a link, so the selection background no longer swallows those words
   and paint over only part of the selection.
+
+- **`/cache-usage all` no longer freezes the desktop GUI**: the scan ran on the view thread
+  whenever no async runtime was in scope, so with many saved sessions the whole window stopped and
+  the panel appeared only after the scan had finished. The scan now runs in the background and the
+  panel opens right away with `scanning sessions…`.
+
+- **Arrow keys scroll the desktop GUI's info panels**: the scroll offset was clamped against a
+  range with the wrong sign, so `↑` / `↓` / `PgUp` / `PgDn` on `/usage`, `/help`, `/session`,
+  `/changelog` and the extension detail pages snapped back to the top instead of moving. `End` goes
+  to the bottom now.
+
+- **`/rewind` works in the desktop GUI**: it was listed in the `/` panel but had no handler, so the
+  command text simply went back into the composer. It now rolls back the last user input.
+
+- **`/debug` answers in the desktop GUI**: it was listed in the `/` panel but did nothing. A bare
+  `/debug` now prints the agent diagnostics into the conversation (provider, model, message count,
+  auto-compaction and retry, working directory, session); the `/debug info` / `provider` /
+  `system-prompt` subcommands stay with the `debug` extension.
 
 ## 中文
 
@@ -582,6 +618,21 @@
   子命令（`Tab` 只补全，`Enter` 补全并执行），桌面端也有了 `/goal pause` 这样的二级候选；
   面板里的说明紧跟命令名而不是被推到最右边，描述才显示得下。
 
+- **桌面 GUI 的消息区支持滚轮加速**：滚轮沿用终端 UI 的那套速度换算——孤立一格按系统自己的步长
+  滚，快速连滚会按间隔放大（最多 10 倍），按住 `Alt` 再乘 5，用来快速跳过很长的回复。只有对话区
+  受影响：菜单、面板与侧栏还是各自的滚动。
+
+- **`/changelog` 按 Markdown 渲染并带滚动条**：更新日志现在像助手回复一样排版——标题、列表、行内
+  代码与代码块都有样式，不再是一整块纯文本；面板右侧显示滚动条，能看到自己在哪一段，也能用
+  `↑` / `↓` / `PgUp` / `PgDn` / `Home` / `End` 翻。
+
+- **桌面 GUI 的图片放大了一倍**：`@图片` 引用与工具返回的图片最大边长从 180 提到 360，截图不用
+  点开也看得清。
+
+- **桌面 GUI 有了自己的使用文档**：`docs/gui.md` 说明如何启动、布局、侧栏与消息区、右侧的
+  Files / Changes 面板、停靠面板、各类覆盖层与对话框、完整键位表、窗口里能用的斜杠命令、
+  外观与缩放，以及与终端界面的差异。
+
 ## 修复
 
 - **桌面 GUI 的文件修改按 diff 渲染**：`edit` 卡片头部显示文件路径，改动本身按 diff 画——右对齐的
@@ -670,5 +721,16 @@
   `Esc` 丢弃；点过哪一行就是哪一行，列表重建后不再跳回第一条，过滤框也一起保留。`Tab` 打开当前条目
   的只读详情页（`Tab` / `Enter` / `Esc` 返回，草稿还在）——扩展显示描述、模式、工具与 fork 来源，
   技能显示 `SKILL.md` 头信息、来源与路径。底栏与横幅扩展不再列出，它们只在终端界面渲染。
+- **桌面 GUI 的 `/cache-usage all` 不再卡住窗口**：以前取不到异步运行时就在视图线程上同步扫描，
+  会话一多整个窗口就停住，面板要等扫完才出现。现在扫描放到后台，面板立刻弹出并显示
+  `scanning sessions…`。
+- **桌面 GUI 的信息面板能用方向键滚动了**：滚动偏移的夹取方向反了，`/usage`、`/help`、`/session`、
+  `/changelog` 与扩展详情页里的 `↑` / `↓` / `PgUp` / `PgDn` 只会跳回顶部，`End` 也到不了底部；
+  现在都按实际可滚范围移动。
+- **桌面 GUI 的 `/rewind` 能用了**：它在 `/` 面板里列着却没有实现，敲完只会把命令文本塞回输入框；
+  现在会撤销上一条用户输入。
+- **桌面 GUI 的 `/debug` 有输出了**：以前列在 `/` 面板里但什么都不做；现在裸 `/debug` 会把诊断信息
+  （provider、model、消息数、自动压缩与重试、工作目录、会话）写进对话流，`/debug info` / `provider` /
+  `system-prompt` 子命令仍由 `debug` 扩展提供。
 - **选中文字时行内样式不再盖掉选区底色**：选区底色与行内代码、链接的高亮在交界处切成互不重叠的
   段落，重叠的那些词不会再把选区底色吞掉，也不会只画出半个选区。

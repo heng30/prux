@@ -360,7 +360,8 @@ impl GuiApp {
             .w_full()
             .overflow_y_scroll()
             .track_scroll(&self.scroll)
-            // 滚轮滚动不会通知视图，这里补一次重绘，滚动条滑块才跟得上
+            // 滚轮加速在全局鼠标监听的 capture 阶段接管（见 `hover_probe`），
+            // 这里只为仍走原生滚动的情形（面板挡住时的让路）补一次重绘，滑块才跟得上
             .on_scroll_wheel(cx.listener(|_, _, _, cx| cx.notify()))
             // 悬浮探测走全局鼠标监听（见 `hover_probe`）：滚动容器的 hitbox 判定偏宽
             .child(content);

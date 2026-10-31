@@ -704,7 +704,7 @@ impl GuiApp {
                     "pageup" => detail.scroll_by(-12.),
                     "pagedown" => detail.scroll_by(12.),
                     "home" => detail.scroll_to(0.),
-                    "end" => detail.scroll_to(f32::MAX),
+                    "end" => detail.scroll_to(f32::NEG_INFINITY),
                     _ if up => detail.scroll_by(-1.),
                     _ if down => detail.scroll_by(1.),
                     _ => {}
@@ -767,7 +767,7 @@ impl GuiApp {
                 "pageup" => info.scroll_by(-12.),
                 "pagedown" => info.scroll_by(12.),
                 "home" => info.scroll_to(0.),
-                "end" => info.scroll_to(f32::MAX),
+                "end" => info.scroll_to(f32::NEG_INFINITY),
                 _ if up => info.scroll_by(-1.),
                 _ if down => info.scroll_by(1.),
                 _ => {}

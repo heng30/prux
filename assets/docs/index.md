@@ -21,6 +21,10 @@ prux
 - [键位（Keybindings）](keybindings.md) - 默认快捷键与自定义键位（`keybindings.json`）。
 - [上下文压缩（Compaction）](compaction.md) - `/compact` 上下文压缩与分支摘要。
 
+## 界面
+
+- [桌面界面（GUI）](gui.md) - 桌面窗口版：启动、布局、侧栏与消息区、面板与覆盖层、键位表、斜杠命令，以及与终端界面的差异。
+
 ## 定制
 
 - [扩展（Extensions）](extensions.md) - 用 Rust 实现的 `Extension` trait，提供工具、命令、快捷键、CLI flag 与事件钩子。

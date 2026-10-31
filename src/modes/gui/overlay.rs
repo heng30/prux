@@ -7,8 +7,9 @@ use super::{
     text_edit::Editor,
     theme::{
         CONTROL_H_LG, FONT_BODY, FONT_CAPTION, FONT_SMALL, ICON_SIZE, RADIUS_LG, RADIUS_MD,
-        RADIUS_SM, SPACE_MD, SPACE_SM, SPACE_XS, SPACE_XXS, Theme, px,
+        RADIUS_SM, SCROLLBAR_WIDTH, SPACE_MD, SPACE_SM, SPACE_XS, SPACE_XXS, Theme, min_thumb, px,
     },
+    transcript,
 };
 use crate::{
     core::extensions::{self, DockLine, DockSpan, OverlayView},
@@ -403,6 +404,8 @@ pub struct Info {
     pub lines: Vec<String>,
     /// 两列表格内容（属性 / 值）：非空时按表格渲染，值里是 URL 的可点击
     pub rows: Vec<InfoRow>,
+    /// [`Self::lines`] 是否按 Markdown 渲染（`/changelog` 这类本身就是 Markdown 的内容）
+    pub markdown: bool,
     /// 滚动位置：方向键与滚轮共用同一个句柄
     pub scroll: ScrollHandle,
 }
@@ -422,8 +425,15 @@ impl Info {
             title: title.into(),
             lines,
             rows: Vec::new(),
+            markdown: false,
             scroll: ScrollHandle::new(),
         }
+    }
+
+    /// 同一份内容改成按 Markdown 渲染（拿回 `self`，构建时链式用）
+    pub fn as_markdown(mut self) -> Self {
+        self.markdown = true;
+        self
     }
 
     /// 新建表格型详情页（扩展 / 技能的 Tab 详情）。
@@ -432,6 +442,7 @@ impl Info {
             title: title.into(),
             lines: Vec::new(),
             rows,
+            markdown: false,
             scroll: ScrollHandle::new(),
         }
     }
@@ -442,10 +453,11 @@ impl Info {
         self.scroll_to(top + rows * INFO_SCROLL_STEP);
     }
 
-    /// 滚到纵坐标 `y`（夹到 `0..=max_offset`）；传 `f32::MAX` 即滚到底。
+    /// 滚到纵坐标 `y`：偏移取 `-max..=0`（负数为向下滚动，`0` 是顶端，
+    /// [`f32::NEG_INFINITY`] 即滚到底），越界夹回实际可滚范围。
     pub fn scroll_to(&mut self, y: f32) {
         let max = f32::from(self.scroll.max_offset().height);
-        let y = y.clamp(0., max);
+        let y = y.clamp(-max, 0.);
         self.scroll
             .set_offset(gpui::point(gpui::px(0.), gpui::px(y)));
     }
@@ -1067,15 +1079,27 @@ fn render_info(info: &Info, theme: &Theme) -> AnyElement {
 
     if info.rows.is_empty() {
         let mut body = info_body(&info.scroll);
-        for line in &info.lines {
-            body = body.child(
-                div()
-                    .text_size(px(FONT_SMALL))
-                    .text_color(theme.text_secondary)
-                    .child(SharedString::from(line.clone())),
-            );
+        if info.markdown {
+            body = body.child(transcript::markdown_body(&info.lines.join("\n"), theme));
+        } else {
+            for line in &info.lines {
+                body = body.child(
+                    div()
+                        .text_size(px(FONT_SMALL))
+                        .text_color(theme.text_secondary)
+                        .child(SharedString::from(line.clone())),
+                );
+            }
         }
-        column = column.child(body);
+
+        // 滚动条贴在主体右边缘（面板本身不留空白，滑块才能贴到卡片内侧）
+        column = column.child(
+            div()
+                .relative()
+                .w_full()
+                .child(body)
+                .child(info_scrollbar(&info.scroll, theme)),
+        );
     } else {
         column =
             column
@@ -1097,6 +1121,41 @@ fn render_info(info: &Info, theme: &Theme) -> AnyElement {
 /// 详情卡片主体：有高度上限、纵向滚动的容器（表格与纯文本共用同一个滚动句柄）。
 fn info_body(scroll: &ScrollHandle) -> gpui::Stateful<Div> {
     rows_container("overlay-info-body", scroll, INFO_BODY_MAX_H).mt(px(SPACE_XS))
+}
+
+/// 详情卡片主体的滚动条：内容超出一屏时总显示（面板是临时的，不做悬停隐现）。
+///
+/// 位置按上一帧记录的滚动状态算；拖动不做，方向键 / 滚轮 / PgUp / PgDn 已能到底。
+fn info_scrollbar(scroll: &ScrollHandle, theme: &Theme) -> AnyElement {
+    let viewport = f32::from(scroll.bounds().size.height);
+    let max = f32::from(scroll.max_offset().height);
+    if max <= 0. || viewport <= 0. {
+        return div().into_any_element();
+    }
+
+    let height = geometry::thumb_height(viewport, max, min_thumb());
+    let top = geometry::thumb_top(
+        f32::from(scroll.offset().y),
+        max,
+        geometry::thumb_travel(viewport, max, min_thumb()),
+    );
+
+    div()
+        .absolute()
+        .top_0()
+        .right_0()
+        .h_full()
+        .w(px(SCROLLBAR_WIDTH))
+        .child(
+            div()
+                .absolute()
+                .top(gpui::px(top))
+                .w_full()
+                .h(gpui::px(height))
+                .rounded(px(RADIUS_SM))
+                .bg(theme.text_ghost),
+        )
+        .into_any_element()
 }
 
 /// 详情表格的表头（属性 / 值）：贴在滚动主体上方，列宽与行内单元格一致。

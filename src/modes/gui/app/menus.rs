@@ -115,6 +115,9 @@ impl GuiApp {
     ///
     /// 不用元素 `on_hover`：滚动容器的 hitbox 判定偏宽（鼠标在整列甚至整屏范围内都算悬停），
     /// 滚动条会常显。这里在绘制阶段挂一个全局鼠标监听，用 `ScrollHandle::bounds()` 比位置。
+    ///
+    /// 对话区的滚轮加速也走这里：capture 阶段先于原生滚动拿到事件，算完步长并
+    /// `stop_propagation`，原生滚动（bubble 阶段）就不会再按未加速的步长盖一次。
     pub(super) fn hover_probe(&self, transcript_live: bool, cx: &mut Context<Self>) -> AnyElement {
         let transcript = self.scroll.clone();
         let sidebar = self.sessions_scroll.clone();
@@ -124,6 +127,29 @@ impl GuiApp {
             move |_, _, window, _| {
                 let (transcript, sidebar) = (transcript.clone(), sidebar.clone());
                 let move_app = app.clone();
+
+                let wheel = transcript.clone();
+                let wheel_app = app.clone();
+                window.on_mouse_event(move |event: &gpui::ScrollWheelEvent, phase, window, cx| {
+                    if phase != gpui::DispatchPhase::Capture
+                        || !transcript_live
+                        || !wheel.bounds().contains(&event.position)
+                    {
+                        return;
+                    }
+
+                    let applied = wheel_app.update(cx, |this, cx| {
+                        let applied = this.wheel_transcript(event, window.line_height());
+                        if applied {
+                            cx.notify();
+                        }
+                        applied
+                    });
+
+                    if applied {
+                        cx.stop_propagation();
+                    }
+                });
 
                 window.on_mouse_event(move |event: &gpui::MouseMoveEvent, phase, window, cx| {
                     if phase != gpui::DispatchPhase::Bubble {
