@@ -333,6 +333,11 @@
 
 ### Fixed
 
+- **The desktop GUI's status dots sit on the text's optical center**: the brand dot next to `prux`
+  (and the tool card's status dot) was centered on the line box, which left it about 2 px above the
+  middle of the letters. It is nudged back down so the dot and the lowercase text share one horizontal
+  center line.
+
 - **Desktop GUI slash commands keep their arguments**: `/compact <instructions>` and `/bug <hint>`
   used to be swallowed as an unknown command, `/history` parked its text back in the input box
   instead of reopening the search panel, and `/name <name>` renamed the session while the sidebar
@@ -820,6 +825,10 @@
   不再把值挤进一行标题加一行灰色详情。`/usage` 与 `/session` 的 `key: value` 行也归到同一套两列表格里。
 
 ## 修复
+
+- **桌面 GUI 的状态圆点与文字视觉中心对齐**：品牌行里 `prux` 旁那个圆点（以及工具卡片的状态点）
+  以前居中于行盒，比字母的视觉中心高约 2px，看起来偏上；现在补上这段偏移，圆点与文字在同一条
+  水平中心线上。
 
 - **桌面 GUI 的斜杠命令不再吞掉参数**：`/compact <指令>` 与 `/bug <提示>` 以前被当成未知命令丢弃，
   `/history` 把文本塞回输入框而不重新弹搜索面板，`/name <名称>` 改名后侧栏还显示旧标题。
