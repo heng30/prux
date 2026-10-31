@@ -185,7 +185,6 @@ tokio-tungstenite = { version = "0.30", default-features = false, features = [
   "connect",
   "rustls",
 ] }
-
 gpui = { version = "0.2", optional = true, default-features = false, features = [
   "x11",
   "wayland",          # Linux 渲染后端；x11 / wayland 二者都要留（用户环境都可能有）
