@@ -85,7 +85,7 @@ const MAX_SNAPSHOT_BYTES: u64 = 256 * 1024;
 const SUBCOMMANDS: &[SubcommandDef] = &[
     SubcommandDef {
         name: "list",
-        description: "Print the background jobs (default when no subcommand is given)",
+        description: "Print the background jobs",
     },
     SubcommandDef {
         name: "stop",
@@ -186,7 +186,8 @@ impl Extension for Processes {
     fn commands(&self) -> Vec<ExtensionCommand> {
         vec![ExtensionCommand {
             name: CMD.to_string(),
-            description: "/ps [list|stop <id>|clear] - background jobs".to_string(),
+            description: "/ps toggles the background-job panel; /ps list; /ps stop <id>; /ps clear"
+                .to_string(),
             busy_safe: true, // handler 只碰扩展自身状态与宿主停靠面板，不锁 agent
             subcommands: SUBCOMMANDS.to_vec(),
         }]
@@ -706,7 +707,7 @@ fn one_line(command: &str, max_chars: usize) -> String {
     truncate_chars(&flat, max_chars)
 }
 
-/// `/ps [list|stop <id>|clear]`：按子命令分派，未知子命令提示用法。
+/// `/ps [list|stop <id>|clear]`：裸命令切换停靠段的显隐（对齐 `/todos`），其余按子命令分派。
 fn command_ps(host: &mut dyn CommandHost, raw: &str) -> bool {
     let args = command_arg(raw);
     let (sub, rest) = match args.split_once(char::is_whitespace) {
@@ -715,10 +716,8 @@ fn command_ps(host: &mut dyn CommandHost, raw: &str) -> bool {
     };
 
     match sub.to_lowercase().as_str() {
-        "" | "list" => {
-            host.push_message(&list_text(), UiNotifyLevel::Info);
-            show_dock(host);
-        }
+        "" => toggle_dock(host),
+        "list" => host.push_message(&list_text(), UiNotifyLevel::Info),
         "stop" => {
             if rest.is_empty() {
                 host.push_message("Usage: /ps stop <id>", UiNotifyLevel::Warning);
@@ -741,10 +740,18 @@ fn command_ps(host: &mut dyn CommandHost, raw: &str) -> bool {
     false
 }
 
-/// 打开停靠面板（面板内容的显隐本身就是「job 存在」，故这里直接置位并请求显示）。
-fn show_dock(host: &mut dyn CommandHost) {
-    lock().dock_shown = true;
-    host.show_dock();
+/// 裸 `/ps`：三段式切换本扩展的 dock 段（同 plan-mode 的 `/todos`）。
+///
+/// 面板未显示 → 显示本段并打开面板；面板显示中且本段可见 → 隐藏本段
+/// （面板再无其它内容时下一帧自动收起）；面板显示中但本段已隐藏 → 重新显示。
+fn toggle_dock(host: &mut dyn CommandHost) {
+    if !host.dock_visible() {
+        lock().dock_shown = true;
+        host.show_dock();
+        return;
+    }
+    let mut st = lock();
+    st.dock_shown = !st.dock_shown;
 }
 
 /// 丢掉已完成 job 记录，返回丢掉的数量。
@@ -873,7 +880,7 @@ mod tests {
         reset();
     }
 
-    /// `/ps` 打开面板并列 job；`/ps clear` 丢掉已完成记录。
+    /// `/ps` 三段式切换停靠段；`/ps list` 打印清单；`/ps clear` 丢掉已完成记录。
     #[test]
     fn ps_command_shows_panel_and_clears_finished_jobs() {
         let _g = lock_test();
@@ -883,16 +890,26 @@ mod tests {
         wait_finished("job-1").expect("job 应结束");
 
         let mut st = App::new();
-        st.dock_visible = false;
         command_ps(&mut st, "ps");
-        assert!(lock().dock_shown, "/ps 应打开面板");
         assert!(
-            st.system_messages
-                .iter()
-                .any(|(_, m)| sys_spans_text(&m.spans).contains("job-1"))
+            lock().dock_shown && st.dock_visible,
+            "/ps 在面板未显示时应打开面板并显示本段"
         );
         let lines = dock_lines();
         assert!(lines.len() >= 2, "面板应有标题行 + job 行: {lines:?}");
+
+        command_ps(&mut st, "ps");
+        assert!(!lock().dock_shown, "面板显示中再按 /ps 应隐藏本段");
+        command_ps(&mut st, "ps");
+        assert!(lock().dock_shown, "第三次 /ps 应重新显示本段");
+
+        command_ps(&mut st, "ps list");
+        assert!(
+            st.system_messages
+                .iter()
+                .any(|(_, m)| sys_spans_text(&m.spans).contains("job-1")),
+            "/ps list 应把清单打到聊天区"
+        );
 
         command_ps(&mut st, "ps clear");
         assert!(lock().jobs.is_empty(), "clear 应丢掉已完成的 job");

@@ -170,7 +170,7 @@ TUI 有 `AgentCommand::SwitchCwd`（UI 驱动），但**没有 agent 可调的 `
 | 后台启动 | 工具 `background_bash`（`command` + 可选 `cwd`），立即返回 `job-N` / pid / 日志路径 |
 | 读输出 | 工具 `read_process_output`（快照式、不 drain；省略 `id` 列全部 job），日志尾部行数 `lines`（默认 100、上限 2000、单次最多 256 KiB） |
 | 停止 | 工具 `stop_process`，Unix `killpg` / Windows `taskkill /T`，连同子进程一起杀 |
-| 用户视图 | `/ps`（打印清单 + 打开 dock 面板）、`/ps stop <id>`、`/ps clear` |
+| 用户视图 | `/ps` 三段式切换 dock 段（对齐 `/todos`）、`/ps list`、`/ps stop <id>`、`/ps clear` |
 
 砍掉的部分：`background_on_timeout`、Ctrl-G「脱离前台」键位、systemd scope、cgroup OOM 区分、
 Windows Job Object（只用 `taskkill /T`）。

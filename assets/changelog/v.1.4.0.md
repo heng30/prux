@@ -8,10 +8,10 @@
   and the log path at once — stdin is `/dev/null`, and stdout/stderr go to that log file instead
   of the terminal. `read_process_output` returns an output snapshot (status, pid, elapsed time
   and the last N lines; reading does not consume the log, and omitting `id` lists every job),
-  while `stop_process` kills the whole process group. `/ps` prints the job list and opens the
-  dock panel, `/ps stop <id>` stops a job and `/ps clear` drops finished ones. A job keeps
-  running after the turn ends, and disabling the extension stops every running job. Off by
-  default (`Dev` mode).
+  while `stop_process` kills the whole process group. `/ps` toggles the dock section (three-stage,
+  like `/todos`), `/ps list` prints the job list, `/ps stop <id>` stops a job and `/ps clear`
+  drops finished ones. A job keeps running after the turn ends, and disabling the extension
+  stops every running job. Off by default (`Dev` mode).
 
 - **The desktop GUI's session sidebar shows how many sessions each group holds**: the `Today` /
   `This week` / `Older` heading now carries its entry count, right-aligned in the caption colour.
@@ -763,8 +763,8 @@
   dev server、watcher 这类长命命令会把一整轮卡到超时。`background_bash` 把命令丢到后台，立刻
   返回 `job-N`、pid 与日志路径——stdin 接 `/dev/null`，stdout/stderr 写进那个日志文件而不是
   继承终端。`read_process_output` 返回输出**快照**（状态、pid、耗时、最后 N 行；读不消费日志，
-  省略 `id` 列出全部 job），`stop_process` 杀掉整个进程组。`/ps` 打印 job 清单并打开停靠面板，
-  `/ps stop <id>` 停止、`/ps clear` 丢掉已完成记录。job 不随回合结束消失，禁用本扩展会停掉
+  省略 `id` 列出全部 job），`stop_process` 杀掉整个进程组。`/ps` 三段式切换停靠段显隐
+  （同 `/todos`），`/ps list` 打印清单，`/ps stop <id>` 停止、`/ps clear` 丢掉已完成记录。job 不随回合结束消失，禁用本扩展会停掉
   全部运行中的 job。默认不启用（`Dev` 模式）。
 
 - **桌面 GUI 的侧栏分组标题显示该组条目数**：`Today` / `This week` / `Older` 右侧按说明色右对齐
