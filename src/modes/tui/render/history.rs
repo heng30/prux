@@ -278,6 +278,7 @@ impl App {
             images,
         }
     }
+
     /// 消息集变化（toolResult 到达 / 会话切换 / 导航）或宽度重建：清空渲染缓存，
     /// 下一帧对未命中条目重新渲染填充。edit 预览按 toolCallId 缓存，随消息集一起失效。
     pub fn invalidate_render(&mut self) {

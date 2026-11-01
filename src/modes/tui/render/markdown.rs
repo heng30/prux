@@ -12,9 +12,9 @@
 //! - inline math：`$...$`（mdCodeBlock），display math `$$...$$`（mdCodeBlock，分式堆叠/上下限分列）
 //! - tab → 3 空格；词级折行（CJK 每字符可断，超长词按字符断）
 
-use super::{latex, mermaid, syntax_hl};
+use super::syntax_hl;
 use crate::{
-    core::markdown_table,
+    core::{latex, markdown_table, mermaid},
     modes::tui::theme::Theme,
     utils::display::{char_width, display_width, grapheme_width},
 };

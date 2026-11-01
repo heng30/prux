@@ -14,7 +14,10 @@ use super::{
     },
 };
 use crate::{
-    core::provider::{AgentMessage, ContentBlock},
+    core::{
+        mermaid,
+        provider::{AgentMessage, ContentBlock},
+    },
     utils::{
         color::Rgb,
         display::{fit_display, format_tool_duration},
@@ -25,7 +28,7 @@ use base64::Engine as _;
 use gpui::{
     AnyElement, Bounds, Context, FontStyle, FontWeight, HighlightStyle, Hsla, Image, ImageFormat,
     ImageSource, IntoElement, ParentElement, Pixels, SharedString, Styled, StyledText, Window, div,
-    prelude::*,
+    prelude::*, relative,
 };
 use serde_json::Value;
 use std::{
@@ -48,6 +51,12 @@ const USER_BUBBLE_MAX_WIDTH: f32 = 560.;
 const USER_COLLAPSED_LINES: usize = 6;
 /// 缩略图最大边长（逻辑像素）
 const IMAGE_THUMB: f32 = 360.0;
+/// 覆盖层面板里等宽内容（公式 / mermaid）的排版列数：面板宽度渲染时才量得到
+const OVERLAY_COLS: usize = 100;
+/// 等宽字形宽度估计（相对字号）：把内容宽度换算成 mermaid 的列数
+///
+/// shortcut: 按 0.6em 估；字体实际偏宽时图末尾会被裁掉一点，偏窄时多留白。
+const MONO_ADVANCE: f32 = 0.6;
 
 thread_local! {
     /// 缩略图图片源缓存：`(路径, (文件长度, 修改时间)) → 图片源`，免掉每帧重读缩略图文件。
@@ -88,6 +97,8 @@ struct Body {
     len: usize,
     /// 解析时的明暗主题：换主题要按新配色重算代码高亮
     dark: bool,
+    /// 解析时的等宽列数：mermaid 图的排版宽度跟着它变
+    cols: usize,
     /// 预解析好的行
     rows: Vec<Row>,
 }
@@ -97,6 +108,8 @@ struct Body {
 enum Row {
     /// 普通 Markdown 行（段落/标题/列表/引用）
     Line(markdown::Line),
+    /// 表格
+    Table(markdown::Table),
     /// 围栏代码块，已按主题高亮成 `(颜色, 文本)` 片段
     Code {
         /// 语言标签（None 显示 `text`）
@@ -104,17 +117,23 @@ enum Row {
         /// 每行的着色片段
         lines: Vec<Vec<(Option<Rgb>, String)>>,
     },
+    /// 等宽多行块：块级公式与 mermaid 图（都已排版成行，靠行首空格对齐）
+    Mono {
+        /// 各行文本
+        lines: Vec<String>,
+    },
     /// 分隔线
     Rule,
 }
 
 impl Body {
-    /// 取（必要时重建）预解析结果。
-    fn rows(&mut self, text: &str, theme: &Theme) -> &[Row] {
-        if self.len != text.len() || self.dark != theme.is_dark {
+    /// 取（必要时重建）预解析结果；`cols` 是等宽内容的排版列数。
+    fn rows(&mut self, text: &str, theme: &Theme, cols: usize) -> &[Row] {
+        if self.len != text.len() || self.dark != theme.is_dark || self.cols != cols {
             self.len = text.len();
             self.dark = theme.is_dark;
-            self.rows = parse_rows(text, theme);
+            self.cols = cols;
+            self.rows = parse_rows(text, theme, cols);
         }
         &self.rows
     }
@@ -1365,7 +1384,8 @@ fn assistant_block(
         );
     }
 
-    let rows = assistant.body.rows(&assistant.text, theme);
+    let cols = (f32::from(ctx.width) / (FONT_SMALL * MONO_ADVANCE)) as usize;
+    let rows = assistant.body.rows(&assistant.text, theme, cols.max(16));
     column
         .child(render_rows(rows, theme, ctx.lines))
         .into_any_element()
@@ -1606,7 +1626,8 @@ fn note_block(note: &Note, theme: &Theme) -> AnyElement {
 
 /// Markdown 文本 → 元素（覆盖层面板用：只要排版与配色，不登记选区/行位置）。
 pub fn markdown_body(text: &str, theme: &Theme) -> AnyElement {
-    let rows = parse_rows(text, theme);
+    // 覆盖层面板的宽度在渲染时才量得到，这里按固定列数排等宽内容（公式/mermaid）
+    let rows = parse_rows(text, theme, OVERLAY_COLS);
     let mut lines = TextLines {
         next: 0,
         selection: None,
@@ -1618,16 +1639,30 @@ pub fn markdown_body(text: &str, theme: &Theme) -> AnyElement {
 }
 
 /// Markdown 文本 → 预解析行（代码块的高亮只在解析时做一次）。
-fn parse_rows(text: &str, theme: &Theme) -> Vec<Row> {
+///
+/// `cols` 是等宽内容的排版列数：mermaid 图按它限制宽度。
+fn parse_rows(text: &str, theme: &Theme, cols: usize) -> Vec<Row> {
     let syntect_theme = theme.syntect();
     markdown::parse(text)
         .into_iter()
         .map(|block| match block {
             markdown::Block::Line(line) => Row::Line(line),
-            markdown::Block::Code { lang, code } => Row::Code {
-                lines: code::highlight(&code, lang.as_deref(), &syntect_theme),
-                lang,
-            },
+            markdown::Block::Code { lang, code } => {
+                // mermaid 图渲染成等宽盒图；超宽/解析失败时回退为源码高亮
+                if lang.as_deref() == Some("mermaid")
+                    && let Some(figure) = mermaid::render_mermaid(&code, Some(cols))
+                {
+                    return Row::Mono {
+                        lines: figure.lines().map(str::to_string).collect(),
+                    };
+                }
+                Row::Code {
+                    lines: code::highlight(&code, lang.as_deref(), &syntect_theme),
+                    lang,
+                }
+            }
+            markdown::Block::Table(table) => Row::Table(table),
+            markdown::Block::Math { lines } => Row::Mono { lines },
             markdown::Block::Rule => Row::Rule,
         })
         .collect()
@@ -1758,6 +1793,32 @@ fn render_rows(rows: &[Row], theme: &Theme, lines: &mut TextLines) -> AnyElement
                 child_lines.push(None);
                 card.child(body).into_any_element()
             }
+            Row::Table(table) => {
+                child_lines.push(None);
+                table_body(table, theme)
+            }
+            Row::Mono { lines: mono } => {
+                child_lines.push(None);
+                let mut body = div()
+                    .w_full()
+                    .flex()
+                    .flex_col()
+                    .my(px(SPACE_XS))
+                    .px(px(SPACE_SM))
+                    .py(px(SPACE_SM))
+                    .rounded(px(RADIUS_MD))
+                    .border_1()
+                    .border_color(theme.border)
+                    .bg(theme.inset)
+                    .overflow_hidden()
+                    .font_family("monospace")
+                    .text_size(px(FONT_SMALL))
+                    .text_color(theme.code_text);
+                for line in mono {
+                    body = body.child(div().w_full().child(SharedString::from(line.clone())));
+                }
+                body.into_any_element()
+            }
             Row::Rule => {
                 child_lines.push(None);
                 div()
@@ -1781,6 +1842,78 @@ fn render_rows(rows: &[Row], theme: &Theme, lines: &mut TextLines) -> AnyElement
         }
     });
     column.into_any_element()
+}
+
+/// Markdown 表格 → 网格：列宽按各列最长单元格的字符数比例分配，单元格自动折行。
+///
+/// 表格不按字符画边框（比例字体对不齐）：列宽交给 flex，边框由每行的下边与
+/// 单元格右边拼出——在 gpui 里自己算列宽只会算出对不齐的格子。
+fn table_body(table: &markdown::Table, theme: &Theme) -> AnyElement {
+    let cols = table
+        .rows
+        .iter()
+        .map(Vec::len)
+        .chain(std::iter::once(table.header.len()))
+        .max()
+        .unwrap_or(0)
+        .max(1);
+
+    // 列权重 = 该列最长单元格的字符数，免得窄列被宽内容挤成一条缝
+    let mut weights = vec![1_f32; cols];
+    for row in std::iter::once(&table.header).chain(table.rows.iter()) {
+        for (index, cell) in row.iter().enumerate() {
+            let len: usize = cell.iter().map(|span| span.text.chars().count()).sum();
+            weights[index] = weights[index].max(len as f32);
+        }
+    }
+
+    let total: f32 = weights.iter().sum();
+    let count = table.rows.len() + 1;
+    let mut grid = div()
+        .w_full()
+        .my(px(SPACE_XS))
+        .flex()
+        .flex_col()
+        .rounded(px(RADIUS_MD))
+        .border_1()
+        .border_color(theme.border)
+        .overflow_hidden()
+        .text_size(px(FONT_SMALL));
+
+    for (row_index, row) in std::iter::once(&table.header)
+        .chain(table.rows.iter())
+        .enumerate()
+    {
+        let header = row_index == 0;
+        let mut line = div().flex().items_start();
+        if row_index + 1 < count {
+            line = line.border_b_1().border_color(theme.border);
+        }
+
+        for (index, cell) in row.iter().enumerate() {
+            let mut cell_div = div()
+                .w(relative(weights.get(index).copied().unwrap_or(1.) / total))
+                .min_w_0()
+                .overflow_hidden()
+                .px(px(SPACE_SM))
+                .py(px(SPACE_XXS))
+                .text_color(if header {
+                    theme.text
+                } else {
+                    theme.text_secondary
+                });
+            if header {
+                cell_div = cell_div.font_weight(FontWeight::SEMIBOLD);
+            }
+            if index + 1 < cols {
+                cell_div = cell_div.border_r_1().border_color(theme.border);
+            }
+            line = line.child(cell_div.child(inline_text(None, cell, theme, None)));
+        }
+        grid = grid.child(line);
+    }
+
+    grid.into_any_element()
 }
 
 /// 一行的行内片段 → 单个文本元素。
@@ -1901,7 +2034,7 @@ fn char_range_to_bytes(text: &str, range: Range<usize>) -> Range<usize> {
 /// 行内代码只上色不画底色：gpui 的高亮底色铺满整个行盒（行高 1.32em），
 /// 比字形高一截、文字看着偏下，折行时相邻行的底色还会连成一片。
 fn span_highlight(style: &markdown::SpanStyle, theme: &Theme) -> HighlightStyle {
-    let color = if style.code {
+    let color = if style.code || style.math {
         Some(theme.code_text)
     } else if style.link {
         Some(theme.link)

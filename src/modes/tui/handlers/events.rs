@@ -257,6 +257,16 @@ impl App {
         );
     }
 
+    /// 新会话首次落盘：补上文件路径（`/new` 时还没有文件，写首条消息后才建）。
+    ///
+    /// 也要重发一次会话切换：路径为空时扩展拿不到会话键，子代理扩展会退化到
+    /// `default` 桶（所有无键会话共用一份），该会话的定时任务之后 `/resume` 回来就读不到。
+    pub fn on_session_file(&mut self, path: String) {
+        self.current_session_path = Some(path.clone());
+        core::extensions::dispatch_session_switched(Some(&path), &self.messages);
+        self.invalidate_render();
+    }
+
     /// /session 统计渲染（worker 传原始数值，格式化在此进行）
     pub fn on_session_stats(&mut self, stats: SessionStats) {
         let mut spans: Vec<SysSpan> = Vec::new();

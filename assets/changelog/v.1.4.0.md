@@ -369,6 +369,18 @@
 
 ### Fixed
 
+- **A new session's file path reaches the UI once it lands on disk**: `/new` starts a deferred
+  session, so the switch reply has no path — and nothing ever sent one later. Until the next switch
+  `/fork` answered `no current session`, `/resume` did not mark the running session as current, and
+  extensions keyed the session as `default`. The worker now reports the path the moment the first
+  message writes the file, and the switch is re-dispatched to extensions with it.
+- **The desktop GUI renders tables, formulas and Mermaid diagrams**: assistant markdown used to
+  run a table's cells together into one paragraph, leave `$...$` / `$$...$$` as literal source and
+  print `mermaid` fences as plain code. Tables now render as a real grid (column widths follow each
+  column's longest cell, cells wrap), inline and display math go through the same LaTeX-to-Unicode
+  renderer the terminal UI uses, and `mermaid` blocks become the same box-drawing diagrams. The
+  LaTeX and Mermaid renderers moved into the core layer so both UIs share one implementation.
+
 - **The desktop GUI's status dots sit on the text's optical center**: the brand dot next to `prux`
   (and the tool card's status dot) was centered on the line box, which left it about 2 px above the
   middle of the letters. It is nudged back down so the dot and the lowercase text share one horizontal
@@ -907,6 +919,16 @@
   拒掉它。对话框卡住页面时，命令超时的报错会点名这一点，不再看起来像连接已经死掉。
 
 ## 修复
+
+- **新会话落盘后会把文件路径补发给 UI**：`/new` 起的是延迟落盘会话，切换回执里没有路径，
+  而之后也没有任何地方补发——于是在下一次切会话之前，`/fork` 一律回 `no current session`，
+  `/resume` 不把当前会话标成当前，扩展也把会话记到 `default` 键上。现在首条消息写出会话文件时
+  worker 就把路径报给 UI，并带着它重发一次会话切换给扩展。
+- **桌面 GUI 能渲染表格、公式与 mermaid 图了**：助手正文里的表格以前被挤成一段连排的文字，
+  `$...$` / `$$...$$` 原样显示成源码，`mermaid` 围栏只当普通代码块。现在表格按真网格渲染
+  （列宽按该列最长单元格分配、单元格自动折行），行内公式与块级公式都走与终端 UI 相同的
+  LaTeX → Unicode 渲染，`mermaid` 块也渲染成同样的盒图。LaTeX 与 mermaid 的渲染器随之搬到
+  core 层，两端共用一份实现。
 
 - **桌面 GUI 的状态圆点与文字视觉中心对齐**：品牌行里 `prux` 旁那个圆点（以及工具卡片的状态点）
   以前居中于行盒，比字母的视觉中心高约 2px，看起来偏上；现在补上这段偏移，圆点与文字在同一条

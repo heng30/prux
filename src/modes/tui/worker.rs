@@ -57,12 +57,13 @@ const TOOLS_BUCKET: &str = "Tools/summaries";
 /// worker 主循环
 pub async fn run_worker(agent: Arc<Mutex<Agent>>, mut cmd_rx: CommandRx) {
     // 事件 sink → 闭包队列（无锁）。agent 在 worker 内独占，UI 不再 attach sink。
-    agent
-        .lock()
-        .await
-        .attach_json_sink(Box::new(move |ev: Value| {
+    let mut reported_file = {
+        let mut a = agent.lock().await;
+        a.attach_json_sink(Box::new(move |ev: Value| {
             _ = run_in_event_loop(move |ui| ui.apply_sink_event(&ev));
         }));
+        session_file_of(&a)
+    };
 
     let mut on_round: Option<RoundFuture> = None;
     let mut pending_abort: Option<AbortTx> = None;
@@ -94,6 +95,7 @@ pub async fn run_worker(agent: Arc<Mutex<Agent>>, mut cmd_rx: CommandRx) {
 
                      // 回合结束：应用保温回执（保温任务在回合期间并行跑）
                      drain_cache_warm(&agent).await;
+                     sync_session_file(&agent, &mut reported_file).await;
                 }
             }
 
@@ -111,7 +113,9 @@ pub async fn run_worker(agent: Arc<Mutex<Agent>>, mut cmd_rx: CommandRx) {
                     break;
                 }
 
-                if let Some(round) = dispatch(&agent, cmd, &mut pending_abort).await {
+                if let Some(round) =
+                    dispatch(&agent, cmd, &mut pending_abort, &mut reported_file).await
+                {
                     on_round = Some(round);
                 }
                 continue;
@@ -136,10 +140,41 @@ pub async fn run_worker(agent: Arc<Mutex<Agent>>, mut cmd_rx: CommandRx) {
                 break;
             }
 
-            if let Some(round) = dispatch(&agent, cmd, &mut pending_abort).await {
+            if let Some(round) = dispatch(&agent, cmd, &mut pending_abort, &mut reported_file).await
+            {
                 on_round = Some(round);
             }
         }
+    }
+}
+
+/// 当前会话的文件路径（无会话 / 尚未落盘时为 `None`）。
+fn session_file_of(agent: &Agent) -> Option<String> {
+    agent
+        .session
+        .as_ref()
+        .and_then(|s| s.get_session_file())
+        .map(|p| p.to_string_lossy().to_string())
+}
+
+/// 会话首次落盘后把文件路径回给 UI。
+///
+/// `/new` 起的新会话是延迟落盘的（空会话不建文件），开新会话的回执里没有路径，
+/// 直到第一条消息/条目写入才建文件。UI 的 `current_session_path` 靠这次补发对齐，
+/// 否则 `/fork`、`/resume` 的当前会话标记、会话面板高亮都会落空。
+async fn sync_session_file(agent: &Arc<Mutex<Agent>>, reported: &mut Option<String>) {
+    let current = {
+        let guard = agent.lock().await;
+        session_file_of(&guard)
+    };
+
+    if current.is_none() || current == *reported {
+        return;
+    }
+
+    *reported = current.clone();
+    if let Some(path) = current {
+        _ = run_in_event_loop(move |ui| ui.on_session_file(path));
     }
 }
 
@@ -179,8 +214,20 @@ async fn drain_cache_warm(agent: &Arc<Mutex<Agent>>) {
     }
 }
 
-/// 分发单条命令。返回 `Some` 表示进入了回合（挂到 on_round）。
+/// 分发单条命令，并在其后补发「会话已落盘」的路径（见 [`sync_session_file`]）。
 async fn dispatch(
+    agent: &Arc<Mutex<Agent>>,
+    cmd: AgentCommand,
+    pending_abort: &mut Option<AbortTx>,
+    reported_file: &mut Option<String>,
+) -> Option<RoundFuture> {
+    let round = dispatch_cmd(agent, cmd, pending_abort).await;
+    sync_session_file(agent, reported_file).await;
+    round
+}
+
+/// 分发单条命令。返回 `Some` 表示进入了回合（挂到 on_round）。
+async fn dispatch_cmd(
     agent: &Arc<Mutex<Agent>>,
     cmd: AgentCommand,
     pending_abort: &mut Option<AbortTx>,
@@ -2010,14 +2057,14 @@ mod tests {
         shutdown(worker, cmd_tx, handle).await;
     }
 
-    /// 回归：`/new` 的回执必须带上新建会话的文件路径。
+    /// 回归：`/new` 起的新会话延迟落盘，落盘后必须把文件路径补发给 UI 与扩展。
     ///
-    /// `Session::create(persist=true)` 此刻已经落盘；回执若报 `file: None`，
+    /// 新会话是延迟落盘的（空会话不建文件），切换回执里没有路径；路径为空时
     /// 子代理扩展会把会话键退化成 `default`（所有无键会话共用 default.json），
-    /// 该会话的定时任务之后 `/resume` 回来就读不到了。
+    /// 该会话的定时任务之后 `/resume` 回来就读不到了。首条消息落盘后要补发。
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
-    async fn new_session_reply_carries_the_fresh_session_file() {
+    async fn new_session_reports_its_file_once_it_lands_on_disk() {
         let _g = crate::test_support::AUTH_TEST_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
@@ -2048,22 +2095,40 @@ mod tests {
             .unwrap(),
         ));
 
+        let probe = agent.clone();
         let (cmd_tx, cmd_rx) = channels();
         let worker = WorkerHandle::new(cmd_tx.clone());
         let (handle, mut ui_rx) = start_worker_with_agent(agent, cmd_rx);
         let mut app = App::new();
+        // 占位：/new 的切换回执要把它清成 None（新会话还没落盘）
+        app.current_session_path = Some(old_path.clone());
 
         worker.send(AgentCommand::NewSession);
+        apply_until(&mut ui_rx, &mut app, |a| a.current_session_path.is_none())
+            .await
+            .expect("/new 当下不应有会话文件（延迟落盘）");
+
+        // 回合里写入首条消息才会建文件：此处直接写，等价于回合落盘那一步
+        let msg = crate::core::provider::AgentMessage::user_text("hi");
+        probe
+            .lock()
+            .await
+            .session
+            .as_mut()
+            .expect("新会话应已装上")
+            .append_message(&msg);
+        // 任意命令都会在 dispatch 之后补发路径，这里用 /session 统计
+        worker.send(AgentCommand::SessionStats);
         apply_until(&mut ui_rx, &mut app, |a| {
             a.current_session_path.as_deref().is_some()
         })
         .await
-        .expect("/new 后应带上新会话文件路径");
+        .expect("会话落盘后应把新会话文件路径回给 UI");
 
         let new_path = app.current_session_path.clone().unwrap();
         assert_ne!(new_path, old_path, "应是新会话文件");
         assert!(
-            std::path::Path::new(&new_path).exists(),
+            std::path::Path::new(&new_path).is_file(),
             "回执里的会话文件应已落盘: {new_path}"
         );
         shutdown(worker, cmd_tx, handle).await;
