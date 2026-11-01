@@ -20,7 +20,7 @@ use crate::{
     },
     utils::{
         color::Rgb,
-        display::{char_width, fit_display, format_tool_duration},
+        display::{char_width, display_width, fit_display, format_tool_duration},
         mime, paths,
     },
 };
@@ -55,6 +55,9 @@ const IMAGE_THUMB: f32 = 360.0;
 const OVERLAY_COLS: usize = 100;
 /// 等宽块的行高（相对字号）：mermaid 盒图的横线靠行距对齐，每行必须等高。
 const MONO_LINE_HEIGHT: f32 = 1.55;
+
+const MIN_COL_WEIGHT: f32 = 8.;
+const MAX_COL_WEIGHT: f32 = 40.;
 
 thread_local! {
     /// 缩略图图片源缓存：`(路径, (文件长度, 修改时间)) → 图片源`，免掉每帧重读缩略图文件。
@@ -1913,13 +1916,17 @@ fn table_body(table: &markdown::Table, theme: &Theme) -> AnyElement {
         .unwrap_or(0)
         .max(1);
 
-    // 列权重 = 该列最长单元格的字符数，免得窄列被宽内容挤成一条缝
-    let mut weights = vec![1_f32; cols];
+    // 列权重 = 该列最长单元格的**显示宽度**（汉字算两列），夹在 [下限, 上限] 之间：
+    // 下限让「项目」这种两字表头不至于被压成每行一个字，上限让超长描述折行而不是把其他列挤成细缝。
+    let mut weights = vec![MIN_COL_WEIGHT; cols];
     for row in std::iter::once(&table.header).chain(table.rows.iter()) {
         for (index, cell) in row.iter().enumerate() {
-            let len: usize = cell.iter().map(|span| span.text.chars().count()).sum();
-            weights[index] = weights[index].max(len as f32);
+            let width: usize = cell.iter().map(|span| display_width(&span.text)).sum();
+            weights[index] = weights[index].max(width as f32);
         }
+    }
+    for weight in &mut weights {
+        *weight = weight.clamp(MIN_COL_WEIGHT, MAX_COL_WEIGHT);
     }
 
     let total: f32 = weights.iter().sum();
