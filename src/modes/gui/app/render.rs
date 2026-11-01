@@ -866,7 +866,9 @@ impl GuiApp {
                         )
                         .children(self.render_dock(&theme))
                         .child(measured_composer(
-                            composer_card,
+                            // 包一层再量：`measured_composer` 量的是**子元素**，直接把卡片递进去
+                            // 量到的是卡片内的输入框，折行宽度会比实际可用宽度窄一圈内边距
+                            div().w_full().child(composer_card),
                             self.composer_bounds.clone(),
                         ))
                         .child(

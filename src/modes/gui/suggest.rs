@@ -34,6 +34,29 @@ pub const MAX_ITEMS: usize = 40;
 /// 有独立 GUI 面板入口的扩展命令：`/` 面板与 Ctrl-M 命令面板里都列（同一个动作两个入口）。
 pub const PANEL_COMMANDS: &[&str] = &["skills", "extension", "settings"];
 
+/// 内置命令声明的子命令：`(命令名, 子命令, 说明)`，按声明顺序。
+///
+/// GUI 侧只有 `/session` 有二级候选（与终端 UI 的分发一一对应）；
+/// 扩展命令声明的子命令从扩展注册表里取（见 `app::suggest::subcommand_defs`）。
+const BUILTIN_SUBCOMMANDS: &[(&str, &str, &str)] = &[
+    ("session", "statistics", "Show current session info"),
+    (
+        "session",
+        "rm-current",
+        "Delete the current session (confirm)",
+    ),
+    (
+        "session",
+        "rm-project",
+        "Delete every session of this project (confirm)",
+    ),
+    (
+        "session",
+        "rm-all",
+        "Delete every session of every project (confirm)",
+    ),
+];
+
 /// GUI 支持的斜杠命令：名字（不含 `/`）+ 说明。
 /// 与 TUI 的命令集对齐（`dock` 没有桌面等价物，除了它全部列出）。
 pub const COMMANDS: &[(&str, &str)] = &[
@@ -289,6 +312,15 @@ pub fn detect_subcommand(text_before_cursor: &str) -> Option<(usize, String, Str
     Some((line_start, name.to_string(), query.to_string()))
 }
 
+/// 内置命令声明的子命令 `(名字, 说明)`；命令未声明子命令时返回空。
+pub fn builtin_subcommands(command: &str) -> Vec<(String, String)> {
+    BUILTIN_SUBCOMMANDS
+        .iter()
+        .filter(|(name, _, _)| *name == command)
+        .map(|(_, sub, detail)| ((*sub).to_string(), (*detail).to_string()))
+        .collect()
+}
+
 /// 子命令候选：`defs` 是命令声明的 `(名字, 说明)`，按声明顺序做模糊匹配。
 ///
 /// 候选只写子命令名（插入位置在命令名之后），说明进右侧灰字。
@@ -414,6 +446,18 @@ mod tests {
         assert_eq!(all.len(), 2);
         assert_eq!(subcommands(&defs, "res")[0].label, "resume");
         assert!(subcommands(&defs, "zzz").is_empty());
+    }
+
+    /// 内置 `/session` 声明了二级候选（GUI 不读终端 UI 的命令表，得自己挂一份）。
+    #[test]
+    fn builtin_session_subcommands() {
+        let subs = builtin_subcommands("session");
+        let names: Vec<&str> = subs.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["statistics", "rm-current", "rm-project", "rm-all"]
+        );
+        assert!(builtin_subcommands("model").is_empty());
     }
 
     /// 命令与子命令采纳后立即提交，`@` 文件只补全。

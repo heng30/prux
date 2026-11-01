@@ -493,11 +493,11 @@ fn switch_cwd(agent: &mut Agent, path: &str, events: &UnboundedSender<GuiEvent>)
 }
 
 /// 开新会话：清空消息、建一个持久会话文件（与 TUI 的 `/new` 一致）。
+///
+/// 不预先建工程桶目录：首次写入才建，否则 `/session rm-*` 删完空目录又会长回来。
 fn new_session(agent: &mut Agent, events: &UnboundedSender<GuiEvent>) {
     let cwd = agent.cwd.clone();
     let dir = session_manager::default_session_dir(&cwd, &settings_manager::agent_dir());
-
-    _ = std::fs::create_dir_all(&dir);
 
     match Session::create_deferred(&cwd, Some(dir)) {
         Ok(session) => {

@@ -589,11 +589,12 @@ mod tests {
         app.resolve_session_delete_confirm("no");
         assert!(a.exists() && b.exists());
 
-        // 重新弹窗并确认 → 本项目两个文件没了，别的工程还在
+        // 重新弹窗并确认 → 本项目两个文件没了，别的工程还在，空掉的桶目录也跟着走
         app.open_session_delete_confirm(SessionDeleteScope::Project);
         app.resolve_session_delete_confirm("yes");
         assert!(!a.exists() && !b.exists());
         assert!(keep.exists());
+        assert!(!proj_dir.exists(), "删空的桶目录也要删掉");
         assert!(app.pending_session_delete.is_none());
     }
 

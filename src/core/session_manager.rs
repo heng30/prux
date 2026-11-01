@@ -185,6 +185,9 @@ fn write_repaired_file(file: &Path, content: &str) -> std::io::Result<()> {
 /// 返回实际采用的方式：`"trash"` 表示已进回收站，`"unlink"` 表示已直接删除且不可恢复；
 /// 两者都失败时返回错误文案。TUI 与 GUI 的删除动作共用本函数，避免同一操作在两处
 /// 安全等级不一致。
+///
+/// 删掉最后一个会话文件后连同工程桶目录一起删（`remove_dir` 只在目录为空时成功），
+/// 否则 `rm-project` / `rm-all` 会在 `sessions/` 下留一堆空目录。
 pub fn delete_session_file(path: &str) -> std::result::Result<&'static str, String> {
     let mut cmd = Command::new("trash");
     // 以 `-` 开头的路径会被 CLI 当成选项，用 `--` 终止选项解析
@@ -192,15 +195,24 @@ pub fn delete_session_file(path: &str) -> std::result::Result<&'static str, Stri
         cmd.arg("--");
     }
     cmd.arg(path);
+
     let trash_ok = match cmd.output() {
         Ok(o) => o.status.success() || !Path::new(path).exists(),
         Err(_) => false,
     };
-    if trash_ok {
-        return Ok("trash");
+
+    let method = if trash_ok {
+        "trash"
+    } else {
+        std::fs::remove_file(path).map_err(|e| e.to_string())?;
+        "unlink"
+    };
+
+    if let Some(dir) = Path::new(path).parent() {
+        // 目录非空（还有别的会话）时失败，正是「不该删」的情况，忽略即可
+        _ = std::fs::remove_dir(dir);
     }
-    std::fs::remove_file(path).map_err(|e| e.to_string())?;
-    Ok("unlink")
+    Ok(method)
 }
 
 /// D 档判定：引用断裂类错误——被丢弃行/缺失的 state 导致后缀依赖缺失，跳过该行也救不回来，应就地截断。
@@ -2175,11 +2187,16 @@ mod tests {
     }
 
     /// 删除会话文件：本机装了 `trash` 走回收站，否则回退 unlink——两种情况文件都必须消失。
+    /// 删空了的工程桶目录也跟着走；目录里还有别的会话就留着。
     #[test]
     fn delete_session_file_removes_file_either_way() {
         let tmp = tempfile::tempdir().unwrap();
-        let path = tmp.path().join("s.jsonl");
+        let bucket = tmp.path().join("sessions/--proj--");
+        std::fs::create_dir_all(&bucket).unwrap();
+        let path = bucket.join("s.jsonl");
+        let keep = bucket.join("keep.jsonl");
         std::fs::write(&path, "{}").unwrap();
+        std::fs::write(&keep, "{}").unwrap();
 
         let method = delete_session_file(path.to_str().unwrap()).unwrap();
         assert!(
@@ -2187,6 +2204,10 @@ mod tests {
             "unexpected: {method}"
         );
         assert!(!path.exists());
+        assert!(bucket.exists(), "桶里还有会话，目录不能删");
+
+        delete_session_file(keep.to_str().unwrap()).unwrap();
+        assert!(!bucket.exists(), "桶空了要连目录一起删");
     }
 
     /// 延迟落盘的会话：没写入前磁盘上没有文件，写入首条消息后才建文件（空会话不落盘）。

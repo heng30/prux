@@ -105,6 +105,36 @@ pub fn wrap_chunks(
     chunks
 }
 
+/// 按行切视觉行，给行尾光标留一格：光标在行尾而最后一段已排满时，
+/// 再补一个空段把光标排到下一视觉行。
+///
+/// 不补的话行尾那个光标方块（一个空格宽）会顶出卡片右边——看着就是“多出一个字符”。
+fn wrap_chunks_for_line(
+    line: &str,
+    wrap_width: f32,
+    cursor_at_end: bool,
+    mut width_of: impl FnMut(char) -> f32,
+) -> Vec<std::ops::Range<usize>> {
+    let mut chunks = wrap_chunks(line, wrap_width, &mut width_of);
+    if cursor_at_end && wrap_width > 0. {
+        let used: f32 = chunks
+            .last()
+            .map(|chunk| {
+                line.chars()
+                    .skip(chunk.start)
+                    .take(chunk.end - chunk.start)
+                    .map(&mut width_of)
+                    .sum()
+            })
+            .unwrap_or(0.);
+        if used + width_of(' ') > wrap_width {
+            let end = line.chars().count();
+            chunks.push(end..end);
+        }
+    }
+    chunks
+}
+
 /// 输入框正文的可用宽度：卡片外宽减左右内边距与 1px 边框。
 ///
 /// 只扣内边距会宽 2px：每行按多出的宽度排好字后，flex 会把行尾那个字压掉一半才折行。
@@ -155,7 +185,8 @@ fn render_inner(
             Some(wrap) => {
                 let font_size = px(FONT_SIZE);
                 let width = f32::from(wrap.width);
-                wrap_chunks(line, width, |ch| {
+                let at_end = cursor_col.is_some_and(|col| col >= chars.len());
+                wrap_chunks_for_line(line, width, at_end, |ch| {
                     char_width(ch, font_size, wrap.window, &mut widths)
                 })
             }
@@ -221,8 +252,9 @@ fn render_inner(
                 }
                 line_row = line_row.child(element);
             }
-            // 光标在行尾（或空行）：补一个可见方块，否则整行没有光标
-            if chunk.end == chars.len() && cursor_col.is_some_and(|col| col >= chars.len()) {
+            // 光标在行尾（或空行）：补一个可见方块，否则整行没有光标。
+            // 只看最后一个视觉行：行排满时前面还有一个正常段的 `end` 也是行尾。
+            if chunk_index + 1 == chunks.len() && cursor_col.is_some_and(|col| col >= chars.len()) {
                 line_row = line_row.child(
                     div()
                         .id(gpui::ElementId::Name(format!("c{row}:end").into()))
@@ -246,6 +278,10 @@ fn render_inner(
 }
 
 /// 单个字符的排印宽度：排版器量真字形，不做等宽估算（CJK、回退字体都按实际算）。
+///
+/// 结果向上取整到物理像素：布局引擎把每个字符元素的宽按**整数物理像素**排布
+/// （16.5px 的字在 1.5 倍缩放下每字实占 25 而非 24.375），亚像素累加会让折行
+/// 每行多塞一个字，那一个字就被行尾裁掉一半。
 fn char_width(
     ch: char,
     font_size: gpui::Pixels,
@@ -262,12 +298,14 @@ fn char_width(
     let mut buffer = [0u8; 4];
     let text = ch.encode_utf8(&mut buffer);
     let runs = [style.to_run(text.len())];
+    let scale = window.scale_factor();
     let width = f32::from(
         window
             .text_system()
             .layout_line(text, font_size, &runs, None)
             .width,
     );
+    let width = (width * scale).ceil() / scale;
     cache.insert(ch, width);
     width
 }
@@ -365,6 +403,21 @@ mod tests {
         assert_eq!(wrap_chunks("", 40., |_| 10.), vec![0..0]);
         // 宽度未知时不折行
         assert_eq!(wrap_chunks("abcdef", 0., |_| 10.), vec![0..6]);
+    }
+
+    /// 行尾光标也占一格：排满时另起一视觉行，还有空位就留在行尾。
+    #[test]
+    fn tail_cursor_gets_its_own_row_when_line_is_full() {
+        assert_eq!(
+            wrap_chunks_for_line("abcdefgh", 40., true, |_| 10.),
+            vec![0..4, 4..8, 8..8]
+        );
+        // 光标不在行尾时不多出一行
+        assert_eq!(
+            wrap_chunks_for_line("abcdefgh", 40., false, |_| 10.),
+            vec![0..4, 4..8]
+        );
+        assert_eq!(wrap_chunks_for_line("abc", 40., true, |_| 10.), vec![0..3]);
     }
 
     /// 折行宽度要把卡片左右边框也扣掉：只扣内边距会宽 2px，

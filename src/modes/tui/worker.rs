@@ -866,11 +866,13 @@ async fn dispatch_switch_cwd(agent: &Arc<Mutex<Agent>>, path: String) -> Option<
 }
 
 /// 处理 AgentCommand::NewSession：在当前目录下开新会话。
+///
+/// 不预先建工程桶目录：`create_deferred` 首次写入才落盘并建目录，
+/// 先建一次会在 `/session rm-*` 之后又把空目录长回来。
 async fn dispatch_new_session(agent: &Arc<Mutex<Agent>>) -> Option<RoundFuture> {
     let mut a = agent.lock().await;
     let cwd = a.cwd.clone();
     let dir = session_manager::default_session_dir(&cwd, &settings_manager::agent_dir());
-    _ = std::fs::create_dir_all(&dir);
     let payload = match session_manager::Session::create_deferred(&cwd, Some(dir)) {
         Ok(s) => {
             let session_id = s.session_id.clone();

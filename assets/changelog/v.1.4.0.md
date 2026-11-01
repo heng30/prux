@@ -393,6 +393,25 @@
 
 ### Fixed
 
+- **Deleting the last session of a project no longer leaves an empty folder behind**: every project
+  keeps its sessions in a per-project folder under `sessions/`, and `/session rm-current`,
+  `rm-project`, `rm-all` and the GUI sidebar's Delete removed the files but kept the folders. The
+  folder now goes with the last session in it (`/new` and the GUI's `+` also stopped pre-creating
+  it), so the directory listing matches what is actually there.
+
+- **The cursor at the end of a full line in the desktop GUI's input box no longer pushes a glyph
+  out of the card**: the block was appended to the line that was already filled edge to edge, so it
+  hung over the card's border. It now gets its own visual line when the current one has no room
+  left, and each glyph's width is rounded up to whole physical pixels — the layout engine places
+  per-character elements at integer pixels, so the fractional remainder used to let every visual
+  line hold one glyph too many. The card is also handed to the measuring layer wrapped, so the
+  measured width is the card's own and not its inner input row's.
+
+- **`/session` subcommands complete in the desktop GUI's input box**: only extension commands could
+  declare subcommands, so `/session` offered nothing. The built-in `statistics`, `rm-current`,
+  `rm-project` and `rm-all` are listed now, and they win over an extension command of the same name,
+  matching how the command itself is dispatched.
+
 - **The desktop GUI's `/history` panel uses the full row width**: prompt rows have no right-hand
   detail, but they were still laid out as "label capped at the detail column width + detail", so
   every prompt was truncated at roughly a quarter of the panel with the rest of the row left blank.
@@ -1006,6 +1025,19 @@
   边框也一并扣掉。
 
 ## 修复
+
+- **删掉工程的最后一个会话不再留下空文件夹**：每个工程的会话都放在 `sessions/` 下的独立目录里，
+  `/session rm-current`、`rm-project`、`rm-all` 与桌面 GUI 侧栏的删除都只删文件、留着目录。现在
+  最后一个会话走的时候目录一起走（`/new` 与 GUI 的 `+` 也不再预先建目录），目录列表与实际内容一致。
+
+- **桌面 GUI 输入框排满一行时，行尾光标不再把字顶出卡片**：那个光标方块原本追加在已经排满的行
+  末尾，于是压到了卡片边框外面。现在当前行没空位时它自己占下一视觉行；每个字符的宽度也向上取整
+  到整数物理像素——布局引擎按整数像素摆放逐字符元素，亚像素余量会让每行多塞一个字。卡片改为包
+  一层再交给测量，量到的是卡片本身而不是卡片内的输入行。
+
+- **桌面 GUI 输入框能补全 `/session` 的子命令**：以前只有扩展命令能声明子命令，`/session` 什么
+  都不提示。现在列出内置的 `statistics`、`rm-current`、`rm-project`、`rm-all`，且与命令分发一致，
+  同名扩展命令抢不走它们。
 
 - **桌面 GUI 的 `/history` 面板用满整行宽度**：历史 prompt 没有行尾说明，却仍按「主文案截在说明
   列宽 + 行尾说明」的版式排，于是每条都只占面板四分之一就被截断，右边留一大片空白。现在行尾说明

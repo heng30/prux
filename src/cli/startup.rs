@@ -867,7 +867,7 @@ fn select_session(parsed: &Args, cwd: &str, default_dir: &Path) -> Option<Sessio
         };
     }
 
-    _ = std::fs::create_dir_all(default_dir);
+    // 不预建工程桶目录：首次写入才建，否则空会话会在 `sessions/` 下留一堆空目录
     Session::create_deferred(cwd, Some(default_dir.to_path_buf())).ok()
 }
 

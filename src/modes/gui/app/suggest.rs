@@ -9,8 +9,16 @@ use std::sync::{
     atomic::{AtomicBool, Ordering as AtomicOrdering},
 };
 
-/// 扩展命令声明的子命令候选：`(名字, 说明)` 按声明顺序；命令不存在或没声明则为空。
+/// 命令声明的子命令候选：`(名字, 说明)` 按声明顺序；命令不存在或没声明则为空。
+///
+/// 内置优先（分发也是内置优先）：`/session` 的子命令挂在 GUI 的静态表里，
+/// 避免被同名扩展命令的声明“借用”。
 fn subcommand_defs(command: &str) -> Vec<(String, String)> {
+    let builtin = suggest_engine::builtin_subcommands(command);
+    if !builtin.is_empty() {
+        return builtin;
+    }
+
     core::extensions::registered_commands()
         .into_iter()
         .find(|candidate| candidate.name.eq_ignore_ascii_case(command))
