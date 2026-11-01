@@ -26,9 +26,9 @@ use crate::{
 };
 use base64::Engine as _;
 use gpui::{
-    AnyElement, Bounds, Context, FontStyle, FontWeight, HighlightStyle, Hsla, Image, ImageFormat,
-    ImageSource, IntoElement, ParentElement, Pixels, SharedString, Styled, StyledText, Window, div,
-    prelude::*, relative,
+    AnyElement, Bounds, Context, ElementId, FontStyle, FontWeight, HighlightStyle, Hsla, Image,
+    ImageFormat, ImageSource, InteractiveText, IntoElement, ParentElement, Pixels, SharedString,
+    Styled, StyledText, Window, div, prelude::*, relative,
 };
 use serde_json::Value;
 use std::{
@@ -56,7 +56,9 @@ const OVERLAY_COLS: usize = 100;
 /// 等宽块的行高（相对字号）：mermaid 盒图的横线靠行距对齐，每行必须等高。
 const MONO_LINE_HEIGHT: f32 = 1.55;
 
+/// 表格列权重的下限（等效半角列数）：再窄的列也放得下几个字，不至于竖排。
 const MIN_COL_WEIGHT: f32 = 8.;
+/// 表格列权重的上限（等效半角列数）：超长描述改为折行，不吃光其他列的宽度。
 const MAX_COL_WEIGHT: f32 = 40.;
 
 thread_local! {
@@ -1674,6 +1676,10 @@ fn render_rows(rows: &[Row], theme: &Theme, lines: &mut TextLines) -> AnyElement
     let mut column = div().w_full().flex().flex_col().gap(px(SPACE_XS));
     // 子元素下标 → 行序号（规则线之类不参与选区的行记 None）
     let mut child_lines: Vec<Option<usize>> = Vec::new();
+
+    // 可点文本的元素 id：每帧从 0 递增，跨帧稳定（gpui 靠 id 记住鼠标按下位置，
+    // id 一变点击就失效），同帧且不重复。
+    let mut link_id = 0_usize;
     for row in rows {
         let element: AnyElement = match row {
             Row::Line(line) => {
@@ -1716,10 +1722,12 @@ fn render_rows(rows: &[Row], theme: &Theme, lines: &mut TextLines) -> AnyElement
                     }
                     markdown::LineKind::Text => None,
                 };
+
                 // 这一行参与选区：登记序号/文本，并把选区画成背景高亮
                 let index = lines.next;
                 lines.next += 1;
-                let (plain, _) = inline_runs(marker.as_deref(), &line.spans, theme);
+
+                let (plain, _, _) = inline_runs(marker.as_deref(), &line.spans, theme);
                 let len = plain.chars().count();
                 let selected = lines
                     .selection
@@ -1731,8 +1739,17 @@ fn render_rows(rows: &[Row], theme: &Theme, lines: &mut TextLines) -> AnyElement
                 });
                 child_lines.push(Some(index));
                 let text_bounds = lines.text_bounds.clone();
+
+                let id = link_id;
+                link_id += 1;
                 element
-                    .child(inline_text(marker.as_deref(), &line.spans, theme, selected))
+                    .child(inline_text(
+                        marker.as_deref(),
+                        &line.spans,
+                        theme,
+                        selected,
+                        id,
+                    ))
                     // 文字元素的实测边界：列定位按它算，外层行盒的 padding/缩进不进列号
                     .on_children_prepainted(move |children: Vec<Bounds<Pixels>>, _, _| {
                         if let Some(child) = children.first() {
@@ -1796,7 +1813,7 @@ fn render_rows(rows: &[Row], theme: &Theme, lines: &mut TextLines) -> AnyElement
             }
             Row::Table(table) => {
                 child_lines.push(None);
-                table_body(table, theme)
+                table_body(table, theme, &mut link_id)
             }
             Row::Mono { lines: mono } => {
                 child_lines.push(None);
@@ -1906,7 +1923,7 @@ fn mono_run(text: String, height: Pixels) -> AnyElement {
 ///
 /// 表格不按字符画边框（比例字体对不齐）：列宽交给 flex，边框由每行的下边与
 /// 单元格右边拼出——在 gpui 里自己算列宽只会算出对不齐的格子。
-fn table_body(table: &markdown::Table, theme: &Theme) -> AnyElement {
+fn table_body(table: &markdown::Table, theme: &Theme, link_id: &mut usize) -> AnyElement {
     let cols = table
         .rows
         .iter()
@@ -1970,7 +1987,8 @@ fn table_body(table: &markdown::Table, theme: &Theme) -> AnyElement {
             if index + 1 < cols {
                 cell_div = cell_div.border_r_1().border_color(theme.border);
             }
-            line = line.child(cell_div.child(inline_text(None, cell, theme, None)));
+            line = line.child(cell_div.child(inline_text(None, cell, theme, None, *link_id)));
+            *link_id += 1;
         }
         grid = grid.child(line);
     }
@@ -1983,13 +2001,19 @@ fn table_body(table: &markdown::Table, theme: &Theme) -> AnyElement {
 /// 一个片段一个 `div` 是不行的：每个 `div` 都是独立的块，行内代码会被排成
 /// 单独一行并撑满宽度，正文也就断在半句上。行内样式只能靠 `StyledText` 的
 /// 分段高亮表达，标记（`•` / `1.`）也拼进同一段文本里才能跟着首行缩进。
+///
+/// 带链接的片段用 `InteractiveText` 挂点击，Ctrl+点击交给系统默认浏览器打开。
+///
+/// `id` 由调用方按渲染顺序递增：gpui 靠元素 id 记住鼠标按下的位置，id 每帧变一次
+/// 点击就永远匹配不上（按下在旧 id、抬起找新 id），点击会默默无反应。
 fn inline_text(
     marker: Option<&str>,
     spans: &[markdown::Span],
     theme: &Theme,
     selection: Option<Range<usize>>,
-) -> StyledText {
-    let (text, highlights) = inline_runs(marker, spans, theme);
+    id: usize,
+) -> AnyElement {
+    let (text, highlights, links) = inline_runs(marker, spans, theme);
     let highlights = match selection {
         Some(range) => merge_selection(
             highlights,
@@ -2001,7 +2025,29 @@ fn inline_text(
         ),
         None => highlights,
     };
-    StyledText::new(text).with_highlights(highlights)
+
+    let styled = StyledText::new(text).with_highlights(highlights);
+    if links.is_empty() {
+        return styled.into_any_element();
+    }
+
+    // 元素 id 每帧从 0 递增：同帧内唯一，且只要文档不变就跨帧稳定
+    let urls: Vec<String> = links.iter().map(|(_, url)| url.clone()).collect();
+    InteractiveText::new(ElementId::NamedInteger("md-link".into(), id as u64), styled)
+        .on_click(
+            links.into_iter().map(|(range, _)| range).collect(),
+            move |index, window, _| {
+                // 与终端 UI 同一个手势：Ctrl+点击才打开，普通点击留给选字
+                if !window.modifiers().control {
+                    return;
+                }
+
+                if let Some(url) = urls.get(index) {
+                    super::overlay::open_url(url);
+                }
+            },
+        )
+        .into_any_element()
 }
 
 /// 把选区底色并进已有高亮，切成互不重叠的段。
@@ -2048,9 +2094,14 @@ fn inline_runs(
     marker: Option<&str>,
     spans: &[markdown::Span],
     theme: &Theme,
-) -> (String, Vec<(Range<usize>, HighlightStyle)>) {
+) -> (
+    String,
+    Vec<(Range<usize>, HighlightStyle)>,
+    Vec<(Range<usize>, String)>,
+) {
     let mut text = String::new();
     let mut highlights: Vec<(std::ops::Range<usize>, HighlightStyle)> = Vec::new();
+    let mut links: Vec<(Range<usize>, String)> = Vec::new();
     let mut push = |text: &mut String, body: &str, style: HighlightStyle| {
         let start = text.len();
         text.push_str(body);
@@ -2071,9 +2122,16 @@ fn inline_runs(
     }
 
     for span in spans {
+        let start = text.len();
         push(&mut text, &span.text, span_highlight(&span.style, theme));
+        // 空片段不登记，否则会产生一个永远点不到的区间
+        if let Some(url) = &span.url
+            && text.len() > start
+        {
+            links.push((start..text.len(), url.clone()));
+        }
     }
-    (text, highlights)
+    (text, highlights, links)
 }
 
 /// 字符下标区间 → 字节区间（越界自动夹住）。
@@ -2563,5 +2621,29 @@ mod tests {
         // `+++` / `---` 是文件头，不算增删行
         assert_eq!(line_color("+++ b/a.rs", &theme), theme.text_secondary);
         assert_eq!(line_color("--- a/a.rs", &theme), theme.text_secondary);
+    }
+
+    /// 链接片段的字节区间必须正好落在渲染出来的文本上：差一位，点击要么落空、
+    /// 要么点到旁边的字。
+    #[test]
+    fn link_spans_cover_exactly_the_link_text() {
+        let theme = Theme::dark();
+        let blocks = markdown::parse("见 [文档](https://example.com) 与 `code`");
+        let markdown::Block::Line(line) = &blocks[0] else {
+            panic!("应解析成一行");
+        };
+
+        let (text, _, links) = inline_runs(None, &line.spans, &theme);
+        assert_eq!(links.len(), 1);
+        let (range, url) = &links[0];
+        assert_eq!(url, "https://example.com");
+        assert_eq!(&text[range.clone()], "文档");
+
+        // 没有链接的行不产生可点区间
+        let blocks = markdown::parse("纯文本");
+        let markdown::Block::Line(line) = &blocks[0] else {
+            panic!("应解析成一行");
+        };
+        assert!(inline_runs(None, &line.spans, &theme).2.is_empty());
     }
 }

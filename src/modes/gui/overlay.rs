@@ -1329,7 +1329,7 @@ fn is_url(value: &str) -> bool {
 }
 
 /// 用系统默认浏览器打开链接（`webbrowser` crate，与 TUI 的 Ctrl+click 同一条路径）。
-fn open_url(url: &str) {
+pub(super) fn open_url(url: &str) {
     _ = webbrowser::open(url);
 }
 

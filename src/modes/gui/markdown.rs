@@ -29,6 +29,10 @@ pub struct Span {
     pub text: String,
     /// 该片段的样式
     pub style: SpanStyle,
+    /// 链接目标：该片段处于 `[文字](url)` 里时是 `url`，其余为 `None`。
+    ///
+    /// 渲染时据此把片段挂上点击，纯文本片段不必再回查源码。
+    pub url: Option<String>,
 }
 
 /// 一行的语义类型。
@@ -99,6 +103,8 @@ pub fn parse(text: &str) -> Vec<Block> {
     let mut style = SpanStyle::default();
     let mut kind = LineKind::Text;
     let mut quote_depth = 0usize;
+    // 当前所在的链接目标：`Tag::Link` 内产生的片段都记上它，离开时清空
+    let mut link_url: Option<String> = None;
     let mut list_stack: Vec<Option<u64>> = Vec::new();
     let mut code: Option<(Option<String>, String)> = None;
     let mut table: Option<Table> = None;
@@ -202,6 +208,7 @@ pub fn parse(text: &str) -> Vec<Block> {
                     spans.push(Span {
                         text: text.to_string(),
                         style,
+                        url: link_url.clone(),
                     });
                 }
             }
@@ -211,12 +218,14 @@ pub fn parse(text: &str) -> Vec<Block> {
                 spans.push(Span {
                     text: text.to_string(),
                     style: code_style,
+                    url: link_url.clone(),
                 });
             }
             Event::Html(html) | Event::InlineHtml(html) => {
                 spans.push(Span {
                     text: html.to_string(),
                     style,
+                    url: link_url.clone(),
                 });
             }
             Event::Start(Tag::Strong) => style.bold = true,
@@ -225,8 +234,14 @@ pub fn parse(text: &str) -> Vec<Block> {
             Event::End(TagEnd::Emphasis) => style.italic = false,
             Event::Start(Tag::Strikethrough) => style.italic = true,
             Event::End(TagEnd::Strikethrough) => style.italic = false,
-            Event::Start(Tag::Link { .. }) => style.link = true,
-            Event::End(TagEnd::Link) => style.link = false,
+            Event::Start(Tag::Link { dest_url, .. }) => {
+                style.link = true;
+                link_url = Some(dest_url.to_string());
+            }
+            Event::End(TagEnd::Link) => {
+                style.link = false;
+                link_url = None;
+            }
             Event::InlineMath(src) => {
                 let text = latex::render_latex(&src, false).unwrap_or_else(|| format!("${src}$"));
                 let mut math_style = style;
@@ -234,6 +249,7 @@ pub fn parse(text: &str) -> Vec<Block> {
                 spans.push(Span {
                     text,
                     style: math_style,
+                    url: link_url.clone(),
                 });
             }
             Event::DisplayMath(src) => {
@@ -252,6 +268,7 @@ pub fn parse(text: &str) -> Vec<Block> {
                     spans.push(Span {
                         text: " ".to_string(),
                         style,
+                        url: link_url.clone(),
                     });
                     continue;
                 }
