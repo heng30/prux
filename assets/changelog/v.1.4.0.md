@@ -2,6 +2,10 @@
 
 ### Added
 
+- **The desktop GUI's `/session` panel can copy the session file path**: the `Session file` value is
+  clickable (link colour, underline on hover) and writes the path to the system clipboard with a
+  toast confirmation; an in-memory session has no path and stays plain text.
+
 - **A bouncing-ball startup banner**: a new `bouncyballs-banner` extension drops the logo art in
   as bouncing balls — every non-blank art cell falls from above on an ease-out-bounce curve,
   turns into its real glyph on landing, and the block settles into exactly the static art. The
@@ -616,6 +620,9 @@
 ## 中文
 
 ### 新增
+
+- **桌面 GUI 的 `/session` 面板支持复制会话文件路径**：`Session file` 一行可点击（链接色、悬停
+  下划线），点击把路径写进系统剪贴板并弹 toast 确认；内存会话没有路径，保持普通文本。
 
 - **新增小球落位式启动横幅**：新的 `bouncyballs-banner` 扩展把左侧 logo 拆成一颗颗球——art 的
   每个非空白字符都从上方按 out-bounce 缓动落下、落位时显形为该格原本的字符，最后定格成与静态版

@@ -2,7 +2,7 @@
 //! 与扩展覆盖层（扩展自持内容，GUI 只负责绘制与回传按键）。
 
 use super::{
-    app::{GuiApp, ScrollArea, ScrollDrag},
+    app::{GuiApp, ScrollArea, ScrollDrag, ToastKind},
     composer,
     text_edit::Editor,
     theme::{
@@ -437,6 +437,8 @@ pub struct InfoRow {
     pub key: String,
     /// 值（右列）；以 `http://` / `https://` 开头时渲染成可点击链接
     pub value: String,
+    /// 值是否可点击复制到系统剪贴板（`true` 时鼠标悬停画下划线、点击写剪贴板并弹提示）
+    pub copy: bool,
 }
 
 impl Info {
@@ -1133,7 +1135,7 @@ fn render_info(info: &Info, theme: &Theme, cx: &mut gpui::Context<GuiApp>) -> An
             div()
                 .relative()
                 .w_full()
-                .child(info_table(&info.rows, theme, &info.scroll))
+                .child(info_table(&info.rows, theme, &info.scroll, cx))
                 .child(info_scrollbar(&info.scroll, theme, cx)),
         );
     }
@@ -1253,8 +1255,15 @@ fn info_header(headers: &[String; 2], theme: &Theme) -> AnyElement {
         .into_any_element()
 }
 
-/// 详情页表格主体：左列键名（定宽折行）+ 右列值（占满剩余宽度），值是 URL 时用链接色。
-fn info_table(rows: &[InfoRow], theme: &Theme, scroll: &ScrollHandle) -> gpui::Stateful<Div> {
+/// 详情页表格主体：左列键名（定宽折行）+ 右列值（占满剩余宽度），值是 URL 时用链接色；
+/// [`InfoRow::copy`] 为真时值可点击复制（同样用链接色 + 悬停下划线）。
+fn info_table(
+    rows: &[InfoRow],
+    theme: &Theme,
+    scroll: &ScrollHandle,
+    cx: &mut gpui::Context<GuiApp>,
+) -> gpui::Stateful<Div> {
+    let app = cx.entity();
     let mut table = info_body(scroll);
 
     for (index, row) in rows.iter().enumerate() {
@@ -1270,12 +1279,30 @@ fn info_table(rows: &[InfoRow], theme: &Theme, scroll: &ScrollHandle) -> gpui::S
                 .on_click(move |_, _, _| open_url(&url))
                 .child(SharedString::from(row.value.clone()))
                 .into_any_element()
+        } else if row.copy {
+            let text = row.value.clone();
+            let app = app.clone();
+            value
+                .id(("info-copy", index))
+                .text_color(theme.link)
+                .cursor_pointer()
+                .hover(|style| style.underline())
+                .on_click(move |_, _, cx| {
+                    let text = text.clone();
+                    app.update(cx, |this, cx| {
+                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                        this.toast("Copied to clipboard", ToastKind::Info, cx);
+                    });
+                })
+                .child(SharedString::from(row.value.clone()))
+                .into_any_element()
         } else {
             value
                 .text_color(theme.text_secondary)
                 .child(SharedString::from(row.value.clone()))
                 .into_any_element()
         };
+
         table = table.child(
             div()
                 .flex()

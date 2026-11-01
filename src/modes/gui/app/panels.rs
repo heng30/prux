@@ -706,7 +706,13 @@ impl GuiApp {
                     ));
                     lines.push(format!("Active tools: {}", snapshot.tools.join(", ")));
                 }
-                Info::with_rows("Sessions", info_rows(lines))
+
+                // 会话文件路径可点击复制到剪贴板；内存会话没有路径，不高亮
+                let mut rows = info_rows(lines);
+                for row in &mut rows {
+                    row.copy = row.key == "Session file" && !row.value.starts_with('(');
+                }
+                Info::with_rows("Sessions", rows)
             }
             InfoKind::Help => {
                 Info::with_rows("Keybindings", hotkey_rows()).with_headers("Keys", "Action")
@@ -771,6 +777,7 @@ fn hotkey_rows() -> Vec<InfoRow> {
         .map(|(key, value)| InfoRow {
             key: key.to_string(),
             value: value.to_string(),
+            copy: false,
         })
         .collect()
 }
@@ -965,10 +972,12 @@ pub(super) fn info_rows(lines: Vec<String>) -> Vec<InfoRow> {
             Some((key, value)) => rows.push(InfoRow {
                 key: key.to_string(),
                 value: value.to_string(),
+                copy: false,
             }),
             None => rows.push(InfoRow {
                 key: "Description".to_string(),
                 value: text.to_string(),
+                copy: false,
             }),
         }
     }

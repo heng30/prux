@@ -211,7 +211,7 @@ pub(super) struct ScrollDrag {
 
 /// toast 级别：决定配色与位置。
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum ToastKind {
+pub(crate) enum ToastKind {
     /// 中性提示
     Info,
     /// 成功
@@ -811,7 +811,12 @@ impl GuiApp {
     }
 
     /// 弹一条 toast（TUI 状态栏那类瞬时提示），几秒后自动消失。
-    fn toast(&mut self, text: impl Into<String>, kind: ToastKind, cx: &mut Context<Self>) {
+    pub(crate) fn toast(
+        &mut self,
+        text: impl Into<String>,
+        kind: ToastKind,
+        cx: &mut Context<Self>,
+    ) {
         let text: String = text.into();
         self.toast_seq += 1;
         let id = self.toast_seq;
