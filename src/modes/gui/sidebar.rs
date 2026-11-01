@@ -364,10 +364,22 @@ fn session_list(
     for (index, row) in rows.iter().enumerate() {
         if last_group != Some(row.group) {
             last_group = Some(row.group);
+            let count = rows.iter().filter(|r| r.group == row.group).count();
+
             list = list.child(
                 div()
                     .mt(px(SPACE_XS))
-                    .child(section_label(theme, row.group.label())),
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(section_label(theme, row.group.label()))
+                    .child(
+                        div()
+                            .px(px(SPACE_SM))
+                            .text_size(px(FONT_CAPTION))
+                            .text_color(theme.text_ghost)
+                            .child(SharedString::from(format!("{count} items"))),
+                    ),
             );
         }
 

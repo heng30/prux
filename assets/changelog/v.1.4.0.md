@@ -2,6 +2,10 @@
 
 ### Added
 
+- **The desktop GUI's session sidebar shows how many sessions each group holds**: the `Today` /
+  `This week` / `Older` heading now carries its entry count, right-aligned in the caption colour.
+  The count follows the search filter, so a filtered list reports what it actually lists.
+
 - **The desktop GUI's `/session` panel can copy the session file path**: the `Session file` value is
   clickable (link colour, underline on hover) and writes the path to the system clipboard with a
   toast confirmation; an in-memory session has no path and stays plain text.
@@ -688,6 +692,9 @@
 ## 中文
 
 ### 新增
+
+- **桌面 GUI 的侧栏分组标题显示该组条目数**：`Today` / `This week` / `Older` 右侧按说明色右对齐
+  显示条数，随搜索过滤结果变化，数的是列表里真实呈现的会话。
 
 - **桌面 GUI 的 `/session` 面板支持复制会话文件路径**：`Session file` 一行可点击（链接色、悬停
   下划线），点击把路径写进系统剪贴板并弹 toast 确认；内存会话没有路径，保持普通文本。
