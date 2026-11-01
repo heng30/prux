@@ -351,6 +351,22 @@
   up down the panel instead of being glued into one label and its grey detail line. `/usage` and
   `/session` read their `key: value` lines into the same two-column table.
 
+- **The `browser` extension gained tabs, history, hovering and page state reads**: `back`,
+  `forward` and `reload` walk the tab's own navigation history instead of re-navigating by hand, and
+  `close_tab` closes a tab by index or target id. `hover` moves the pointer without clicking
+  (drop-downs and tooltips need it), `dblclick` sends two click rounds, and `inspect` reads one piece
+  of element state — `value`, `text`, `html`, `attr`, `count`, `visible`, `enabled`, `checked` — so
+  the model no longer has to parse the snapshot text for it. `snapshot` takes a `scope` selector and
+  a `depth` cap, `wait` accepts a URL fragment or an arbitrary JS expression, and `press`
+  understands chords such as `Control+a` and `Meta+v`.
+
+- **The `browser` extension reads the console and answers JavaScript dialogs**: attaching a tab now
+  also turns on `Runtime` / `Log` / `Page` event reporting, buffered per tab (200 lines). The new
+  `console` action drains that buffer — `console.*` output, uncaught exceptions, failed resource
+  loads — and the new `dialog` action reports an open `alert` / `confirm` / `prompt` and accepts or
+  dismisses it. A command that times out while a dialog is open now says so instead of looking like
+  a dead connection.
+
 ### Fixed
 
 - **The desktop GUI's status dots sit on the text's optical center**: the brand dot next to `prux`
@@ -617,6 +633,11 @@
 - **Restarting a turn in the desktop GUI no longer drops queued input**: steer messages that piled
   up while an extension rebuilt the prompt are now sent with the new prompt instead of being lost.
 
+- **The `browser` extension no longer clicks through a banner**: `click` and `dblclick` check the
+  element's center point first and refuse when another element covers it (naming it, e.g.
+  `covered by <div#banner>`), when the element is disabled, or when it has no clickable area. The old
+  behaviour dispatched the click anyway and reported success.
+
 ## 中文
 
 ### 新增
@@ -873,6 +894,18 @@
   `Provider` / `Status`（`configured` 标记），会话选择器是 `Title` / `Updated` / `Messages`——各项沿列对齐，
   不再把值挤进一行标题加一行灰色详情。`/usage` 与 `/session` 的 `key: value` 行也归到同一套两列表格里。
 
+- **`browser` 扩展补上标签页、历史、悬停与页面状态读取**：`back` / `forward` / `reload` 走标签页自己的
+  导航历史，不必再手写一次导航；`close_tab` 按索引或目标 id 关标签页。`hover` 只移动指针不点击（下拉
+  菜单与 tooltip 需要），`dblclick` 发两轮点击，`inspect` 读元素的单项状态——`value` / `text` /
+  `html` / `attr` / `count` / `visible` / `enabled` / `checked`——不用再从快照文本里猜。`snapshot`
+  支持 `scope` 限定子树与 `depth` 限制层数，`wait` 支持 URL 片段与任意 JS 条件，`press` 支持
+  `Control+a` / `Meta+v` 这类组合键。
+
+- **`browser` 扩展能读控制台、能处理 JS 对话框**：attach 一个标签页时顺带打开 `Runtime` / `Log` /
+  `Page` 的事件上报，按标签页缓冲（200 条）。新的 `console` 动作取走并回放缓冲——`console.*` 输出、
+  未捕获异常、资源加载失败；新的 `dialog` 动作报出打开中的 `alert` / `confirm` / `prompt` 并接受或
+  拒掉它。对话框卡住页面时，命令超时的报错会点名这一点，不再看起来像连接已经死掉。
+
 ## 修复
 
 - **桌面 GUI 的状态圆点与文字视觉中心对齐**：品牌行里 `prux` 旁那个圆点（以及工具卡片的状态点）
@@ -1045,3 +1078,7 @@
 
 - **桌面 GUI 重启回合不再丢掉已排队的输入**：扩展重建 prompt 期间积压的 steer 消息现在与新 prompt
   一起发出，而不是被丢弃。
+
+- **`browser` 扩展不再点穿遮罩**：`click` / `dblclick` 先检查元素中心点，被别的元素盖住时直接报错并
+  点名盖住它的元素（如 `covered by <div#banner>`），元素 `disabled` 或没有可点面积时同样报错——以前
+  照旧派发点击并回「已点击」。

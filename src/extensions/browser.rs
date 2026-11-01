@@ -1,7 +1,8 @@
 //! `browser` 扩展：用 CDP（Chrome DevTools Protocol）驱动一个**真实浏览器**。
 //!
 //! 与 `web-access`（只把网页正文读成 markdown）的分工：这里能导航、读页面结构、
-//! 点/填/选、按键、滚动、截图、执行 JS、上传文件——即模型能像人一样操作页面。
+//! 点/填/选、按键、滚动、截图、执行 JS、上传文件、读控制台、处理 JS 对话框——
+//! 即模型能像人一样操作页面。
 //!
 //! # 调试端点从哪来
 //!
@@ -21,7 +22,7 @@
 //! # 按需加载
 //!
 //! `browser` 工具声明为**延迟工具**（`ToolExposure::Deferred`）：它的描述、参数 schema 与
-//! snippet/guidelines 都不进模型可见列表与系统提示（每轮省下约 3.7k 字符），
+//! snippet/guidelines 都不进模型可见列表与系统提示（每轮省下约 5k 字符），
 //! 模型先用 `tool_search` 检索到它，**下一轮**才拿到完整声明。
 //! 因此本扩展要求 `tool-search` 扩展可用（它默认启用，模式与本扩展相同）。
 //!
@@ -383,7 +384,7 @@ impl Extension for Browser {
 fn browser_tool() -> ExtensionTool {
     let mut tool = ExtensionTool::simple(
         TOOL,
-        "Drive a real browser over the Chrome DevTools Protocol. Actions: status, list_tabs, new_tab, select_tab, open, snapshot, get_content, click, type, select, press, scroll, wait, eval, screenshot, upload. Start with `status`; call `snapshot` to get `ref` handles (e1, e2, ...) and pass those to click/type/select/press/upload instead of guessing selectors.",
+        "Drive a real browser over the Chrome DevTools Protocol. Actions: status, list_tabs, new_tab, select_tab, close_tab, open, back, forward, reload, snapshot, get_content, inspect, click, dblclick, hover, type, select, press, scroll, wait, eval, screenshot, upload, console, dialog. Start with `status`; call `snapshot` to get `ref` handles (e1, e2, ...) and pass those to click/type/select/press/upload instead of guessing selectors.",
         json!({
             "type": "object",
             "properties": {
@@ -394,7 +395,7 @@ fn browser_tool() -> ExtensionTool {
                 },
                 "url": {
                     "type": "string",
-                    "description": "open / new_tab: page URL. A missing scheme is treated as https."
+                    "description": "open / new_tab: page URL. A missing scheme is treated as https. wait: substring the page URL must reach."
                 },
                 "ref": {
                     "type": "string",
@@ -402,7 +403,7 @@ fn browser_tool() -> ExtensionTool {
                 },
                 "selector": {
                     "type": "string",
-                    "description": "CSS selector used when `ref` is not given."
+                    "description": "CSS selector used when `ref` is not given (and required for inspect with what=count)."
                 },
                 "text": {
                     "type": "string",
@@ -414,7 +415,7 @@ fn browser_tool() -> ExtensionTool {
                 },
                 "key": {
                     "type": "string",
-                    "description": "press: key name (Enter, Tab, Escape, Backspace, Delete, ArrowUp/Down/Left/Right, Home, End, PageUp, PageDown, Space) or a single ASCII character."
+                    "description": "press: key name (Enter, Tab, Escape, Backspace, Delete, ArrowUp/Down/Left/Right, Home, End, PageUp, PageDown, Space), a single ASCII character, or a chord such as `Control+a` / `Shift+Enter` / `Meta+v`."
                 },
                 "paths": {
                     "type": "array",
@@ -432,7 +433,7 @@ fn browser_tool() -> ExtensionTool {
                 },
                 "expression": {
                     "type": "string",
-                    "description": "eval: JavaScript expression to run in the page."
+                    "description": "eval: JavaScript expression to run in the page. wait: expression polled until it is truthy."
                 },
                 "awaitPromise": {
                     "type": "boolean",
@@ -489,6 +490,32 @@ fn browser_tool() -> ExtensionTool {
                     "type": "integer",
                     "minimum": 500,
                     "description": "snapshot: cap on the returned text length (default 20000)."
+                },
+                "scope": {
+                    "type": "string",
+                    "description": "snapshot: CSS selector limiting the collected elements to that subtree (default: whole page)."
+                },
+                "depth": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "snapshot: keep only elements at most this many levels below the scope root (default: no limit)."
+                },
+                "what": {
+                    "type": "string",
+                    "enum": ["value", "text", "html", "attr", "count", "visible", "enabled", "checked"],
+                    "description": "inspect: which piece of state to read. `count` needs `selector`, `attr` needs `attr`, the rest need `ref` or `selector`."
+                },
+                "attr": {
+                    "type": "string",
+                    "description": "inspect: attribute name to read when `what` is `attr` (e.g. `href`)."
+                },
+                "accept": {
+                    "type": "boolean",
+                    "description": "dialog: true accepts the open dialog, false dismisses it. Omit to only report the dialog."
+                },
+                "promptText": {
+                    "type": "string",
+                    "description": "dialog: text to enter into a `prompt` dialog before accepting it."
                 }
             },
             "required": ["action"]
@@ -797,10 +824,307 @@ mod tests {
             let conn = fake.connect().await;
             let error = run(&conn, json!({ "action": "wait" })).await.unwrap_err();
             assert!(
-                error.0.contains("needs `ms`, `selector`, or `text`"),
+                error
+                    .0
+                    .contains("needs `ms`, `selector`, `text`, `url`, or `expression`"),
                 "{}",
                 error.0
             );
+        });
+    }
+
+    /// `wait` 还支持 URL 与任意 JS 条件。
+    #[test]
+    fn wait_supports_url_and_expression_conditions() {
+        with_runtime(|| async {
+            let fake = fake::FakeBrowser::start().await;
+            let conn = fake.connect().await;
+
+            let out = run(&conn, json!({ "action": "wait", "url": "example" }))
+                .await
+                .unwrap();
+            assert!(out.text.contains("condition met"), "{}", out.text);
+            assert!(
+                fake.saw_expression("location.href.includes(\"example\")"),
+                "{:?}",
+                fake.commands()
+            );
+
+            let out = run(&conn, json!({ "action": "wait", "expression": "1 + 1" }))
+                .await
+                .unwrap();
+            assert!(out.text.contains("condition met"), "{}", out.text);
+            assert!(fake.saw_expression("!!(1 + 1)"), "{:?}", fake.commands());
+        });
+    }
+
+    /// `back` 走历史；`forward` 到历史头时不静默。
+    #[test]
+    fn history_navigates_and_reports_the_end_of_the_history() {
+        with_runtime(|| async {
+            let fake = fake::FakeBrowser::start().await;
+            let conn = fake.connect().await;
+
+            let out = run(&conn, json!({ "action": "back" })).await.unwrap();
+            assert!(out.text.contains("went back to"), "{}", out.text);
+            assert_eq!(
+                fake.params_of("Page.navigateToHistoryEntry"),
+                vec![json!({ "entryId": 1 })]
+            );
+
+            let error = run(&conn, json!({ "action": "forward" }))
+                .await
+                .unwrap_err();
+            assert!(error.0.contains("no history entry ahead"), "{}", error.0);
+        });
+    }
+
+    /// `reload` 只发 `Page.reload`，再等页面就绪。
+    #[test]
+    fn reload_refreshes_the_active_tab() {
+        with_runtime(|| async {
+            let fake = fake::FakeBrowser::start().await;
+            let conn = fake.connect().await;
+            let out = run(&conn, json!({ "action": "reload" })).await.unwrap();
+            assert!(out.text.contains("reloaded"), "{}", out.text);
+            assert!(fake.saw("Page.reload"));
+        });
+    }
+
+    /// `close_tab` 交目标 id 给浏览器，并报出剩下几个标签页。
+    #[test]
+    fn close_tab_closes_the_target() {
+        with_runtime(|| async {
+            let fake = fake::FakeBrowser::start().await;
+            let conn = fake.connect().await;
+            let out = run(&conn, json!({ "action": "close_tab", "index": 0 }))
+                .await
+                .unwrap();
+            assert!(out.text.contains("closed tab Fake Page"), "{}", out.text);
+            assert_eq!(
+                fake.params_of("Target.closeTarget"),
+                vec![json!({ "targetId": "T1" })]
+            );
+        });
+    }
+
+    /// `hover` 只发一次 `mouseMoved`。
+    #[test]
+    fn hover_only_moves_the_mouse() {
+        with_runtime(|| async {
+            let fake = fake::FakeBrowser::start().await;
+            let conn = fake.connect().await;
+            let out = run(&conn, json!({ "action": "hover", "ref": "e1" }))
+                .await
+                .unwrap();
+            assert!(out.text.contains("hovering (60, 40)"), "{}", out.text);
+
+            let events = fake.params_of("Input.dispatchMouseEvent");
+            assert_eq!(events.len(), 1, "hover 不应派发按下/抬起");
+            assert_eq!(events[0]["type"], json!("mouseMoved"));
+        });
+    }
+
+    /// `dblclick` 发两轮按下/抬起，第二轮 `clickCount` 为 2。
+    #[test]
+    fn dblclick_sends_two_click_rounds() {
+        with_runtime(|| async {
+            let fake = fake::FakeBrowser::start().await;
+            let conn = fake.connect().await;
+            let out = run(&conn, json!({ "action": "dblclick", "ref": "e1" }))
+                .await
+                .unwrap();
+            assert!(out.text.starts_with("double-clicked"), "{}", out.text);
+
+            let events = fake.params_of("Input.dispatchMouseEvent");
+            assert_eq!(events.len(), 5, "move + 两轮 press/release");
+            assert_eq!(events[2]["clickCount"], json!(1));
+            assert_eq!(events[3]["clickCount"], json!(2));
+            assert_eq!(events[4]["clickCount"], json!(2));
+        });
+    }
+
+    /// 中心点被盖住、或元素被禁用时，`click` 在派发事件之前就报错。
+    #[test]
+    fn click_refuses_a_covered_or_disabled_target() {
+        with_runtime(|| async {
+            let fake = fake::FakeBrowser::start().await;
+            let conn = fake.connect().await;
+
+            let error = run(
+                &conn,
+                json!({ "action": "click", "selector": "#__covered__" }),
+            )
+            .await
+            .unwrap_err();
+            assert!(error.0.contains("covered by <div#banner>"), "{}", error.0);
+
+            let error = run(
+                &conn,
+                json!({ "action": "click", "selector": "#__disabled__" }),
+            )
+            .await
+            .unwrap_err();
+            assert!(error.0.contains("is disabled"), "{}", error.0);
+
+            assert!(!fake.saw("Input.dispatchMouseEvent"), "报错时不应点下去");
+        });
+    }
+
+    /// `inspect` 读元素状态 / 数选择器命中条数；`attr` 必须给属性名。
+    #[test]
+    fn inspect_reads_state_and_counts_matches() {
+        with_runtime(|| async {
+            let fake = fake::FakeBrowser::start().await;
+            let conn = fake.connect().await;
+
+            let out = run(
+                &conn,
+                json!({ "action": "inspect", "what": "text", "ref": "e1" }),
+            )
+            .await
+            .unwrap();
+            assert_eq!(out.text, "text: Hello world (ref e1)");
+
+            let out = run(
+                &conn,
+                json!({ "action": "inspect", "what": "count", "selector": ".item" }),
+            )
+            .await
+            .unwrap();
+            assert!(
+                out.text.contains("2 element(s) match `.item`"),
+                "{}",
+                out.text
+            );
+
+            let error = run(
+                &conn,
+                json!({ "action": "inspect", "what": "attr", "ref": "e1" }),
+            )
+            .await
+            .unwrap_err();
+            assert!(error.0.contains("needs `attr`"), "{}", error.0);
+
+            let error = run(
+                &conn,
+                json!({ "action": "inspect", "what": "colour", "ref": "e1" }),
+            )
+            .await
+            .unwrap_err();
+            assert!(error.0.contains("`what` must be one of"), "{}", error.0);
+        });
+    }
+
+    /// `snapshot` 的 `scope` / `depth` 拼进注入的 JS。
+    #[test]
+    fn snapshot_passes_scope_and_depth_into_the_page() {
+        with_runtime(|| async {
+            let fake = fake::FakeBrowser::start().await;
+            let conn = fake.connect().await;
+            run(
+                &conn,
+                json!({ "action": "snapshot", "scope": "#main", "depth": 2 }),
+            )
+            .await
+            .unwrap();
+            assert!(
+                fake.saw_expression("const SCOPE = \"#main\";"),
+                "{:?}",
+                fake.commands()
+            );
+            assert!(
+                fake.saw_expression("const MAX_DEPTH = 2;"),
+                "{:?}",
+                fake.commands()
+            );
+        });
+    }
+
+    /// `console` 回放缓冲并清空（第二次没有新条目）。
+    #[test]
+    fn console_returns_and_clears_the_buffer() {
+        with_runtime(|| async {
+            let fake = fake::FakeBrowser::start().await;
+            let conn = fake.connect().await;
+            run(&conn, json!({ "action": "snapshot" })).await.unwrap();
+
+            let out = run(&conn, json!({ "action": "console" })).await.unwrap();
+            assert!(out.text.contains("[log] hello 7"), "{}", out.text);
+            assert!(
+                out.text
+                    .contains("[error] 404 (https://example.test/missing.js)"),
+                "{}",
+                out.text
+            );
+
+            let out = run(&conn, json!({ "action": "console" })).await.unwrap();
+            assert!(out.text.contains("nothing recorded"), "{}", out.text);
+        });
+    }
+
+    /// `dialog` 报出打开中的对话框，给 `accept` 才真正回答它。
+    #[test]
+    fn dialog_reports_and_answers_the_open_dialog() {
+        with_runtime(|| async {
+            let fake = fake::FakeBrowser::start().await;
+            let conn = fake.connect().await;
+
+            let out = run(&conn, json!({ "action": "dialog" })).await.unwrap();
+            assert!(out.text.contains("no JavaScript dialog"), "{}", out.text);
+
+            run(
+                &conn,
+                json!({ "action": "open", "url": "https://example.test/__dialog__" }),
+            )
+            .await
+            .unwrap();
+
+            let out = run(&conn, json!({ "action": "dialog" })).await.unwrap();
+            assert!(
+                out.text.contains("open confirm dialog: Sure?"),
+                "{}",
+                out.text
+            );
+            assert!(
+                !fake.saw("Page.handleJavaScriptDialog"),
+                "只问不答时不该回答"
+            );
+
+            let out = run(&conn, json!({ "action": "dialog", "accept": true }))
+                .await
+                .unwrap();
+            assert!(
+                out.text.contains("accepted the confirm dialog"),
+                "{}",
+                out.text
+            );
+            assert_eq!(
+                fake.params_of("Page.handleJavaScriptDialog"),
+                vec![json!({ "accept": true })]
+            );
+
+            let out = run(&conn, json!({ "action": "dialog" })).await.unwrap();
+            assert!(out.text.contains("no JavaScript dialog"), "{}", out.text);
+        });
+    }
+
+    /// `press` 支持组合键：修饰键进 `modifiers`，且不插入文本。
+    #[test]
+    fn press_supports_modifier_chords() {
+        with_runtime(|| async {
+            let fake = fake::FakeBrowser::start().await;
+            let conn = fake.connect().await;
+
+            run(&conn, json!({ "action": "press", "key": "Control+a" }))
+                .await
+                .unwrap();
+            let keys = fake.params_of("Input.dispatchKeyEvent");
+            assert_eq!(keys[0]["modifiers"], json!(2));
+            assert_eq!(keys[0]["key"], json!("a"));
+            assert_eq!(keys[0]["code"], json!("KeyA"));
+            assert!(keys[0].get("text").is_none(), "组合键不应插入文本");
+            assert_eq!(keys[1]["modifiers"], json!(2));
         });
     }
 

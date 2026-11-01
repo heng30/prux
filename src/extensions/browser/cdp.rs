@@ -4,14 +4,15 @@
 //! 页面命令经 `Target.attachToTarget { flatten: true }` 拿到的 `sessionId` 走同一条连接
 //! （flat session 模式），因此一个连接就能管多标签页。
 //!
-//! 事件一律丢弃：本扩展的动作都是请求/响应式的（等页面加载用轮询 `document.readyState`，
-//! 不等 `Page.loadEventFired`），所以不需要事件路由，也不需要 `*.enable`。
+//! 动作都是请求/响应式的（等页面加载用轮询 `document.readyState`，不等 `Page.loadEventFired`），
+//! 因此只收下少数事件：控制台/日志（`console` 动作）与 JS 对话框状态（`dialog` 动作）。
+//! 其余事件照旧丢弃；收下的几类在 [`Events`] 里按上限缓冲，读任务只写、不阻塞。
 
 use crate::utils::net;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet, VecDeque},
     sync::{
         Arc, Mutex as StdMutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -26,6 +27,41 @@ use tokio_tungstenite::tungstenite::Message;
 
 /// 在途请求表：CDP 命令 id → 响应回调。
 type Pending = Arc<StdMutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>>;
+
+/// 控制台/日志缓冲的条数上限（超出丢最老的）。
+const MAX_EVENT_LINES: usize = 200;
+
+/// 一个打开着的 JS 对话框（`alert` / `confirm` / `prompt` / `beforeunload`）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Dialog {
+    /// 事件所属的页面会话（`sessionId`）。
+    pub session_id: String,
+    /// 对话框类型，如 `alert`、`confirm`、`prompt`。
+    pub kind: String,
+    /// 对话框正文。
+    pub message: String,
+}
+
+/// 页面事件缓冲：读任务写入，动作读出。
+#[derive(Default)]
+struct Events {
+    /// 控制台/日志行（老的在前），带所属会话：`(sessionId, 一行文本)`。
+    lines: VecDeque<(String, String)>,
+    /// 当前打开着的对话框；`None` = 没有。
+    dialog: Option<Dialog>,
+    /// 已经 enable 过事件域的会话（每个会话只 enable 一次）。
+    enabled: HashSet<String>,
+}
+
+impl Events {
+    /// 追加一行；到上限时先丢最老的。
+    fn push(&mut self, session_id: &str, line: String) {
+        if self.lines.len() >= MAX_EVENT_LINES {
+            self.lines.pop_front();
+        }
+        self.lines.push_back((session_id.to_string(), line));
+    }
+}
 
 /// 浏览器级端点信息（`GET /json/version` 的结果）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -136,6 +172,8 @@ pub struct Cdp {
     timeout: Duration,
     /// 页面会话表。
     sessions: StdMutex<Sessions>,
+    /// 收下的页面事件（控制台 / 对话框）。
+    events: Arc<StdMutex<Events>>,
     /// 读任务是否已结束（连接已断）。
     closed: Arc<AtomicBool>,
 }
@@ -156,6 +194,7 @@ impl Cdp {
         let (mut sink, mut source) = stream.split();
         let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
         let pending: Pending = Arc::new(StdMutex::new(HashMap::new()));
+        let events: Arc<StdMutex<Events>> = Arc::new(StdMutex::new(Events::default()));
         let closed = Arc::new(AtomicBool::new(false));
 
         tokio::spawn(async move {
@@ -168,14 +207,15 @@ impl Cdp {
         });
 
         let reader_pending = Arc::clone(&pending);
+        let reader_events = Arc::clone(&events);
         let reader_closed = Arc::clone(&closed);
         tokio::spawn(async move {
             while let Some(message) = source.next().await {
                 match message {
-                    Ok(Message::Text(text)) => route(&reader_pending, &text),
+                    Ok(Message::Text(text)) => route(&reader_pending, &reader_events, &text),
                     Ok(Message::Binary(data)) => {
                         if let Ok(text) = std::str::from_utf8(&data) {
-                            route(&reader_pending, text);
+                            route(&reader_pending, &reader_events, text);
                         }
                     }
                     Ok(Message::Close(_)) | Err(_) => break,
@@ -193,6 +233,7 @@ impl Cdp {
             endpoint,
             timeout,
             sessions: StdMutex::new(Sessions::default()),
+            events,
             closed,
         })
     }
@@ -269,8 +310,14 @@ impl Cdp {
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .remove(&id);
+                // 对话框打开时页面命令会一直不回应，把原因写进报错省得模型重建连接
+                let hint = if self.dialog().is_some() {
+                    " (a JavaScript dialog is open: call `dialog` to accept or dismiss it)"
+                } else {
+                    ""
+                };
                 Err(format!(
-                    "browser: `{method}` timed out after {}s",
+                    "browser: `{method}` timed out after {}s{hint}",
                     self.timeout.as_secs()
                 ))
             }
@@ -351,10 +398,8 @@ impl Cdp {
         }
     }
 
-    /// attach 到目标并把它设为活动标签页，返回 `sessionId`。
-    ///
-    /// 同一目标只 attach 一次（结果缓存）；`activate` 为 true 时先把它切到前台
-    /// （输入事件只对活动标签页生效）。
+    /// attach 到目标并把它设为活动标签页（`activate` 时先切前台，输入事件只对活动标签页生效），
+    /// 返回 `sessionId`；同一目标只 attach 一次（结果缓存）。
     pub async fn attach(&self, target: &PageTarget, activate: bool) -> Result<String, String> {
         if activate {
             self.send(
@@ -422,6 +467,108 @@ impl Cdp {
         let sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
         let target = sessions.active.as_ref()?;
         sessions.attached.get(&target.target_id).cloned()
+    }
+
+    /// 为一个页面会话打开事件上报（控制台 / 日志 / 对话框），每个会话只发一次。
+    ///
+    /// 失败只当没有事件：拿不到控制台信息不该让动作本身失败。
+    pub async fn enable_events(&self, session_id: &str) {
+        let first = self
+            .events
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .enabled
+            .insert(session_id.to_string());
+        if !first {
+            return;
+        }
+        for domain in ["Runtime.enable", "Log.enable", "Page.enable"] {
+            _ = self.send_session(session_id, domain, json!({})).await;
+        }
+    }
+
+    /// 取走某个会话累积的控制台/日志行（取走即清空）。
+    pub fn drain_console(&self, session_id: &str) -> Vec<String> {
+        let mut events = self.events.lock().unwrap_or_else(|e| e.into_inner());
+        let before = events.lines.len();
+        let mut taken = Vec::with_capacity(before);
+        events.lines.retain(|(session, line)| {
+            if session == session_id {
+                taken.push(line.clone());
+                false
+            } else {
+                true
+            }
+        });
+        taken
+    }
+
+    /// 当前打开着的对话框（没有则为 `None`）。
+    pub fn dialog(&self) -> Option<Dialog> {
+        self.events
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .dialog
+            .clone()
+    }
+
+    /// 忘掉本地的对话框记录（accept / dismiss 之后调用；`Closed` 事件也会清）。
+    pub fn forget_dialog(&self) {
+        self.events.lock().unwrap_or_else(|e| e.into_inner()).dialog = None;
+    }
+
+    /// 关掉一个标签页，并清掉它的会话缓存（还活动着的话连活动标签页一起清）。
+    pub async fn close_target(&self, target_id: &str) -> Result<(), String> {
+        self.send("Target.closeTarget", json!({ "targetId": target_id }))
+            .await?;
+        let mut sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
+        sessions.attached.remove(target_id);
+        if sessions
+            .active
+            .as_ref()
+            .is_some_and(|target| target.target_id == target_id)
+        {
+            sessions.active = None;
+        }
+        Ok(())
+    }
+
+    /// 在标签页的导航历史里前后移动：`delta` 为负是后退，为正是前进。
+    ///
+    /// 历史到头时报错（而不是静默不动）。
+    pub async fn navigate_history(&self, session_id: &str, delta: i64) -> Result<(), String> {
+        let history = self
+            .send_session(session_id, "Page.getNavigationHistory", json!({}))
+            .await?;
+        let current = history
+            .get("currentIndex")
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
+        let entries = history
+            .get("entries")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let index = current + delta;
+        let Some(entry) = usize::try_from(index).ok().and_then(|i| entries.get(i)) else {
+            return Err(format!(
+                "browser: no history entry {} (the tab is at {}/{})",
+                if delta < 0 { "behind" } else { "ahead" },
+                current,
+                entries.len().saturating_sub(1)
+            ));
+        };
+        let entry_id = entry
+            .get("id")
+            .and_then(Value::as_i64)
+            .ok_or_else(|| "browser: Page.getNavigationHistory returned no entry id".to_string())?;
+        self.send_session(
+            session_id,
+            "Page.navigateToHistoryEntry",
+            json!({ "entryId": entry_id }),
+        )
+        .await?;
+        Ok(())
     }
 
     /// 在页面上求值，返回 CDP 的 `RemoteObject`。
@@ -510,12 +657,13 @@ fn exception_text(details: &Value) -> String {
     details.to_string()
 }
 
-/// 按 id 把响应分发给等待者；事件（无 `id`）一律忽略。
-fn route(pending: &Pending, text: &str) {
+/// 按 id 把响应分发给等待者；没 `id` 的走事件路径。
+fn route(pending: &Pending, events: &StdMutex<Events>, text: &str) {
     let Ok(value) = serde_json::from_str::<Value>(text) else {
         return;
     };
     let Some(id) = value.get("id").and_then(Value::as_u64) else {
+        handle_event(events, &value);
         return;
     };
     let Some(sender) = pending
@@ -538,6 +686,89 @@ fn route(pending: &Pending, text: &str) {
         None => Ok(value.get("result").cloned().unwrap_or(Value::Null)),
     };
     _ = sender.send(outcome);
+}
+
+/// 把一条事件写进缓冲：控制台/日志行，以及 JS 对话框的开、关。
+fn handle_event(events: &StdMutex<Events>, value: &Value) {
+    let Some(method) = value.get("method").and_then(Value::as_str) else {
+        return;
+    };
+    let params = value.get("params").cloned().unwrap_or(Value::Null);
+    let session = value
+        .get("sessionId")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+
+    let mut events = events.lock().unwrap_or_else(|e| e.into_inner());
+    let line = match method {
+        "Runtime.consoleAPICalled" => {
+            let kind = params.get("type").and_then(Value::as_str).unwrap_or("log");
+            let args = params
+                .get("args")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let text = args.iter().map(remote_text).collect::<Vec<_>>().join(" ");
+            Some(format!("[{kind}] {text}"))
+        }
+        "Runtime.exceptionThrown" => params
+            .get("exceptionDetails")
+            .map(|details| format!("[error] {}", exception_text(details))),
+        "Log.entryAdded" => params.get("entry").map(|entry| {
+            let field = |key: &str| entry.get(key).and_then(Value::as_str).unwrap_or_default();
+            let level = field("level");
+            let text = field("text");
+            let url = field("url");
+            if url.is_empty() {
+                format!("[{level}] {text}")
+            } else {
+                format!("[{level}] {text} ({url})")
+            }
+        }),
+        "Page.javascriptDialogOpening" => {
+            let field = |key: &str| {
+                params
+                    .get(key)
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string()
+            };
+            events.dialog = Some(Dialog {
+                session_id: session.clone(),
+                kind: field("type"),
+                message: field("message"),
+            });
+            None
+        }
+        "Page.javascriptDialogClosed" => {
+            if events
+                .dialog
+                .as_ref()
+                .is_some_and(|dialog| dialog.session_id == session)
+            {
+                events.dialog = None;
+            }
+            None
+        }
+        _ => None,
+    };
+    if let Some(line) = line {
+        events.push(&session, line);
+    }
+}
+
+/// `RemoteObject` → 一行文本：优先 `value`，其次 `description`。
+fn remote_text(object: &Value) -> String {
+    match object.get("value") {
+        Some(Value::String(text)) => text.clone(),
+        Some(value) if !value.is_null() => value.to_string(),
+        _ => object
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+    }
 }
 
 /// 连接断开时让所有在途请求立即失败，而不是各自等到超时。
@@ -565,10 +796,11 @@ mod tests {
     #[test]
     fn route_dispatches_results_and_errors() {
         let pending: Pending = Arc::new(StdMutex::new(HashMap::new()));
+        let events: StdMutex<Events> = StdMutex::new(Events::default());
 
         let (ok_sender, ok_receiver) = oneshot::channel();
         pending.lock().unwrap().insert(1, ok_sender);
-        route(&pending, r#"{"id":1,"result":{"sessionId":"S1"}}"#);
+        route(&pending, &events, r#"{"id":1,"result":{"sessionId":"S1"}}"#);
         assert_eq!(
             ok_receiver.blocking_recv().unwrap().unwrap(),
             json!({ "sessionId": "S1" })
@@ -578,15 +810,87 @@ mod tests {
         pending.lock().unwrap().insert(2, err_sender);
         route(
             &pending,
+            &events,
             r#"{"id":2,"error":{"code":-32601,"message":"method not found"}}"#,
         );
         let error = err_receiver.blocking_recv().unwrap().unwrap_err();
         assert!(error.contains("-32601") && error.contains("method not found"));
 
         // 事件（无 id）与未知 id 都不应 panic，也不该留下悬挂项
-        route(&pending, r#"{"method":"Page.loadEventFired"}"#);
-        route(&pending, r#"{"id":99,"result":{}}"#);
+        route(
+            &pending,
+            &events,
+            r#"{"method":"Page.javascriptDialogClosed"}"#,
+        );
+        route(&pending, &events, r#"{"id":99,"result":{}}"#);
         assert!(pending.lock().unwrap().is_empty());
+    }
+
+    /// 控制台 / 异常 / 日志事件被缓冲成一行行文本，截断到上限；对话框开关同步状态。
+    #[test]
+    fn events_are_buffered_per_session_and_dialog_state_tracked() {
+        let pending: Pending = Arc::new(StdMutex::new(HashMap::new()));
+        let events: StdMutex<Events> = StdMutex::new(Events::default());
+
+        route(
+            &pending,
+            &events,
+            r#"{"method":"Runtime.consoleAPICalled","sessionId":"S1","params":{"type":"error","args":[{"value":"boom"},{"value":42}]}}"#,
+        );
+        route(
+            &pending,
+            &events,
+            r#"{"method":"Log.entryAdded","sessionId":"S1","params":{"entry":{"level":"error","text":"net fail","url":"https://x/y.js"}}}"#,
+        );
+        route(
+            &pending,
+            &events,
+            r#"{"method":"Runtime.exceptionThrown","sessionId":"S2","params":{"exceptionDetails":{"text":"Uncaught"}}}"#,
+        );
+
+        {
+            let events = events.lock().unwrap();
+            assert_eq!(events.lines.len(), 3);
+            assert_eq!(events.lines[0].1, "[error] boom 42");
+            assert_eq!(events.lines[1].1, "[error] net fail (https://x/y.js)");
+            assert_eq!(
+                events.lines[2],
+                ("S2".to_string(), "[error] Uncaught".into())
+            );
+        }
+
+        // 打开时记下，关闭时清掉
+        route(
+            &pending,
+            &events,
+            r#"{"method":"Page.javascriptDialogOpening","sessionId":"S1","params":{"type":"confirm","message":"Sure?"}}"#,
+        );
+        {
+            let events = events.lock().unwrap();
+            let dialog = events.dialog.clone().expect("应记下打开中的对话框");
+            assert_eq!(
+                (dialog.session_id.as_str(), dialog.kind.as_str()),
+                ("S1", "confirm")
+            );
+            assert_eq!(dialog.message, "Sure?");
+        }
+        route(
+            &pending,
+            &events,
+            r#"{"method":"Page.javascriptDialogClosed","sessionId":"S1"}"#,
+        );
+        assert!(events.lock().unwrap().dialog.is_none());
+    }
+
+    /// 缓冲超出上限时丢最老的。
+    #[test]
+    fn console_buffer_drops_the_oldest_line() {
+        let mut events = Events::default();
+        for index in 0..=MAX_EVENT_LINES {
+            events.push("S1", format!("line{index}"));
+        }
+        assert_eq!(events.lines.len(), MAX_EVENT_LINES);
+        assert_eq!(events.lines[0].1, "line1");
     }
 
     /// 断开时在途请求立即拿到错误，而不是等超时。

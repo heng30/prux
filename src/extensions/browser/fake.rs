@@ -152,6 +152,11 @@ async fn serve_ws(stream: TcpStream, commands: Arc<Mutex<Vec<(String, Value)>>>)
             .push((method.clone(), params.clone()));
 
         let id = value.get("id").cloned().unwrap_or(Value::Null);
+        for event in events_for(&method, &params) {
+            if ws.send(Message::text(event.to_string())).await.is_err() {
+                return;
+            }
+        }
         let response = match reply(&method, &params) {
             Ok(result) => json!({ "id": id, "result": result }),
             Err(message) => json!({ "id": id, "error": { "code": -32601, "message": message } }),
@@ -178,10 +183,25 @@ fn reply(method: &str, params: &Value) -> Result<Value, String> {
         }),
         "Target.activateTarget"
         | "Page.navigate"
+        | "Page.navigateToHistoryEntry"
+        | "Page.reload"
+        | "Page.handleJavaScriptDialog"
+        | "Target.closeTarget"
+        | "Runtime.enable"
+        | "Log.enable"
+        | "Page.enable"
         | "DOM.setFileInputFiles"
         | "Input.dispatchMouseEvent"
         | "Input.insertText"
         | "Input.dispatchKeyEvent" => json!({}),
+        // 两条历史、当前在第一条：`back` 能走、`forward` 到头报错
+        "Page.getNavigationHistory" => json!({
+            "currentIndex": 1,
+            "entries": [
+                { "id": 1, "url": "https://example.test/" },
+                { "id": 2, "url": "https://example.test/next" }
+            ]
+        }),
         "Page.getLayoutMetrics" => json!({ "cssContentSize": { "width": 800, "height": 1200 } }),
         "Page.captureScreenshot" => json!({ "data": png_base64() }),
         "Runtime.evaluate" => {
@@ -193,6 +213,41 @@ fn reply(method: &str, params: &Value) -> Result<Value, String> {
         }
         other => return Err(format!("FakeBrowser has no handler for {other}")),
     })
+}
+
+/// 回放一条结果之前先推的事件（控制台 / 对话框）。
+///
+/// 页面 URL 里带 `__dialog__` 时，导航完成后推一个 `confirm` 对话框；`Runtime.enable`
+/// 完成后推一条控制台日志与一条资源失败日志。
+fn events_for(method: &str, params: &Value) -> Vec<Value> {
+    match method {
+        "Runtime.enable" => vec![
+            json!({ "method": "Runtime.consoleAPICalled", "sessionId": "S1", "params": {
+                "type": "log", "args": [{ "value": "hello" }, { "value": 7 }]
+            }}),
+            json!({ "method": "Log.entryAdded", "sessionId": "S1", "params": { "entry": {
+                "level": "error", "text": "404", "url": "https://example.test/missing.js"
+            }}}),
+        ],
+        "Page.navigate" => {
+            let url = params
+                .get("url")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if url.contains("__dialog__") {
+                return vec![
+                    json!({ "method": "Page.javascriptDialogOpening", "sessionId": "S1", "params": {
+                        "type": "confirm", "message": "Sure?"
+                    }}),
+                ];
+            }
+            Vec::new()
+        }
+        "Page.handleJavaScriptDialog" => vec![json!({
+            "method": "Page.javascriptDialogClosed", "sessionId": "S1"
+        })],
+        _ => Vec::new(),
+    }
 }
 
 /// `Runtime.evaluate` 的表达式里是否包含 `needle`。
@@ -219,6 +274,19 @@ fn evaluate_reply(params: &Value) -> Value {
     let result = if expression.starts_with("!!") {
         // `wait` 的条件表达式：`__never__` 恒不满足，其余恒满足
         json!({ "type": "boolean", "value": !expression.contains("__never__") })
+    } else if expression.contains("const matches = document.querySelectorAll") {
+        // `inspect` + `what = count`
+        json!({ "type": "object", "value": { "count": 2 } })
+    } else if expression.contains("return { value: ") {
+        // `inspect` 的其余字段
+        json!({ "type": "object", "value": { "value": "Hello world" } })
+    } else if expression.contains("document.elementFromPoint") {
+        // 元素探测：`__covered__` / `__disabled__` 两个标记用来构造异常情形
+        json!({ "type": "object", "value": {
+            "x": 10.0, "y": 20.0, "width": 100.0, "height": 40.0,
+            "disabled": expression.contains("__disabled__"),
+            "covered": if expression.contains("__covered__") { json!("div#banner") } else { Value::Null }
+        }})
     } else if expression.contains("const interactable") {
         json!({ "type": "object", "value": {
             "title": "Fake Page",

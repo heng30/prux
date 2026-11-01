@@ -72,7 +72,7 @@ core::extensions::register_banner_extension(extensions::banner::Banner::new());
 | `codemode` | 扩展 | JavaScript 工具编排：模型写一段 JS，在 QuickJS 沙箱里用 `tools.<name>()` 并行/串联调其它工具（内置、扩展、MCP 都能调），只把脚本输出交回模型；嵌套调用记进 `details.nestedCalls` 并计入会话成本。`codemode.mode`（`on`/`only`）与 `codemode.inlineBudget` 控制可调工具怎么声明给模型（配置在 `agent_dir()/extensions/codemode.json`）；`/codemode` 打开扩展设置面板（Space/Enter 循环档位、立即落盘），`/codemode show` 打印当前配置。**默认不启用**（`Dev`/`Creator` 模式可用），详见 [extensions/codemode.md](extensions/codemode.md) |
 | `web-access` | 扩展 | 联网能力：`web_search`（8 个 REST provider 聚合搜索）/`fetch_content`（`readable` HTML→markdown、`raw` 原文，带 SSRF 防护）/`get_search_content`（按 `responseId` 取回内容切片、`findText` 检索）。配置在 `agent_dir()/extensions/web-search.json`。**默认不启用**，需在 `/extension` 面板开启 |
 | `mcp` | 扩展 | Model Context Protocol 客户端：用单个 `mcp` 工具代理已配置服务器的工具/资源/prompt（`status`/`list`/`search`/`describe`/`call`/`resources`/`read_resource`/`prompts`/`get_prompt`），懒连接 + 空闲断开 + 元数据缓存 + OAuth 2.1 登录；`/mcp` 做状态/诊断/OAuth，`prux mcp` 子命令做配置增删改查。**默认不启用**，需在 `/extension` 面板开启。详见 [extensions/mcp.md](extensions/mcp.md) |
-| `browser` | 扩展 | 真实浏览器自动化（CDP）：单个 `browser` 工具共 16 个动作——`status`/`list_tabs`/`new_tab`/`select_tab`/`open`/`snapshot`/`get_content`/`click`/`type`/`select`/`press`/`scroll`/`wait`/`eval`/`screenshot`/`upload`。工具是**延迟工具**：模型先用 `tool_search` 载入才能调（见下文）。`snapshot` 给可交互元素分配 `e1`/`e2`… 引用，其余动作优先用引用定位（比 CSS 选择器稳）。CDP 端点写在 `agent_dir()/extensions/browser.json`（默认 `127.0.0.1:9222`，**只允许回环主机**）；那个端口上没人监听时，会按 `browsers` 列表的顺序自动启动一个浏览器（已经在跑的候选会被跳过）。连上后 `/dock` 面板里多一行浏览器状态。**默认不启用**（`Dev`/`Creator` 模式）。详见下文 |
+| `browser` | 扩展 | 真实浏览器自动化（CDP）：单个 `browser` 工具共 25 个动作——`status`/`list_tabs`/`new_tab`/`select_tab`/`close_tab`/`open`/`back`/`forward`/`reload`/`snapshot`/`get_content`/`inspect`/`click`/`dblclick`/`hover`/`type`/`select`/`press`/`scroll`/`wait`/`eval`/`screenshot`/`upload`/`console`/`dialog`。工具是**延迟工具**：模型先用 `tool_search` 载入才能调（见下文）。`snapshot` 给可交互元素分配 `e1`/`e2`… 引用，其余动作优先用引用定位（比 CSS 选择器稳）。CDP 端点写在 `agent_dir()/extensions/browser.json`（默认 `127.0.0.1:9222`，**只允许回环主机**）；那个端口上没人监听时，会按 `browsers` 列表的顺序自动启动一个浏览器（已经在跑的候选会被跳过）。连上后 `/dock` 面板里多一行浏览器状态。**默认不启用**（`Dev`/`Creator` 模式）。详见下文 |
 | `computer` | 扩展 | 操作真实的桌面：15 个 `computer_*` 工具（截图 / 裁剪 / 鼠标键盘 / 窗口 / 无障碍控件 / 剪贴板 / 启动应用 / 急停）。**默认不启用**（需先在 `/extension` 面板开启，开启即授权）；全部是延迟工具，模型经 `tool_search` 检索后才进工具表，平时不占请求。Linux **只支持 Wayland**（`grim` 或 `xcap` 截图、`swaymsg` 列窗口、`enigo` 虚拟键鼠、AT-SPI2 读无障碍）；Windows / macOS 用 `xcap` + `enigo`，无障碍分别走 UI Automation 与 AXUIElement。截图返回 `frame` id，坐标可以按图内像素给并由扩展投影；帧对应的窗口移动过后动作会被拒绝。子代理不可调用。详见 [extensions/computer.md](extensions/computer.md) |
 | `open` | 扩展 | 用系统默认程序打开文件或 URL：`open` 工具（参数 `path`）。`http`/`https`/`file` URL 原样透传，本地路径按工作目录展开且必须存在；只把用户引到内容面前，**不把内容读回上下文**。**默认不启用**（`Dev` / `Creator` 模式） |
 | `markit` | 扩展 | 文档读写双向：`read_doc` 工具（**延迟工具**，模型先用 `tool_search` 载入；参数 `path`）把文档读成 Markdown——按扩展名分派：`.pdf` 抽文本层，`.docx` 还原标题 / 列表 / 表格，`.xlsx` / `.xls` / `.xlsb` / `.xlsm` / `.ods` 每个工作表一段 Markdown 表格，`.pptx` 每张幻灯片一节，`.epub` 按 spine 顺序拼接各章；超过 32 MiB 的文件在解析前拒绝，输出按 `read` 的口径截断（2000 行 / 50KB）。反方向是 `export_pdf`（同样是延迟工具）：Markdown → Typst 标记 → 调系统里的 `typst` 命令编译成 PDF，没装 typst 时把下载地址回给模型。**默认不启用**（`Dev` / `Creator` 模式） |
@@ -489,7 +489,7 @@ google-chrome --remote-debugging-port=9222
 
 自动启动的浏览器**独立于 prux**：prux 退出、`Ctrl+C` 都不会关掉它，它留在桌面上给你继续用；等它的调试端点就绪的上限就是配置里的 `timeout`。
 
-**按需加载**：`browser` 是**延迟工具**——在模型用 `tool_search` 检索到它之前，它的描述、参数 schema 与提示片段都不进请求（完整声明约 3.7k 字符，长期挂在每轮请求里不划算）。因此需要 `tool-search` 扩展处于启用状态（默认启用，模式与本扩展相同）：模型先用 `tool_search` 搜到 `browser`，**下一次模型调用**即可调用它；`tool-search` 被关闭时，`browser` 不会出现在工具表里，模型也就发现不了它。会话恢复（`/resume`）时，历史里调用过 `browser` 的会话会自动重新载入它。这个前置依赖经 `prerequisite_tools()` 声明：`/extension` 详情页的 `requires:` 行会以 `tool-search (tool_search)` 的形式列出（扩展名在前，一眼能看出该开哪个扩展），并在它不可用时补 `- enable it`；保存扩展状态时也会就此告警（只提示，不拦）。
+**按需加载**：`browser` 是**延迟工具**——在模型用 `tool_search` 检索到它之前，它的描述、参数 schema 与提示片段都不进请求（完整声明约 5k 字符，长期挂在每轮请求里不划算）。因此需要 `tool-search` 扩展处于启用状态（默认启用，模式与本扩展相同）：模型先用 `tool_search` 搜到 `browser`，**下一次模型调用**即可调用它；`tool-search` 被关闭时，`browser` 不会出现在工具表里，模型也就发现不了它。会话恢复（`/resume`）时，历史里调用过 `browser` 的会话会自动重新载入它。这个前置依赖经 `prerequisite_tools()` 声明：`/extension` 详情页的 `requires:` 行会以 `tool-search (tool_search)` 的形式列出（扩展名在前，一眼能看出该开哪个扩展），并在它不可用时补 `- enable it`；保存扩展状态时也会就此告警（只提示，不拦）。
 
 **配置**：`agent_dir()/extensions/browser.json`（首次启用时写入模板，全部键可选）：
 
@@ -513,20 +513,30 @@ google-chrome --remote-debugging-port=9222
 | `list_tabs` | 列出全部标签页（活动项前标 `*`，带索引与目标 id） | — |
 | `new_tab` | 新建标签页并切过去 | `url` |
 | `select_tab` | 切换活动标签页 | `index`（来自 `list_tabs`）或 `targetId` |
+| `close_tab` | 关掉一个标签页 | `index` 或 `targetId` |
 | `open` | 在当前标签页导航并等页面就绪 | `url`（缺 scheme 按 `https://` 补全） |
-| `snapshot` | 页面结构 + 可交互元素引用 + 可见文本 | `maxElements`、`maxChars` |
+| `back` / `forward` | 在导航历史里前后移动（到头报错，不静默） | — |
+| `reload` | 刷新当前标签页（旧引用随之失效） | — |
+| `snapshot` | 页面结构 + 可交互元素引用 + 可见文本 | `maxElements`、`maxChars`、`scope`（限定 CSS 子树：收集范围与可见文本都限定在内）、`depth`（限制层数） |
 | `get_content` | 页面可见文本或整页 HTML | `format`（`text` 默认 / `html`） |
-| `click` | 在元素中心派发真实鼠标事件 | `ref` 或 `selector` |
+| `inspect` | 读元素状态：`value`/`text`/`html`/`attr`/`count`/`visible`/`enabled`/`checked` | `what`、`ref`/`selector`、`attr`（`what=attr`）、`selector`（`what=count`） |
+| `click` | 在元素中心派发真实鼠标事件；被别的元素盖住、`disabled`、不可见时报错而不点 | `ref` 或 `selector` |
+| `dblclick` | 双击（两轮按下/抬起） | `ref` 或 `selector` |
+| `hover` | 只把鼠标移到元素中心（下拉菜单 / tooltip） | `ref` 或 `selector` |
 | `type` | 聚焦元素后插入文本，可选回车提交 | `text`、`ref`/`selector`、`clear`、`submit` |
 | `select` | 设置 `<select>` 取值并派发 `input`/`change` | `ref`/`selector`、`value` |
-| `press` | 按一个键（`Enter`/`Tab`/`Escape`/`Backspace`/`Delete`/方向键/`Home`/`End`/`PageUp`/`PageDown`/`Space` 或单个 ASCII 字符） | `key`、`ref`/`selector` |
+| `press` | 按一个键（`Enter`/`Tab`/`Escape`/`Backspace`/`Delete`/方向键/`Home`/`End`/`PageUp`/`PageDown`/`Space`、单个 ASCII 字符，或 `Control+a` / `Shift+Enter` / `Meta+v` 这类组合键） | `key`、`ref`/`selector` |
 | `scroll` | 滚到元素 / 页顶页底 / 按增量滚动 | `ref`/`selector`、`to`（`top`/`bottom`）、`deltaX`、`deltaY`（默认 500） |
-| `wait` | 按毫秒、CSS 选择器或页面文本等待 | `ms`、`selector`、`text`、`timeout` |
+| `wait` | 按毫秒、CSS 选择器、页面文本、URL 片段或任意 JS 条件等待 | `ms`、`selector`、`text`、`url`、`expression`、`timeout` |
 | `eval` | 在页面里执行表达式并回传值 | `expression`、`awaitPromise` |
 | `screenshot` | 截视口 / 整页 / 某个元素 | `fullPage`、`ref`/`selector` |
 | `upload` | 把本地文件塞进 `<input type="file">` | `ref`/`selector`、`paths`（相对路径按工作目录解析，文件不存在直接报错） |
+| `console` | 取走并回放页面的控制台输出、未捕获异常与资源加载失败（读后清空） | — |
+| `dialog` | 报告当前 JS 对话框；给了 `accept` 就接受 / 拒掉它（`alert` / `confirm` / `prompt` / `beforeunload`） | `accept`、`promptText` |
 
-**元素引用（`ref`）**：`snapshot` 给页面上可见的可交互元素分配 `e1`、`e2`… 引用，`click`/`type`/`select`/`press`/`upload` 优先用引用定位，比 CSS 选择器稳。引用只在当前页面上下文有效：**导航或刷新后失效**，此时工具会明确报错（不会点到别的元素），重新 `snapshot` 即可；`ref` 只接受 `e<数字>` 形式。
+**控制台与对话框**：第一次 attach 一个标签页时会顺带给它打开 `Runtime` / `Log` / `Page` 的事件上报（每个标签页一次）。`console` 返回自上次调用以来的条目——页面里的 `console.*` 输出、未捕获异常、资源加载失败——读后清空；缓冲区上限 200 条，超出丢最旧的。JS 对话框（`alert` / `confirm` / `prompt` / `beforeunload`）会把这个标签页上的命令全部堵住：命令超时的报错里会点名这一点，用 `dialog` 看内容、接受或拒掉即可。
+
+**元素引用（`ref`）**：`snapshot` 给页面上可见的可交互元素分配 `e1`、`e2`… 引用，`click`/`dblclick`/`hover`/`type`/`select`/`press`/`upload`/`inspect` 优先用引用定位，比 CSS 选择器稳。引用只在当前页面上下文有效：**导航或刷新后失效**，此时工具会明确报错（不会点到别的元素），重新 `snapshot` 即可；`ref` 只接受 `e<数字>` 形式。
 
 **截图**：落盘到系统临时目录（属主可读）并在结果文本里给出路径，同时作为图片附件回给模型（超限时自动缩放）。
 

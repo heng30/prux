@@ -6,8 +6,15 @@
 //! 两条贯穿全部动作的约定：
 //! - 等页面就绪用轮询 `document.readyState`，不等 `Page.loadEventFired`（省掉事件路由）；
 //! - 元素定位优先用 `snapshot` 分配的 `ref`（`e1`…），其次才是 CSS `selector`。
+//!
+//! 控制台与 JS 对话框是唯一的例外：它们由 CDP 事件推过来（见 [`Cdp::enable_events`]），
+//! `console` / `dialog` 两个动作只是读缓冲并回话。
 
-use super::{cdp::Cdp, config::Config, snapshot};
+use super::{
+    cdp::{Cdp, PageTarget},
+    config::Config,
+    snapshot,
+};
 use crate::{
     core::tools::{ToolError, ToolResult, ToolResultAttachment, resolve_tool_path},
     extensions::util::{
@@ -23,15 +30,22 @@ use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 
 /// `browser` 工具的全部动作名（也用于错误文案）。
-pub(crate) const ACTIONS: [&str; 16] = [
+pub(crate) const ACTIONS: [&str; 25] = [
     "status",
     "list_tabs",
     "new_tab",
     "select_tab",
+    "close_tab",
     "open",
+    "back",
+    "forward",
+    "reload",
     "snapshot",
     "get_content",
+    "inspect",
     "click",
+    "dblclick",
+    "hover",
     "type",
     "select",
     "press",
@@ -40,6 +54,8 @@ pub(crate) const ACTIONS: [&str; 16] = [
     "eval",
     "screenshot",
     "upload",
+    "console",
+    "dialog",
 ];
 
 /// 轮询类动作（等页面就绪、`wait`）的间隔。
@@ -47,6 +63,20 @@ const POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 /// 快照/正文截断的尾部标注。
 const TRUNCATED_SUFFIX: &str = "\n… [truncated]";
+
+/// `inspect` 可读的字段（`what` 的合法取值）。
+const INSPECT_WHATS: [&str; 8] = [
+    "value", "text", "html", "attr", "count", "visible", "enabled", "checked",
+];
+
+/// 修饰键位：`Alt`（CDP `modifiers` 位掩码）。
+const MODIFIER_ALT: i64 = 1;
+/// 修饰键位：`Control`。
+const MODIFIER_CONTROL: i64 = 2;
+/// 修饰键位：`Meta`（macOS 的 `Cmd`）。
+const MODIFIER_META: i64 = 4;
+/// 修饰键位：`Shift`。
+const MODIFIER_SHIFT: i64 = 8;
 
 /// 校验动作名。
 ///
@@ -74,10 +104,17 @@ pub(crate) async fn execute(
         "list_tabs" => list_tabs(cdp).await,
         "new_tab" => new_tab(cdp, args, cfg).await,
         "select_tab" => select_tab(cdp, args).await,
+        "close_tab" => close_tab(cdp, args).await,
         "open" => open(cdp, args, cfg).await,
+        "back" => history(cdp, -1, cfg).await,
+        "forward" => history(cdp, 1, cfg).await,
+        "reload" => reload(cdp, cfg).await,
         "snapshot" => take_snapshot(cdp, args, cfg).await,
         "get_content" => get_content(cdp, args, cfg).await,
-        "click" => click(cdp, args).await,
+        "inspect" => inspect(cdp, args).await,
+        "click" => click(cdp, args, 1).await,
+        "dblclick" => click(cdp, args, 2).await,
+        "hover" => hover(cdp, args).await,
         "type" => type_text(cdp, args).await,
         "select" => select_option(cdp, args).await,
         "press" => press(cdp, args).await,
@@ -86,6 +123,8 @@ pub(crate) async fn execute(
         "eval" => eval(cdp, args).await,
         "screenshot" => screenshot(cdp, args).await,
         "upload" => upload(cdp, args, cwd).await,
+        "console" => console(cdp).await,
+        "dialog" => dialog(cdp, args).await,
         other => Err(unknown_action(other)),
     }
 }
@@ -164,8 +203,29 @@ async fn new_tab(cdp: &Cdp, args: &Value, cfg: &Config) -> Result<ToolResult, To
 
 /// `select_tab`：按 `index`（来自 `list_tabs`）或 `targetId` 切换活动标签页。
 async fn select_tab(cdp: &Cdp, args: &Value) -> Result<ToolResult, ToolError> {
+    let target = resolve_target(cdp, args).await?;
+    let session = cdp.attach(&target, true).await.map_err(ToolError)?;
+    let summary = page_summary(cdp, &session).await;
+    Ok(ToolResult::text(format!("active tab: {summary}")))
+}
+
+/// `close_tab`：关掉一个标签页（`index` 或 `targetId`）。
+async fn close_tab(cdp: &Cdp, args: &Value) -> Result<ToolResult, ToolError> {
+    let target = resolve_target(cdp, args).await?;
+    cdp.close_target(&target.target_id)
+        .await
+        .map_err(ToolError)?;
+    Ok(ToolResult::text(format!(
+        "closed tab {} <{}>",
+        one_line(&target.title, 80),
+        one_line(&target.url, 120)
+    )))
+}
+
+/// 按 `index`（来自 `list_tabs`）或 `targetId` 定位标签页。
+async fn resolve_target(cdp: &Cdp, args: &Value) -> Result<PageTarget, ToolError> {
     let pages = cdp.pages().await.map_err(ToolError)?;
-    let target = match (
+    match (
         args.get("index").and_then(Value::as_u64),
         opt_string(args, "targetId"),
     ) {
@@ -174,7 +234,7 @@ async fn select_tab(cdp: &Cdp, args: &Value) -> Result<ToolResult, ToolError> {
                 "browser: no tab at index {index}; {} tab(s) open (use list_tabs)",
                 pages.len()
             ))
-        })?,
+        }),
         (None, Some(target_id)) => pages
             .iter()
             .find(|target| target.target_id == target_id)
@@ -183,17 +243,11 @@ async fn select_tab(cdp: &Cdp, args: &Value) -> Result<ToolResult, ToolError> {
                 ToolError(format!(
                     "browser: no tab with id `{target_id}`; use list_tabs to see the open tabs"
                 ))
-            })?,
-        (None, None) => {
-            return Err(ToolError(
-                "browser: select_tab needs `index` (from list_tabs) or `targetId`".to_string(),
-            ));
-        }
-    };
-
-    let session = cdp.attach(&target, true).await.map_err(ToolError)?;
-    let summary = page_summary(cdp, &session).await;
-    Ok(ToolResult::text(format!("active tab: {summary}")))
+            }),
+        (None, None) => Err(ToolError(
+            "browser: needs `index` (from list_tabs) or `targetId`".to_string(),
+        )),
+    }
 }
 
 /// `open`：在当前标签页导航。
@@ -218,7 +272,36 @@ async fn open(cdp: &Cdp, args: &Value, cfg: &Config) -> Result<ToolResult, ToolE
     )))
 }
 
-/// `snapshot`：页面结构 + 可交互元素引用（`e1`…）。
+/// `back` / `forward`：在标签页的导航历史里前后移动（`step` 为 -1 / 1），到头报错。
+async fn history(cdp: &Cdp, step: i64, cfg: &Config) -> Result<ToolResult, ToolError> {
+    let session = ensure_session(cdp).await?;
+    cdp.navigate_history(&session, step)
+        .await
+        .map_err(ToolError)?;
+    let state = wait_ready(cdp, &session, cfg.timeout).await;
+    let summary = page_summary(cdp, &session).await;
+    let direction = if step < 0 { "back" } else { "forward" };
+    Ok(ToolResult::text(format!(
+        "went {direction} to {summary}{}",
+        ready_suffix(&state)
+    )))
+}
+
+/// `reload`：刷新当前标签页（旧引用随之失效）。
+async fn reload(cdp: &Cdp, cfg: &Config) -> Result<ToolResult, ToolError> {
+    let session = ensure_session(cdp).await?;
+    cdp.send_session(&session, "Page.reload", json!({}))
+        .await
+        .map_err(ToolError)?;
+    let state = wait_ready(cdp, &session, cfg.timeout).await;
+    let summary = page_summary(cdp, &session).await;
+    Ok(ToolResult::text(format!(
+        "reloaded {summary}{}",
+        ready_suffix(&state)
+    )))
+}
+
+/// `snapshot`：页面结构 + 可交互元素引用（`e1`…）；`scope` 限定范围，`depth` 限定层数。
 async fn take_snapshot(cdp: &Cdp, args: &Value, cfg: &Config) -> Result<ToolResult, ToolError> {
     let session = ensure_session(cdp).await?;
     let max_elements = optional_usize(args, "maxElements")?
@@ -227,9 +310,15 @@ async fn take_snapshot(cdp: &Cdp, args: &Value, cfg: &Config) -> Result<ToolResu
     let max_chars = optional_usize(args, "maxChars")?
         .map(|value| value.clamp(500, 1_000_000))
         .unwrap_or(cfg.max_snapshot_chars);
+    let scope = opt_string(args, "scope");
+    let depth = optional_usize(args, "depth")?.map(|value| value.clamp(1, 100));
 
     let remote = cdp
-        .evaluate(&session, &snapshot::snapshot_expression(max_elements), true)
+        .evaluate(
+            &session,
+            &snapshot::snapshot_expression(max_elements, scope.as_deref(), depth),
+            true,
+        )
         .await
         .map_err(ToolError)?;
     let data =
@@ -259,11 +348,66 @@ async fn get_content(cdp: &Cdp, args: &Value, cfg: &Config) -> Result<ToolResult
     )))
 }
 
-/// `click`：把元素滚到视口中央后派发真实鼠标事件（`el.click()` 覆盖不到依赖坐标的场景）。
-async fn click(cdp: &Cdp, args: &Value) -> Result<ToolResult, ToolError> {
+/// `inspect`：读元素的一项状态（`value` / `text` / `html` / `attr` / `count` / `visible` /
+/// `enabled` / `checked`）；`count` 用 `selector` 数命中条数，其余需要一个元素。
+async fn inspect(cdp: &Cdp, args: &Value) -> Result<ToolResult, ToolError> {
+    let what = req_str(args, "what")?;
+    if !INSPECT_WHATS.contains(&what.as_str()) {
+        return Err(ToolError(format!(
+            "browser: `what` must be one of {}, got `{what}`",
+            INSPECT_WHATS.join(", ")
+        )));
+    }
+    let session = ensure_session(cdp).await?;
+
+    if what == "count" {
+        let selector = req_str(args, "selector")?;
+        let value = eval_object(cdp, &session, &snapshot::count_expression(&selector)).await?;
+        let count = value.get("count").and_then(Value::as_u64).unwrap_or(0);
+        return Ok(ToolResult::text(format!(
+            "count: {count} element(s) match `{selector}`"
+        )));
+    }
+
+    let attr = opt_string(args, "attr");
+    if what == "attr" && attr.is_none() {
+        return Err(ToolError(
+            "browser: `inspect` with `what: attr` needs `attr` (the attribute name)".to_string(),
+        ));
+    }
+    let element = element_arg(args)?;
+    let value = eval_object(
+        cdp,
+        &session,
+        &snapshot::inspect_expression(&element, &what, attr.as_deref()),
+    )
+    .await?;
+    let picked = value.get("value").cloned().unwrap_or(Value::Null);
+    let shown = truncate_chars_with_postfix(&value_text(&picked), 4000, TRUNCATED_SUFFIX);
+    Ok(ToolResult::text(format!(
+        "{what}: {shown} ({})",
+        target_description(args)
+    )))
+}
+
+/// `click` / `dblclick`：滚到视口中央、检查可点性后派发真实鼠标事件（`clicks` = 点击数）。
+async fn click(cdp: &Cdp, args: &Value, clicks: u8) -> Result<ToolResult, ToolError> {
     let session = ensure_session(cdp).await?;
     let element = element_arg(args)?;
-    let rect = element_rect(cdp, &session, &element).await?;
+    let probe = element_probe(cdp, &session, &element).await?;
+    if probe.disabled {
+        return Err(ToolError(format!(
+            "browser: {} is disabled",
+            target_description(args)
+        )));
+    }
+    if let Some(covered) = &probe.covered {
+        return Err(ToolError(format!(
+            "browser: the click point of {} is covered by <{covered}>; dismiss it, take a fresh snapshot and retry",
+            target_description(args)
+        )));
+    }
+    let rect = probe.rect;
     if !(rect.width > 0.0 && rect.height > 0.0) {
         return Err(ToolError(
             "browser: the element has no clickable area (is it visible?)".to_string(),
@@ -271,18 +415,56 @@ async fn click(cdp: &Cdp, args: &Value) -> Result<ToolResult, ToolError> {
     }
     let (x, y) = (rect.x + rect.width / 2.0, rect.y + rect.height / 2.0);
 
-    for params in [
+    cdp.send_session(
+        &session,
+        "Input.dispatchMouseEvent",
         json!({ "type": "mouseMoved", "x": x, "y": y }),
-        json!({ "type": "mousePressed", "x": x, "y": y, "button": "left", "buttons": 1, "clickCount": 1 }),
-        json!({ "type": "mouseReleased", "x": x, "y": y, "button": "left", "buttons": 0, "clickCount": 1 }),
-    ] {
-        cdp.send_session(&session, "Input.dispatchMouseEvent", params)
-            .await
-            .map_err(ToolError)?;
+    )
+    .await
+    .map_err(ToolError)?;
+    for count in 1..=clicks {
+        for (kind, buttons) in [("mousePressed", 1), ("mouseReleased", 0)] {
+            let params = json!({
+                "type": kind,
+                "x": x,
+                "y": y,
+                "button": "left",
+                "buttons": buttons,
+                "clickCount": count,
+            });
+            cdp.send_session(&session, "Input.dispatchMouseEvent", params)
+                .await
+                .map_err(ToolError)?;
+        }
     }
 
+    let what = if clicks > 1 {
+        "double-clicked"
+    } else {
+        "clicked"
+    };
     Ok(ToolResult::text(format!(
-        "clicked ({x:.0}, {y:.0}) on {}",
+        "{what} ({x:.0}, {y:.0}) on {}",
+        target_description(args)
+    )))
+}
+
+/// `hover`：把鼠标移到元素中心（下拉菜单、tooltip 依赖它）。
+async fn hover(cdp: &Cdp, args: &Value) -> Result<ToolResult, ToolError> {
+    let session = ensure_session(cdp).await?;
+    let element = element_arg(args)?;
+    let rect = element_probe(cdp, &session, &element).await?.rect;
+    let (x, y) = (rect.x + rect.width / 2.0, rect.y + rect.height / 2.0);
+
+    cdp.send_session(
+        &session,
+        "Input.dispatchMouseEvent",
+        json!({ "type": "mouseMoved", "x": x, "y": y }),
+    )
+    .await
+    .map_err(ToolError)?;
+    Ok(ToolResult::text(format!(
+        "hovering ({x:.0}, {y:.0}) over {}",
         target_description(args)
     )))
 }
@@ -392,7 +574,7 @@ async fn scroll(cdp: &Cdp, args: &Value) -> Result<ToolResult, ToolError> {
     Ok(ToolResult::text(format!("scrolled to y={y:.0}")))
 }
 
-/// `wait`：按毫秒、选择器或页面文本等待。
+/// `wait`：按毫秒、CSS 选择器、页面文本、URL 或任意 JS 条件等待。
 async fn wait(cdp: &Cdp, args: &Value, cfg: &Config) -> Result<ToolResult, ToolError> {
     if let Some(ms) = optional_usize(args, "ms")? {
         let ms = ms.min(600_000);
@@ -413,9 +595,13 @@ async fn wait(cdp: &Cdp, args: &Value, cfg: &Config) -> Result<ToolResult, ToolE
             "!!(document.body && (document.body.innerText || '').includes({}))",
             snapshot::json_literal(&text)
         )
+    } else if let Some(url) = opt_string(args, "url") {
+        format!("!!location.href.includes({})", snapshot::json_literal(&url))
+    } else if let Some(expression) = opt_string(args, "expression") {
+        format!("!!({expression})")
     } else {
         return Err(ToolError(
-            "browser: wait needs `ms`, `selector`, or `text`".to_string(),
+            "browser: wait needs `ms`, `selector`, `text`, `url`, or `expression`".to_string(),
         ));
     };
 
@@ -475,7 +661,7 @@ async fn screenshot(cdp: &Cdp, args: &Value) -> Result<ToolResult, ToolError> {
 
     let mut params = json!({ "format": "png", "fromSurface": true });
     if let Some(element) = element {
-        let rect = element_rect(cdp, &session, &element).await?;
+        let rect = element_probe(cdp, &session, &element).await?.rect;
         if !(rect.width > 0.0 && rect.height > 0.0) {
             return Err(ToolError(
                 "browser: the element has no visible area to capture".to_string(),
@@ -581,20 +767,69 @@ async fn upload(cdp: &Cdp, args: &Value, cwd: &str) -> Result<ToolResult, ToolEr
     )))
 }
 
+/// `console`：取走并回放页面控制台 / 未捕获异常 / 资源失败日志（读后清空）。
+async fn console(cdp: &Cdp) -> Result<ToolResult, ToolError> {
+    let session = ensure_session(cdp).await?;
+    let lines = cdp.drain_console(&session);
+    if lines.is_empty() {
+        return Ok(ToolResult::text(
+            "console: nothing recorded since the last call".to_string(),
+        ));
+    }
+    Ok(ToolResult::text(format!(
+        "console ({} entries):\n{}",
+        lines.len(),
+        lines.join("\n")
+    )))
+}
+
+/// `dialog`：报告当前 JS 对话框；给了 `accept` 就把它接受 / 拒掉（`promptText` 填 prompt 输入）。
+async fn dialog(cdp: &Cdp, args: &Value) -> Result<ToolResult, ToolError> {
+    let accept = optional_bool(args, "accept")?;
+    let Some(open) = cdp.dialog() else {
+        return Ok(ToolResult::text("no JavaScript dialog is open".to_string()));
+    };
+
+    let Some(accept) = accept else {
+        return Ok(ToolResult::text(format!(
+            "open {} dialog: {}\npass `accept: true` to accept it or `accept: false` to dismiss it",
+            open.kind, open.message
+        )));
+    };
+
+    let mut params = json!({ "accept": accept });
+    if let Some(text) = opt_string(args, "promptText") {
+        params["promptText"] = json!(text);
+    }
+    cdp.send_session(&open.session_id, "Page.handleJavaScriptDialog", params)
+        .await
+        .map_err(ToolError)?;
+    cdp.forget_dialog();
+    Ok(ToolResult::text(format!(
+        "{} the {} dialog: {}",
+        if accept { "accepted" } else { "dismissed" },
+        open.kind,
+        open.message
+    )))
+}
+
 /// 取当前活动页面的会话；没有就 attach 第一个标签页，再没有就新建 `about:blank`。
 ///
-/// 新 attach 的标签页会被切到前台——输入事件只对活动标签页生效。
+/// 新 attach 的标签页会被切到前台——输入事件只对活动标签页生效。顺便为该会话打开
+/// 事件上报（控制台 / 日志 / 对话框），每个会话只发一次。
 async fn ensure_session(cdp: &Cdp) -> Result<String, ToolError> {
-    if let Some(session) = cdp.active_session() {
-        return Ok(session);
-    }
-    match cdp.pages().await.map_err(ToolError)?.into_iter().next() {
-        Some(target) => cdp.attach(&target, true).await.map_err(ToolError),
+    let session = match cdp.active_session() {
+        Some(session) => session,
         None => {
-            let target = cdp.create_target("about:blank").await.map_err(ToolError)?;
-            cdp.attach(&target, true).await.map_err(ToolError)
+            let target = match cdp.pages().await.map_err(ToolError)?.into_iter().next() {
+                Some(target) => target,
+                None => cdp.create_target("about:blank").await.map_err(ToolError)?,
+            };
+            cdp.attach(&target, true).await.map_err(ToolError)?
         }
-    }
+    };
+    cdp.enable_events(&session).await;
+    Ok(session)
 }
 
 /// 轮询 `document.readyState` 直到 `complete`；超时或页面取不到状态时返回最后的取值（不报错）。
@@ -678,9 +913,19 @@ struct Rect {
     height: f64,
 }
 
-/// 取元素矩形（先滚到视口中央）。
-async fn element_rect(cdp: &Cdp, session: &str, element: &str) -> Result<Rect, ToolError> {
-    let value = eval_object(cdp, session, &snapshot::element_rect_expression(element)).await?;
+/// 元素探测结果：矩形 + 可点性。
+struct Probe {
+    /// 视口矩形（`scrollIntoView` 之后）。
+    rect: Rect,
+    /// 元素是否被禁用（`disabled` / `aria-disabled="true"`）。
+    disabled: bool,
+    /// 中心点被哪个元素盖住（如 `div#banner`）；没被盖住为 `None`。
+    covered: Option<String>,
+}
+
+/// 探测元素（先滚到视口中央）：矩形、是否禁用、中心点是否被盖。
+async fn element_probe(cdp: &Cdp, session: &str, element: &str) -> Result<Probe, ToolError> {
+    let value = eval_object(cdp, session, &snapshot::element_probe_expression(element)).await?;
     let number = |key: &str| value.get(key).and_then(Value::as_f64).unwrap_or(f64::NAN);
     let rect = Rect {
         x: number("x"),
@@ -697,7 +942,17 @@ async fn element_rect(cdp: &Cdp, session: &str, element: &str) -> Result<Rect, T
             "browser: the element has no measurable position".to_string(),
         ));
     }
-    Ok(rect)
+    Ok(Probe {
+        rect,
+        disabled: value
+            .get("disabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        covered: value
+            .get("covered")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+    })
 }
 
 /// 元素定位表达式：`ref` 优先，其次 `selector`，都没有则报错。
@@ -731,10 +986,14 @@ fn element_missing_hint() -> String {
         .to_string()
 }
 
-/// 派发一次按键（按下 + 抬起）；未知键名返回 `Err`。
+/// 派发一次按键（按下 + 抬起）；支持 `Control+a` 这类组合键，未知键名返回 `Err`。
 async fn dispatch_key(cdp: &Cdp, session: &str, key: &str) -> Result<(), ToolError> {
-    let spec =
-        key_spec(key).ok_or_else(|| ToolError(format!("browser: unsupported key `{key}`")))?;
+    let chord = key_chord(key).ok_or_else(|| {
+        ToolError(format!(
+            "browser: unsupported key `{key}` (use a named key, one ASCII character, or a `Control+a` / `Shift+Enter` chord)"
+        ))
+    })?;
+    let spec = chord.spec;
 
     let mut down = json!({
         "type": if spec.text.is_some() { "keyDown" } else { "rawKeyDown" },
@@ -742,6 +1001,7 @@ async fn dispatch_key(cdp: &Cdp, session: &str, key: &str) -> Result<(), ToolErr
         "code": spec.code,
         "windowsVirtualKeyCode": spec.vk,
         "nativeVirtualKeyCode": spec.vk,
+        "modifiers": chord.modifiers,
     });
     if let Some(text) = &spec.text {
         down["text"] = json!(text);
@@ -756,11 +1016,49 @@ async fn dispatch_key(cdp: &Cdp, session: &str, key: &str) -> Result<(), ToolErr
         "code": spec.code,
         "windowsVirtualKeyCode": spec.vk,
         "nativeVirtualKeyCode": spec.vk,
+        "modifiers": chord.modifiers,
     });
     cdp.send_session(session, "Input.dispatchKeyEvent", up)
         .await
         .map_err(ToolError)?;
     Ok(())
+}
+
+/// 一次按键（含修饰键）。
+struct Chord {
+    /// 键本身（`key` / `code` / `vk` / `text`）。
+    spec: KeySpec,
+    /// 修饰键位掩码（CDP `Input.dispatchKeyEvent` 的 `modifiers`）。
+    modifiers: i64,
+}
+
+/// 按键串 → [`Chord`]：`+` 连接的是修饰键，最后一段是键本身。
+///
+/// 带修饰键时不插入文本（`Control+a` 是快捷键，不是输入 `a`）。
+fn key_chord(key: &str) -> Option<Chord> {
+    let trimmed = key.trim();
+    let (last, modifiers) = match trimmed.rsplit_once('+') {
+        Some((head, last)) if !head.is_empty() => {
+            let mut modifiers = 0;
+            for part in head.split('+') {
+                modifiers |= match part.trim().to_ascii_lowercase().as_str() {
+                    "control" | "ctrl" => MODIFIER_CONTROL,
+                    "alt" | "option" => MODIFIER_ALT,
+                    "shift" => MODIFIER_SHIFT,
+                    "meta" | "cmd" | "command" | "super" => MODIFIER_META,
+                    _ => return None,
+                };
+            }
+            (last, modifiers)
+        }
+        _ => (trimmed, 0),
+    };
+
+    let mut spec = key_spec(last)?;
+    if modifiers != 0 {
+        spec.text = None;
+    }
+    Some(Chord { spec, modifiers })
 }
 
 /// 一次按键的 CDP 参数。
@@ -975,6 +1273,32 @@ mod tests {
 
         assert!(element_arg(&json!({})).is_err());
         assert!(!has_element_arg(&json!({})));
+    }
+
+    /// 组合键拆成修饰键 + 键本身；未知修饰键、缺键名都拒绝。
+    #[test]
+    fn key_chord_parses_modifiers() {
+        let plain = key_chord("a").unwrap();
+        assert_eq!((plain.modifiers, plain.spec.key.as_str()), (0, "a"));
+        assert_eq!(plain.spec.text.as_deref(), Some("a"));
+
+        let control_a = key_chord("Control+a").unwrap();
+        assert_eq!(control_a.modifiers, MODIFIER_CONTROL);
+        assert_eq!(control_a.spec.key, "a");
+        assert_eq!(control_a.spec.text, None, "组合键不插入文本");
+
+        let shift_enter = key_chord("Shift+Enter").unwrap();
+        assert_eq!(shift_enter.modifiers, MODIFIER_SHIFT);
+        assert_eq!(shift_enter.spec.key, "Enter");
+        assert_eq!(
+            key_chord("Ctrl+Shift+Tab").unwrap().modifiers,
+            MODIFIER_CONTROL | MODIFIER_SHIFT
+        );
+        // `+` 本身就是键：首段为空时不当组合键拆
+        assert_eq!(key_chord("+").unwrap().spec.key, "+");
+
+        assert!(key_chord("Hyper+a").is_none());
+        assert!(key_chord("Control+").is_none());
     }
 
     /// 未知动作的报错里列出全部合法动作，且**不碰网络**（校验先于连接）。

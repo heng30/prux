@@ -12,10 +12,15 @@
 use crate::extensions::util::truncate_chars_with_postfix;
 use serde_json::Value;
 
-/// 注入页面收集可交互元素的 JS；`__MAX_ELEMENTS__` 由 [`snapshot_expression`] 替换。
+/// 注入页面收集可交互元素的 JS；`__MAX_ELEMENTS__` / `__MAX_DEPTH__` / `__SCOPE__`
+/// 由 [`snapshot_expression`] 替换。
 const SNAPSHOT_JS: &str = r#"(() => {
   const MAX = __MAX_ELEMENTS__;
+  const MAX_DEPTH = __MAX_DEPTH__;
+  const SCOPE = __SCOPE__;
   const SELECTOR = 'a[href],button,input,select,textarea,summary,[role=button],[role=link],[role=checkbox],[role=radio],[role=switch],[role=tab],[role=menuitem],[role=option],[contenteditable=true],[onclick]';
+  const root = SCOPE === null ? (document.body || document.documentElement) : document.querySelector(SCOPE);
+  if (!root) return { error: 'no element matches scope ' + SCOPE };
   const label = (el) => {
     const raw = el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('alt') || el.getAttribute('title') || el.innerText || el.value || '';
     const text = String(raw).replace(/\s+/g, ' ').trim();
@@ -27,7 +32,15 @@ const SNAPSHOT_JS: &str = r#"(() => {
     const style = getComputedStyle(el);
     return style.visibility !== 'hidden' && style.display !== 'none' && style.opacity !== '0';
   };
-  const interactable = Array.from(document.querySelectorAll(SELECTOR)).filter(visible);
+  const depthOf = (el) => {
+    let depth = 0;
+    let node = el.parentElement;
+    while (node && node !== root && node !== document.body && node !== document.documentElement) { depth++; node = node.parentElement; }
+    return depth;
+  };
+  const interactable = Array.from(root.querySelectorAll(SELECTOR))
+    .filter(visible)
+    .filter((el) => MAX_DEPTH === 0 || depthOf(el) < MAX_DEPTH);
   const refs = {};
   const lines = interactable.slice(0, MAX).map((el, index) => {
     const ref = 'e' + (index + 1);
@@ -41,8 +54,7 @@ const SNAPSHOT_JS: &str = r#"(() => {
     return ref + ' ' + kind + ' ' + JSON.stringify(label(el)) + value + href + disabled;
   });
   window.__pruxRefs = refs;
-  const body = document.body;
-  const text = (body ? (body.innerText || body.textContent || '') : '').replace(/\n{3,}/g, '\n\n').trim();
+  const text = (root.innerText || root.textContent || '').replace(/\n{3,}/g, '\n\n').trim();
   return { title: document.title, url: location.href, refs: lines, total: interactable.length, text: text };
 })()"#;
 
@@ -92,16 +104,34 @@ impl SnapshotData {
     }
 }
 
-/// 生成收集快照的 JS 表达式（`max_elements` 为可交互元素条数上限）。
-pub(crate) fn snapshot_expression(max_elements: usize) -> String {
-    SNAPSHOT_JS.replace("__MAX_ELEMENTS__", &max_elements.to_string())
+/// 生成收集快照的 JS 表达式。
+///
+/// `scope` 是限定收集范围的 CSS 选择器（`None` = 整个 `document.body`）；
+/// `max_depth` 只保留限制在 `scope` 根之下这么多层的元素（`None` = 不限）。
+pub(crate) fn snapshot_expression(
+    max_elements: usize,
+    scope: Option<&str>,
+    max_depth: Option<usize>,
+) -> String {
+    SNAPSHOT_JS
+        .replace("__MAX_ELEMENTS__", &max_elements.to_string())
+        .replace("__MAX_DEPTH__", &max_depth.unwrap_or(0).to_string())
+        .replace(
+            "__SCOPE__",
+            &scope
+                .map(json_literal)
+                .unwrap_or_else(|| "null".to_string()),
+        )
 }
 
-/// 解析 `snapshot_expression` 的返回值；形状不对时报错。
+/// 解析 `snapshot_expression` 的返回值；形状不对或页面报了 `error` 时报错。
 pub(crate) fn parse(value: &Value) -> Result<SnapshotData, String> {
     let Some(object) = value.as_object() else {
         return Err("browser: snapshot returned no page data".to_string());
     };
+    if let Some(error) = error_of(value) {
+        return Err(format!("browser: {error}"));
+    }
 
     let refs: Vec<String> = object
         .get("refs")
@@ -189,19 +219,61 @@ pub(crate) fn element_expression(
     Err("browser: pass `ref` (from snapshot) or `selector`".to_string())
 }
 
-/// 返回元素视口矩形（CSS 像素，`x` / `y` 为左上角）的 JS。
+/// 探测元素的 JS：视口矩形（CSS 像素，`x` / `y` 为左上角）+ 是否禁用 + 中心点是否被别的元素盖住。
 ///
 /// 先 `scrollIntoView` 滚到视口中央，再读 `getBoundingClientRect`：点击用它的中心点，
-/// 截图用它的尺寸。
-pub(crate) fn element_rect_expression(element: &str) -> String {
+/// 截图用它的尺寸。`covered` 为遮住中心点的那个元素（如 `div#consent-banner`），没遮住为 `null`。
+pub(crate) fn element_probe_expression(element: &str) -> String {
     format!(
         r#"(() => {{
   const el = {element};
   if (!el) return {{ error: 'element not found; references go stale after a navigation - call snapshot again' }};
   if (el.scrollIntoView) el.scrollIntoView({{ block: 'center', inline: 'center' }});
   const rect = el.getBoundingClientRect();
-  return {{ x: rect.left, y: rect.top, width: rect.width, height: rect.height }};
+  const describe = (node) => node.tagName.toLowerCase() + (node.id ? '#' + node.id : '');
+  const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+  return {{
+    x: rect.left, y: rect.top, width: rect.width, height: rect.height,
+    disabled: el.disabled === true || el.getAttribute('aria-disabled') === 'true',
+    covered: hit && !el.contains(hit) && hit !== el ? describe(hit) : null
+  }};
 }})()"#
+    )
+}
+
+/// 读元素状态的 JS（`inspect` 动作）：返回值统一包在 `{ value: ... }` 里。
+///
+/// `what` 已由调用方校验过（只能是固定几种），`attr` 只在 `what = attr` 时用。
+pub(crate) fn inspect_expression(element: &str, what: &str, attr: Option<&str>) -> String {
+    let value = match what {
+        "text" => "(el.innerText || el.textContent || '')".to_string(),
+        "html" => "el.innerHTML".to_string(),
+        "attr" => format!(
+            "el.getAttribute({})",
+            json_literal(attr.unwrap_or_default())
+        ),
+        "visible" => "!!(el.getClientRects().length && (() => { const style = getComputedStyle(el); return style.visibility !== 'hidden' && style.display !== 'none'; })())"
+            .to_string(),
+        "enabled" => "!(el.disabled === true || el.getAttribute('aria-disabled') === 'true')"
+            .to_string(),
+        "checked" => "!!(el.checked || el.getAttribute('aria-checked') === 'true')".to_string(),
+        _ => "('value' in el ? String(el.value) : (el.innerText || el.textContent || ''))"
+            .to_string(),
+    };
+    format!(
+        r#"(() => {{
+  const el = {element};
+  if (!el) return {{ error: 'element not found; references go stale after a navigation - call snapshot again' }};
+  return {{ value: {value} }};
+}})()"#
+    )
+}
+
+/// 数选择器命中条数的 JS（`inspect` + `what = count`）。
+pub(crate) fn count_expression(selector: &str) -> String {
+    format!(
+        "(() => {{ const matches = document.querySelectorAll({}); return {{ count: matches.length }}; }})()",
+        json_literal(selector)
     )
 }
 
@@ -397,11 +469,53 @@ mod tests {
         assert_eq!(error_of(&json!(null)), None);
     }
 
-    /// 元素上限替换进 JS；其余部分不被动过。
+    /// 元素上限、范围与深度替换进 JS；其余部分不被动过。
     #[test]
     fn snapshot_expression_substitutes_the_element_limit() {
-        let expression = snapshot_expression(42);
+        let expression = snapshot_expression(42, None, None);
         assert!(expression.contains("const MAX = 42;"));
+        assert!(expression.contains("const MAX_DEPTH = 0;"));
+        assert!(expression.contains("const SCOPE = null;"));
         assert!(!expression.contains("__MAX_ELEMENTS__"));
+        assert!(!expression.contains("__SCOPE__"));
+    }
+
+    /// 范围选择器与深度都按 JSON 字面量嵌进 JS（引号不会破坏表达式）。
+    #[test]
+    fn snapshot_expression_embeds_scope_and_depth() {
+        let expression = snapshot_expression(10, Some("#main"), Some(3));
+        assert!(expression.contains("const SCOPE = \"#main\";"));
+        assert!(expression.contains("const MAX_DEPTH = 3;"));
+    }
+
+    /// 范围选择器没命中时，页面报的 `error` 会转成工具错误。
+    #[test]
+    fn parse_surfaces_a_page_side_error() {
+        let error = parse(&json!({ "error": "no element matches scope \".gone\"" })).unwrap_err();
+        assert!(error.contains("no element matches scope"), "{error}");
+    }
+
+    /// `inspect` 的 JS：按 `what` 选表达式，`attr` 只取一次且被转义。
+    #[test]
+    fn inspect_expression_picks_the_field() {
+        let value = inspect_expression("document.body", "value", None);
+        assert!(value.contains("'value' in el"), "{value}");
+
+        let attr = inspect_expression("document.body", "attr", Some("href"));
+        assert!(attr.contains("getAttribute(\"href\")"), "{attr}");
+        assert!(attr.contains("return { value: "), "{attr}");
+
+        assert!(inspect_expression("document.body", "checked", None).contains("aria-checked"));
+    }
+
+    /// 计数用选择器，不需要元素引用。
+    #[test]
+    fn count_expression_uses_the_selector() {
+        let expression = count_expression(".item");
+        assert!(
+            expression.contains("querySelectorAll(\".item\")"),
+            "{expression}"
+        );
+        assert!(expression.contains("const matches"), "{expression}");
     }
 }
