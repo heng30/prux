@@ -353,6 +353,18 @@ pub struct GuiApp {
     line_text_bounds: Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>,
     /// 对话流每行的文本与字号，复制取文本、点选定位都按它
     line_rows: Rc<RefCell<Vec<transcript::LineInfo>>>,
+    /// 上一帧每行的登记：屏幕外的块不渲染，行文本从这里回放给选区/复制
+    prev_rows: Rc<RefCell<Vec<transcript::LineInfo>>>,
+    /// 上一帧各块的屏幕区间（top, bottom），用来判断这一帧哪些块在屏幕外
+    block_spans: Rc<RefCell<Vec<(Pixels, Pixels)>>>,
+    /// 上一帧各块占用的行登记区间（start, end），屏幕外的块按它回放行号
+    block_lines: Rc<RefCell<Vec<(usize, usize)>>>,
+    /// 上一帧渲染出的块数（含占位块）：块数一变说明结构变了，区间不能用
+    rendered_blocks: usize,
+    /// 上一帧因屏幕外而跳过渲染的块数（诊断用）
+    skipped_blocks: usize,
+    /// 上一帧测量块区间时的滚动偏移（区间是屏幕坐标，换帧要按它换算）
+    block_offset: Rc<Cell<Pixels>>,
     /// 附件按钮的补全过滤：true 只列图片
     attach_images: bool,
     /// 标题栏/输入区的下拉菜单
@@ -474,6 +486,12 @@ impl GuiApp {
             line_bounds: Rc::new(RefCell::new(HashMap::new())),
             line_text_bounds: Rc::new(RefCell::new(HashMap::new())),
             line_rows: Rc::new(RefCell::new(Vec::new())),
+            prev_rows: Rc::new(RefCell::new(Vec::new())),
+            block_spans: Rc::new(RefCell::new(Vec::new())),
+            block_lines: Rc::new(RefCell::new(Vec::new())),
+            rendered_blocks: 0,
+            skipped_blocks: 0,
+            block_offset: Rc::new(Cell::new(px(0.))),
             attach_images: false,
             dropdown: None,
             composer_bounds: Rc::new(Cell::new(None)),

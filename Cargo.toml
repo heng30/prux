@@ -10,8 +10,8 @@ keywords = ["cli", "tui", "llm", "agent", "terminal"]
 exclude = ["screenshot/", "tests/", "examples/", "migrations/"]
 description = "A minimal terminal coding agent: TUI, built-in coding tools, and an extension system"
 categories = [
-  "command-line-interface",
   "development-tools",
+  "command-line-interface",
   "artificial-intelligence",
 ]
 
@@ -236,8 +236,8 @@ env_logger = "0.11"
 tokio-stream = "0.1"
 prux = { path = ".", features = ["test-support"] }
 rmcp = { version = "3.1", default-features = false, features = [
+  "tower",
   "server",
   "server-side-http",
   "transport-streamable-http-server",
-  "tower",
 ] }

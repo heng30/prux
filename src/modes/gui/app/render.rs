@@ -16,15 +16,90 @@ use std::rc::Rc;
 
 #[cfg(debug_assertions)]
 thread_local! {
-    /// 帧统计：上一帧起始时刻与已计数帧数（仅 debug 构建且设了 `PRUX_GUI_FRAMES` 才用）
-    static FRAME_STATS: std::cell::RefCell<(Option<std::time::Instant>, u32)> =
-        const { std::cell::RefCell::new((None, 0)) };
+    /// 帧统计：统计窗口起始时刻、本窗口帧数、本窗口累计渲染耗时、上一帧的（已渲染, 总块数）
+    static FRAME_STATS: std::cell::RefCell<FrameStats> =
+        const { std::cell::RefCell::new(FrameStats::new()) };
+}
+
+/// 一秒钟的帧统计窗口。
+#[cfg(debug_assertions)]
+struct FrameStats {
+    /// 统计窗口的起始时刻；`None` 表示还没开始
+    since: Option<std::time::Instant>,
+    /// 本窗口里渲染过的帧数
+    frames: u32,
+    /// 本窗口里各帧 render() 的累计耗时
+    spent: std::time::Duration,
+    /// 上一帧的（屏幕外跳过的块数, 流里的子元素数含占位, 对话块总数）
+    blocks: (usize, usize, usize),
+    /// 上一帧内容区的实测高度（用来核对裁剪前后布局是否一致）
+    height: Option<Pixels>,
+}
+
+#[cfg(debug_assertions)]
+impl FrameStats {
+    /// 空统计。
+    const fn new() -> Self {
+        Self {
+            since: None,
+            frames: 0,
+            spent: std::time::Duration::ZERO,
+            blocks: (0, 0, 0),
+            height: None,
+        }
+    }
+}
+
+/// 每秒向 stderr 报一次本秒渲染帧数：仅 debug 构建，且设了 `PRUX_GUI_FRAMES=1` 才输出。
+///
+/// 静止不操作时还在不断刷 = 有东西每帧请求重绘（界面会持续闪）。
+#[cfg(debug_assertions)]
+fn frame_trace_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("PRUX_GUI_FRAMES").is_some())
+}
+
+/// 记一帧的耗时与块数，每秒输出一次「帧率 / 平均 render 耗时 / 跳过情况」。
+#[cfg(debug_assertions)]
+fn trace_frame(started: std::time::Instant, blocks: (usize, usize, usize), height: Option<Pixels>) {
+    if !frame_trace_on() {
+        return;
+    }
+
+    FRAME_STATS.with(|stats| {
+        let mut stats = stats.borrow_mut();
+        let now = std::time::Instant::now();
+        stats.frames += 1;
+        stats.spent += now.duration_since(started);
+        stats.blocks = blocks;
+        stats.height = height;
+        let Some(since) = stats.since else {
+            stats.since = Some(now);
+            return;
+        };
+
+        let elapsed = now.duration_since(since);
+        if elapsed >= std::time::Duration::from_secs(1) {
+            let per_frame = stats.spent.as_secs_f64() * 1000. / f64::from(stats.frames);
+            eprintln!(
+                "gui frame: {} fps, {per_frame:.1}ms render, skipped {}/{}/{} height {:.1}",
+                stats.frames,
+                stats.blocks.0,
+                stats.blocks.1,
+                stats.blocks.2,
+                stats.height.map_or(-1., f32::from)
+            );
+            stats.since = Some(now);
+            stats.frames = 0;
+            stats.spent = std::time::Duration::ZERO;
+        }
+    });
 }
 
 impl Render for GuiApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         #[cfg(debug_assertions)]
-        trace_frames();
+        let frame_start = std::time::Instant::now();
 
         let transcript = self.render_transcript(window, cx);
         let composer = self.render_composer(window, cx);
@@ -32,35 +107,21 @@ impl Render for GuiApp {
         let body = self.render_body(main, cx);
         let sidebar = self.render_sidebar(cx);
         let root = self.render_root(sidebar, body, cx);
-        self.render_overlays(root, window, cx)
+        let root = self.render_overlays(root, window, cx);
+
+        #[cfg(debug_assertions)]
+        trace_frame(
+            frame_start,
+            (
+                self.skipped_blocks,
+                self.rendered_blocks,
+                self.transcript.blocks().len(),
+            ),
+            self.flow_height.get(),
+        );
+
+        root
     }
-}
-
-/// 每 60 帧向 stderr 报一次平均帧间隔：仅 debug 构建，且设了 `PRUX_GUI_FRAMES=1` 才输出。
-///
-/// 静止不操作时还在不断刷 = 有东西每帧请求重绘（界面会持续闪）。
-#[cfg(debug_assertions)]
-fn trace_frames() {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    if !*ON.get_or_init(|| std::env::var_os("PRUX_GUI_FRAMES").is_some()) {
-        return;
-    }
-
-    FRAME_STATS.with(|stats| {
-        let mut stats = stats.borrow_mut();
-        let now = std::time::Instant::now();
-        stats.1 += 1;
-        let Some(last) = stats.0 else {
-            stats.0 = Some(now);
-            return;
-        };
-
-        if stats.1 % 60 == 0 {
-            let average = now.duration_since(last).as_secs_f64() * 1000. / 60.;
-            eprintln!("gui frame: {average:.1}ms/frame");
-            stats.0 = Some(now);
-        }
-    });
 }
 
 impl GuiApp {
@@ -294,7 +355,32 @@ impl GuiApp {
         // 行登记每帧重建：行序号/边界/文本必须与本帧渲染结果一致
         self.line_bounds.borrow_mut().clear();
         self.line_text_bounds.borrow_mut().clear();
-        self.line_rows.borrow_mut().clear();
+        // 上一帧的行登记先挪到 `prev_rows`：屏幕外的块不再渲染，它们的行文本从这里回放
+        let mut previous = self.prev_rows.borrow_mut();
+        previous.clear();
+        previous.append(&mut self.line_rows.borrow_mut());
+
+        // 上一帧各块的屏幕区间与行区间：屏幕外的块按它跳过
+        let spans = self.block_spans.borrow().clone();
+        let ranges = self.block_lines.borrow().clone();
+
+        // 块区间是上一帧的屏幕坐标（`layout_bounds` 已含滚动偏移），
+        // 按两帧偏移之差换算到这一帧再与视口比；上下各留一屏，滚快了也不至于空白
+        let offset = self.scroll.offset().y;
+        let shift = offset - self.block_offset.get();
+        let viewport = self.scroll.bounds();
+        let pad = viewport.size.height.max(px(320.));
+        let visible_top = viewport.top() - pad;
+        let visible_bottom = viewport.bottom() + pad;
+
+        // 块数变了说明对话流结构变了（切换会话、新消息），区间对不上；
+        // 一次滚动超过一屏（Ctrl+End / 发消息钉底）时旧区间也靠不住：这两种情况都全渲染一帧
+        let jumped = shift.abs() > viewport.size.height;
+        let spans_valid =
+            spans.len() == ranges.len() && spans.len() == self.rendered_blocks && !jumped;
+        let mut rendered_blocks = 0usize;
+        let mut skipped_blocks = 0usize;
+        let mut kept_ranges: Vec<(usize, usize)> = Vec::with_capacity(ranges.len());
 
         let mut lines = transcript::TextLines {
             next: 0,
@@ -318,6 +404,36 @@ impl GuiApp {
                 continue;
             }
 
+            // 屏幕外的块：用上一帧的高度占位，不建元素树、不排版、不提交图元。
+            // shortcut: 占位高度取上一帧，屏外块内容变了会偏一帧（±1 屏余量兜底），
+            // 等它滚进视口就重算。
+            if spans_valid
+                && let (Some((top, bottom)), Some((start, end))) =
+                    (spans.get(rendered_blocks), ranges.get(rendered_blocks))
+                && (*bottom + shift < visible_top || *top + shift > visible_bottom)
+            {
+                // 占位高度取到下一块上沿的距离（减掉流的 gap）：块自带的外边距也被算进去，
+                // 否则每块漏几千分之一像素，几百块累起来就是几十像素的高度漂移
+                let height = spans
+                    .get(rendered_blocks + 1)
+                    .map_or(*bottom - *top, |next| next.0 - *top - px(SPACE_MD));
+                flow = flow.child(div().flex_none().h(height));
+                // 行登记照样回放：选区/复制仍按行号工作，只是这些行不在屏幕上
+                flow_ctx.lines.rows.borrow_mut().extend(
+                    previous
+                        .get(*start..*end)
+                        .unwrap_or_default()
+                        .iter()
+                        .cloned(),
+                );
+                flow_ctx.lines.next = *end;
+                skipped_blocks += 1;
+                kept_ranges.push((*start, *end));
+                rendered_blocks += 1;
+                continue;
+            }
+
+            let line_start = flow_ctx.lines.next;
             flow = flow.child(transcript::render_block(
                 block,
                 &theme,
@@ -327,7 +443,13 @@ impl GuiApp {
                 window,
                 cx,
             ));
+            kept_ranges.push((line_start, flow_ctx.lines.next));
+            rendered_blocks += 1;
         }
+
+        *self.block_lines.borrow_mut() = kept_ranges;
+        self.rendered_blocks = rendered_blocks;
+        self.skipped_blocks = skipped_blocks;
 
         let measured_height = self.flow_height.clone();
         let mut content = flow
@@ -353,8 +475,25 @@ impl GuiApp {
             content = content.min_h(height);
         }
 
+        let span_cell = self.block_spans.clone();
+        let offset_cell = self.block_offset.clone();
+        let scrolled = self.scroll.clone();
         content =
             content.on_children_prepainted(move |children: Vec<Bounds<Pixels>>, window, _| {
+                // 各块的布局区间：下一帧据此跳过屏幕外的块
+                {
+                    let mut spans = span_cell.borrow_mut();
+                    spans.clear();
+                    spans.extend(children.iter().map(|bound| (bound.top(), bound.bottom())));
+                    // 区间与产生它的滚动偏移必须成对记录：这一帧的 clamp 已经改过 offset 了
+                    let offset = scrolled.offset().y;
+                    if offset_cell.replace(offset) != offset {
+                        // 这一帧滚动位置变了（滚轮、Ctrl+End、钉底被 clamp），可见区域换了一批块：
+                        // 再画一帧，让新进入视口的块真正渲染出来，否则会看到一片占位空白
+                        window.request_animation_frame();
+                    }
+                }
+
                 let (Some(first), Some(last)) = (children.first(), children.last()) else {
                     return;
                 };

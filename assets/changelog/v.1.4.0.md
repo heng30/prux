@@ -369,6 +369,19 @@
 
 ### Fixed
 
+- **The desktop GUI's `/history` panel uses the full row width**: prompt rows have no right-hand
+  detail, but they were still laid out as "label capped at the detail column width + detail", so
+  every prompt was truncated at roughly a quarter of the panel with the rest of the row left blank.
+  A row with an empty detail now lets the label take the whole width; `/command` and `@path` rows,
+  which do carry a description, keep the description right after the name.
+
+- **The desktop GUI only renders the part of a conversation you can see**: a long session used to
+  rebuild every transcript block on each redraw, which cost tens of milliseconds per frame and made
+  the window flicker while anything was moving. Blocks more than a screen away from the viewport are
+  now replaced by a placeholder of their measured height, so a redraw only pays for what is on
+  screen; their line entries are replayed from the previous frame, so selection and copy still see
+  the whole text. A block that changes while off screen keeps its old height until it scrolls back in.
+
 - **The desktop GUI no longer repaints itself every frame**: the transcript's measure-and-pin
   callbacks compared layout results with exact floats and asked for a new frame whenever they
   differed — on a long conversation the accumulated subpixel error never matched, so the whole
@@ -666,6 +679,12 @@
 - **`Ctrl-N` no longer starts a new session in the desktop GUI**: it collides with the terminal UI's
   named-session filter, so the shortcut is gone; use `/new` or the `+` button in the sidebar.
 
+- **Long overlay and dock lines wrap instead of running off the card in the desktop GUI**: each line
+  was a flex row of per-span elements, and a text element's automatic minimum width is its whole
+  unwrapped line — so the row never shrank and long text (a subagent's task, a dock status line)
+  painted straight past the panel's border. The spans now let themselves shrink, and such lines
+  break inside the card.
+
 ## 中文
 
 ### 新增
@@ -936,6 +955,14 @@
 
 ## 修复
 
+- **桌面 GUI 的 `/history` 面板用满整行宽度**：历史 prompt 没有行尾说明，却仍按「主文案截在说明
+  列宽 + 行尾说明」的版式排，于是每条都只占面板四分之一就被截断，右边留一大片空白。现在行尾说明
+  为空的行走「主文案独占整行」；带说明的 `/命令`、`@路径` 候选仍是说明紧跟主文案。
+
+- **桌面 GUI 只渲染看得见的那部分对话**：长会话以前每次重绘都重建全部对话块，单帧要几十毫秒，
+  只要有内容在动整窗就会闪。现在离视口一屏以外的块只放一个按实测高度定的占位块，重绘只为屏幕
+  上的内容付钱；这些块的行登记从上一帧回放，选区与复制仍能拿到全文。屏幕外发生变化了的块要等
+  它滚回视口才更新高度。
 - **桌面 GUI 不再每帧把自己重绘一遍**：对话流的测量与钉底回调拿布局结果做精确浮点比较，只要不
   相等就请求下一帧——长会话里累加出的亚像素误差永远对不上，于是整窗持续重绘，静止不动也一直闪。
   现在这些比较允许半像素误差，渲染每行时文本与高亮也只构造一次。设 `PRUX_GUI_FRAMES=1` 可以让
@@ -1143,3 +1170,7 @@
 
 - **桌面 GUI 的 `Ctrl-N` 不再新建会话**：它与终端 UI 的命名会话过滤撞键，快捷键已移除，改用 `/new`
   或侧栏的 `+` 按钮。
+
+- **桌面 GUI 的覆盖层与停靠面板长行会折行，不再戳出卡片**：每行原本是一排按样式片段切开的 flex
+  子元素，而文本的自动最小宽度就是它不折行时的整行宽度——于是这一行永远缩不到卡片宽度，长文本
+  （子代理的任务说明、停靠状态行）直接画到面板边框外面。现在片段允许收缩，这类长行在卡片内折行。

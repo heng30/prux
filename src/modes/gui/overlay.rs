@@ -587,8 +587,11 @@ impl ExtOverlay {
 pub(crate) fn render_dock_line(line: &DockLine, theme: &Theme) -> AnyElement {
     let mut row = div().w_full().flex().flex_wrap();
     for span in line {
+        // min_w_0：文本的 min-content 就是整行宽度，不显式清掉 flex 的最小宽度，
+        // 片段就缩不到容器宽度，长行会直接溢出卡片（不会折行）
         row = row.child(
             div()
+                .min_w_0()
                 .text_color(dock_span_color(span, theme))
                 .child(SharedString::from(span.text.clone())),
         );
@@ -762,7 +765,8 @@ pub(crate) struct RowSpec<'a> {
     /// 次要说明（空串表示不显示）
     pub detail: &'a str,
     /// 说明是否紧跟主文案（`true` 用于补全面板）：`false` 时主文案撑满、说明右对齐，
-    /// `true` 时说明吃掉剩余宽度并左对齐，命令与说明之间不留大片空白
+    /// `true` 时说明吃掉剩余宽度并左对齐，命令与说明之间不留大片空白；
+    /// `detail` 为空时不起作用，主文案独自撑满整行
     pub detail_inline: bool,
     /// 勾选框状态（`Some` 时行首画方框）
     pub checked: Option<bool>,
@@ -853,7 +857,8 @@ pub(crate) fn list_row(
         .truncate()
         .child(SharedString::from(label.to_string()));
 
-    row = row.child(if detail_inline {
+    // 没有说明时主文案独占整行：`/history` 这类只列正文的条目不该被截在说明列宽上，右侧留出一大片空白
+    row = row.child(if detail_inline && !detail.is_empty() {
         label_cell.flex_none().max_w(px(DETAIL_MAX_WIDTH))
     } else {
         label_cell.flex_1()
