@@ -760,7 +760,6 @@ fn hotkey_rows() -> Vec<InfoRow> {
         ("Ctrl-I", "Skills"),
         ("Ctrl-,", "Settings"),
         ("Ctrl-Shift-A", "Select all"),
-        ("Ctrl-N", "New session"),
         ("Ctrl-G", "Next session"),
         ("Ctrl-= / Ctrl-0", "Zoom in / reset to 100%"),
         ("Ctrl-Shift--", "Zoom out"),

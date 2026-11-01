@@ -216,7 +216,6 @@ prux-gui -c         # 接着最近一个会话
 | `Ctrl-Shift-U` | 用量与费用 |
 | `Ctrl-I` | 技能面板 |
 | `Ctrl-,` | 设置面板 |
-| `Ctrl-N` | 新建会话 |
 | `Ctrl-Shift-T` | 明 / 暗主题切换 |
 | `Ctrl-Shift-G` | 外观面板（主题与缩放） |
 | `Ctrl-=` / `Ctrl--` / `Ctrl-0` | 放大 / 缩小 / 回到 100% |

@@ -663,6 +663,9 @@
   `covered by <div#banner>`), when the element is disabled, or when it has no clickable area. The old
   behaviour dispatched the click anyway and reported success.
 
+- **`Ctrl-N` no longer starts a new session in the desktop GUI**: it collides with the terminal UI's
+  named-session filter, so the shortcut is gone; use `/new` or the `+` button in the sidebar.
+
 ## 中文
 
 ### 新增
@@ -1137,3 +1140,6 @@
 - **桌面 GUI 的 markdown 链接可以打开**：`[文字](url)` 以前只是变色，点不动。现在 Ctrl+点击用系统
   默认浏览器打开（与终端 UI 同一手势、与右侧信息面板里的链接同一条路径），渲染区与覆盖层面板里的
   markdown 都生效；普通点击仍留给选字。
+
+- **桌面 GUI 的 `Ctrl-N` 不再新建会话**：它与终端 UI 的命名会话过滤撞键，快捷键已移除，改用 `/new`
+  或侧栏的 `+` 按钮。

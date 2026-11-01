@@ -528,14 +528,6 @@ impl GuiApp {
                 cx.notify();
                 return true;
             }
-            "n" => {
-                _ = self.cmd_tx.send(AgentCommand::NewSession);
-                self.transcript.clear();
-                self.flow_height.set(None);
-                self.reload_sessions(cx);
-                cx.notify();
-                return true;
-            }
             "=" | "+" | "-" | "0" => {
                 let current = theme::ui_scale();
                 let scale = match keystroke.key.as_str() {
