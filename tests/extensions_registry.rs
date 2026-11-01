@@ -75,14 +75,15 @@ fn register_all_collects_and_sorts_slices() {
         "footer(minimal)",
         "footer(rich)",
         "ask-user-question",
+        "processes",
     ] {
         unregister_extension(n);
     }
 
     prux::extensions::register_all();
 
-    // 分布式切片确实汇聚：39 个工具扩展 + 3 个底栏扩展
-    assert_eq!(extension_count(), 39, "普通扩展应被切片收集");
+    // 分布式切片确实汇聚：40 个工具扩展 + 3 个底栏扩展
+    assert_eq!(extension_count(), 40, "普通扩展应被切片收集");
     assert_eq!(footer_extension_count(), 3, "footer 扩展应全被切片收集");
 
     // plan-mode / goal / subagent / tasks / web-access / proxy / ssh-remote / doc-helper / notify
@@ -195,6 +196,10 @@ fn register_all_collects_and_sorts_slices() {
     assert!(
         !is_extension_enabled("shake"),
         "shake 应默认不启用（会改写模型上下文，Dev / Creator 工具）"
+    );
+    assert!(
+        !is_extension_enabled("processes"),
+        "processes 应默认不启用（后台 job 会长期占用系统资源）"
     );
     // update-check 默认启用（版本提示属于开箱能力）
     assert!(

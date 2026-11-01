@@ -18,8 +18,6 @@ pub(crate) mod index;
 #[cfg(windows)]
 mod powershell;
 
-pub use operations::{DefaultToolOperations, ToolOperations, ToolStat};
-
 pub use bash::{
     BashOutcome, BashSessionEnv, OnChunkCallback, abort_all_bash, abort_bash, execute_bash,
     execute_bash_with, execute_bash_with_env,
@@ -33,8 +31,11 @@ pub use index::{
     tool_execution_mode, validate_tool_arguments,
 };
 pub use ls::execute_ls;
+pub use operations::{DefaultToolOperations, ToolOperations, ToolStat};
 pub use read::{ReadImageOptions, execute_read, execute_read_with_options, format_line_range};
 pub use write::execute_write;
+
+pub(crate) use bash::find_bash;
 
 #[cfg(windows)]
 pub use powershell::{execute_powershell, execute_powershell_result, find_powershell};

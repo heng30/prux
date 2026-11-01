@@ -35,6 +35,7 @@ pub mod open;
 pub mod permissions;
 pub mod plan_mode;
 pub mod ponytail;
+pub mod processes;
 pub mod proxy;
 pub mod recap_btw;
 pub mod rewind;
@@ -129,6 +130,8 @@ pub const PRIORITY_SSH_REMOTE: u32 = 51;
 pub const PRIORITY_ASK_USER_QUESTION: u32 = 52;
 /// doc-helper 按需文档查询扩展的注册优先级。
 pub const PRIORITY_DOC_HELPER: u32 = 50;
+/// processes 后台进程监督扩展的注册优先级。
+pub const PRIORITY_PROCESSES: u32 = 49;
 /// debug 调试工具集扩展注册优先级。
 pub const PRIORITY_DEBUG: u32 = 45;
 /// tool_search 延迟工具检索扩展的注册优先级。

@@ -2,6 +2,17 @@
 
 ### Added
 
+- **A `processes` extension supervises background jobs**: the built-in `bash` tool only runs
+  commands in the foreground and kills them on timeout, so a dev server or a watcher blocks the
+  whole turn. `background_bash` starts a command in the background and returns `job-N`, its pid
+  and the log path at once — stdin is `/dev/null`, and stdout/stderr go to that log file instead
+  of the terminal. `read_process_output` returns an output snapshot (status, pid, elapsed time
+  and the last N lines; reading does not consume the log, and omitting `id` lists every job),
+  while `stop_process` kills the whole process group. `/ps` prints the job list and opens the
+  dock panel, `/ps stop <id>` stops a job and `/ps clear` drops finished ones. A job keeps
+  running after the turn ends, and disabling the extension stops every running job. Off by
+  default (`Dev` mode).
+
 - **The desktop GUI's session sidebar shows how many sessions each group holds**: the `Today` /
   `This week` / `Older` heading now carries its entry count, right-aligned in the caption colour.
   The count follows the search filter, so a filtered list reports what it actually lists.
@@ -747,6 +758,14 @@
 ## 中文
 
 ### 新增
+
+- **新增 `processes` 扩展：后台进程监督**：内置 `bash` 工具只有「前台执行 + 超时杀进程」，
+  dev server、watcher 这类长命命令会把一整轮卡到超时。`background_bash` 把命令丢到后台，立刻
+  返回 `job-N`、pid 与日志路径——stdin 接 `/dev/null`，stdout/stderr 写进那个日志文件而不是
+  继承终端。`read_process_output` 返回输出**快照**（状态、pid、耗时、最后 N 行；读不消费日志，
+  省略 `id` 列出全部 job），`stop_process` 杀掉整个进程组。`/ps` 打印 job 清单并打开停靠面板，
+  `/ps stop <id>` 停止、`/ps clear` 丢掉已完成记录。job 不随回合结束消失，禁用本扩展会停掉
+  全部运行中的 job。默认不启用（`Dev` 模式）。
 
 - **桌面 GUI 的侧栏分组标题显示该组条目数**：`Today` / `This week` / `Older` 右侧按说明色右对齐
   显示条数，随搜索过滤结果变化，数的是列表里真实呈现的会话。
