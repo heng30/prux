@@ -125,6 +125,18 @@ pub const TOAST_DURATION: Duration = Duration::from_millis(3600);
 /// 界面默认字体族：编译期内嵌的思源黑体 CN（`assets/fonts/SourceHanSansCN.otf`）。
 pub const UI_FONT_FAMILY: &str = "Source Han Sans CN";
 
+/// 等宽字体族：编译期内嵌的 Source Code Pro（`assets/fonts/SourceCodePro-Regular.otf`）。
+///
+/// 用于代码块、mermaid 图与公式。它的半角 advance 是 0.6em，与终端单元格一致，
+/// 网格对齐的计算全部按这个值推。
+pub const MONO_FONT_FAMILY: &str = "Source Code Pro";
+
+/// 等宽字体的半角 advance（相对字号，单位 em）。
+///
+/// 取自内嵌 OTF 的 hmtx：全部半角字形都是 600/1000 em。字号换算成列宽时按它推，
+/// 不要再估。
+pub const MONO_ADVANCE: f32 = 0.6;
+
 /// 当前界面缩放系数，存千分比整数（1000 = 1.0）：全局唯一，渲染时由 [`px`] 读取。
 static UI_SCALE_PERMILLE: AtomicU32 = AtomicU32::new(1000);
 

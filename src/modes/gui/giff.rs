@@ -9,8 +9,8 @@ use super::{
     text_edit::Editor,
     theme::{
         CONTROL_H_LG, CONTROL_H_MD, CONTROL_H_SM, DIFF_GUTTER_W, FONT_CAPTION, FONT_SMALL,
-        HEADER_H, ICON_SIZE, RADIUS_MD, RADIUS_SM, SCROLLBAR_HIT_WIDTH, SCROLLBAR_WIDTH, SPACE_MD,
-        SPACE_SM, SPACE_XS, SPACE_XXS, Theme, min_thumb, px,
+        HEADER_H, ICON_SIZE, MONO_FONT_FAMILY, RADIUS_MD, RADIUS_SM, SCROLLBAR_HIT_WIDTH,
+        SCROLLBAR_WIDTH, SPACE_MD, SPACE_SM, SPACE_XS, SPACE_XXS, Theme, min_thumb, px,
     },
 };
 use crate::utils::{color::Rgb, geometry, process::run_stdout};
@@ -905,7 +905,7 @@ fn content_view(theme: &Theme, panel: &RightPanel, scroll: &ScrollHandle) -> Any
         .rounded(px(RADIUS_MD))
         .bg(theme.inset)
         .text_size(px(FONT_CAPTION))
-        .font_family("monospace")
+        .font_family(MONO_FONT_FAMILY)
         .whitespace_nowrap()
         // 行按自身宽度排（stretch 会把每行压回容器宽，长行永远溢不出来）
         .items_start()

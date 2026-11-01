@@ -9,8 +9,8 @@ use super::{
     components::dot,
     markdown,
     theme::{
-        DOT_SIZE, FONT_BODY, FONT_CAPTION, FONT_SMALL, RADIUS_MD, SPACE_LG, SPACE_MD, SPACE_SM,
-        SPACE_XS, SPACE_XXS, Theme, UI_FONT_FAMILY, px,
+        DOT_SIZE, FONT_BODY, FONT_CAPTION, FONT_SMALL, MONO_ADVANCE, MONO_FONT_FAMILY, RADIUS_MD,
+        SPACE_LG, SPACE_MD, SPACE_SM, SPACE_XS, SPACE_XXS, Theme, UI_FONT_FAMILY, px,
     },
 };
 use crate::{
@@ -20,7 +20,7 @@ use crate::{
     },
     utils::{
         color::Rgb,
-        display::{fit_display, format_tool_duration},
+        display::{char_width, fit_display, format_tool_duration},
         mime, paths,
     },
 };
@@ -53,10 +53,8 @@ const USER_COLLAPSED_LINES: usize = 6;
 const IMAGE_THUMB: f32 = 360.0;
 /// 覆盖层面板里等宽内容（公式 / mermaid）的排版列数：面板宽度渲染时才量得到
 const OVERLAY_COLS: usize = 100;
-/// 等宽字形宽度估计（相对字号）：把内容宽度换算成 mermaid 的列数
-///
-/// shortcut: 按 0.6em 估；字体实际偏宽时图末尾会被裁掉一点，偏窄时多留白。
-const MONO_ADVANCE: f32 = 0.6;
+/// 等宽块的行高（相对字号）：mermaid 盒图的横线靠行距对齐，每行必须等高。
+const MONO_LINE_HEIGHT: f32 = 1.55;
 
 thread_local! {
     /// 缩略图图片源缓存：`(路径, (文件长度, 修改时间)) → 图片源`，免掉每帧重读缩略图文件。
@@ -1770,7 +1768,7 @@ fn render_rows(rows: &[Row], theme: &Theme, lines: &mut TextLines) -> AnyElement
                     .flex_col()
                     .px(px(SPACE_SM))
                     .py(px(SPACE_SM))
-                    .font_family("monospace");
+                    .font_family(MONO_FONT_FAMILY);
 
                 for line in code {
                     let mut element = div()
@@ -1811,11 +1809,11 @@ fn render_rows(rows: &[Row], theme: &Theme, lines: &mut TextLines) -> AnyElement
                     .border_color(theme.border)
                     .bg(theme.inset)
                     .overflow_hidden()
-                    .font_family("monospace")
+                    .font_family(MONO_FONT_FAMILY)
                     .text_size(px(FONT_SMALL))
                     .text_color(theme.code_text);
                 for line in mono {
-                    body = body.child(div().w_full().child(SharedString::from(line.clone())));
+                    body = body.child(mono_line(line));
                 }
                 body.into_any_element()
             }
@@ -1842,6 +1840,63 @@ fn render_rows(rows: &[Row], theme: &Theme, lines: &mut TextLines) -> AnyElement
         }
     });
     column.into_any_element()
+}
+
+/// mono 块的一行 → 等宽网格单元。
+///
+/// 内嵌的 Source Code Pro 半角 advance 是 0.6em，而中文 fallback 到思源黑体是 1em：
+/// 直接靠空格缩进时，含中文的行每过一个汉字就少 0.2em，右边的盒线竖线随之左移。
+/// 这里把每个全角字固定占 2 个半角单元并居中，与终端里「一格一列、汉字占两列」一致。
+fn mono_line(line: &str) -> AnyElement {
+    let height = px(FONT_SMALL * MONO_LINE_HEIGHT);
+    let mut row = div().w_full().flex().h(height);
+    let mut run = String::new();
+    for ch in line.chars() {
+        if char_width(ch) == 1 && ch != ' ' {
+            run.push(ch);
+            continue;
+        }
+
+        if !run.is_empty() {
+            row = row.child(mono_run(std::mem::take(&mut run), height));
+        }
+
+        // 空格单独占格：整段文本里的前导空格会被排版吞掉，图就缩不进原位
+        row = row.child(if ch == ' ' {
+            div()
+                .flex_none()
+                .w(px(FONT_SMALL * MONO_ADVANCE))
+                .h(height)
+                .into_any_element()
+        } else {
+            div()
+                .flex_none()
+                .w(px(FONT_SMALL * MONO_ADVANCE * 2.))
+                .h(height)
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(SharedString::from(ch.to_string()))
+                .into_any_element()
+        });
+    }
+
+    if !run.is_empty() {
+        row = row.child(mono_run(run, height));
+    }
+    row.into_any_element()
+}
+
+/// 一段半角连续文本 → 一个定高单元：Source Code Pro 里每个半角字形都是 0.6em，整段排即可。
+fn mono_run(text: String, height: Pixels) -> AnyElement {
+    div()
+        .flex_none()
+        .h(height)
+        .flex()
+        .items_center()
+        .whitespace_nowrap()
+        .child(SharedString::from(text))
+        .into_any_element()
 }
 
 /// Markdown 表格 → 网格：列宽按各列最长单元格的字符数比例分配，单元格自动折行。

@@ -40,6 +40,12 @@ const MIN_WINDOW_SIZE: (f32, f32) = (760.0, 560.0);
 /// 内嵌字体：思源黑体 CN（默认界面字体，随二进制发布，不依赖系统装字体）。
 const UI_FONT_BYTES: &[u8] = embedded_bytes!("fonts/SourceHanSansCN.otf");
 
+/// 内嵌等宽字体：Source Code Pro，与终端里渲染 TUI 的西文字体同族。
+///
+/// 代码块 / mermaid 图 / 公式的网格按它的半角 advance（0.6em）排版，缺了它就会
+/// 退回系统 monospace，宽度与中文 fallback 对不上。
+const MONO_FONT_BYTES: &[u8] = embedded_bytes!("fonts/SourceCodePro-Regular.otf");
+
 /// GUI 入口。**必须由主线程调用**（gpui 独占主线程事件循环）。
 ///
 /// `rt` 是调用方持有的 tokio runtime：agent worker 跑在它上面，
@@ -76,9 +82,10 @@ pub fn run(startup: Startup, rt: &Handle) {
     core::extensions::set_ui_ready(true);
 
     Application::new().run(move |cx: &mut App| {
-        _ = cx
-            .text_system()
-            .add_fonts(vec![Cow::Borrowed(UI_FONT_BYTES)]);
+        _ = cx.text_system().add_fonts(vec![
+            Cow::Borrowed(UI_FONT_BYTES),
+            Cow::Borrowed(MONO_FONT_BYTES),
+        ]);
 
         let bounds = Bounds::centered(
             None,
