@@ -520,6 +520,12 @@ impl GuiApp {
     /// worker 直接 drop 回合 future，agent 不会再发 `agent_settled`，忙状态只能
     /// 本地复位，中断提示也只能自己补（同 TUI 的硬中止）。
     pub(super) fn abort_turn(&mut self, cx: &mut Context<Self>) {
+        // 回合 future 被 drop 后不会再有 agent_end，靠事件断电的扩展（hang-detect 等）
+        // 会一直以为回合还在跑，静默超时后把已停下的会话又拉起来（同 TUI 的硬中止）。
+        core::extensions::dispatch_agent_event(&serde_json::json!({
+            "type": "agent_end",
+            "reason": "aborted",
+        }));
         _ = self.cmd_tx.send(AgentCommand::Abort);
         self.busy = false;
         self.transcript.abort();

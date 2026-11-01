@@ -273,7 +273,12 @@ impl GuiApp {
             ExtensionUiRequest::AbortRun => self.abort_turn(cx),
             ExtensionUiRequest::RestartRun { message } => {
                 self.abort_turn(cx);
-                _ = self.cmd_tx.send(AgentCommand::PromptMessage(*message));
+                let mut batch = vec![*message];
+                if let Ok(mut inbox) = self.steer_inbox.lock() {
+                    batch.extend(inbox.drain(..));
+                }
+                self.busy = true;
+                _ = self.cmd_tx.send(AgentCommand::PromptBatch(batch));
             }
             ExtensionUiRequest::RewindLastUserInput { restore_to_editor } => {
                 self.pending_rewind_restore = restore_to_editor;

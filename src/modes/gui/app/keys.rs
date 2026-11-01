@@ -3,6 +3,7 @@
 //! 拆自 [`super::app`]：只搬按键分派，动作执行见 [`super::actions`]。
 
 use super::*;
+use crate::core::extensions::cancel_background_work;
 
 impl GuiApp {
     /// 键盘入口：分发完统一重绘一次。
@@ -52,6 +53,15 @@ impl GuiApp {
                 self.handle_dialog_key(key, shift);
             }
 
+            cx.notify();
+            return;
+        }
+
+        // 忙碌态 Esc 直接中断，优先于菜单/补全/覆盖层（同 TUI 的 handle_busy_key）
+        if self.busy && keystroke.key == "escape" {
+            self.abort_turn(cx);
+            crate::core::extensions::cancel_background_work();
+            self.restore_queued();
             cx.notify();
             return;
         }
@@ -381,6 +391,7 @@ impl GuiApp {
             // 并把排队的 steer / follow-up 取回编辑器
             if self.busy && self.editor.is_empty() {
                 self.abort_turn(cx);
+                cancel_background_work();
                 self.restore_queued();
                 return true;
             }
@@ -654,14 +665,13 @@ impl GuiApp {
                 cx.notify();
             }
             "escape" => {
-                if self.busy {
-                    self.abort_turn(cx);
-                    // 中断时把排队的 steer / follow-up 取回编辑器（同 TUI 的 handle_cancel_prompt）
-                    self.restore_queued();
-                } else if self.panel.visible {
+                if self.panel.visible {
                     // 空闲时 Esc 先收右侧面板（giff 等）——之前面板没有关闭途径
                     self.panel.visible = false;
                     self.panel.search_focus = false;
+                } else if cancel_background_work() > 0 {
+                    // 没有面板时 Esc 先取消可取消的后台工作（如 MCP OAuth 登录），同 TUI
+                    self.toast("Cancelled background work", ToastKind::Info, cx);
                 }
                 cx.notify();
             }

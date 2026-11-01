@@ -2,11 +2,16 @@
 //!
 //! 拆自 [`super::app`]：只搬渲染代码，状态与按键分发仍在父模块。
 
-use super::theme::{
-    CONTROL_H_MD, CONTROL_H_SM, DOCK_MAX_H, FONT_BODY, FONT_CAPTION, FONT_HERO, FONT_SMALL,
-    RADIUS_LG, RADIUS_MD, RADIUS_SM, SPACE_LG, SPACE_MD, SPACE_SM, SPACE_XL, SPACE_XS,
+use super::{
+    icon,
+    status::BLINK_DIM_OPACITY,
+    theme::{
+        CONTROL_H_MD, CONTROL_H_SM, DOCK_MAX_H, FONT_BODY, FONT_CAPTION, FONT_HERO, FONT_SMALL,
+        RADIUS_LG, RADIUS_MD, RADIUS_SM, SPACE_LG, SPACE_MD, SPACE_SM, SPACE_XL, SPACE_XS,
+    },
+    *,
 };
-use super::{icon, status::BLINK_DIM_OPACITY, *};
+use crate::core::extensions::cancel_background_work;
 use std::rc::Rc;
 
 impl Render for GuiApp {
@@ -507,7 +512,10 @@ impl GuiApp {
             .hover(|style| style.opacity(0.86))
             .on_click(cx.listener(move |this, _, _, cx| {
                 if this.busy {
+                    // 与 Esc 同语义：中止后把排队的 steer / follow-up 取回编辑器
                     this.abort_turn(cx);
+                    cancel_background_work();
+                    this.restore_queued();
                 } else {
                     this.submit(false, cx);
                     cx.notify();

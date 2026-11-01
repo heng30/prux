@@ -603,6 +603,16 @@
   reopened the panel over text that had not changed. Suggestions are now refreshed only when the
   editor's text actually changed.
 
+- **An aborted turn in the desktop GUI really stops everything**: `Esc`, the stop button and an
+  extension's abort now report `agent_end` (as the terminal UI does), so event-driven extensions
+  such as the idle-timeout watchdog stop believing the turn is still running and no longer restart
+  an already idle session. They also drop cancellable background work (an MCP OAuth login, say)
+  and take the queued steer / follow-up messages back into the input box; `Esc` does that before
+  menu and overlay handling while a turn is running.
+
+- **Restarting a turn in the desktop GUI no longer drops queued input**: steer messages that piled
+  up while an extension rebuilt the prompt are now sent with the new prompt instead of being lost.
+
 ## 中文
 
 ### 新增
@@ -1020,3 +1030,11 @@
 
 - **桌面 GUI 的补全面板不再因移动光标弹出**：`/命令` 与 `@路径` 以前每按一个键就重算，在一段
   没改动的文字中间按左右方向键也会把面板重新弹出来挡住内容。现在只有输入框文本真的变了才重算补全。
+
+- **桌面 GUI 中断回合后真的停下来**：`Esc`、停止按钮与扩展发起的中断现在都会补发 `agent_end`
+  （与终端 UI 一致），靠事件断电的扩展（如空闲超时看门狗）就不会以为回合还在跑、把已经停下的会话
+  又拉起来；同时取消可取消的后台工作（如 MCP OAuth 登录）、把排队的 steer / follow-up 取回输入框。
+  回合运行中 `Esc` 在菜单与覆盖层处理之前先走中断。
+
+- **桌面 GUI 重启回合不再丢掉已排队的输入**：扩展重建 prompt 期间积压的 steer 消息现在与新 prompt
+  一起发出，而不是被丢弃。
