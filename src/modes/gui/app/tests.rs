@@ -349,3 +349,31 @@ fn filled_history_action_word_is_still_a_trigger() {
     );
     assert!(suggest_engine::history_action("@clear").is_some());
 }
+
+/// 布局实测的抖动容差：半像素内的位移不该被当成「布局变了」而每帧请求重绘。
+#[test]
+fn layout_jitter_within_half_pixel_is_ignored() {
+    let origin = gpui::point(px(10.), px(20.));
+    let base = gpui::Bounds {
+        origin,
+        size: gpui::size(px(300.), px(400.)),
+    };
+    let shifted = gpui::Bounds {
+        origin: gpui::point(px(10.4), px(19.6)),
+        size: gpui::size(px(300.3), px(399.7)),
+    };
+    let moved = gpui::Bounds {
+        origin: gpui::point(px(11.), px(20.)),
+        size: base.size,
+    };
+    assert!(render::same_bounds(base, base));
+    assert!(render::same_bounds(base, shifted), "亚像素抖动应视为同一处");
+    assert!(!render::same_bounds(base, moved));
+
+    assert!(render::within_half_pixel(Some(px(400.)), px(400.4)));
+    assert!(!render::within_half_pixel(Some(px(400.)), px(402.)));
+    assert!(
+        !render::within_half_pixel(None, px(400.)),
+        "还没测过就要测一次"
+    );
+}

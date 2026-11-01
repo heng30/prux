@@ -369,6 +369,19 @@
 
 ### Fixed
 
+- **The desktop GUI no longer repaints itself every frame**: the transcript's measure-and-pin
+  callbacks compared layout results with exact floats and asked for a new frame whenever they
+  differed — on a long conversation the accumulated subpixel error never matched, so the whole
+  window redrew continuously and flickered even when nothing moved. The comparisons now allow
+  half a pixel, and each rendered line builds its text and highlights once instead of twice.
+  `PRUX_GUI_FRAMES=1` makes the GUI report its frame interval to stderr, which shows whether
+  anything is still asking for a redraw while idle.
+
+- **The desktop GUI no longer re-parses an overlay's Markdown on every frame**: `/changelog` and
+  the other Markdown panels ran the whole document through the parser and the syntax highlighter on
+  every redraw, so scrolling a long changelog stuttered. The parsed rows are cached and reused until
+  the text, the light/dark theme or the layout width changes — assistant bodies already worked this way.
+
 - **A new session's file path reaches the UI once it lands on disk**: `/new` starts a deferred
   session, so the switch reply has no path — and nothing ever sent one later. Until the next switch
   `/fork` answered `no current session`, `/resume` did not mark the running session as current, and
@@ -920,6 +933,13 @@
 
 ## 修复
 
+- **桌面 GUI 不再每帧把自己重绘一遍**：对话流的测量与钉底回调拿布局结果做精确浮点比较，只要不
+  相等就请求下一帧——长会话里累加出的亚像素误差永远对不上，于是整窗持续重绘，静止不动也一直闪。
+  现在这些比较允许半像素误差，渲染每行时文本与高亮也只构造一次。设 `PRUX_GUI_FRAMES=1` 可以让
+  GUI 把帧间隔报到 stderr，静止时还在刷就说明还有东西在请求重绘。
+- **桌面 GUI 不再每帧重解析覆盖层面板的 Markdown**：`/changelog` 这类 Markdown 面板以前每次重绘
+  都把整份正文重新喂给解析器与语法高亮，滚动长 changelog 会卡顿。现在解析结果缓存复用，直到正文、
+  明暗主题或排版宽度变化才重做（助手正文早就是这套做法）。
 - **新会话落盘后会把文件路径补发给 UI**：`/new` 起的是延迟落盘会话，切换回执里没有路径，
   而之后也没有任何地方补发——于是在下一次切会话之前，`/fork` 一律回 `no current session`，
   `/resume` 不把当前会话标成当前，扩展也把会话记到 `default` 键上。现在首条消息写出会话文件时

@@ -41,6 +41,13 @@ use std::{
     time::{Instant, SystemTime},
 };
 
+/// 一行行内文本的渲染素材：(纯文本, 分段高亮, 可点链接的字符区间与目标)。
+type Runs = (
+    String,
+    Vec<(Range<usize>, HighlightStyle)>,
+    Vec<(Range<usize>, String)>,
+);
+
 /// 工具输出收起时显示的行数。
 const COLLAPSED_OUTPUT_LINES: usize = 6;
 /// 工具输出展开时显示的行数上限。
@@ -66,6 +73,12 @@ thread_local! {
     /// `ImageSource` 不是 `Send`，而渲染只在 UI 线程上，故用线程本地变量。
     static IMAGE_SOURCES: RefCell<Vec<(PathBuf, (u64, Option<SystemTime>), ImageSource)>> =
         RefCell::new(Vec::new());
+}
+
+thread_local! {
+    /// 覆盖层文档的预解析缓存：面板每帧都重排，解析与高亮却与帧无关
+    /// （`/changelog` 这类上百 KB 的正文，每帧重解析就是滚动卡顿的来源）。
+    static OVERLAY_ROWS: RefCell<Option<OverlayRows>> = const { RefCell::new(None) };
 }
 
 /// 工具调用的执行状态。
@@ -1630,7 +1643,7 @@ fn note_block(note: &Note, theme: &Theme) -> AnyElement {
 /// Markdown 文本 → 元素（覆盖层面板用：只要排版与配色，不登记选区/行位置）。
 pub fn markdown_body(text: &str, theme: &Theme) -> AnyElement {
     // 覆盖层面板的宽度在渲染时才量得到，这里按固定列数排等宽内容（公式/mermaid）
-    let rows = parse_rows(text, theme, OVERLAY_COLS);
+    let rows = overlay_rows(text, theme, OVERLAY_COLS);
     let mut lines = TextLines {
         next: 0,
         selection: None,
@@ -1639,6 +1652,43 @@ pub fn markdown_body(text: &str, theme: &Theme) -> AnyElement {
         rows: Rc::new(RefCell::new(Vec::new())),
     };
     render_rows(&rows, theme, &mut lines)
+}
+
+/// 一份覆盖层文档的预解析结果。
+struct OverlayRows {
+    /// 解析输入的 Markdown 全文（逐字节比较，长度相同不算命中）
+    text: String,
+    /// 解析时的明暗主题（换主题要按新配色重算代码高亮）
+    dark: bool,
+    /// 解析时的等宽列数（公式/mermaid 的排版宽度）
+    cols: usize,
+    /// 预解析好的行
+    rows: Rc<Vec<Row>>,
+}
+
+/// 取（必要时重建）覆盖层文档的预解析行。
+///
+/// 同时只有一个覆盖层面板在渲染，故只留最后一份。
+fn overlay_rows(text: &str, theme: &Theme, cols: usize) -> Rc<Vec<Row>> {
+    OVERLAY_ROWS.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if let Some(hit) = cache.as_ref()
+            && hit.text == text
+            && hit.dark == theme.is_dark
+            && hit.cols == cols
+        {
+            return hit.rows.clone();
+        }
+
+        let rows = Rc::new(parse_rows(text, theme, cols));
+        *cache = Some(OverlayRows {
+            text: text.to_string(),
+            dark: theme.is_dark,
+            cols,
+            rows: rows.clone(),
+        });
+        rows
+    })
 }
 
 /// Markdown 文本 → 预解析行（代码块的高亮只在解析时做一次）。
@@ -1727,14 +1777,14 @@ fn render_rows(rows: &[Row], theme: &Theme, lines: &mut TextLines) -> AnyElement
                 let index = lines.next;
                 lines.next += 1;
 
-                let (plain, _, _) = inline_runs(marker.as_deref(), &line.spans, theme);
+                let (plain, highlights, links) = inline_runs(marker.as_deref(), &line.spans, theme);
                 let len = plain.chars().count();
                 let selected = lines
                     .selection
                     .and_then(|selection| selection.range_for(index, len));
                 lines.rows.borrow_mut().push(LineInfo {
                     index,
-                    text: plain,
+                    text: plain.clone(),
                     font_size,
                 });
                 child_lines.push(Some(index));
@@ -1743,13 +1793,7 @@ fn render_rows(rows: &[Row], theme: &Theme, lines: &mut TextLines) -> AnyElement
                 let id = link_id;
                 link_id += 1;
                 element
-                    .child(inline_text(
-                        marker.as_deref(),
-                        &line.spans,
-                        theme,
-                        selected,
-                        id,
-                    ))
+                    .child(inline_text((plain, highlights, links), theme, selected, id))
                     // 文字元素的实测边界：列定位按它算，外层行盒的 padding/缩进不进列号
                     .on_children_prepainted(move |children: Vec<Bounds<Pixels>>, _, _| {
                         if let Some(child) = children.first() {
@@ -1987,7 +2031,12 @@ fn table_body(table: &markdown::Table, theme: &Theme, link_id: &mut usize) -> An
             if index + 1 < cols {
                 cell_div = cell_div.border_r_1().border_color(theme.border);
             }
-            line = line.child(cell_div.child(inline_text(None, cell, theme, None, *link_id)));
+            line = line.child(cell_div.child(inline_text(
+                inline_runs(None, cell, theme),
+                theme,
+                None,
+                *link_id,
+            )));
             *link_id += 1;
         }
         grid = grid.child(line);
@@ -2004,16 +2053,17 @@ fn table_body(table: &markdown::Table, theme: &Theme, link_id: &mut usize) -> An
 ///
 /// 带链接的片段用 `InteractiveText` 挂点击，Ctrl+点击交给系统默认浏览器打开。
 ///
+/// `runs` 由调用方用 [`inline_runs`] 算好传入：每帧每行只拼一次文本与高亮，
+/// 长对话流下这是帧内的主要开销之一。
+///
 /// `id` 由调用方按渲染顺序递增：gpui 靠元素 id 记住鼠标按下的位置，id 每帧变一次
 /// 点击就永远匹配不上（按下在旧 id、抬起找新 id），点击会默默无反应。
 fn inline_text(
-    marker: Option<&str>,
-    spans: &[markdown::Span],
+    (text, highlights, links): Runs,
     theme: &Theme,
     selection: Option<Range<usize>>,
     id: usize,
 ) -> AnyElement {
-    let (text, highlights, links) = inline_runs(marker, spans, theme);
     let highlights = match selection {
         Some(range) => merge_selection(
             highlights,
@@ -2089,16 +2139,8 @@ fn merge_selection(
     out
 }
 
-/// 行内片段 → (纯文本, 分段高亮)；纯文本用来复制与按字符定位。
-fn inline_runs(
-    marker: Option<&str>,
-    spans: &[markdown::Span],
-    theme: &Theme,
-) -> (
-    String,
-    Vec<(Range<usize>, HighlightStyle)>,
-    Vec<(Range<usize>, String)>,
-) {
+/// 行内片段 → 纯文本（用来复制与按字符定位）、分段高亮与可点链接区间。
+fn inline_runs(marker: Option<&str>, spans: &[markdown::Span], theme: &Theme) -> Runs {
     let mut text = String::new();
     let mut highlights: Vec<(std::ops::Range<usize>, HighlightStyle)> = Vec::new();
     let mut links: Vec<(Range<usize>, String)> = Vec::new();
@@ -2608,6 +2650,22 @@ mod tests {
         write(b"not-really-a-png");
         assert!(matches!(image_source(&path), ImageSource::Resource(_)));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 覆盖层正文的解析结果跨帧复用，换主题/换文本才重做（否则上百 KB 的正文每帧重解析）。
+    #[test]
+    fn overlay_rows_are_cached_across_frames() {
+        let theme = Theme::dark();
+        let first = overlay_rows("# 标题\n\n正文", &theme, 80);
+        let again = overlay_rows("# 标题\n\n正文", &theme, 80);
+        assert!(Rc::ptr_eq(&first, &again), "同一文本应命中缓存");
+
+        // 长度相同但内容不同的正文不能误命中
+        let other = overlay_rows("# 标题\n\n副文", &theme, 80);
+        assert!(!Rc::ptr_eq(&first, &other));
+        // 明暗主题不同要重算代码高亮
+        let light = overlay_rows("# 标题\n\n正文", &Theme::light(), 80);
+        assert!(!Rc::ptr_eq(&first, &light));
     }
 
     /// diff 行按增/删/块头着色，普通行用次要色。

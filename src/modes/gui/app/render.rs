@@ -14,8 +14,18 @@ use super::{
 use crate::core::extensions::cancel_background_work;
 use std::rc::Rc;
 
+#[cfg(debug_assertions)]
+thread_local! {
+    /// 帧统计：上一帧起始时刻与已计数帧数（仅 debug 构建且设了 `PRUX_GUI_FRAMES` 才用）
+    static FRAME_STATS: std::cell::RefCell<(Option<std::time::Instant>, u32)> =
+        const { std::cell::RefCell::new((None, 0)) };
+}
+
 impl Render for GuiApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(debug_assertions)]
+        trace_frames();
+
         let transcript = self.render_transcript(window, cx);
         let composer = self.render_composer(window, cx);
         let main = self.render_main(transcript, composer);
@@ -24,6 +34,33 @@ impl Render for GuiApp {
         let root = self.render_root(sidebar, body, cx);
         self.render_overlays(root, window, cx)
     }
+}
+
+/// 每 60 帧向 stderr 报一次平均帧间隔：仅 debug 构建，且设了 `PRUX_GUI_FRAMES=1` 才输出。
+///
+/// 静止不操作时还在不断刷 = 有东西每帧请求重绘（界面会持续闪）。
+#[cfg(debug_assertions)]
+fn trace_frames() {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if !*ON.get_or_init(|| std::env::var_os("PRUX_GUI_FRAMES").is_some()) {
+        return;
+    }
+
+    FRAME_STATS.with(|stats| {
+        let mut stats = stats.borrow_mut();
+        let now = std::time::Instant::now();
+        stats.1 += 1;
+        let Some(last) = stats.0 else {
+            stats.0 = Some(now);
+            return;
+        };
+
+        if stats.1 % 60 == 0 {
+            let average = now.duration_since(last).as_secs_f64() * 1000. / 60.;
+            eprintln!("gui frame: {average:.1}ms/frame");
+            stats.0 = Some(now);
+        }
+    });
 }
 
 impl GuiApp {
@@ -321,9 +358,13 @@ impl GuiApp {
                 let (Some(first), Some(last)) = (children.first(), children.last()) else {
                     return;
                 };
+
                 let needed =
                     last.bottom() - first.top() + px(FLOW_PADDING_TOP + FLOW_PADDING_BOTTOM);
-                if measured_height.get() != Some(needed) {
+
+                // 差得不足半像素就别再请求下一帧：布局的小数误差会让长内容永远「差一点」，
+                // 精确比较则每帧都重绘一次，整窗就一直在闪
+                if !within_half_pixel(measured_height.get(), needed) {
                     measured_height.set(Some(needed));
                     window.request_animation_frame();
                 }
@@ -355,7 +396,7 @@ impl GuiApp {
 
             // 用户自己滚回底部时重新接管，这样新内容来了还会继续跟
             let following = owned.is_some() || (offset - target).abs() <= px(1.);
-            if following && owned != Some(target) {
+            if following && (offset - target).abs() > px(0.5) {
                 scroll.set_offset(gpui::point(px(0.), target));
                 window.request_animation_frame();
             }
@@ -1460,10 +1501,23 @@ pub(super) fn measured_composer(
 ) -> gpui::Div {
     wrapper.on_children_prepainted(move |bounds: Vec<Bounds<Pixels>>, window, _| {
         if let Some(card) = bounds.first()
-            && cell.get() != Some(*card)
+            && cell.get().is_none_or(|last| !same_bounds(last, *card))
         {
             cell.set(Some(*card));
             window.request_animation_frame();
         }
     })
+}
+
+/// 两组边界在半像素内视为同一处：布局的微小抖动不该每帧都触发重绘。
+pub(super) fn same_bounds(a: Bounds<Pixels>, b: Bounds<Pixels>) -> bool {
+    (a.origin.x - b.origin.x).abs() <= px(0.5)
+        && (a.origin.y - b.origin.y).abs() <= px(0.5)
+        && (a.size.width - b.size.width).abs() <= px(0.5)
+        && (a.size.height - b.size.height).abs() <= px(0.5)
+}
+
+/// `measured` 已记录且与 `needed` 相差不超过半像素时返回 `true`（不必重绘）。
+pub(super) fn within_half_pixel(measured: Option<Pixels>, needed: Pixels) -> bool {
+    measured.is_some_and(|last| (last - needed).abs() <= px(0.5))
 }
