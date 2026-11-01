@@ -452,7 +452,6 @@ fn footer_block(
         .w_full()
         .px(px(SPACE_XS))
         .py(px(SPACE_XS))
-        .rounded(px(RADIUS_MD))
         .flex()
         .flex_col()
         .gap(px(SPACE_XXS))

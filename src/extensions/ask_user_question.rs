@@ -975,7 +975,7 @@ fn view_for(q: &Questionnaire, cols: u16) -> OverlayView {
             }
 
             lines.push(plain(""));
-            for (index, label) in ["Submit answers", "Cancel"].iter().enumerate() {
+            for (index, label) in ["Submit", "Cancel"].iter().enumerate() {
                 rows.push(lines.len());
                 let focused = q.cursor == index;
                 lines.push(vec![DockSpan::new(
