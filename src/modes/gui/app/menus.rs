@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::{core, utils::paths};
+use std::path::Path;
 
 impl GuiApp {
     /// 模型下拉菜单：只作用于当前会话，不写配置。
@@ -386,21 +387,44 @@ impl GuiApp {
         cx.notify();
     }
 
-    /// 菜单「删除」：先弹二次确认。
+    /// 菜单「删除」：先弹二次确认。当前打开的会话不能从侧栏删（与终端 UI 的选择器一致）。
     pub(super) fn ask_delete(&mut self, path: &str, cx: &mut Context<Self>) {
+        self.session_menu = None;
+        if self
+            .snapshot
+            .as_ref()
+            .and_then(|s| s.session_path.as_deref())
+            == Some(path)
+        {
+            self.transcript
+                .push_note(Note::Error("Cannot delete the current session".into()));
+            cx.notify();
+            return;
+        }
+
         let title = self
             .sessions
             .iter()
             .find(|row| row.path == path)
             .map(|row| row.title.clone())
-            .unwrap_or_else(|| {
-                crate::utils::paths::file_name_of(std::path::Path::new(path)).unwrap_or_default()
-            });
+            .unwrap_or_else(|| paths::file_name_of(Path::new(path)).unwrap_or_default());
+        self.ask_delete_many(vec![path.to_string()], format!("Delete \"{title}\"?"), cx);
+    }
+
+    /// 批量删除确认：`/session rm-*` 与侧栏单条共用同一个对话框。
+    pub(super) fn ask_delete_many(
+        &mut self,
+        paths: Vec<String>,
+        detail: String,
+        cx: &mut Context<Self>,
+    ) {
         self.session_menu = None;
-        self.dialog = Some(SessionDialog::Delete {
-            path: path.to_string(),
-            title,
-        });
+        if paths.is_empty() {
+            self.transcript
+                .push_note(Note::Info("No sessions to delete".into()));
+        } else {
+            self.dialog = Some(SessionDialog::Delete { paths, detail });
+        }
         cx.notify();
     }
 
@@ -585,17 +609,30 @@ impl GuiApp {
                 self.confirm_number_setting(key, &text, cx);
                 return;
             }
-            SessionDialog::Delete { path, .. } => {
-                let current = self
-                    .snapshot
+            SessionDialog::Delete { paths, .. } => {
+                let current = self.snapshot.as_ref().and_then(|s| s.session_path.clone());
+                let deleting_current = current
                     .as_ref()
-                    .and_then(|s| s.session_path.clone())
-                    .is_some_and(|current| current == path);
-                _ = std::fs::remove_file(&path);
-                if current {
+                    .is_some_and(|current| paths.iter().any(|p| p == current));
+                let files: Vec<PathBuf> = paths.iter().map(PathBuf::from).collect();
+                let (deleted, failed) = core::session_manager::delete_sessions(&files);
+
+                // 删的是当前会话：文件已经没了，接着往旧路径写会把它重建出来，必须换会话
+                if deleting_current {
                     _ = self.cmd_tx.send(AgentCommand::NewSession);
                     self.transcript.clear();
                     self.flow_height.set(None);
+                }
+
+                match failed.first() {
+                    None => self
+                        .transcript
+                        .push_note(Note::Info(format!("Deleted {deleted} session(s)"))),
+                    Some((path, error)) => self.transcript.push_note(Note::Error(format!(
+                        "Deleted {deleted} session(s) · {} failed: {} ({error})",
+                        failed.len(),
+                        path.display()
+                    ))),
                 }
             }
         }

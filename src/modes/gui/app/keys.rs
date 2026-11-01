@@ -57,15 +57,6 @@ impl GuiApp {
             return;
         }
 
-        // 忙碌态 Esc 直接中断，优先于菜单/补全/覆盖层（同 TUI 的 handle_busy_key）
-        if self.busy && keystroke.key == "escape" {
-            self.abort_turn(cx);
-            crate::core::extensions::cancel_background_work();
-            self.restore_queued();
-            cx.notify();
-            return;
-        }
-
         if self.session_menu.is_some() {
             if self.dispatch_session_menu_key(&keystroke, cx) {
                 cx.notify();
@@ -140,6 +131,17 @@ impl GuiApp {
 
         // 侧栏会话搜索框同理（顺序与 `ime_target` 一致：面板优先）
         if self.session_search_active() && self.dispatch_session_search_key(&keystroke, primary) {
+            cx.notify();
+            return;
+        }
+
+        // 忙碌态 Esc 中断回合——但要排在覆盖层、菜单、补全与搜索框之后：
+        // 那些界面开着时 Esc 是「关它」，先中断就等于按一下取消了正在跑的回合
+        // （同 TUI：覆盖层/面板优先于 busy 快捷键）
+        if self.busy && keystroke.key == "escape" {
+            self.abort_turn(cx);
+            cancel_background_work();
+            self.restore_queued();
             cx.notify();
             return;
         }

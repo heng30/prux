@@ -117,6 +117,9 @@ pub const DROPDOWN_ROW_HEIGHT: f32 = 24.0;
 /// 下拉菜单的最大高度（超过就滚动）
 pub const DROPDOWN_MAX_HEIGHT: f32 = 360.0;
 
+/// 卡片边框宽度（px），`border_1()` 的实际占用；排版算可用宽度时要扣掉
+pub const BORDER_WIDTH: f32 = 1.0;
+
 /// 同时最多保留几条 toast
 pub const TOAST_MAX: usize = 4;
 /// toast 停留时长

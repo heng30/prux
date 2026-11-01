@@ -50,6 +50,8 @@ pub enum PanelKind {
     SettingsOverwrite,
     /// `/history @clear` / `@clear-all` 的删除确认面板：Yes / No
     HistoryClearConfirm,
+    /// `/session rm-current` / `rm-project` / `rm-all` 的删除确认面板：Yes / No
+    SessionDeleteConfirm,
     /// `/bug`：描述输入（filter 行作为输入框）
     BugReportHint,
     /// `/bug`：是否附带 session transcript（Yes / No）
@@ -87,6 +89,7 @@ impl PanelKind {
                 | PanelKind::ImportCwdConfirm
                 | PanelKind::SettingsOverwrite
                 | PanelKind::HistoryClearConfirm
+                | PanelKind::SessionDeleteConfirm
                 | PanelKind::BugReportTranscript
                 | PanelKind::BugReportSummary
                 | PanelKind::BugReportDelivery

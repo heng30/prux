@@ -157,7 +157,7 @@ prux-gui -c         # 接着最近一个会话
   （`Enter` 写盘，留空表示清除）。条目含义见[设置](settings.md)。
 - **扩展 / 技能面板**（`/extension`、`Ctrl-I`）：勾选只改未落盘的草稿，
   `Ctrl-S` 才写盘并重建工具，`Esc` 丢弃；`Enter` 打开当前条目的详情页（描述、模式、工具、来源）。
-- **信息卡片**：`/session`（当前会话概要）、`/hotkeys`（键位摘要）、`Ctrl-Shift-U`（用量与费用）。
+- **信息卡片**：`/session`（当前会话概要，等价于 `/session statistics`）、`/hotkeys`（键位摘要）、`Ctrl-Shift-U`（用量与费用）。侧栏会话菜单的 Delete 只删非当前会话；`/session rm-current`、`rm-project`、`rm-all` 走命令删除，确认框里写明会删掉多少个会话文件，删当前会话后自动开新会话。
   卡片主体有高度上限，`↑` / `↓` / `PgUp` / `PgDn` / `Home` / `End` 滚动，右侧显示滚动条。
 - **信任面板**（启动或 `/trust`）：`Trust`、`Trust parent folder (…)`、`Trust (this session only)`、
   `Do not trust`、`Do not trust (this session only)`，以及 `Remove all saved trust decisions`。
@@ -180,7 +180,7 @@ prux-gui -c         # 接着最近一个会话
 | `Shift-Enter` / `Ctrl-J` | 换行 |
 | `Alt-Enter` | 排 follow-up（本轮结算后发送） |
 | `Tab` | 插入两个空格 |
-| `Esc` | 中止当前回合；空闲时收起右侧面板 |
+| `Esc` | 中止当前回合（覆盖层 / 菜单 / 补全 / 搜索框开着时先关它们）；空闲时收起右侧面板 |
 | `←` / `→` | 按字符移动（`Shift` 扩选） |
 | `Ctrl-←` / `Ctrl-→` / `Alt-←` / `Alt-→` / `Alt-B` / `Alt-F` | 按词移动 |
 | `Home` / `Ctrl-A`，`End` / `Ctrl-E` | 行首 / 行尾 |
@@ -229,6 +229,7 @@ prux-gui -c         # 接着最近一个会话
 | `Ctrl-Home` / `Ctrl-End` | 顶部 / 底部（到底后重新跟随新输出） |
 | `Shift-PgUp` / `Shift-PgDn` | 按视口翻页 |
 | 左键拖选 | 选中文本 |
+| 中键 | 有选区则复制进系统剪贴板并粘贴到输入框，无选区则粘贴剪贴板 |
 | 点击工具卡片 | 展开 / 收起该块 |
 | 拖动滚动条 | 滚动（滚动条在鼠标悬停该区时显示） |
 
@@ -289,7 +290,7 @@ prux-gui -c         # 接着最近一个会话
   状态行里。停靠面板（dock）两边都有。
 - **滚轮速度**：桌面版按系统步长加速。终端界面的 `fullscreenWheelScrollLines`（`/settings` 里的
   Wheel scroll lines）只作用于终端界面。
-- **鼠标**：桌面版支持拖选、拖动滚动条、拖动侧栏/面板边界、右键菜单、点卡片展开、点 chip 开面板。
+- **鼠标**：桌面版支持拖选、中键复制粘贴、拖动滚动条、拖动侧栏/面板边界、右键菜单、点卡片展开、点 chip 开面板。
 - **主题**：桌面版两套，终端界面多套自定义主题（见[主题](themes.md)）。
 - **扩展**：扩展注册的工具、命令、快捷键、覆盖层与停靠段两边共用；扩展请求的列表选择与输入行在
   桌面版里同样会弹出对应面板。

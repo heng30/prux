@@ -128,6 +128,30 @@ pub struct PendingHistoryClear {
     pub detail: String,
 }
 
+/// `/session rm-*` 的删除范围。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionDeleteScope {
+    /// `rm-current`：只删当前会话（删后自动开新会话）
+    Current,
+    /// `rm-project`：删当前工作目录分桶下的所有会话
+    Project,
+    /// `rm-all`：删所有工程分桶下的所有会话
+    All,
+}
+
+/// `/session rm-*` 确认面板的待处理请求。
+///
+/// `paths` 在弹窗前算好：确认后不再重新扫目录（扫两遍会把确认期间新建的会话也删了）。
+#[derive(Debug, Clone)]
+pub struct PendingSessionDelete {
+    /// 待删除的会话文件（一到多个）
+    pub paths: Vec<PathBuf>,
+    /// 爆炸半径（弹窗展示：数量 + 目录）
+    pub detail: String,
+    /// 确认后是否立即开新会话：删的是当前会话时必须（文件没了，接着写会把它重建出来）
+    pub start_new: bool,
+}
+
 /// `/bug` 交互流程的待处理状态：收集 hint 与两个布尔选择，面板逐级推进。
 #[derive(Debug, Clone, Default)]
 pub struct PendingBugReport {
@@ -530,6 +554,8 @@ pub struct App {
     pub pending_settings_overwrite: Option<PendingSettingsOverwrite>,
     /// 待用户确认的 `/history @clear` / `@clear-all` 请求（None=无）
     pub pending_history_clear: Option<PendingHistoryClear>,
+    /// `/session rm-*` 待确认的删除（None = 没有打开删除确认面板）
+    pub pending_session_delete: Option<PendingSessionDelete>,
     /// 进行中的 `/bug` 流程状态（None=无）
     pub pending_bug_report: Option<PendingBugReport>,
     /// 系统消息（显示在消息流，不进 LLM 上下文；带时间戳与级别，渲染时与 LLM 消息按时间线合并）
@@ -961,6 +987,7 @@ impl App {
             pending_import_cwd: None,
             pending_settings_overwrite: None,
             pending_history_clear: None,
+            pending_session_delete: None,
             pending_bug_report: None,
             extension_detail: Vec::new(),
             extensions_changed: false,

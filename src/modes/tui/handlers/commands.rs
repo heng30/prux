@@ -18,7 +18,7 @@ use crate::{
     extensions::skills::bundled_skill_names,
     modes::tui::{
         agent_actor::AgentCommand,
-        app::{App, MsgLevel, WorkingKind},
+        app::{App, MsgLevel, SessionDeleteScope, WorkingKind},
         giff::{self, GiffView},
         theme::{Theme, available_theme_names},
     },
@@ -46,7 +46,11 @@ const BUILTIN_COMMANDS: &[(&str, &str, &[SubcommandDef])] = &[
     ("new", "Start a new session", &[]),
     ("hotkeys", "Show keybindings", &[]),
     ("thinking", "Set thinking level (<level>)", &[]),
-    ("session", "Show current session info", &[]),
+    (
+        "session",
+        "Session info / delete sessions (<statistics|rm-current|rm-project|rm-all>)",
+        SESSION_SUBCOMMANDS,
+    ),
     ("changelog", "Show changelog entries", &[]),
     ("resume", "List/switch sessions (<index>)", &[]),
     (
@@ -90,6 +94,28 @@ const BUILTIN_COMMANDS: &[(&str, &str, &[SubcommandDef])] = &[
     ("extension", "Enable/disable extensions", &[]),
     ("dock", "Toggle the dock panel", &[]),
     ("giff", "Review uncommitted changes", &[]),
+];
+
+/// `/session` 的子命令（声明顺序 = 补全候选顺序）。
+///
+/// 名字与 `cmd_session_arg` 的分发一一对应；`statistics` 就是不带参数的 `/session`。
+const SESSION_SUBCOMMANDS: &[SubcommandDef] = &[
+    SubcommandDef {
+        name: "statistics",
+        description: "Show current session info",
+    },
+    SubcommandDef {
+        name: "rm-current",
+        description: "Delete the current session (confirm)",
+    },
+    SubcommandDef {
+        name: "rm-project",
+        description: "Delete every session of this project (confirm)",
+    },
+    SubcommandDef {
+        name: "rm-all",
+        description: "Delete every session of every project (confirm)",
+    },
 ];
 
 /// 扩展快捷键执行入口类型：需要 TUI 状态 &mut App + agent
@@ -152,7 +178,7 @@ impl App {
             _ if cmd.starts_with("label ") => self.cmd_label(raw),
             _ if cmd.starts_with("model ") => self.cmd_model_named(raw),
             _ if cmd.starts_with("name ") => self.cmd_name(raw),
-            _ if cmd.starts_with("session ") => self.cmd_session_switch(raw),
+            _ if cmd.starts_with("session ") => self.cmd_session_arg(raw),
             _ if cmd.starts_with("history ") => self.cmd_history(raw),
             _ if cmd.starts_with("bug ") => self.cmd_bug(raw),
             _ if cmd.starts_with("import ") => self.cmd_import(raw),
@@ -439,7 +465,7 @@ impl App {
 
     /// 处理 `/new`：清空当前 transcript、流式与滚动状态，通知扩展会话级状态重置，
     /// 并由 worker 开启一个全新会话。
-    fn cmd_new(&mut self) {
+    pub(crate) fn cmd_new(&mut self) {
         self.messages.clear();
         self.system_messages.clear();
         self.expand_overrides.clear(); // 会话切换：丢弃上一条 transcript 的逐块展开态
@@ -647,6 +673,18 @@ impl App {
     fn cmd_name(&mut self, cmd: &str) {
         let name = cmd_arg(cmd, "name").to_string();
         self.worker.send(AgentCommand::SetSessionName { name });
+    }
+
+    /// 处理 `/session <参数>`：先认子命令（`statistics` / `rm-current` / `rm-project` /
+    /// `rm-all`），其余按序号切会话。
+    fn cmd_session_arg(&mut self, cmd: &str) {
+        match cmd_arg(cmd, "session") {
+            "statistics" => self.cmd_session(),
+            "rm-current" => self.open_session_delete_confirm(SessionDeleteScope::Current),
+            "rm-project" => self.open_session_delete_confirm(SessionDeleteScope::Project),
+            "rm-all" => self.open_session_delete_confirm(SessionDeleteScope::All),
+            _ => self.cmd_session_switch(cmd),
+        }
     }
 
     /// 处理 `/session <序号>`：按 1 起的序号恢复 `list_sessions` 中的会话；
@@ -971,6 +1009,44 @@ mod tests {
         crate::test_support::pin_test_agent_dir();
         let (cmd_tx, cmd_rx) = crate::modes::tui::agent_actor::channels();
         (WorkerHandle::new(cmd_tx), cmd_rx)
+    }
+
+    #[test]
+    fn session_subcommands_route_before_index_switch() {
+        // `/session rm-project` 必须先认子命令，不能被当成序号解析（原来所有参数都走切会话）
+        let _ad = crate::test_support::AgentDirGuard::temp();
+        let dir = tempfile::tempdir().unwrap();
+        let mut st = App {
+            cwd: dir.path().to_string_lossy().to_string(),
+            ..App::default()
+        };
+
+        // 没有会话时 rm-project 不弹空确认框
+        st.handle_slash_command("session rm-project");
+        assert!(!st.panel.active);
+        assert!(st.pending_session_delete.is_none());
+
+        // 有会话时弹确认面板
+        let sess_dir = crate::core::session_manager::default_session_dir(
+            &st.cwd,
+            &crate::core::settings_manager::agent_dir(),
+        );
+        let mut s =
+            crate::core::session_manager::Session::create(&st.cwd, Some(sess_dir), true).unwrap();
+        s.append_message(&crate::core::provider::AgentMessage::user_text("hi"));
+        drop(s);
+
+        st.handle_slash_command("session rm-project");
+        assert_eq!(
+            st.panel.top().map(|l| l.kind),
+            Some(PanelKind::SessionDeleteConfirm)
+        );
+
+        // `/session statistics` 仍是会话统计：不弹面板、下发 SessionStats
+        st.panel.close();
+        st.pending_session_delete = None;
+        st.handle_slash_command("session statistics");
+        assert!(!st.panel.active);
     }
 
     #[test]

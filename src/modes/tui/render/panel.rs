@@ -117,6 +117,23 @@ fn panel_content(app: &App, layer: &PanelLayer, width: usize) -> Vec<Line<'stati
         PanelKind::ProjectTrust | PanelKind::ProjectTrustDialog => {
             trust::project_trust_lines(app, layer, width, warning, muted, accent)
         }
+        PanelKind::SessionDeleteConfirm => {
+            let detail = app
+                .pending_session_delete
+                .as_ref()
+                .map(|p| p.detail.clone())
+                .unwrap_or_default();
+            detail_confirm_lines(
+                app,
+                layer,
+                width,
+                warning,
+                muted,
+                accent,
+                &detail,
+                "Session files go to the system trash when available, otherwise they are deleted permanently.",
+            )
+        }
         PanelKind::TrustClearConfirm => detail_confirm_lines(
             app,
             layer,
@@ -804,6 +821,7 @@ pub(crate) fn panel_hint(layer: &PanelLayer) -> String {
         PanelKind::Custom(_) | PanelKind::SessionRepair | PanelKind::ZombieOperations
             | PanelKind::ImportConfirm | PanelKind::ImportCwdConfirm | PanelKind::SettingsOverwrite
             | PanelKind::HistoryClearConfirm
+            | PanelKind::SessionDeleteConfirm
             | PanelKind::TrustClearConfirm
             | PanelKind::LoginAuthType
             | PanelKind::LoginMethod
@@ -1016,6 +1034,7 @@ fn row_is_current(layer: &PanelLayer, item: &PanelItem, app: &App) -> bool {
         | PanelKind::ImportCwdConfirm
         | PanelKind::SettingsOverwrite
         | PanelKind::HistoryClearConfirm
+        | PanelKind::SessionDeleteConfirm
         | PanelKind::ProjectTrust
         | PanelKind::ProjectTrustDialog
         | PanelKind::TrustClearConfirm => false,
@@ -1574,6 +1593,7 @@ pub fn render_panel_text(app: &App, width: usize) -> Vec<String> {
             | PanelKind::ImportCwdConfirm
             | PanelKind::SettingsOverwrite
             | PanelKind::HistoryClearConfirm
+            | PanelKind::SessionDeleteConfirm
             | PanelKind::ProjectTrust
             | PanelKind::ProjectTrustDialog
             | PanelKind::TrustClearConfirm => false,

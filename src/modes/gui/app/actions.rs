@@ -16,6 +16,82 @@ impl GuiApp {
         }
     }
 
+    /// `/session <参数>`：先认子命令（`statistics` / `rm-current` / `rm-project` /
+    /// `rm-all`），其余按 1 起的序号切会话。
+    ///
+    /// 序号用会话目录「最近修改倒序」，直接列目录而不是读侧栏行——侧栏是逐条回填的，
+    /// 刚启动时行数不全，用它会报出错误的可用范围（同 TUI 的 `cmd_session_switch`）。
+    fn cmd_session_arg(&mut self, arg: &str, cx: &mut Context<Self>) {
+        match arg.trim().to_ascii_lowercase().as_str() {
+            "statistics" => self.open_info(InfoKind::Session, cx),
+            "rm-current" | "rm-project" | "rm-all" => self.ask_delete_sessions(arg.trim(), cx),
+            _ => {
+                let paths = sidebar::paths(&self.cwd());
+                match arg.parse::<usize>() {
+                    Ok(index) if index >= 1 && index <= paths.len() => {
+                        let path = paths[index - 1].to_string_lossy().to_string();
+                        _ = self.cmd_tx.send(AgentCommand::ResumeSession { path });
+                    }
+                    _ => self.transcript.push_note(Note::Error(format!(
+                        "invalid index: {arg} (available 1-{})",
+                        paths.len()
+                    ))),
+                }
+            }
+        }
+    }
+
+    /// `/session rm-current|rm-project|rm-all`：弹删除确认（与侧栏单条删除同一个对话框）。
+    fn ask_delete_sessions(&mut self, scope: &str, cx: &mut Context<Self>) {
+        let current = self.snapshot.as_ref().and_then(|s| s.session_path.clone());
+        let (paths, detail) = match scope {
+            "rm-current" => match current {
+                // 确认框正文是单行文本（GUI 对话框不做换行排版），路径在侧栏行里已可见
+                Some(path) => (
+                    vec![path],
+                    "Delete the current session and start a new one?".to_string(),
+                ),
+                None => {
+                    self.transcript
+                        .push_note(Note::Error("No current session to delete".into()));
+                    cx.notify();
+                    return;
+                }
+            },
+            "rm-project" => {
+                let paths: Vec<String> = sidebar::paths(&self.cwd())
+                    .iter()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .collect();
+                let count = paths.len();
+                let dir = core::session_manager::default_session_dir(
+                    &self.cwd(),
+                    &core::settings_manager::agent_dir(),
+                );
+                (
+                    paths,
+                    format!("Delete all {count} sessions in {}?", dir.display()),
+                )
+            }
+            _ => {
+                let agent_dir = core::settings_manager::agent_dir();
+                let paths: Vec<String> = core::session_manager::list_all_sessions(&agent_dir)
+                    .iter()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .collect();
+                let count = paths.len();
+                (
+                    paths,
+                    format!(
+                        "Delete all {count} sessions in {}?",
+                        agent_dir.join("sessions").display()
+                    ),
+                )
+            }
+        };
+        self.ask_delete_many(paths, detail, cx);
+    }
+
     /// 斜杠命令本体：`arg` 是命令名之后的原文（不吃参数的命令收到空串）。
     fn run_slash_with(&mut self, name: &str, arg: &str, cx: &mut Context<Self>) {
         match name {
@@ -92,22 +168,8 @@ impl GuiApp {
                         .push_note(Note::Error(format!("model not found in scope: {arg}")));
                 }
             }
-            // `/session <序号>`：按会话目录里「最近修改倒序」的 1 起序号切会话。
-            // 直接列目录而不是读侧栏行——侧栏是逐条回填的，刚启动时行数不全，
-            // 用它会报出错误的可用范围（同 TUI 的 `cmd_session_switch`）。
-            "session" if !arg.is_empty() => {
-                let paths = sidebar::paths(&self.cwd());
-                match arg.parse::<usize>() {
-                    Ok(index) if index >= 1 && index <= paths.len() => {
-                        let path = paths[index - 1].to_string_lossy().to_string();
-                        _ = self.cmd_tx.send(AgentCommand::ResumeSession { path });
-                    }
-                    _ => self.transcript.push_note(Note::Error(format!(
-                        "invalid index: {arg} (available 1-{})",
-                        paths.len()
-                    ))),
-                }
-            }
+            // `/session <子命令|序号>`：子命令见 `cmd_session_arg`，其余按序号切会话
+            "session" if !arg.is_empty() => self.cmd_session_arg(arg, cx),
             "new" => {
                 _ = self.cmd_tx.send(AgentCommand::NewSession);
                 self.transcript.clear();

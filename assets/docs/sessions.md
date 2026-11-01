@@ -32,7 +32,7 @@ prux --fork <path|id>      # 把某会话文件/部分 UUID fork 成新会话
 prux --export <sess> [out] # 把会话导出为 HTML
 ```
 
-交互模式下用 `/session` 查看当前会话信息：会话名、文件路径、会话 ID、消息总数、工具调用数、token（输入/输出/总）与成本。
+交互模式下用 `/session` 查看当前会话信息：会话名、文件路径、会话 ID、消息总数、工具调用数、token（输入/输出/总）与成本（等价于 `/session statistics`）。
 
 ## 会话文件格式
 
@@ -61,6 +61,10 @@ prux --export <sess> [out] # 把会话导出为 HTML
 |------|------|
 | `/resume` | 打开会话选择器，浏览/切换历史会话（也支持 `/session <序号>` 直接切换） |
 | `/session` | 显示当前会话信息（文件、ID、消息数、token、成本） |
+| `/session statistics` | 同上：当前会话信息 |
+| `/session rm-current` | 删除当前会话（确认后执行，并开一个新会话） |
+| `/session rm-project` | 删除当前项目目录下的所有会话（确认后执行） |
+| `/session rm-all` | 删除所有项目目录下的所有会话（确认后执行） |
 | `/session <n>` | 按序号切换会话（序号 1..N，按最近修改排序） |
 | `/new` | 开始全新会话 |
 | `/name <name>` | 设置当前会话显示名 |
@@ -94,6 +98,16 @@ prux --export <sess> [out] # 把会话导出为 HTML
 - `Ctrl+Backspace`：查询为空时直接进入删除确认
 
 选择器会显示当前打开的会话，并在左侧用 `✓` 标记（已打开的会话不可选中，方向键会自动跳过）；空会话（无用户消息）不显示（当前会话除外）；fork 出的会话按其 `parentSessionId` 在列表中以树形缩进显示（默认 threaded 排序）。打开时默认选中**第一个非当前会话**（渐进加载/树重排期间持续跟随，用户首次导航后不再自动跳转）。方向键选择（`Home`/`End` 跳首/末项，`Ctrl+G` 跳到当前打开会话的下一条会话）、`Enter` 恢复、`Esc`/`Ctrl+C` 取消。相关键位可在 [keybindings.md](keybindings.md) 的 `app.session.*` 中自定义。
+
+## 用命令删除会话（/session rm-*）
+
+`/session` 的三个删除子命令都以 Yes/No 面板确认，确认框里写明会删掉多少个会话文件、在哪个目录：
+
+- `/session rm-current`：只删当前会话的文件。删完自动开一个新会话——文件已经没了，继续往旧路径写会把它重新建出来。正在输出时该命令会被排进 steer 队列，等当前轮结束才执行。
+- `/session rm-project`：删当前工作目录分桶下的全部会话（`<agent_dir>/sessions/--<cwd>--/`）。
+- `/session rm-all`：删所有工程分桶下的全部会话（`<agent_dir>/sessions/` 下每个子目录）。
+
+删除优先交给 `trash` CLI（进系统回收站，可恢复）；`trash` 不可用或失败时直接 unlink，**不可恢复**。批量删除里单个文件失败不会中断其余文件，失败项会在提示里列出。没有可删的会话时不会弹空确认框，只回一句提示。
 
 ## 命名会话
 

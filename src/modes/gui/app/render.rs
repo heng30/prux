@@ -710,11 +710,11 @@ impl GuiApp {
 
         let ime_layer = self.ime_layer(cx);
 
-        // 输入框可用内宽：上一帧实测的卡片宽减左右内边距（首帧还没量到时按窗口估算）
+        // 输入框可用内宽：上一帧实测的卡片宽减左右内边距与边框（首帧还没量到时按窗口估算）
         let composer_wrap_width = self
             .composer_bounds
             .get()
-            .map(|bounds| bounds.size.width - px(COMPOSER_H_PADDING * 2.))
+            .map(|bounds| composer::wrap_width_for(bounds.size.width))
             .filter(|width| *width > px(0.))
             .unwrap_or_else(|| px(600.));
 
@@ -1109,6 +1109,10 @@ impl GuiApp {
             .font_family(theme::UI_FONT_FAMILY)
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::on_key_down))
+            .on_mouse_down(
+                MouseButton::Middle,
+                cx.listener(|this, _, _, cx| this.middle_click(cx)),
+            )
             .child(sidebar)
             .child(body)
     }
@@ -1492,9 +1496,13 @@ impl GuiApp {
                     String::new(),
                     Some(composer::render(editor, theme)),
                 ),
-                Some(SessionDialog::Delete { title, .. }) => (
-                    "Delete session",
-                    format!("Delete \"{title}\"? This cannot be undone."),
+                Some(SessionDialog::Delete { paths, detail }) => (
+                    if paths.len() > 1 {
+                        "Delete sessions"
+                    } else {
+                        "Delete session"
+                    },
+                    detail.clone(),
                     None,
                 ),
                 None => ("", String::new(), None),

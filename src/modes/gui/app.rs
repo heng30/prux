@@ -42,12 +42,12 @@ use super::{
     suggest::{self as suggest_engine, Suggest, Trigger},
     text_edit::{self, Editor},
     theme::{
-        self, COMPOSER_H_PADDING, CONTENT_MAX_WIDTH, DROPDOWN_MAX_HEIGHT, DROPDOWN_ROW_HEIGHT,
-        FLOW_PADDING_BOTTOM, FLOW_PADDING_TOP, MENU_EDGE_MARGIN, PANEL_DEFAULT_WIDTH,
-        PANEL_MAX_WIDTH, PANEL_MIN_WIDTH, SCROLLBAR_HIT_WIDTH, SCROLLBAR_WIDTH,
-        SIDEBAR_DEFAULT_WIDTH, SIDEBAR_HANDLE_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH,
-        SUGGEST_CHROME_HEIGHT, SUGGEST_GAP, SUGGEST_ROW_HEIGHT, SUGGEST_ROWS, TOAST_DURATION,
-        TOAST_MAX, TRANSCRIPT_LINE_HEIGHT, Theme, min_thumb, px,
+        self, CONTENT_MAX_WIDTH, DROPDOWN_MAX_HEIGHT, DROPDOWN_ROW_HEIGHT, FLOW_PADDING_BOTTOM,
+        FLOW_PADDING_TOP, MENU_EDGE_MARGIN, PANEL_DEFAULT_WIDTH, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH,
+        SCROLLBAR_HIT_WIDTH, SCROLLBAR_WIDTH, SIDEBAR_DEFAULT_WIDTH, SIDEBAR_HANDLE_WIDTH,
+        SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, SUGGEST_CHROME_HEIGHT, SUGGEST_GAP,
+        SUGGEST_ROW_HEIGHT, SUGGEST_ROWS, TOAST_DURATION, TOAST_MAX, TRANSCRIPT_LINE_HEIGHT, Theme,
+        min_thumb, px,
     },
     transcript::{self, Note, Transcript},
 };
@@ -191,10 +191,10 @@ enum SessionDialog {
     },
     /// 删除前的二次确认
     Delete {
-        /// 会话文件路径
-        path: String,
-        /// 展示用的会话标题
-        title: String,
+        /// 待删除的会话文件路径（侧栏单条一个，`/session rm-*` 可以一批）
+        paths: Vec<String>,
+        /// 确认框正文（单条是「Delete "<标题>"?」，批量是数量与目录）
+        detail: String,
     },
 }
 

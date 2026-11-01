@@ -18,6 +18,38 @@ impl GuiApp {
         cx.notify();
     }
 
+    /// 中键：复制选区并贴进输入框（对齐 TUI 的 `handle_mouse_middle_down`）。
+    ///
+    /// 有选区 → 复制进系统剪贴板并粘贴（粘贴不依赖剪贴板，与 TUI 一致）；
+    /// 无选区 → 直接贴剪贴板。覆盖层面板里没有可写的输入行，打开时只复制不粘贴。
+    pub(super) fn middle_click(&mut self, cx: &mut Context<Self>) {
+        let picked = self
+            .text_sel
+            .map(|selection| transcript::selected_text(selection, &self.line_rows.borrow()))
+            .filter(|text| !text.is_empty())
+            .or_else(|| {
+                let text = self.editor.selected_text();
+                (!text.is_empty()).then_some(text)
+            });
+
+        let Some(text) = picked else {
+            if self.overlay.is_none()
+                && let Some(text) = cx.read_from_clipboard().and_then(|item| item.text())
+            {
+                self.editor.insert(&text);
+            }
+            cx.notify();
+            return;
+        };
+
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(text.clone()));
+        self.text_sel = None;
+        if self.overlay.is_none() {
+            self.editor.insert(&text);
+        }
+        cx.notify();
+    }
+
     /// 按窗口坐标找出落在哪一行文字上，返回（行序号, 行内字符下标）。
     pub(super) fn line_hit(
         &self,

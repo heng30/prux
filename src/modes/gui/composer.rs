@@ -1,14 +1,14 @@
 //! 输入行（composer）：把 [`Editor`] 状态渲染成多行文本，带光标与选区。
 
-use super::text_edit::Editor;
-use super::theme::{FONT_BODY, SPACE_XXS, Theme, UI_FONT_FAMILY, px};
+use super::{
+    text_edit::Editor,
+    theme::{BORDER_WIDTH, COMPOSER_H_PADDING, FONT_BODY, SPACE_XXS, Theme, UI_FONT_FAMILY, px},
+};
 use gpui::{
     AnyElement, InteractiveElement, IntoElement, ParentElement, SharedString,
     StatefulInteractiveElement, Styled, div,
 };
-use std::cell::Cell;
-use std::collections::HashMap;
-use std::rc::Rc;
+use std::{cell::Cell, collections::HashMap, rc::Rc};
 
 /// 输入行最多显示的行数（超出部分靠滚动，避免占满整屏）。
 const MAX_VISIBLE_LINES: usize = 8;
@@ -103,6 +103,13 @@ pub fn wrap_chunks(
     }
     chunks.push(start..chars);
     chunks
+}
+
+/// 输入框正文的可用宽度：卡片外宽减左右内边距与 1px 边框。
+///
+/// 只扣内边距会宽 2px：每行按多出的宽度排好字后，flex 会把行尾那个字压掉一半才折行。
+pub fn wrap_width_for(card_width: gpui::Pixels) -> gpui::Pixels {
+    card_width - px(COMPOSER_H_PADDING * 2. + BORDER_WIDTH * 2.)
 }
 
 /// [`render`] 与 [`render_wrapped`] 的公共实现。
@@ -358,6 +365,16 @@ mod tests {
         assert_eq!(wrap_chunks("", 40., |_| 10.), vec![0..0]);
         // 宽度未知时不折行
         assert_eq!(wrap_chunks("abcdef", 0., |_| 10.), vec![0..6]);
+    }
+
+    /// 折行宽度要把卡片左右边框也扣掉：只扣内边距会宽 2px，
+    /// 每行排好的字被 flex 压掉半个再折行。
+    #[test]
+    fn wrap_width_subtracts_padding_and_border() {
+        assert_eq!(
+            wrap_width_for(px(400.)),
+            px(400. - COMPOSER_H_PADDING * 2. - 2.)
+        );
     }
 
     /// 行尾光标补一个占位方块；选区连续字符合成一段。

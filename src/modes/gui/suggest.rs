@@ -43,7 +43,10 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("thinking", "Set thinking level"),
     ("compact", "Compact context"),
     ("copy", "Copy last reply"),
-    ("session", "Show current session info"),
+    (
+        "session",
+        "Session info / delete sessions (statistics|rm-current|rm-project|rm-all)",
+    ),
     ("name", "Rename current session"),
     ("clone", "Clone current branch"),
     ("fork", "Fork current session"),

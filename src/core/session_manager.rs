@@ -22,6 +22,7 @@ use std::{
     collections::{HashMap, HashSet},
     io::{BufRead, Write},
     path::{Path, PathBuf},
+    process::Command,
     sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -177,6 +178,29 @@ fn write_repaired_file(file: &Path, content: &str) -> std::io::Result<()> {
     let tmp = file.with_extension("jsonl.tmp");
     std::fs::write(&tmp, content)?;
     std::fs::rename(&tmp, file)
+}
+
+/// 删除会话文件：先试 `trash` CLI（进系统回收站，可恢复），失败回退 unlink。
+///
+/// 返回实际采用的方式：`"trash"` 表示已进回收站，`"unlink"` 表示已直接删除且不可恢复；
+/// 两者都失败时返回错误文案。TUI 与 GUI 的删除动作共用本函数，避免同一操作在两处
+/// 安全等级不一致。
+pub fn delete_session_file(path: &str) -> std::result::Result<&'static str, String> {
+    let mut cmd = Command::new("trash");
+    // 以 `-` 开头的路径会被 CLI 当成选项，用 `--` 终止选项解析
+    if path.starts_with('-') {
+        cmd.arg("--");
+    }
+    cmd.arg(path);
+    let trash_ok = match cmd.output() {
+        Ok(o) => o.status.success() || !Path::new(path).exists(),
+        Err(_) => false,
+    };
+    if trash_ok {
+        return Ok("trash");
+    }
+    std::fs::remove_file(path).map_err(|e| e.to_string())?;
+    Ok("unlink")
 }
 
 /// D 档判定：引用断裂类错误——被丢弃行/缺失的 state 导致后缀依赖缺失，跳过该行也救不回来，应就地截断。
@@ -2040,6 +2064,39 @@ pub fn list_sessions(dir: &Path) -> Vec<PathBuf> {
     sessions.into_iter().map(|(_, p)| p).collect()
 }
 
+/// 所有工程分桶下的会话文件（`<agent_dir>/sessions/--*--/*.jsonl`）。
+///
+/// 只扫一层子目录：会话目录结构固定为「根/工程桶/文件」，不递归。
+/// 根目录不存在时返回空列表。
+pub fn list_all_sessions(agent_dir: &Path) -> Vec<PathBuf> {
+    let Ok(read_dir) = std::fs::read_dir(agent_dir.join("sessions")) else {
+        return Vec::new();
+    };
+
+    let mut all: Vec<PathBuf> = Vec::new();
+    for entry in read_dir.flatten() {
+        if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            all.extend(list_sessions(&entry.path()));
+        }
+    }
+    all
+}
+
+/// 逐个删除会话文件，返回 `(成功数, 失败项)`。
+///
+/// 单文件失败不中断整批（批量删除要把能删的都删掉），失败项交给调用方报给用户。
+pub fn delete_sessions(paths: &[PathBuf]) -> (usize, Vec<(PathBuf, String)>) {
+    let mut deleted = 0;
+    let mut failed: Vec<(PathBuf, String)> = Vec::new();
+    for path in paths {
+        match delete_session_file(&path.to_string_lossy()) {
+            Ok(_) => deleted += 1,
+            Err(e) => failed.push((path.clone(), e)),
+        }
+    }
+    (deleted, failed)
+}
+
 /// 会话列表展示元数据（每行信息：名称/首条消息、消息数、修改时间）
 #[derive(Debug, Clone)]
 pub struct SessionMeta {
@@ -2115,6 +2172,21 @@ mod tests {
     fn session_at(dir: &Path) -> Session {
         let d = dir.join("sessions");
         Session::create(dir.to_str().unwrap(), Some(d.clone()), true).unwrap()
+    }
+
+    /// 删除会话文件：本机装了 `trash` 走回收站，否则回退 unlink——两种情况文件都必须消失。
+    #[test]
+    fn delete_session_file_removes_file_either_way() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("s.jsonl");
+        std::fs::write(&path, "{}").unwrap();
+
+        let method = delete_session_file(path.to_str().unwrap()).unwrap();
+        assert!(
+            method == "trash" || method == "unlink",
+            "unexpected: {method}"
+        );
+        assert!(!path.exists());
     }
 
     /// 延迟落盘的会话：没写入前磁盘上没有文件，写入首条消息后才建文件（空会话不落盘）。

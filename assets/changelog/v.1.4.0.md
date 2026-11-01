@@ -371,6 +371,26 @@
   dismisses it. A command that times out while a dialog is open now says so instead of looking like
   a dead connection.
 
+- **`/session` takes subcommands, including three that delete sessions**: `/session statistics` is
+  the session summary that bare `/session` already printed, and `/session rm-current`,
+  `/session rm-project` and `/session rm-all` delete the current session, every session of the
+  current project, or every session of every project. Each one asks for a Yes/No confirmation that
+  names the number of session files and the directory they live in, and each reports how many
+  deletions succeeded. `rm-current` starts a new session afterwards, because the file it just
+  deleted would otherwise be recreated by the next write. `/session <n>` still switches to the
+  n-th session, so existing habits keep working, and the subcommand names complete in the input box
+  in the terminal UI.
+
+- **The desktop GUI copies and pastes on middle click, as the terminal UI does**: with a selection
+  (transcript or input box) it goes to the system clipboard and is pasted at the cursor; with no
+  selection the clipboard is pasted. Panels have no writable input row, so with one open the click
+  only copies.
+
+- **The desktop GUI's input box no longer clips half a character at the end of a wrapped line**: the
+  wrap width was the composer card's width minus its horizontal padding, but the card also has a
+  1px border on each side, so every visual line was laid out 2px wider than it could be and the last
+  glyph was squeezed by the flex row before wrapping to the next line. The border is subtracted now.
+
 ### Fixed
 
 - **The desktop GUI's `/history` panel uses the full row width**: prompt rows have no right-hand
@@ -689,6 +709,17 @@
   painted straight past the panel's border. The spans now let themselves shrink, and such lines
   break inside the card.
 
+- **Deleting a session in the desktop GUI goes to the trash, as in the terminal UI**: the sidebar's
+  Delete action unlinked the file outright, so one misclick was unrecoverable. It now runs the
+  `trash` CLI first and falls back to unlinking only when that fails, and it refuses to delete the
+  session that is currently open — that file is still being appended to, as the terminal UI already
+  enforced. The confirmation no longer claims the deletion cannot be undone.
+
+- **`Esc` in the desktop GUI closes an open panel before it aborts the turn**: while a turn was
+  running, `Esc` was checked against the busy state first, so hiding an overlay or menu cancelled
+  the running turn instead. The busy-state abort now runs after the overlay, dropdown, completion
+  panel and search boxes, matching what the terminal UI already did.
+
 ## 中文
 
 ### 新增
@@ -960,6 +991,20 @@
   未捕获异常、资源加载失败；新的 `dialog` 动作报出打开中的 `alert` / `confirm` / `prompt` 并接受或
   拒掉它。对话框卡住页面时，命令超时的报错会点名这一点，不再看起来像连接已经死掉。
 
+- **`/session` 有了子命令，其中三个用于删除会话**：`/session statistics` 就是原来不带参数的
+  `/session` 打印的会话概要；`/session rm-current`、`/session rm-project`、`/session rm-all`
+  分别删除当前会话、当前项目目录下的所有会话、所有项目目录下的所有会话。三者都先弹 Yes/No 确认框，
+  写明会删掉多少个会话文件、在哪个目录，删完回报成功条数。`rm-current` 删完自动开新会话——否则
+  下一次写入会把刚删掉的文件重新建出来。`/session <序号>` 的按序号切会话保持不变，子命令名在终端
+  UI 的输入框里可补全。
+
+- **桌面 GUI 中键复制并粘贴，与终端 UI 一致**：有选区（对话流或输入框）就复制进系统剪贴板并粘到
+  光标处，没有选区就粘贴剪贴板内容。面板里没有可写的输入行，所以面板打开时只复制不粘贴。
+
+- **桌面 GUI 输入框不再把折行行尾的那个字裁掉一半**：折行宽度取的是输入卡片宽度减去左右内边距，
+  而卡片左右还有 1px 边框，于是每个视觉行都多算了 2px 宽，行尾那个字被 flex 压掉一半才换行。现在
+  边框也一并扣掉。
+
 ## 修复
 
 - **桌面 GUI 的 `/history` 面板用满整行宽度**：历史 prompt 没有行尾说明，却仍按「主文案截在说明
@@ -1181,3 +1226,12 @@
 - **桌面 GUI 的覆盖层与停靠面板长行会折行，不再戳出卡片**：每行原本是一排按样式片段切开的 flex
   子元素，而文本的自动最小宽度就是它不折行时的整行宽度——于是这一行永远缩不到卡片宽度，长文本
   （子代理的任务说明、停靠状态行）直接画到面板边框外面。现在片段允许收缩，这类长行在卡片内折行。
+
+- **桌面 GUI 删除会话与终端 UI 一致，先进回收站**：侧栏的删除动作原本直接 unlink，点错一次就
+  找不回来。现在先走 `trash` CLI，失败才回退 unlink；并且和终端 UI 一样不允许删除当前正开着的
+  会话——那个文件仍在被追加写入。确认框也不再写「无法撤销」。
+
+- **桌面 GUI 的 `Esc` 先关面板、再中止回合**：正在输出时 `Esc` 原本先命中忙碌态分支，于是想收起
+  覆盖层或菜单，却把正在跑的回合取消了。忙碌态的中止现在排在覆盖层、下拉菜单、补全面板与搜索框
+  之后，与终端 UI 的顺序一致。
+

@@ -187,6 +187,13 @@ impl App {
             self.cancel_history_clear_confirm();
         }
 
+        // 取消 `/session rm-*` 删除确认面板：什么都不删
+        if let Some(layer) = self.panel.top()
+            && layer.kind == PanelKind::SessionDeleteConfirm
+        {
+            self.cancel_session_delete_confirm();
+        }
+
         // 取消「清空 trust.json」确认面板：保留所有信任决策
         if let Some(layer) = self.panel.top()
             && layer.kind == PanelKind::TrustClearConfirm
@@ -621,6 +628,9 @@ impl App {
 
             // /history 历史删除确认：Enter 确认（yes → 执行删除 / no → 取消）
             PanelKind::HistoryClearConfirm => self.resolve_history_clear_confirm(&item.value),
+
+            // /session rm-* 会话删除确认：Enter 确认（yes → 执行删除 / no → 取消）
+            PanelKind::SessionDeleteConfirm => self.resolve_session_delete_confirm(&item.value),
 
             // /bug：transcript / 摘要 / 导出三步都是选项面板（选择后打开下一级，均需提前返回）
             PanelKind::BugReportHint => {}

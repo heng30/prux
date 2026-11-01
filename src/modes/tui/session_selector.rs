@@ -15,7 +15,6 @@ use std::{
     collections::{HashMap, VecDeque},
     io::{BufRead, BufReader},
     path::{Path, PathBuf},
-    process::Command,
     time::{Duration, Instant, SystemTime},
 };
 
@@ -624,7 +623,7 @@ impl SessionSelector {
             return;
         };
 
-        match delete_session_file(&path) {
+        match session_manager::delete_session_file(&path) {
             Ok(method) => {
                 // 从两个缓存列表移除（删除后两列表同步过滤）
                 self.current.retain(|r| r.path.to_string_lossy() != path);
@@ -1342,24 +1341,6 @@ fn match_session(row: &SessionRow, parsed: &ParsedQuery) -> Option<f64> {
         total += fuzzy_match(value, &text)?;
     }
     Some(total)
-}
-
-/// 删除会话文件：先试 `trash` CLI，失败回退 unlink
-fn delete_session_file(path: &str) -> Result<&'static str, String> {
-    let mut cmd = Command::new("trash");
-    if path.starts_with('-') {
-        cmd.arg("--");
-    }
-    cmd.arg(path);
-    let trash_ok = match cmd.output() {
-        Ok(o) => o.status.success() || !Path::new(path).exists(),
-        Err(_) => false,
-    };
-    if trash_ok {
-        return Ok("trash");
-    }
-    std::fs::remove_file(path).map_err(|e| e.to_string())?;
-    Ok("unlink")
 }
 
 #[cfg(test)]

@@ -11,13 +11,13 @@
 use super::super::{
     agent_actor::AgentCommand,
     app::{
-        App, MsgLevel, PendingHistoryClear, PendingImport, PendingImportCwd,
-        PendingSettingsOverwrite,
+        App, MsgLevel, PendingHistoryClear, PendingImport, PendingImportCwd, PendingSessionDelete,
+        PendingSettingsOverwrite, SessionDeleteScope,
     },
     panel::{PanelItem, PanelKind},
 };
-use crate::core::{prompt_history, settings_manager};
-use std::path::PathBuf;
+use crate::core::{prompt_history, session_manager, settings_manager};
+use std::path::{Path, PathBuf};
 
 /// Yes/No 确认项的公共定义（/import、import cwd、/history 三族共用）
 const YES_NO: &[(&str, &str)] = &[("Yes", "yes"), ("No", "no")];
@@ -273,6 +273,100 @@ impl App {
             MsgLevel::Info,
         );
     }
+
+    /// `/session rm-current` / `rm-project` / `rm-all`：打开删除确认面板。
+    ///
+    /// 没有可删的会话时不弹窗（空确认框只能让人对 Yes/No 发楞），只给一句提示。
+    /// `detail` 预先算好真实范围：这是不可恢复操作唯一能给的预警。
+    pub(crate) fn open_session_delete_confirm(&mut self, scope: SessionDeleteScope) {
+        let agent_dir = settings_manager::agent_dir();
+        let current = self.current_session_path.clone();
+
+        let (title, paths, where_) = match scope {
+            SessionDeleteScope::Current => match &current {
+                Some(path) => (
+                    "Delete the current session".to_string(),
+                    vec![PathBuf::from(path)],
+                    path.clone(),
+                ),
+                None => {
+                    self.push_msg("No current session to delete".to_string(), MsgLevel::Info);
+                    self.dirty = true;
+                    return;
+                }
+            },
+            SessionDeleteScope::Project => {
+                let dir = session_manager::default_session_dir(&self.cwd, &agent_dir);
+                (
+                    "Delete all sessions of this project".to_string(),
+                    session_manager::list_sessions(&dir),
+                    dir.display().to_string(),
+                )
+            }
+            SessionDeleteScope::All => (
+                "Delete every session".to_string(),
+                session_manager::list_all_sessions(&agent_dir),
+                agent_dir.join("sessions").display().to_string(),
+            ),
+        };
+
+        if paths.is_empty() {
+            self.push_msg("No sessions to delete".to_string(), MsgLevel::Info);
+            self.dirty = true;
+            return;
+        }
+
+        // 删的是当前会话时，删完必须换会话：文件没了，往旧路径接着写会把它重建出来
+        let start_new = current
+            .as_deref()
+            .is_some_and(|c| paths.iter().any(|p| p == Path::new(c)));
+        let detail = format!("{} sessions\n{}", paths.len(), where_);
+
+        self.open_confirm(PanelKind::SessionDeleteConfirm, title, YES_NO);
+        self.pending_session_delete = Some(PendingSessionDelete {
+            paths,
+            detail,
+            start_new,
+        });
+    }
+
+    /// 确认面板选择：`yes` = 执行删除；其余 = 取消。
+    pub(crate) fn resolve_session_delete_confirm(&mut self, choice: &str) {
+        let Some(pending) = self.pending_session_delete.take() else {
+            return;
+        };
+
+        if choice != "yes" {
+            self.push_msg("Session delete cancelled".to_string(), MsgLevel::Info);
+            self.dirty = true;
+            return;
+        }
+
+        let (deleted, failed) = session_manager::delete_sessions(&pending.paths);
+        if pending.start_new {
+            self.cmd_new();
+        }
+
+        let (msg, level) = match failed.first() {
+            None => (format!("Deleted {deleted} session(s)"), MsgLevel::Info),
+            Some((path, error)) => (
+                format!(
+                    "Deleted {deleted} session(s) · {} failed: {} ({error})",
+                    failed.len(),
+                    path.display()
+                ),
+                MsgLevel::Warning,
+            ),
+        };
+        self.push_msg(msg, level);
+        self.dirty = true;
+    }
+
+    /// 确认面板取消（Esc/Ctrl+C）：什么都不删。
+    pub(crate) fn cancel_session_delete_confirm(&mut self) {
+        let had_pending = self.pending_session_delete.take().is_some();
+        self.cancel_with(had_pending, "Session delete cancelled", MsgLevel::Info);
+    }
 }
 
 #[cfg(test)]
@@ -280,7 +374,7 @@ mod tests {
     use crate::modes::tui::panel::PanelKind;
     use crate::{
         core::{provider::AgentMessage, session_manager::Session},
-        modes::tui::app::App,
+        modes::tui::app::{App, SessionDeleteScope},
     };
 
     #[test]
@@ -457,5 +551,79 @@ mod tests {
         app.run_import(path);
         assert!(!app.panel.active, "cwd 一致不应弹确认框");
         assert!(app.pending_import_cwd.is_none());
+    }
+
+    /// 建一个已落盘的会话，返回文件路径。
+    fn write_session(cwd: &str, dir: &std::path::Path) -> std::path::PathBuf {
+        let mut s = Session::create(cwd, Some(dir.to_path_buf()), true).unwrap();
+        s.append_message(&AgentMessage::user_text("hi"));
+        s.get_session_file().unwrap().to_path_buf()
+    }
+
+    #[test]
+    fn session_rm_project_deletes_only_this_project() {
+        // `/session rm-project`：只删当前 cwd 分桶下的会话，别的工程的会话留着
+        let _ad = crate::test_support::AgentDirGuard::temp();
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().join("proj");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let mut app = App {
+            cwd: cwd.to_string_lossy().to_string(),
+            ..App::default()
+        };
+
+        let agent_dir = crate::core::settings_manager::agent_dir();
+        let proj_dir = crate::core::session_manager::default_session_dir(&app.cwd, &agent_dir);
+        let other_dir = dir.path().join("other-sessions");
+        let a = write_session(&app.cwd, &proj_dir);
+        let b = write_session(&app.cwd, &proj_dir);
+        let keep = write_session("/elsewhere", &other_dir);
+
+        app.open_session_delete_confirm(SessionDeleteScope::Project);
+        assert_eq!(
+            app.panel.top().map(|l| l.kind),
+            Some(PanelKind::SessionDeleteConfirm)
+        );
+        assert_eq!(app.pending_session_delete.as_ref().unwrap().paths.len(), 2);
+        // No → 什么都不删
+        app.resolve_session_delete_confirm("no");
+        assert!(a.exists() && b.exists());
+
+        // 重新弹窗并确认 → 本项目两个文件没了，别的工程还在
+        app.open_session_delete_confirm(SessionDeleteScope::Project);
+        app.resolve_session_delete_confirm("yes");
+        assert!(!a.exists() && !b.exists());
+        assert!(keep.exists());
+        assert!(app.pending_session_delete.is_none());
+    }
+
+    #[test]
+    fn session_rm_current_deletes_file_and_starts_new_session() {
+        // `/session rm-current`：删掉当前会话文件并换新会话（否则后续写入会把它重建出来）
+        let _ad = crate::test_support::AgentDirGuard::temp();
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::default();
+        let path = write_session(&app.cwd, &dir.path().join("sessions"));
+        app.current_session_path = Some(path.to_string_lossy().to_string());
+
+        app.open_session_delete_confirm(SessionDeleteScope::Current);
+        assert!(app.pending_session_delete.as_ref().unwrap().start_new);
+        app.resolve_session_delete_confirm("yes");
+        assert!(!path.exists());
+        assert!(app.current_session_path.is_none(), "删完必须换会话");
+    }
+
+    #[test]
+    fn session_rm_skips_panel_without_sessions() {
+        // 没有可删的会话时不弹空确认框，只提示
+        let _ad = crate::test_support::AgentDirGuard::temp();
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App {
+            cwd: dir.path().to_string_lossy().to_string(),
+            ..App::default()
+        };
+        app.open_session_delete_confirm(SessionDeleteScope::Project);
+        assert!(!app.panel.active);
+        assert!(app.pending_session_delete.is_none());
     }
 }
