@@ -147,7 +147,7 @@ struct SessionMenu {
     path: String,
     /// 菜单锚点（右键位置，窗口坐标）
     position: gpui::Point<Pixels>,
-    /// 键盘高亮项：0 = 重命名，1 = 删除
+    /// 高亮项：0 = 重命名，1 = 删除。键盘与鼠标共用这一个状态，保证同时只有一行亮
     selected: usize,
 }
 

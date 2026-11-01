@@ -347,6 +347,20 @@ impl GuiApp {
         cx.notify();
     }
 
+    /// 鼠标移到菜单某一项：高亮跟着走。
+    ///
+    /// 菜单只有一束高亮（`selected`），鼠标悬停与键盘移动改的是同一项，否则键盘选中项
+    /// 会一直亮着，看起来同时高亮两行。
+    pub(super) fn hover_session_menu(&mut self, index: usize, cx: &mut Context<Self>) {
+        if let Some(menu) = self.session_menu.as_mut() {
+            if menu.selected == index {
+                return;
+            }
+            menu.selected = index;
+            cx.notify();
+        }
+    }
+
     /// 打开会话行右键菜单。
     pub(super) fn open_session_menu(
         &mut self,

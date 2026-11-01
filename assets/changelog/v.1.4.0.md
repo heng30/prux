@@ -393,6 +393,11 @@
 
 ### Fixed
 
+- **The desktop GUI's session right-click menu highlights one row at a time**: the keyboard
+  selection and the mouse hover were drawn from separate states, so hovering `Delete` left `Rename`
+  lit as well and the menu showed two highlights at once. Hovering now moves the single selection,
+  as the arrow keys do, and the colour follows it.
+
 - **Deleting the last session of a project no longer leaves an empty folder behind**: every project
   keeps its sessions in a per-project folder under `sessions/`, and `/session rm-current`,
   `rm-project`, `rm-all` and the GUI sidebar's Delete removed the files but kept the folders. The
@@ -1025,6 +1030,10 @@
   边框也一并扣掉。
 
 ## 修复
+
+- **桌面 GUI 会话行右键菜单同时只高亮一项**：键盘选中与鼠标悬停原本是两套独立高亮，悬停 `Delete`
+  时 `Rename` 还亮着，菜单里两行同时高亮。现在悬停移动的就是那一份选中项（与方向键一致），文字
+  颜色随之变化。
 
 - **删掉工程的最后一个会话不再留下空文件夹**：每个工程的会话都放在 `sessions/` 下的独立目录里，
   `/session rm-current`、`rm-project`、`rm-all` 与桌面 GUI 侧栏的删除都只删文件、留着目录。现在

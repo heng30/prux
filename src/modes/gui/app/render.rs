@@ -1425,7 +1425,12 @@ impl GuiApp {
                                     .text_size(px(FONT_SMALL))
                                     .text_color(theme.text_secondary)
                                     .cursor_pointer()
-                                    .hover(|style| style.bg(theme.overlay).text_color(theme.text))
+                                    // 悬停改的是同一束高亮（不是叠加一层底色），鼠标与键盘不会同时亮两行
+                                    .on_mouse_move(
+                                        cx.listener(|this, _, _, cx| {
+                                            this.hover_session_menu(0, cx)
+                                        }),
+                                    )
                                     // 键盘高亮（上下 / Ctrl-J、Ctrl-K）
                                     .when(selected == 0, |row| {
                                         row.bg(theme.overlay).text_color(theme.text)
@@ -1446,8 +1451,14 @@ impl GuiApp {
                                     .text_size(px(FONT_SMALL))
                                     .text_color(theme.text_secondary)
                                     .cursor_pointer()
-                                    .hover(|style| style.bg(theme.overlay).text_color(theme.danger))
-                                    .when(selected == 1, |row| row.bg(theme.overlay))
+                                    .on_mouse_move(
+                                        cx.listener(|this, _, _, cx| {
+                                            this.hover_session_menu(1, cx)
+                                        }),
+                                    )
+                                    .when(selected == 1, |row| {
+                                        row.bg(theme.overlay).text_color(theme.danger)
+                                    })
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.ask_delete(&path, cx);
                                     }))
