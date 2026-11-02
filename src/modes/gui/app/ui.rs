@@ -184,9 +184,9 @@ impl GuiApp {
         }
 
         // 扩展覆盖层可能正在等后台结果（`/btw` 的答案、`/doctor` 的探针）：每轮重拉一帧，
-        // 与 TUI 每帧重绘同一个效果；扩展不再认领时 `refresh` 会把它收起来
-        if matches!(self.overlay, Some(Overlay::Extension(_))) {
-            self.refresh_extension_overlay();
+        // 与 TUI 每帧重绘同一个效果；扩展不再认领时 `refresh` 会把它收起来。
+        // 内容没变就不重绘：面板开着不动时也整窗刷 10 次/秒，只会白白让界面闪。
+        if matches!(self.overlay, Some(Overlay::Extension(_))) && self.refresh_extension_overlay() {
             cx.notify();
         }
 
@@ -616,13 +616,19 @@ impl GuiApp {
     }
 
     /// 扩展覆盖层重新拉一帧；扩展不再认领时收起面板。
-    pub(super) fn refresh_extension_overlay(&mut self) {
+    ///
+    /// 返回是否需要重绘（内容变了，或面板刚被收起）。
+    pub(super) fn refresh_extension_overlay(&mut self) -> bool {
         let Some(Overlay::Extension(ext)) = self.overlay.as_mut() else {
-            return;
+            return false;
         };
 
-        if !ext.refresh() {
-            self.dismiss_overlay();
+        match ext.refresh() {
+            Some(changed) => changed,
+            None => {
+                self.dismiss_overlay();
+                true
+            }
         }
     }
 

@@ -23,7 +23,7 @@ pub type DockLine = Vec<DockSpan>;
 ///
 /// `fallback` 用 `Cow` 而非 `&'static str`：动态色（如 agent 类型的 `color` 十六进制值）
 /// 在每帧渲染时才知道，`key == ""` + `fallback == "#RRGGBB"` 即"按该十六进制着色"。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DockSpan {
     /// 主题键名（如 "accent"）；空串 = 不查主题表。
     pub key: &'static str,

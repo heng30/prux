@@ -538,11 +538,12 @@ impl ExtOverlay {
         Some(overlay)
     }
 
-    /// 重新拉取内容；返回 false 表示扩展已经不再认领（调用方应关闭覆盖层）。
-    pub fn refresh(&mut self) -> bool {
-        let Some(view) = extensions::overlay_view(self.id, OVERLAY_COLS) else {
-            return false;
-        };
+    /// 重新拉取内容；`None` 表示扩展已经不再认领（调用方应关闭覆盖层），
+    /// `Some(changed)` 里的 `true` 表示这一帧画出来的东西和上一帧不同（需要重绘）。
+    pub fn refresh(&mut self) -> Option<bool> {
+        let view = extensions::overlay_view(self.id, OVERLAY_COLS)?;
+        let mut changed = !same_view(&self.view, &view);
+        let typed = self.input.text();
 
         let gained = self.view.input.is_none() && view.input.is_some();
         let lost = self.view.input.is_some() && view.input.is_none();
@@ -568,7 +569,12 @@ impl ExtOverlay {
                 reveal_row(&self.scroll, selected);
             }
         }
-        true
+
+        // 输入行画的是本地缓冲而不是扩展的值：同步动过它也算变化
+        if self.input.text() != typed {
+            changed = true;
+        }
+        Some(changed)
     }
 
     /// 把扩展给的输入值同步进编辑缓冲（不覆盖正在敲的内容）。
@@ -581,6 +587,19 @@ impl ExtOverlay {
             self.input.insert(&input.value);
         }
     }
+}
+
+/// 两帧覆盖层内容会不会画出同样的画面：只比 GUI 实际渲染的字段。
+///
+/// `messages` / `editor` / `size` 是 TUI 侧的渲染入口，GUI 不用它们，不参与比较。
+fn same_view(a: &OverlayView, b: &OverlayView) -> bool {
+    a.title == b.title
+        && a.header == b.header
+        && a.lines == b.lines
+        && a.footer == b.footer
+        && a.selected == b.selected
+        && a.input_focus == b.input_focus
+        && a.input == b.input
 }
 
 /// 一行扩展文本（主题键 + 兜底色 + 内容）→ GUI 元素；扩展覆盖层与停靠面板共用。
@@ -1435,11 +1454,11 @@ mod tests {
         assert_eq!(overlay.last_selected, Some(2));
 
         SELECTED.store(5, std::sync::atomic::Ordering::Relaxed);
-        assert!(overlay.refresh(), "扩展仍认领该 id");
+        assert_eq!(overlay.refresh(), Some(true), "选中行变了要重绘");
         assert_eq!(overlay.last_selected, Some(5));
 
-        // 同一次选中重复拉取不会反复滚动
-        assert!(overlay.refresh());
+        // 同一次选中重复拉取：不滚动，也不需要重绘
+        assert_eq!(overlay.refresh(), Some(false), "内容没变不请求重绘");
         assert_eq!(overlay.last_selected, Some(5));
         SELECTED.store(usize::MAX, std::sync::atomic::Ordering::Relaxed);
     }

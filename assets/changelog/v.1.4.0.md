@@ -404,6 +404,17 @@
 
 ### Fixed
 
+- **Extension panels in the desktop GUI redraw only when their content changes**: an open `/btw`,
+  `/doctor` or other extension overlay re-fetched its view ten times a second and asked the window
+  for a new frame every time, even with nothing moving. A frame now counts as a redraw only when a
+  field the GUI actually renders (title, header, lines, footer, selection, input focus or the input
+  buffer) differs from the previous one, so an idle panel no longer flickers.
+
+- **The desktop GUI window is opaque on Wayland**: it asked for client-side decorations, which the
+  windowing layer treats as a transparent window — the surface was handed to the compositor with
+  premultiplied alpha and without an opaque region, so a full-window repaint flickered. Decorations
+  now come from the server, so the surface is declared opaque and carries an opaque region.
+
 - **The desktop GUI's session right-click menu highlights one row at a time**: the keyboard
   selection and the mouse hover were drawn from separate states, so hovering `Delete` left `Rename`
   lit as well and the menu showed two highlights at once. Hovering now moves the single selection,
@@ -1049,6 +1060,14 @@
   边框也一并扣掉。
 
 ## 修复
+
+- **桌面 GUI 的扩展面板只在内容变化时重绘**：打开着的 `/btw`、`/doctor` 等扩展覆盖层原本每秒
+  重拉 10 次视图、每次都请求新帧，什么都没动也在刷。现在只有 GUI 实际渲染的字段（标题、抬头、
+  正文、脚注、选中项、输入焦点或输入缓冲）与上一帧不同才算变化，面板静止时不再重绘。
+
+- **桌面 GUI 窗口在 Wayland 下是不透明的**：它要求客户端绘制装饰，而窗口层把
+  `decorations == Client` 当作透明窗口——surface 带着预乘 alpha 交给合成器、也没有 opaque
+  region，整窗重绘时会闪。现在装饰交给服务端，surface 声明为不透明并带上 opaque region。
 
 - **桌面 GUI 会话行右键菜单同时只高亮一项**：键盘选中与鼠标悬停原本是两套独立高亮，悬停 `Delete`
   时 `Rename` 还亮着，菜单里两行同时高亮。现在悬停移动的就是那一份选中项（与方向键一致），文字
