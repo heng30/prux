@@ -6,12 +6,15 @@
 //!   把**归一化之前**的 provider 流事件缓冲起来，每轮 assistant 消息结束时渲染一张卡片
 //!   （provider/model/api + 捕获条数 + 事件摘要），并把整份事件载荷落成会话自定义条目
 //!   （供导出与排查）；
-//! - `system-prompt`：打印当前系统提示词原文，经 worker 回执。
+//! - `system-prompt`：打印当前系统提示词原文，经 worker 回执；
+//! - `receipts`：会话回执——按时间序排出本会话改了哪些文件、跑了哪些命令、MCP / 子代理调用、
+//!   被 permissions 拦下的调用、回合级失败，顶部给汇总（见 [`receipts`]）。
 //!
 //! 默认**不启用**（声明 `default_enabled() == false`）：`provider` 声明了最高频的订阅面，
 //! 不该默认给所有用户挂上。只在 `/extension` 面板开启（`Dev` 及以上模式可用）。
 
 mod provider;
+mod receipts;
 
 use super::{EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_DEBUG, command_arg};
 use crate::{
@@ -45,6 +48,10 @@ const SUBCOMMANDS: &[SubcommandDef] = &[
     SubcommandDef {
         name: "system-prompt",
         description: "Print the current system prompt",
+    },
+    SubcommandDef {
+        name: "receipts",
+        description: "Summarise what this session did ([n] = detail lines)",
     },
 ];
 
@@ -88,7 +95,8 @@ impl Extension for Debug {
     fn commands(&self) -> Vec<ExtensionCommand> {
         vec![ExtensionCommand {
             name: CMD.to_string(),
-            description: "/debug <info|provider|system-prompt> - debug helpers".to_string(),
+            description: "/debug <info|provider|system-prompt|receipts> - debug helpers"
+                .to_string(),
             busy_safe: true, // handler 只碰扩展自身状态、App 消息与命令入队，不锁 agent
             subcommands: SUBCOMMANDS.to_vec(),
         }]
@@ -123,7 +131,7 @@ impl Extension for Debug {
     }
 }
 
-/// `/debug <info|provider|system-prompt> [args]`：按子命令分派，未知子命令打印用法。
+/// `/debug <info|provider|system-prompt|receipts> [args]`：按子命令分派，未知子命令打印用法。
 ///
 /// 参数原文经 [`command_arg`] 去掉命令名后，再按首个空白切成「子命令 + 其余参数」。
 fn command_debug(host: &mut dyn CommandHost, raw: &str) -> bool {
@@ -137,6 +145,7 @@ fn command_debug(host: &mut dyn CommandHost, raw: &str) -> bool {
         "info" => host.debug_info(),
         "provider" => provider::command(host, rest),
         "system-prompt" => host.debug_system_prompt(),
+        "receipts" => _ = receipts::command(host, rest),
         other => host.push_message(&usage(other), UiNotifyLevel::Warning),
     }
     false
@@ -144,7 +153,7 @@ fn command_debug(host: &mut dyn CommandHost, raw: &str) -> bool {
 
 /// 未知子命令（或未给子命令）时的用法提示；`arg` 非空时一并回显，便于定位敲错的词。
 fn usage(arg: &str) -> String {
-    let head = "Usage: /debug <info|provider|system-prompt>";
+    let head = "Usage: /debug <info|provider|system-prompt|receipts>";
     if arg.is_empty() {
         head.to_string()
     } else {
@@ -209,7 +218,7 @@ mod tests {
     fn subcommands_match_parser() {
         // 候选元数据与 command_debug 的分支一一对应
         let names: Vec<&str> = SUBCOMMANDS.iter().map(|s| s.name).collect();
-        assert_eq!(names, vec!["info", "provider", "system-prompt"]);
+        assert_eq!(names, vec!["info", "provider", "system-prompt", "receipts"]);
 
         let cmds = Debug.commands();
         assert_eq!(cmds[0].subcommands, SUBCOMMANDS.to_vec());

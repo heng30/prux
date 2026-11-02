@@ -44,6 +44,7 @@ pub mod proxy;
 pub mod recap_btw;
 pub mod rewind;
 pub mod rollback;
+pub mod sandbox;
 pub mod session_search;
 pub mod shake;
 pub mod skills;
@@ -77,6 +78,8 @@ pub const PRIORITY_PERMISSIONS: u32 = 84;
 pub const PRIORITY_LEAK_GUARD: u32 = 83;
 /// injection-guard 提示注入检测扩展的注册优先级。
 pub const PRIORITY_INJECTION_GUARD: u32 = 82;
+/// sandbox OS 级命令沙箱扩展的注册优先级（与 permissions 同属安全层，紧随其后）。
+pub const PRIORITY_SANDBOX: u32 = 81;
 /// tasks 结构化任务跟踪扩展的注册优先级。
 pub const PRIORITY_TASKS: u32 = 80;
 /// subagent 子代理扩展的注册优先级。

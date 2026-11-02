@@ -494,6 +494,27 @@
   1px border on each side, so every visual line was laid out 2px wider than it could be and the last
   glyph was squeezed by the flex row before wrapping to the next line. The border is subtracted now.
 
+- **A `sandbox` extension puts shell commands inside an OS boundary**: `permissions` decides before
+  execution and has to guess at dynamic command construction; this one hands the filesystem rule to
+  the kernel. Enabling it probes the backend (Linux `bwrap`, macOS `sandbox-exec`) and actually
+  starts a `true` process with it — bubblewrap installs fine in containers where user namespaces are
+  disabled and only fails at spawn. Every `bash` call then runs with the whole filesystem read-only,
+  the current working directory plus the system temp directory writable, and the network open, so
+  `~/.ssh` is out of reach while `~/.cargo` also becomes unwritable: point cache directories at the
+  workspace to keep builds working. A failed probe does **not** fall back to unsandboxed execution —
+  it installs a wrapper that refuses every command with the reason, so the failure is visible
+  instead of silent; turning the extension off is the explicit way back. `/sandbox` prints the
+  backend, the writable paths and the network posture. Off by default.
+
+- **`/debug receipts` answers "what did this session actually do?"**: it reads the records the
+  session already keeps, line by line — `tool_started` records for every call, `toolResult` messages
+  for exit codes and the `edit` patch that gives exact added/removed line counts, and
+  `operation_finished` for turn-level failures — plus the `permissions` review log for the calls
+  that **never ran** (`deny` / `ask`), which leave no trace in the session. The receipt leads with
+  totals (files changed, commands run, MCP calls, agents, failures, approvals) and then lists the
+  turn in order; `/debug receipts <n>` raises the detail cap. Parsing is per line because the
+  command is busy-safe: a half-written tail from the running turn is skipped, not fatal.
+
 ### Changed
 
 - **An isolated subagent starts from the repository's existing build artifacts instead of a cold
@@ -1250,6 +1271,22 @@
 - **桌面 GUI 输入框不再把折行行尾的那个字裁掉一半**：折行宽度取的是输入卡片宽度减去左右内边距，
   而卡片左右还有 1px 边框，于是每个视觉行都多算了 2px 宽，行尾那个字被 flex 压掉一半才换行。现在
   边框也一并扣掉。
+
+- **新增 `sandbox` 扩展，把 shell 命令关进 OS 级边界**：`permissions` 是执行前的判定，动态拼出来
+  的命令只能靠猜；这个扩展把文件系统规则交给内核。启用时探测后端（Linux `bwrap`、macOS
+  `sandbox-exec`）并**真的用它起一个 `true` 进程**——bubblewrap 在禁用用户命名空间的容器里装得下
+  却起不来，只有到 spawn 才暴露。此后每次 `bash` 调用都在「整棵文件系统只读 + 当前工作目录与系统
+  临时目录可写 + 网络放行」下执行：`~/.ssh` 够不到了，`~/.cargo` 也一起变成不可写，要让它编译就把
+  缓存目录指到工作目录里。探测失败**不会**退回无沙箱执行，而是装上一个「一律拒绝启动」的包装器并
+  附上原因，失败因此是看得见的；要恢复无沙箱执行，显式在 `/extension` 里关掉本扩展。`/sandbox`
+  打印当前后端、可写路径与网络状态。默认不启用。
+
+- **`/debug receipts` 回答「这个会话到底做了什么」**：它逐行读会话里本就留下的记录——每次调用的
+  `tool_started`、给退出码与 `edit` 精确增删行数（来自 patch）的 `toolResult` 消息、回合级失败的
+  `operation_finished`——再读 `permissions` 的 review log 补上**根本没跑起来**的那些调用
+  （`deny` / `ask`），后者在会话里不留痕迹。回执先给汇总（改了哪些文件、跑了多少命令、MCP 调用、
+  子代理、失败、审批），再按时间序列出本轮经过；`/debug receipts <n>` 抬高明细行上限。解析是逐行的：
+  命令 busy-safe，正在跑的这一回合写了一半的尾行被跳过，而不是让整份回执失败。
 
 ### 变更
 

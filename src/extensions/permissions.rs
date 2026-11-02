@@ -160,6 +160,13 @@ static GRANTS: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
 /// 配置告警只提示一次的开关（避免每次工具调用都刷屏）。
 static WARNED: AtomicBool = AtomicBool::new(false);
 
+/// review log 文件路径。
+///
+/// 公开给 `/debug receipts`：回执要区分「跑了的」与「被拦下没跑的」，后者只在这里有痕迹。
+pub(crate) fn review_log_path() -> PathBuf {
+    config::review_log_path()
+}
+
 /// 取会话放行表；锁被毒化时取回内部数据继续用。
 fn grants() -> MutexGuard<'static, Vec<(String, String)>> {
     GRANTS.lock().unwrap_or_else(|e| e.into_inner())

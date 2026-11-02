@@ -38,6 +38,7 @@ pub mod prompt_history;
 pub mod prompt_templates;
 pub mod provider;
 pub mod runtime;
+pub mod sandbox;
 pub mod session_manager;
 pub mod session_v4;
 pub mod settings_manager;

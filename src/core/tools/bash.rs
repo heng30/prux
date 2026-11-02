@@ -2,7 +2,7 @@
 
 use crate::{
     core::{
-        settings_manager,
+        sandbox, settings_manager,
         tools::index::{ToolError, ToolResult},
     },
     utils::{
@@ -320,18 +320,6 @@ pub async fn execute_bash_with_env(
         format!("{}\n{}", prefix, command)
     };
 
-    let mut cmd = tokio::process::Command::new(bash);
-    cmd.arg("-c")
-        .arg(&full_command)
-        .current_dir(&cwd_path)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-
-    #[cfg(unix)]
-    cmd.process_group(0);
-
-    env.apply(&mut cmd);
-
     let fail = |text: String| BashOutcome {
         text,
         exit_code: None,
@@ -341,6 +329,37 @@ pub async fn execute_bash_with_env(
         full_output_path: None,
         structured: None,
     };
+
+    // 沙箱：扩展登记了包装器时，真正的 shell 与 `-c <命令>` 追加在包装器参数之后。
+    // 包装器返回 `Err` 表示拒绝执行，必须原样上报——绝不退回无沙箱执行。
+    let wrapper = sandbox::current();
+    let mut cmd = match &wrapper {
+        None => {
+            let mut c = tokio::process::Command::new(&bash);
+            c.arg("-c").arg(&full_command);
+            c
+        }
+        Some(wrap) => match wrap(&cwd_path) {
+            Ok(wrapped) => {
+                let mut c = tokio::process::Command::new(&wrapped.program);
+                c.args(&wrapped.prefix_args)
+                    .arg(&bash)
+                    .arg("-c")
+                    .arg(&full_command);
+                c
+            }
+            Err(reason) => return fail(reason),
+        },
+    };
+    cmd.current_dir(&cwd_path)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    #[cfg(unix)]
+    cmd.process_group(0);
+
+    env.apply(&mut cmd);
+
     if let Err(e) = validate_timeout(timeout) {
         return fail(e.0);
     }
