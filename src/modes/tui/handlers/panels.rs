@@ -2,7 +2,7 @@
 
 use super::{KeyAction, bug_report, extensions::extension_panel_items};
 use crate::{
-    cli::args::VALID_THINKING_LEVELS,
+    cli::args::{VALID_THINKING_LEVELS, thinking_level_description},
     core::{
         self, auth,
         keybindings::{self, KeybindingsManager},
@@ -23,17 +23,6 @@ use crate::{
     utils::clipboard::read_clipboard,
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-
-/// /thinking 级别描述
-const THINKING_LEVEL_DESCRIPTIONS: &[(&str, &str)] = &[
-    ("off", "No reasoning"),
-    ("minimal", "Very brief reasoning (~1k tokens)"),
-    ("low", "Light reasoning (~2k tokens)"),
-    ("medium", "Moderate reasoning (~8k tokens)"),
-    ("high", "Deep reasoning (~16k tokens)"),
-    ("xhigh", "Extra-high reasoning (~32k tokens)"),
-    ("max", "Maximum reasoning"),
-];
 
 impl App {
     /// 打开 /theme 主题选择面板；把当前主题移到列表顶部，便于直接回车确认。
@@ -71,11 +60,7 @@ impl App {
             .map(|l| PanelItem {
                 label: l.clone(),
                 value: l.clone(),
-                desc: THINKING_LEVEL_DESCRIPTIONS
-                    .iter()
-                    .find(|(k, _)| *k == l)
-                    .map(|(_, d)| d.to_string())
-                    .unwrap_or_default(),
+                desc: thinking_level_description(l).to_string(),
                 name: String::new(),
                 ..Default::default()
             })

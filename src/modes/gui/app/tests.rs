@@ -377,3 +377,12 @@ fn layout_jitter_within_half_pixel_is_ignored() {
         "还没测过就要测一次"
     );
 }
+
+/// 模型 / 思考级别行的状态后缀：默认（且在用）> 默认 > 在用 > 空。
+#[test]
+fn model_badge_marks_default_and_current() {
+    assert_eq!(super::panels::model_badge(true, true), "default ✓");
+    assert_eq!(super::panels::model_badge(false, true), "default");
+    assert_eq!(super::panels::model_badge(true, false), "✓");
+    assert_eq!(super::panels::model_badge(false, false), "");
+}

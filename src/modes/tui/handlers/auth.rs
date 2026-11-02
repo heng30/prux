@@ -661,13 +661,11 @@ impl App {
 /// 模型 input 支持类型后缀（` · text,image`；无 input 元数据时为空）。
 /// /model 与 /scoped-models 面板共用，保持两条展示一致。
 fn model_input_suffix(provider: &str, id: &str) -> String {
-    let input = model_resolver::find_model(provider, id)
-        .map(|m| m.input)
-        .unwrap_or_default();
+    let input = model_resolver::model_input_types(provider, id);
     if input.is_empty() {
         String::new()
     } else {
-        format!(" · {}", input.join(","))
+        format!(" · {input}")
     }
 }
 

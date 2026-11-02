@@ -425,6 +425,8 @@ impl GuiApp {
     }
 
     /// 模型选择器。
+    ///
+    /// Enter 只在本会话切模型（`persist: false`），Ctrl-S 才写默认值（见 [`Self::save_overlay_default`]）。
     pub(super) fn open_model_picker(&mut self, cx: &mut Context<Self>) {
         self.overlay = Some(Overlay::List(List::new(
             "Model",
@@ -451,15 +453,33 @@ impl GuiApp {
                 .await;
 
             _ = this.update(cx, |app, cx| {
+                let settings = settings_manager::read_settings();
+                let default = settings.default_provider.zip(settings.default_model);
+                let current = app
+                    .snapshot
+                    .as_ref()
+                    .map(|snapshot| (snapshot.provider.clone(), snapshot.model.clone()));
+                let same = |slot: &Option<(String, String)>, provider: &str, id: &str| {
+                    slot.as_ref().is_some_and(|(p, m)| p == provider && m == id)
+                };
+
                 let mut entries: Vec<Entry> = models
                     .into_iter()
                     .map(|(provider, id, name)| Entry {
                         label: id.clone(),
-                        cells: vec![provider.clone(), name],
+                        cells: vec![
+                            provider.clone(),
+                            core::model_resolver::model_input_types(&provider, &id),
+                            name,
+                        ],
+                        detail: model_badge(
+                            same(&current, &provider, &id),
+                            same(&default, &provider, &id),
+                        ),
                         action: Action::Command(Box::new(AgentCommand::SwitchModel {
                             provider,
                             model_id: id,
-                            persist: true,
+                            persist: false,
                         })),
                         ..Entry::default()
                     })
@@ -468,7 +488,7 @@ impl GuiApp {
                 if entries.is_empty() {
                     entries.push(Entry {
                         label: "No configured models".into(),
-                        cells: vec![String::new(), "Run `prux auth` first".into()],
+                        cells: vec![String::new(), String::new(), "Run `prux auth` first".into()],
                         action: Action::None,
                         ..Entry::default()
                     });
@@ -478,8 +498,13 @@ impl GuiApp {
                 list.columns = vec![
                     Column::fixed("Model", TABLE_NAME_W),
                     Column::fixed("Provider", TABLE_PROVIDER_W),
+                    Column::fixed("Input", TABLE_INPUT_W),
                     Column::flex("Name"),
                 ];
+                list.save_as_default = true;
+                list.hint = Some(
+                    "↑↓ select · Enter switch · Ctrl+S set as default · Esc close".to_string(),
+                );
                 app.overlay = Some(Overlay::List(list));
                 cx.notify();
             });
@@ -488,22 +513,40 @@ impl GuiApp {
     }
 
     /// 思考级别选择器。
+    ///
+    /// Enter 只在本会话切级别（`persist: false`），Ctrl-S 才写默认值。
     pub(super) fn open_thinking_picker(&mut self, _cx: &mut Context<Self>) {
         let levels = self
             .snapshot
             .as_ref()
             .map(|s| s.thinking_levels.clone())
             .unwrap_or_default();
+        let current = self.snapshot.as_ref().and_then(|s| s.thinking.clone());
+        let default = settings_manager::read_settings().default_thinking_level;
+
         let mut entries: Vec<Entry> = levels
             .into_iter()
-            .map(|level| Entry {
-                label: level.clone(),
-                detail: String::new(),
-                action: Action::Command(Box::new(AgentCommand::SetThinking {
-                    level,
-                    persist: true,
-                })),
-                ..Entry::default()
+            .map(|level| {
+                let mut detail = crate::cli::args::thinking_level_description(&level).to_string();
+                let badge = model_badge(
+                    current.as_deref() == Some(level.as_str()),
+                    default.as_deref() == Some(level.as_str()),
+                );
+                if !badge.is_empty() {
+                    if !detail.is_empty() {
+                        detail.push_str(" · ");
+                    }
+                    detail.push_str(&badge);
+                }
+                Entry {
+                    label: level.clone(),
+                    detail,
+                    action: Action::Command(Box::new(AgentCommand::SetThinking {
+                        level,
+                        persist: false,
+                    })),
+                    ..Entry::default()
+                }
             })
             .collect();
 
@@ -516,7 +559,45 @@ impl GuiApp {
             });
         }
 
-        self.overlay = Some(Overlay::List(List::new("Thinking level", entries)));
+        let mut list = List::new("Thinking level", entries);
+        list.save_as_default = true;
+        list.hint =
+            Some("↑↓ select · Enter confirm · Ctrl+S set as default · Esc close".to_string());
+        self.overlay = Some(Overlay::List(list));
+    }
+
+    /// Ctrl-S：模型 / 思考级别面板把选中项同时写成默认值（Enter 只在本会话生效）。
+    /// 返回 true 表示这次按键已被列表消费。
+    pub(super) fn save_overlay_default(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(Overlay::List(list)) = &self.overlay else {
+            return false;
+        };
+        if !list.save_as_default {
+            return false;
+        }
+        let Some(Action::Command(command)) = list.take_action().cloned() else {
+            return false;
+        };
+        // 只把「切换」重放成「切换 + 写默认值」；其它动作照旧
+        let command = match *command {
+            AgentCommand::SwitchModel {
+                provider, model_id, ..
+            } => AgentCommand::SwitchModel {
+                provider,
+                model_id,
+                persist: true,
+            },
+            AgentCommand::SetThinking { level, .. } => AgentCommand::SetThinking {
+                level,
+                persist: true,
+            },
+            other => other,
+        };
+        _ = self.cmd_tx.send(command);
+        self.overlay = None;
+        self.toast("Saved as default", ToastKind::Success, cx);
+        cx.notify();
+        true
     }
 
     /// Shift+Tab：在当前模型支持的 thinking 级别里循环（同 TUI 的 `app.thinking.cycle`）。
@@ -992,6 +1073,16 @@ fn scoped_catalog() -> Vec<(String, String, String)> {
         }
     }
     models
+}
+
+/// 模型/思考级别行的状态后缀：`default ✓`（既是默认又在用）/ `default` / `✓` / 空。
+pub(super) fn model_badge(in_use: bool, is_default: bool) -> String {
+    match (is_default, in_use) {
+        (true, true) => "default ✓".to_string(),
+        (true, false) => "default".to_string(),
+        (false, true) => "✓".to_string(),
+        (false, false) => String::new(),
+    }
 }
 
 /// `/skills` 详情页（Tab）的行：启用态 + SKILL.md 头信息 + 来源 + 路径。

@@ -635,6 +635,15 @@ pub fn find_model(provider: &str, model_id: &str) -> Result<ModelEntry> {
     find_model_impl(provider, model_id, None)
 }
 
+/// 模型声明的输入类型（如 `text,image`）；无元数据或查不到时为空串。
+///
+/// `/model` 与 `/scoped-models` 面板共用，两条展示因此不会漂移。
+pub fn model_input_types(provider: &str, model_id: &str) -> String {
+    find_model(provider, model_id)
+        .map(|model| model.input.join(","))
+        .unwrap_or_default()
+}
+
 /// 按 id / name 精确、再按前缀回退，在激活的虚拟模型里查找定义。
 fn find_virtual_definition(provider: &str, model_id: &str) -> Option<Arc<VirtualModelDefinition>> {
     let defs = virtual_models::active_definitions();

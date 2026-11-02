@@ -13,6 +13,26 @@ use std::collections::HashSet;
 pub const VALID_THINKING_LEVELS: [&str; 7] =
     ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
+/// 思考级别的一句话描述（`/thinking` 面板的副文案），键为 [`VALID_THINKING_LEVELS`] 中的取值。
+const THINKING_LEVEL_DESCRIPTIONS: [(&str, &str); 7] = [
+    ("off", "No reasoning"),
+    ("minimal", "Very brief reasoning (~1k tokens)"),
+    ("low", "Light reasoning (~2k tokens)"),
+    ("medium", "Moderate reasoning (~8k tokens)"),
+    ("high", "Deep reasoning (~16k tokens)"),
+    ("xhigh", "Extra-high reasoning (~32k tokens)"),
+    ("max", "Maximum reasoning"),
+];
+
+/// [`VALID_THINKING_LEVELS`] 中某级别的描述；未登记的级别返回空串。
+pub fn thinking_level_description(level: &str) -> &'static str {
+    THINKING_LEVEL_DESCRIPTIONS
+        .iter()
+        .find(|(name, _)| *name == level)
+        .map(|(_, desc)| *desc)
+        .unwrap_or_default()
+}
+
 /// 子命令
 #[derive(Debug, Clone, Subcommand)]
 pub enum Command {

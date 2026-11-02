@@ -325,6 +325,15 @@
   is longer than fits. The `Ctrl-,` settings panel is the same kind of table now: `Setting / Value /
   Notes`, with the current value in its own column.
 
+- **The desktop GUI's model and thinking pickers say what is what**: the model list gained an
+  `Input` column (`text,image`, straight from the model catalog), and every row carries a state
+  badge on the right — `default ✓` when the entry is both the saved default and the one in use,
+  `default` / `✓` alone otherwise. `Enter` now switches only for this session and `Ctrl-S` writes
+  the choice to the settings file (the same split the scoped-model panel already had), so a quick
+  switch no longer silently replaces the startup default. The thinking list gains the same badge
+  on top of its level descriptions. The TUI's `/model` and `/scoped-models` panels read the input
+  types through the same helper, so the two surfaces cannot drift.
+
 - **The desktop GUI answers extension questions**: extension UI requests used to be queued and
   never read, so `ask_user_question` reported "no UI" and the `permissions` / `ssh-remote` prompts
   silently failed closed. The window now polls that queue and handles every request: a `Select`
@@ -1144,6 +1153,12 @@
   详情页的值按列宽折行、不再截断，内容长过卡片时在卡片内部滚动（滚轮、方向键、`PgUp` / `PgDn`、
   `Home` / `End`）。`Ctrl-,` 设置面板也改成同样的表格：`Setting / Value / Notes` 三列，当前值单独
   占一列。
+
+- **桌面 GUI 的模型与思考级别选择器标清了默认值和当前值**：模型列表多一列 `Input`
+  （`text,image`，直接取自模型元数据），每行右侧带状态标记——既是保存的默认又在用是 `default ✓`，
+  只有其一是 `default` / `✓`。`Enter` 改成只在本次会话切换，`Ctrl-S` 才写进设置文件（与模型名单
+  面板同一套分工），随手换模型不再悄悄改掉启动默认值。思考级别列表在原有的级别描述之外也带上
+  同样的标记。TUI 的 `/model` 与 `/scoped-models` 面板经同一个函数取输入类型，两处展示不会漂移。
 
 - **桌面 GUI 能回答扩展的提问了**：扩展发出的 UI 请求以前只入队没人取，`ask_user_question`
   直接报「没有 UI」，`permissions` / `ssh-remote` 的确认也一律按拒绝处理。窗口现在定时轮询这个

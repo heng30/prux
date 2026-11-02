@@ -223,6 +223,9 @@ pub(crate) const TABLE_MODES_W: f32 = 150.0;
 /// 表格 provider 列宽度（逻辑像素）：模型名单面板的 provider 名。
 pub(crate) const TABLE_PROVIDER_W: f32 = 110.0;
 
+/// 表格 input 列宽度（逻辑像素）：模型声明支持的输入类型（`text,image`）。
+pub(crate) const TABLE_INPUT_W: f32 = 110.0;
+
 /// 表格年龄列宽度（逻辑像素）：会话面板的「多久以前」（`now` / `12m` / `3d`）。
 pub(crate) const TABLE_AGE_W: f32 = 80.0;
 
@@ -328,6 +331,8 @@ pub struct List {
     pub hint: Option<String>,
     /// Space 是否直接触发条目动作（设置 / 扩展 / 技能面板）：为 true 时空格不再写进过滤框
     pub space_activates: bool,
+    /// Ctrl+S 是否把选中项写成默认值（模型 / 思考级别面板）：为 true 时该键被列表消费
+    pub save_as_default: bool,
 }
 
 impl List {
@@ -345,6 +350,7 @@ impl List {
             choice: None,
             hint: None,
             space_activates: false,
+            save_as_default: false,
         }
     }
 
@@ -867,6 +873,17 @@ pub(crate) fn list_row(
         row = row.child(table_cell(theme, label, columns[0].width, false));
         for (text, column) in cells.iter().zip(&columns[1..]) {
             row = row.child(table_cell(theme, text, column.width, true));
+        }
+
+        // 行尾状态（模型行的 `default ✓`）：右侧贴边，不占用列宽
+        if !detail.is_empty() {
+            row = row.child(
+                div()
+                    .flex_none()
+                    .text_size(px(FONT_CAPTION))
+                    .text_color(theme.text_ghost)
+                    .child(SharedString::from(detail.to_string())),
+            );
         }
         return row.into_any_element();
     }
