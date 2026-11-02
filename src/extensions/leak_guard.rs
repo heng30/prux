@@ -11,7 +11,9 @@
 //! - **不改 thinking 块**：思考块带供应商签名，改文本会让签名失效（请求直接报错），
 //!   因此打码只作用于 `Text` 块。
 //! - **去重**：同一类别 + 同一片段只告警一次（`transform_context` 每轮都会重扫历史消息），
-//!   最多记 64 条，满了清空；这一点同时避免了刷屏。
+//!   最多记 64 条，满了挤掉最早一条；这一点同时避免了刷屏。
+//! - **提示带片段预览**：UI 文案里附上命中片段的首尾几个字符（`q8Zr2NvT…Zx4Q`），
+//!   否则用户看不出是路径、base64 还是哈希触发的；预览只进 UI，不进模型上下文。
 //!
 //! 规则表覆盖 `sk-` / `sk-ant-` / `ghp_` / `AKIA` / `xox?-` / `AIza` / `glpat-` / `sk_live_` /
 //! JWT / 私钥块，以及长度 ≥32、大小写与数字齐全、Shannon 熵 ≥4 bits/char 的高熵串；
@@ -387,6 +389,34 @@ fn categories(hits: &[Hit]) -> Vec<&'static str> {
     list
 }
 
+/// 把命中归类，每类取首条命中做片段预览，供 UI 文案指出到底哪一处触发了告警。
+fn describe_hits(hits: &[Hit], text: &str) -> Vec<(&'static str, String)> {
+    let mut list: Vec<(&'static str, String)> = Vec::new();
+    for hit in hits {
+        if !list.iter().any(|(category, _)| *category == hit.category) {
+            list.push((hit.category, preview(&text[hit.start..hit.end])));
+        }
+    }
+    list
+}
+
+/// 命中片段的预览：只露首尾几个字符，够定位又不再把整条凭据贴一遍。
+fn preview(snippet: &str) -> String {
+    /// 预览保留的开头字符数。
+    const HEAD: usize = 8;
+    /// 预览保留的结尾字符数。
+    const TAIL: usize = 4;
+
+    let chars: Vec<char> = snippet.chars().collect();
+    if chars.len() <= HEAD + TAIL + 1 {
+        return snippet.to_string();
+    }
+
+    let head: String = chars[..HEAD].iter().collect();
+    let tail: String = chars[chars.len() - TAIL..].iter().collect();
+    format!("{head}…{tail}")
+}
+
 /// 文案里的「像什么」：单类与多类分开写，避免出现 `a openai-key` 这种硬拼。
 fn describe(list: &[&str]) -> String {
     if list.len() == 1 {
@@ -396,8 +426,22 @@ fn describe(list: &[&str]) -> String {
     }
 }
 
-/// 扫一条消息的文本块；`block` 为 true 时把命中打码。返回本条消息里**新**的命中类别。
-fn scan_message(message: &mut AgentMessage, block: bool) -> Vec<&'static str> {
+/// 同 [`describe`]，但每类附一条片段预览（只用于 UI 提示，不进模型上下文）。
+fn describe_samples(list: &[(&str, String)]) -> String {
+    let items: Vec<String> = list
+        .iter()
+        .map(|(category, sample)| format!("{category}: `{sample}`"))
+        .collect();
+    if items.len() == 1 {
+        format!("what looks like a credential ({})", items[0])
+    } else {
+        format!("what looks like credentials ({})", items.join(", "))
+    }
+}
+
+/// 扫一条消息的文本块；`block` 为 true 时把命中打码。
+/// 返回本条消息里**新**的命中（类别 + 片段预览）。
+fn scan_message(message: &mut AgentMessage, block: bool) -> Vec<(&'static str, String)> {
     let mut fresh = Vec::new();
 
     for content in message.content.iter_mut() {
@@ -411,7 +455,7 @@ fn scan_message(message: &mut AgentMessage, block: bool) -> Vec<&'static str> {
         }
         for hit in &hits {
             if remember(hit.category, &text[hit.start..hit.end]) {
-                fresh.push(hit.category);
+                fresh.push((hit.category, preview(&text[hit.start..hit.end])));
             }
         }
         if block {
@@ -422,13 +466,13 @@ fn scan_message(message: &mut AgentMessage, block: bool) -> Vec<&'static str> {
     fresh
 }
 
-/// 请求前扫描：warn 只提示，block 额外打码。返回本次要提示的类别。
-fn handle_prompt(messages: &mut [AgentMessage], mode: Mode) -> Vec<&'static str> {
-    let mut reported: Vec<&'static str> = Vec::new();
+/// 请求前扫描：warn 只提示，block 额外打码。返回本次要提示的命中（类别 + 片段预览）。
+fn handle_prompt(messages: &mut [AgentMessage], mode: Mode) -> Vec<(&'static str, String)> {
+    let mut reported: Vec<(&'static str, String)> = Vec::new();
     for message in messages.iter_mut() {
-        for category in scan_message(message, mode == Mode::Block) {
-            if !reported.contains(&category) {
-                reported.push(category);
+        for (category, sample) in scan_message(message, mode == Mode::Block) {
+            if !reported.iter().any(|(seen, _)| *seen == category) {
+                reported.push((category, sample));
             }
         }
     }
@@ -436,8 +480,8 @@ fn handle_prompt(messages: &mut [AgentMessage], mode: Mode) -> Vec<&'static str>
 }
 
 /// 提示文案：请求侧。
-fn prompt_warning(reported: &[&str], mode: Mode) -> String {
-    let what = describe(reported);
+fn prompt_warning(reported: &[(&str, String)], mode: Mode) -> String {
+    let what = describe_samples(reported);
     if mode == Mode::Block {
         format!(
             "leak-guard: the prompt contains {what} — replaced with [REDACTED:*] in this request. \
@@ -469,9 +513,10 @@ fn guard_tool_call(name: &str, args: &Value) -> BeforeToolCallOutcome {
         .filter(|hit| remember(hit.category, &rendered[hit.start..hit.end]))
         .map(|hit| hit.category)
         .collect();
-    let what = describe(&categories(&hits));
 
     if mode == Mode::Block {
+        // 原因会回到模型上下文：只报类别，不带片段
+        let what = describe(&categories(&hits));
         return BeforeToolCallOutcome {
             block: true,
             reason: Some(format!(
@@ -485,6 +530,7 @@ fn guard_tool_call(name: &str, args: &Value) -> BeforeToolCallOutcome {
     }
 
     if !fresh.is_empty() {
+        let what = describe_samples(&describe_hits(&hits, &rendered));
         notify_plain(
             format!("leak-guard: `{name}` arguments contain {what}."),
             UiNotifyLevel::Warning,
@@ -723,6 +769,23 @@ mod tests {
         assert!(!is_high_entropy("short"));
         assert_eq!(scan(blob).len(), 1);
         assert_eq!(scan(blob)[0].category, "high-entropy");
+    }
+
+    #[test]
+    fn the_warning_names_the_offending_snippet() {
+        let (_g, _ad) = guard();
+        LeakGuard.apply_setting("mode", "warn").unwrap();
+
+        let mut messages = vec![AgentMessage::user_text(
+            "snippet: q8Zr2NvT5xLw9KpY3mHb7CfJ1sDg6RtA0eU+Zx4Q",
+        )];
+        let reported = handle_prompt(&mut messages, Mode::Warn);
+        let text = prompt_warning(&reported, Mode::Warn);
+        assert!(text.contains("high-entropy: `q8Zr2NvT…Zx4Q`"), "{text}");
+        assert!(
+            !text.contains("q8Zr2NvT5xLw9KpY"),
+            "预览不得回显整条串: {text}"
+        );
     }
 
     #[test]

@@ -842,6 +842,12 @@
   warning memory now drops its oldest entry instead of wiping itself — a history full of such
   names used to reset the memory every request, so the same warning came back every turn.
 
+- **`leak-guard` now names the snippet that triggered it**: the warning only said "looks like
+  credentials (high-entropy)", so a path, a base64 blob and a hash were indistinguishable. The
+  prompt and tool-argument warnings now carry a short head/tail preview of the hit (for example
+  `high-entropy: q8Zr2NvT…Zx4Q`). Blocked tool calls still report the category only, because
+  that reason goes back into the model context.
+
 - **A brand-new session in the desktop GUI now shows up in the sidebar and gets highlighted**: the
   file is only written on the first message, and the sidebar was only re-read when the working
   directory changed or a session was renamed, so the new row stayed missing and nothing was
@@ -1460,6 +1466,10 @@
   这类会话文件名也照报不误。现在路径不再连成一个候选，机器生成的标识直接跳过，告警记录满了
   改为挤掉最早一条而不是整体清空——历史里这类名字一多，记录每轮都被清空，同一个提示就会
   每回合重弹一次。
+
+- **`leak-guard` 的提示会指出到底哪一段触发了告警**：原先只说「像凭据（高熵）」，路径、base64
+  串和哈希在提示里长得一模一样。现在请求前与工具调用前的提示都附上命中片段的首尾预览（如
+  `high-entropy: q8Zr2NvT…Zx4Q`）；被拒绝的工具调用只报类别，因为那条原因会回到模型上下文。
 
 - **桌面 GUI 新建的会话会出现在侧栏并高亮**：会话文件要等首条消息才写出，而侧栏原先只在切换
   工作目录或会话改名时才重读，于是新会话的行一直不出现，当前会话也就高亮不到。现在会话路径
