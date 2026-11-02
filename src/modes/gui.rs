@@ -25,7 +25,7 @@ use crate::{
 use app::GuiApp;
 use gpui::{
     App, AppContext, Application, Bounds, TitlebarOptions, WindowBackgroundAppearance,
-    WindowBounds, WindowDecorations, WindowOptions, px, size,
+    WindowBounds, WindowOptions, px, size,
 };
 use std::{borrow::Cow, sync::Arc};
 use theme::Theme;
@@ -100,10 +100,7 @@ pub fn run(startup: Startup, rt: &Handle) {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             window_min_size: Some(size(px(MIN_WINDOW_SIZE.0), px(MIN_WINDOW_SIZE.1))),
             window_background: WindowBackgroundAppearance::Opaque,
-            // 必须是 Server：Wayland 下 gpui 把 `decorations == Client` 当成透明窗口
-            // （`is_transparent()`），surface 按预乘 alpha 交给合成器逐帧混合、也不设 opaque
-            // region，整窗重绘时会闪。Server 才会走不透明 surface + opaque region。
-            window_decorations: Some(WindowDecorations::Server),
+            window_decorations: Some(gpui::WindowDecorations::Server),
             app_id: Some(APP_NAME.to_owned()),
             ..Default::default()
         };

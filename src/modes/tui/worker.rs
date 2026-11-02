@@ -530,9 +530,8 @@ async fn dispatch_tree(agent: &Arc<Mutex<Agent>>) -> Option<RoundFuture> {
     None
 }
 
-/// 处理 AgentCommand::DebugInfo。
-async fn dispatch_debug_info(agent: &Arc<Mutex<Agent>>) -> Option<RoundFuture> {
-    let a = agent.lock().await;
+/// /debug info 条目文本：每条一行，GUI 与 TUI 共用同一份格式。
+pub(crate) fn debug_info_text(a: &Agent) -> String {
     let mut lines = vec![
         format!("provider: {}", a.model.provider),
         format!("model: {}", a.model.model_id),
@@ -549,7 +548,12 @@ async fn dispatch_debug_info(agent: &Arc<Mutex<Agent>>) -> Option<RoundFuture> {
         lines.push(format!("session: {}", s.session_id));
         lines.push(format!("leaf: {:?}", s.get_leaf_id()));
     }
-    let msg = lines.join("\n");
+    lines.join("\n")
+}
+
+/// 处理 AgentCommand::DebugInfo。
+async fn dispatch_debug_info(agent: &Arc<Mutex<Agent>>) -> Option<RoundFuture> {
+    let msg = debug_info_text(&*agent.lock().await);
     _ = run_in_event_loop(move |ui| ui.on_command_notice(true, msg));
     None
 }

@@ -22,7 +22,7 @@ use crate::{
     extensions::skills::bundled_skill_names,
     modes::tui::{
         agent_actor::{AgentCommand, CommandRx},
-        worker::{session_tree_text, share_via_gist},
+        worker::{debug_info_text, session_tree_text, share_via_gist},
     },
     utils::paths::home_dir,
 };
@@ -191,20 +191,8 @@ async fn apply(agent: &mut Agent, cmd: AgentCommand, events: &UnboundedSender<Gu
             _ = events.send(GuiEvent::Notice(message));
         }
         AgentCommand::DebugInfo => {
-            let mut lines = vec![
-                format!("provider: {}", agent.model.provider),
-                format!("model: {}", agent.model.model_id),
-                format!("messages: {}", agent.messages.len()),
-                format!("autoCompaction: {}", agent.auto_compaction),
-                format!("autoRetry: {}", agent.auto_retry),
-                format!("cwd: {}", agent.cwd),
-            ];
-
-            if let Some(session) = agent.session.as_ref() {
-                lines.push(format!("session: {}", session.session_id));
-                lines.push(format!("leaf: {:?}", session.get_leaf_id()));
-            }
-            _ = events.send(GuiEvent::Notice(lines.join(" · ")));
+            let message = debug_info_text(&agent);
+            _ = events.send(GuiEvent::Notice(message));
         }
         AgentCommand::BugReport {
             hint,
