@@ -35,6 +35,7 @@ pub mod mcp;
 pub mod memory;
 pub mod notify;
 pub mod open;
+pub mod papers;
 pub mod permissions;
 pub mod plan_mode;
 pub mod ponytail;
@@ -141,6 +142,8 @@ pub const PRIORITY_DOC_HELPER: u32 = 50;
 pub const PRIORITY_PROCESSES: u32 = 49;
 /// hardware 芯片手册本地检索扩展的注册优先级。
 pub const PRIORITY_HARDWARE: u32 = 48;
+/// papers 文献检索与全文获取扩展的注册优先级。
+pub const PRIORITY_PAPERS: u32 = 47;
 /// debug 调试工具集扩展注册优先级。
 pub const PRIORITY_DEBUG: u32 = 45;
 /// tool_search 延迟工具检索扩展的注册优先级。

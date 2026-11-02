@@ -2,6 +2,21 @@
 
 ### Added
 
+- **A `papers` extension searches the literature and fetches full texts**: `web_search` gets
+  you web pages, never "which papers, and which one's actual text". Four zero-auth sources are
+  queried concurrently — alphaXiv (community votes, arXiv only), OpenAlex (citation counts,
+  DOIs, cross-publisher), bioRxiv (OpenAlex narrowed by source) and PubMed (two-step: rank by
+  relevance, then `efetch`) — and merged by arXiv id / DOI / OpenAlex id / PMID, keeping the
+  larger vote and citation counts. `paper_search` takes `query`, `sources`, `num_results`,
+  `published_after` / `published_before` and alphaXiv's `prioritize`
+  (`default` / `recency` / `popular` / `historical`); one failing source appends a note and the
+  rest still return. `paper_get` routes a bare or prefixed arXiv id / DOI / OpenAlex id / PMID
+  to the right metadata source, then walks the body chain: alphaXiv markdown full text →
+  its generated overview → arXiv PDF (`export.arxiv.org`) → open-access PDF from OpenAlex.
+  PDFs only yield their text layer, so a scanned paper says so instead of returning nothing.
+  Bodies are truncated at 20000 characters with an `offset` hint for the next call. Both tools
+  are deferred behind `tool-search`; off by default (`Dev` / `Creator`).
+
 - **An `injection-guard` extension warns when a tool result reads like a prompt injection**: an
   agent feeds untrusted text into its own context all day — fetched pages, parsed PDFs, remote
   file reads, `curl` output — and a line of "ignore the previous instructions" inside it is
@@ -823,6 +838,18 @@
 ## 中文
 
 ### 新增
+
+- **新增 `papers` 扩展：文献检索与全文获取**：`web_search` 拿得到网页，拿不到「哪些论文、
+  哪篇原文」。四个零鉴权源并发查询——alphaXiv（社区票数，只覆盖 arXiv）、OpenAlex（引用数、
+  DOI、跨库）、bioRxiv（OpenAlex 按来源收窄）、PubMed（两步：先按相关度排名，再 `efetch`）——
+  按 arXiv id / DOI / OpenAlex id / PMID 有交集即合并，票数与引用数取较大值。`paper_search`
+  接受 `query` / `sources` / `num_results` / `published_after` / `published_before` 与 alphaXiv 的
+  `prioritize`（`default` / `recency` / `popular` / `historical`）；单个源失败只追加一行提示，
+  其余源结果照常返回。`paper_get` 把裸 id 或带前缀的 arXiv id / DOI / OpenAlex id / PMID 路由到
+  对应的元数据源，再走正文回退链：alphaXiv Markdown 全文 → 它的生成式综述 → arXiv PDF
+  （`export.arxiv.org`）→ OpenAlex 给的开放获取 PDF。PDF 只抽文本层，扫描件会明确说「没有
+  文本层」而不是返回空内容。正文按 20000 字符截断，并在末尾给出下一次调用用的 `offset`。
+  两个工具都是 `tool-search` 后面的延迟工具；默认不启用（`Dev` / `Creator`）。
 
 - **新增 `injection-guard` 扩展：工具结果像提示注入时先提示一声**：agent 整天在往自己上下文里灌
   不可信文本——抓回的网页、解析出的 PDF、远端读来的文件、`curl` 的输出——里面一句「忽略上面的
