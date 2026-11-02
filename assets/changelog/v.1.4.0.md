@@ -46,9 +46,18 @@
   exactly what a model is most likely to obey. Every tool result is now scored against a pattern
   table: instruction overrides, system-prompt dumping, role hijacks, chat template tokens
   (`<|im_start|>`, `[INST]`, `<<SYS>>`), line-leading role markers, `new instructions:`,
-  `do not tell the user`, data exfiltration, and instructions hidden in HTML comments. A score of
-  3 or more posts one warning in the chat area (not persisted, never sent to the model). The
-  result itself is **never rewritten** — redaction would break diffs and code blocks, and the
+  `do not tell the user` (now also `don't` / `never`, and `them` / `anyone` as its object — the
+  spelling variants used to read as one weaker rule), data exfiltration, and instructions hidden
+  in HTML comments. A score of 3 or more posts one warning in the chat area (not persisted, never
+  sent to the model). Obfuscation is undone before scoring: zero-width / bidi / tag characters are
+  stripped and base64 / hex payloads are decoded (text-like decodes only, with caps on run length
+  and payload count), so `ig\u{200B}nore` or a base64-encoded sentence still scores. Two
+  exfiltration-lure rules ship with it: a secret-shaped value in a URL query (`?token=…`,
+  `?api_key=…`; markdown images included — they fire on render, no click needed), and a "read a
+  sensitive path and send it somewhere" directive, which needs the read verb, the path and the
+  transport verb inside one sentence (`.ssh/`, `id_rsa`, `authorized_keys`, `.aws/credentials`,
+  `.npmrc`, `.netrc`, `.git-credentials`, `.kube/config`, `.docker/config.json`, `/etc/shadow`).
+  The result itself is **never rewritten** — redaction would break diffs and code blocks, and the
   model needs the original text to judge it. The same tool result is reported once. Off by
   default (`Dev` / `Creator`).
 
@@ -955,7 +964,14 @@
   不可信文本——抓回的网页、解析出的 PDF、远端读来的文件、`curl` 的输出——里面一句「忽略上面的
   指令」，正是模型最容易照做的形态。现在每条工具结果都会过一遍模式表打分：指令覆盖、套系统提示、
   角色劫持、聊天模板标记（`<|im_start|>` / `[INST]` / `<<SYS>>`）、行首角色标记、
-  `new instructions:`、`do not tell the user`、外传数据、藏在 HTML 注释里的指令。总分 ≥3 就在
+  `new instructions:`、`do not tell the user`（写法放宽到 `don't` / `never`，宾语也包括 `them` /
+  `anyone`；这些拼法过去只算作一条更弱的规则）、外传数据、藏在 HTML 注释里的指令。变形先还原再
+  打分：去掉零宽 / 双向 / 标签区字符，并把 base64 与十六进制载荷解出来（只认解出来像文本的，段数
+  与单段长度都有上限），所以 `ig\u{200B}nore` 或整句 base64 一样能命中。同时补上两条外传诱导规则：
+  URL 查询参数里带凭据形状的值（`?token=…` / `?api_key=…`，markdown 图片同样算——渲染即发请求，
+  不用点），以及「读某个敏感路径 + 发到某处」的指令句，要求读动词、敏感路径、传输动词落在同一句
+  里（`.ssh/`、`id_rsa`、`authorized_keys`、`.aws/credentials`、`.npmrc`、`.netrc`、
+  `.git-credentials`、`.kube/config`、`.docker/config.json`、`/etc/shadow`）。总分 ≥3 就在
   聊天区提示一次（不落库、不进模型上下文）。结果本身**绝不改写**——打码会破坏 diff 与代码块，
   而且模型要看原文才能自己判断。同一条结果只提示一次。默认不启用（`Dev` / `Creator`）。
 
