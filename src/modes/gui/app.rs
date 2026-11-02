@@ -604,6 +604,10 @@ impl GuiApp {
                     .snapshot
                     .as_ref()
                     .and_then(|snapshot| snapshot.session_name.clone());
+                let previous_path = self
+                    .snapshot
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.session_path.clone());
 
                 // 快照是回合边界的权威用量（含压缩、嵌套调用等事件看不到的部分）
                 let mut snapshot = snapshot;
@@ -617,12 +621,19 @@ impl GuiApp {
                     .and_then(|snapshot| snapshot.session_name.clone())
                     != previous_name;
 
+                // 新会话延迟落盘：首条消息写出文件后才知道路径，不重读就永远没有对应行，也就高亮不到
+                let appeared = self
+                    .snapshot
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.session_path.clone())
+                    != previous_path;
+
                 let cwd = self.cwd();
                 if cwd != previous {
                     self.reload_sessions(cx);
                     self.refresh_branch();
                     remember_cwd(&cwd);
-                } else if renamed {
+                } else if renamed || appeared {
                     self.reload_sessions(cx);
                 }
             }

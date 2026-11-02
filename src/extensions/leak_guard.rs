@@ -14,7 +14,8 @@
 //!   最多记 64 条，满了清空；这一点同时避免了刷屏。
 //!
 //! 规则表覆盖 `sk-` / `sk-ant-` / `ghp_` / `AKIA` / `xox?-` / `AIza` / `glpat-` / `sk_live_` /
-//! JWT / 私钥块，以及长度 ≥32、大小写与数字齐全、Shannon 熵 ≥4 bits/char 的高熵串。
+//! JWT / 私钥块，以及长度 ≥32、大小写与数字齐全、Shannon 熵 ≥4 bits/char 的高熵串；
+//! 机器生成的标识（UUID、哈希、带 ISO 日期时间的会话文件名）与路径不算凭据。
 //!
 //! 配置持久化在 `agent_dir()/extensions/leak-guard.json`（`mode`：`warn` / `block` / `off`）：
 //! `/leak-guard [warn|block|off]` 直接设档，裸 `/leak-guard` 打开扩展设置面板。
@@ -60,7 +61,8 @@ const CONFIG_REL: &str = "extensions/leak-guard.json";
 /// 配置文件里的键：检测模式。
 const CONFIG_MODE: &str = "mode";
 
-/// 已告警记录的上限：超过就整体清空，避免无界增长（也避免同一个 secret 永久静音）。
+/// 已告警记录的上限：满了就挤掉最早的一条，避免无界增长（整体清空会让同一批命中
+/// 在下一轮重新算「新命中」，历史里噪声一多就会每轮重复告警）。
 const MAX_REMEMBERED: usize = 64;
 
 /// 自声明工厂：linkme 分布式切片。
@@ -69,6 +71,11 @@ static LEAK_GUARD_FACTORY: ExtensionFactory = ExtensionFactory {
     priority: PRIORITY_LEAK_GUARD,
     make: || -> Arc<dyn Extension> { Arc::new(LeakGuard) },
 };
+
+/// 会话文件名里的 ISO 日期时间（`2026-11-02T10-25-54`，含文件名用的 `-` 分隔变体）。
+static TIMESTAMP_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\d{4}-\d{2}-\d{2}[T ]\d{2}[:-]\d{2}").expect("datetime's format invalid")
+});
 
 /// 检测模式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumString, IntoStaticStr)]
@@ -255,12 +262,15 @@ fn scan(text: &str) -> Vec<Hit> {
 }
 
 /// 扫描文本里的高熵串，返回 `(start, end)` 字节区间。
+///
+/// 候选字符集是 base64 的字母表（含 URL 变体的 `-` `_`、填充 `=`）加 `+`，**不含 `/`**：
+/// 斜杠会把整条路径连成一个「高熵串」，路径本身永远不是凭据。
 fn high_entropy_runs(text: &str) -> Vec<(usize, usize)> {
     let mut runs = Vec::new();
     let mut start = None;
 
     for (i, c) in text.char_indices() {
-        let part = c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '=' | '-' | '_');
+        let part = c.is_ascii_alphanumeric() || matches!(c, '+' | '=' | '-' | '_');
         match (part, start) {
             (true, None) => start = Some(i),
             (false, Some(s)) => {
@@ -282,7 +292,7 @@ fn high_entropy_runs(text: &str) -> Vec<(usize, usize)> {
 
 /// 一段候选串是否像随机凭据：够长、大小写与数字齐全、熵足够高。
 ///
-/// shortcut: 纯 hex 串（git sha / 内容哈希 / 行号散列）一律跳过，那是本仓最常见的高熵噪声；
+/// shortcut: 机器生成的标识一律跳过（见 [`looks_like_identifier`]），那是本仓最常见的高熵噪声；
 /// 真要抓 hex 编码的密钥，得另加白名单再放开这一条。
 fn is_high_entropy(run: &str) -> bool {
     /// 高熵串的最小长度：短于此的随机串碰撞概率太低，不值得报。
@@ -290,7 +300,7 @@ fn is_high_entropy(run: &str) -> bool {
     /// 判定为随机串的 Shannon 熵下限（bits/char）。
     const MIN_ENTROPY: f64 = 4.0;
 
-    if run.len() < MIN_LEN || run.chars().all(|c| c.is_ascii_hexdigit()) {
+    if run.len() < MIN_LEN || looks_like_identifier(run) {
         return false;
     }
 
@@ -305,6 +315,15 @@ fn is_high_entropy(run: &str) -> bool {
     }
 
     lower && upper && digit && shannon(run) >= MIN_ENTROPY
+}
+
+/// 候选串是否是机器生成的标识而非凭据：去掉 `-` `_` 后只剩 hex（UUID / git sha / 内容哈希），
+/// 或者体内带 ISO 日期时间（`2026-11-02T10-25-54-666Z_<uuid>` 这类会话文件名）。
+fn looks_like_identifier(run: &str) -> bool {
+    run.chars()
+        .filter(|c| !matches!(c, '-' | '_'))
+        .all(|c| c.is_ascii_hexdigit())
+        || TIMESTAMP_RE.is_match(run)
 }
 
 /// 字节级 Shannon 熵（bits/char）。
@@ -338,7 +357,7 @@ fn remember(category: &str, snippet: &str) -> bool {
         return false;
     }
     if st.warned.len() >= MAX_REMEMBERED {
-        st.warned.clear();
+        st.warned.remove(0);
     }
     st.warned.push(key);
     true
@@ -680,6 +699,23 @@ mod tests {
     }
 
     #[test]
+    fn paths_and_session_names_are_not_reported() {
+        for text in [
+            // 本仓会话文件名的完整形态：路径 + 时间戳 + UUID
+            "/home/blue/.prux/sessions/--data-Videos-videos-draft-artical--/\
+             2026-11-02T10-25-54-666Z_01a19bcb-4dea-7518-9176-439af2a4b1f3.jsonl",
+            "/tmp/prux-subagents-1000/data-Videos-videos-draft-artical/tasks/wf_c719a5cd2c67",
+            "2026-11-02T10-25-54-666Z_01a19bcb-4dea-7518-9176-439af2a4b1f3",
+        ] {
+            assert!(
+                scan(text).is_empty(),
+                "{text} 不该被当成凭据: {:?}",
+                scan(text)
+            );
+        }
+    }
+
+    #[test]
     fn random_base64_is_high_entropy_but_prose_is_not() {
         let blob = "q8Zr2NvT5xLw9KpY3mHb7CfJ1sDg6RtA0eU+Zx4Q";
         assert!(is_high_entropy(blob));
@@ -706,6 +742,29 @@ mod tests {
         let text = format!("token={OPENAI}");
         let hits = scan(&text);
         assert_eq!(hits.len(), 1, "{hits:?}");
+    }
+
+    #[test]
+    fn remember_evicts_the_oldest_entry_instead_of_wiping_the_list() {
+        let (_g, _ad) = guard();
+        for i in 0..MAX_REMEMBERED {
+            assert!(
+                remember("high-entropy", &format!("snippet-{i}")),
+                "第 {i} 条应是新的"
+            );
+        }
+        assert!(
+            remember("high-entropy", "snippet-new"),
+            "满额后新条目仍要告警"
+        );
+        assert!(
+            remember("high-entropy", "snippet-0"),
+            "最早的条目被挤掉后应重新算新命中"
+        );
+        assert!(
+            !remember("high-entropy", "snippet-63"),
+            "挤掉一条后其余记录必须保留，否则每轮都会重新告警"
+        );
     }
 
     #[test]

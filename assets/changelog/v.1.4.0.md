@@ -835,6 +835,18 @@
   the running turn instead. The busy-state abort now runs after the overlay, dropdown, completion
   panel and search boxes, matching what the terminal UI already did.
 
+- **`leak-guard` no longer flags paths and session file names, and stops repeating itself**: the
+  high-entropy scan treated `/` as part of a candidate string, so any file path became one long
+  'random' blob, and UUID / hash / `2026-11-02T10-25-54-666Z_<uuid>` session names went through as
+  well. Paths no longer join into a candidate, machine-generated identifiers are skipped, and the
+  warning memory now drops its oldest entry instead of wiping itself — a history full of such
+  names used to reset the memory every request, so the same warning came back every turn.
+
+- **A brand-new session in the desktop GUI now shows up in the sidebar and gets highlighted**: the
+  file is only written on the first message, and the sidebar was only re-read when the working
+  directory changed or a session was renamed, so the new row stayed missing and nothing was
+  highlighted. A session path appearing or changing now re-reads the list.
+
 ## 中文
 
 ### 新增
@@ -1442,3 +1454,13 @@
 
 - **桌面 GUI 侧栏底部的目录块不再画圆角**：它贴着窗口底边，圆角只在下半截露出一道缺口，
   与侧栏的直边不一致。
+
+- **`leak-guard` 不再对路径与会话文件名误报，也不会反复提示**：高熵扫描把 `/` 也算作候选串的
+  字符，于是任何路径都连成一整条「随机串」，UUID / 哈希 / `2026-11-02T10-25-54-666Z_<uuid>`
+  这类会话文件名也照报不误。现在路径不再连成一个候选，机器生成的标识直接跳过，告警记录满了
+  改为挤掉最早一条而不是整体清空——历史里这类名字一多，记录每轮都被清空，同一个提示就会
+  每回合重弹一次。
+
+- **桌面 GUI 新建的会话会出现在侧栏并高亮**：会话文件要等首条消息才写出，而侧栏原先只在切换
+  工作目录或会话改名时才重读，于是新会话的行一直不出现，当前会话也就高亮不到。现在会话路径
+  出现或变化都会重读列表。
