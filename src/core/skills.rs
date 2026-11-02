@@ -311,6 +311,9 @@ fn load_skills_from_dir_inner(
         if ig_ignores(ig, &rel, false) {
             return;
         }
+
+        // 走 realpath：同名技能经符号链接也会归到真实目录，名字不受 read_dir 顺序影响
+        let path = std::fs::canonicalize(&path).unwrap_or(path);
         if let Some(skill) = load_skill_from_file(&path, source) {
             skills.push(skill);
         }
