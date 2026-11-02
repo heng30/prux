@@ -14,17 +14,31 @@
   model needs the original text to judge it. The same tool result is reported once. Off by
   default (`Dev` / `Creator`).
 
-- **A `hardware` extension searches local chip datasheets and pinout tables**: drop datasheets
+- **A `hardware` extension searches local datasheets and talks to real boards**: drop datasheets
   converted to Markdown (and pinout CSVs) under
   `agent_dir()/extensions/hardware/datasheets/`, grouped by chip if you like, and the
   `hardware_search` tool scores every chunk with the same lexical term splitting the rest of the
   harness uses, returning `file:line` plus the excerpt. A hit in the path weighs that chip up, so
   searching `usart` prefers `stm32f4/…` over an unrelated file; `path` narrows to prefixes and
   `limit` caps the result. Pin aliases need no second mechanism — one CSVs line
-  (`PA9,USART1_TX,TIM1_CH2`) is a chunk, searchable by either name. No SWD/JTAG probe channel:
-  reading board info or memory needs an extra hardware dependency and real silicon to verify. The
-  directory is rescanned per call (no index cache). `/hardware` prints the directory and its
-  file/chunk counts. Off by default, `Dev` mode only.
+  (`PA9,USART1_TX,TIM1_CH2`) is a chunk, searchable by either name. The directory is rescanned per
+  call (no index cache).
+- **The `hardware` extension also drives boards over a probe, serial and GPIO**: `probe-rs` gives
+  `hardware_board_info` (chip and architecture), `hardware_memory_map` (RAM / Flash ranges) and
+  `hardware_memory_read` (a hex dump of any address range); without a probe the first two fall
+  back to a built-in board table (`nucleo-f401re`, `nucleo-f411re`, `arduino-uno`, `arduino-mega`,
+  `arduino-uno-q`, `esp32`, `rpi-gpio`), so "what chip is this board" needs no hardware. Pins go
+  through `gpio_read` / `gpio_write` / `hardware_capabilities`: either a line-delimited JSON
+  bridge on the serial port, or the Uno Q Bridge on `127.0.0.1:9999`; `gpio_rpi_*` and
+  `rpi_system_info` hit a Raspberry Pi's BCM pins directly (`rppal`, Linux only). `hardware_flash`
+  writes `.elf` / `.hex` / `.uf2` / `.bin` over the probe and `pico_flash` copies a UF2 onto a
+  Pico's bootloader volume — both destructive, therefore gated by `permissions` when it is
+  enabled. `arduino_upload` shells out to `arduino-cli`, and `device_read_code` /
+  `device_write_code` / `device_exec` go through `mpremote` for MicroPython boards. Serial paths
+  are whitelisted (`/dev/ttyACM*`, `/dev/ttyUSB*`, `/dev/tty.usbmodem*`, `COM*`) and every call
+  reopens the port. Config lives in `agent_dir()/extensions/hardware/config.json` (`boards`,
+  `chip`, `devices`, `baud`). All tools are deferred behind `tool-search`; `/hardware` prints the
+  directory, board config and tool list. Off by default, `Dev` mode only.
 
 
 - **A `leak-guard` extension flags credentials before they leave**: the `permissions` extension
@@ -822,8 +836,21 @@
   检索同一套词法切词给每个块打分，返回 `file:line` + 片段正文。命中在路径里的块额外加权，所以搜
   `usart` 会优先出 `stm32f4/…` 而不是无关文件；`path` 收窄前缀、`limit` 限条数。引脚别名不需要
   第二套机制——引脚表的一行（`PA9,USART1_TX,TIM1_CH2`）就是一块，引脚名和复用功能名都能搜到。
-  不做 SWD/JTAG 探针通道：读板卡信息或内存要额外的硬件依赖与真机验证。资料目录每次调用重扫（不建
-  索引缓存）。`/hardware` 打印资料目录与文件/块计数。默认不启用（仅 `Dev` 模式可用）。
+  资料目录每次调用重扫（不建索引缓存）。
+- **`hardware` 扩展同时直连板子**：探针通道走 `probe-rs`——`hardware_board_info` 读芯片名与架构、
+  `hardware_memory_map` 列 RAM / Flash 区间、`hardware_memory_read` 把任意地址段渲染成 hex dump；
+  没有探针时前两个回落到内置板卡表（`nucleo-f401re` / `nucleo-f411re` / `arduino-uno` /
+  `arduino-mega` / `arduino-uno-q` / `esp32` / `rpi-gpio`），所以「这块板是什么芯片」不插板也能答。
+  引脚走 `gpio_read` / `gpio_write` / `hardware_capabilities`：对端是串口上的行分隔 JSON 桥接固件，
+  或本机 `127.0.0.1:9999` 的 Uno Q Bridge；`gpio_rpi_*` 与 `rpi_system_info` 直接操作树莓派的 BCM
+  引脚（`rppal`，仅 Linux）。`hardware_flash` 经探针烧 `.elf` / `.hex` / `.uf2` / `.bin`，
+  `pico_flash` 把 UF2 拷进 Pico 的 bootloader 挂载点——两者都是破坏性操作，启用 `permissions`
+  时受其审批约束。`arduino_upload` 调 `arduino-cli`，`device_read_code` / `device_write_code` /
+  `device_exec` 调 `mpremote` 跑 MicroPython 板子。串口路径走白名单（`/dev/ttyACM*` /
+  `/dev/ttyUSB*` / `/dev/tty.usbmodem*` / `COM*`），每次调用重新打开端口。配置在
+  `agent_dir()/extensions/hardware/config.json`（`boards`、`chip`、`devices`、`baud`）。工具全部是
+  延迟工具（需 `tool-search`）；`/hardware` 打印资料目录、板卡配置与工具列表。默认不启用
+  （仅 `Dev` 模式可用）。
 
 
 - **新增 `leak-guard` 扩展：凭据外发前先拦一道**：`permissions` 管的是「哪个工具能跑」，不管
