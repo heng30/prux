@@ -34,7 +34,7 @@ use crate::{
     },
     modes::tui::handlers::register_host_command,
     utils::{
-        glyphs::{DEF_DOT_EMPTY, DEF_DOT_FILLED},
+        glyphs::DEF_DOT_FILLED,
         output_files::create_output_file_stream,
         process::{kill_process_tree, shell_command},
         time::format_duration,
@@ -139,6 +139,11 @@ struct State {
     jobs: Vec<Job>,
     /// 停靠面板的显隐（内存态，不持久化）。
     dock_shown: bool,
+    /// job 刚结束、面板还没重画过：置位后至少再要一帧，好让已完成的行消失。
+    ///
+    /// 空闲时 TUI 只在 80ms tick 里轮询 [`Extension::wants_redraw`]，最后一个运行中 job
+    /// 结束的那一刻计数已归零，没有这个标志就再也等不到重绘。
+    refresh_pending: bool,
 }
 
 /// job 表。
@@ -207,13 +212,14 @@ impl Extension for Processes {
         register_host_command(EXT, CMD, command_ps);
     }
 
-    /// 面板显示且仍有 job 在跑时请求每帧重绘（耗时列要动起来）。
+    /// 面板显示时请求每帧重绘：运行中 job 的耗时列要动，结束时还得刷掉已移除的行。
     fn wants_redraw(&self) -> bool {
         let st = lock();
-        st.dock_shown && st.jobs.iter().any(|j| j.finished.is_none())
+        st.dock_shown && (st.refresh_pending || st.jobs.iter().any(|j| j.finished.is_none()))
     }
 
-    /// 面板内容：标题行 + 每 job 一行（状态点 / id / 状态 / 耗时 / 命令）。
+    /// 面板内容：标题行 + 每个**运行中** job 一行（状态点 / id / 耗时 / 命令）；
+    /// 已结束的 job 不再占用面板行，全部结束时段落消失（面板随之自动收起）。
     fn dock_lines(&self) -> Vec<DockLine> {
         dock_lines()
     }
@@ -487,6 +493,7 @@ fn reap(mut child: std::process::Child, pid: u32) {
                 exit_code,
                 elapsed: job.started.elapsed(),
             });
+            st.refresh_pending = true;
         }
     });
 }
@@ -636,60 +643,37 @@ fn list_text() -> String {
     out.trim_end().to_string()
 }
 
-/// 停靠面板：标题行 + 每 job 一行。
+/// 停靠面板：标题行 + 每个运行中 job 一行；没有运行中的 job 时返回空（段与面板自动收起）。
 fn dock_lines() -> Vec<DockLine> {
-    let st = lock();
+    let mut st = lock();
+    st.refresh_pending = false;
     if !st.dock_shown {
         return Vec::new();
     }
 
-    let running = st.jobs.iter().filter(|j| j.finished.is_none()).count();
-    let finished = st.jobs.len() - running;
-    let mut title = vec![
+    let running: Vec<&Job> = st.jobs.iter().filter(|j| j.finished.is_none()).collect();
+    if running.is_empty() {
+        st.dock_shown = false;
+        return Vec::new();
+    }
+
+    let mut lines = vec![vec![
         DockSpan::new("accent", "#8abeb7", "Processes"),
-        DockSpan::new("muted", "#999999", format!("  {running} running")),
-    ];
-    if finished > 0 {
-        title.push(DockSpan::new(
-            "dim",
-            "#666666",
-            format!("  · {finished} finished"),
-        ));
-    }
+        DockSpan::new("muted", "#999999", format!("  {} running", running.len())),
+    ]];
 
-    let mut lines = vec![title];
-    if st.jobs.is_empty() {
-        lines.push(vec![DockSpan::plain("  no background jobs")]);
-        return lines;
-    }
-
-    for job in &st.jobs {
-        let elapsed = job
-            .finished
-            .as_ref()
-            .map(|f| f.elapsed)
-            .unwrap_or_else(|| job.started.elapsed());
-        let (glyph, key, fallback, status) = match &job.finished {
-            None => (DEF_DOT_FILLED, "success", "#b5bd68", "running".to_string()),
-            Some(f) if f.exit_code == Some(0) && !job.stop_requested => {
-                (DEF_DOT_EMPTY, "dim", "#666666", "exit 0".to_string())
-            }
-            Some(f) => (
-                DEF_DOT_EMPTY,
-                "error",
-                "#cc6666",
-                outcome_text(f, job.stop_requested),
-            ),
-        };
-
+    for job in running {
         lines.push(vec![
-            DockSpan::new(key, fallback, format!("{glyph} ")),
+            DockSpan::new("success", "#b5bd68", format!("{DEF_DOT_FILLED} ")),
             DockSpan::new("text", "#ffffff", job.id.clone()),
-            DockSpan::new("muted", "#999999", format!("  {status}")),
+            DockSpan::new("muted", "#999999", "  running"),
             DockSpan::new(
                 "dim",
                 "#666666",
-                format!("  {}", format_duration(elapsed.as_millis() as u64)),
+                format!(
+                    "  {}",
+                    format_duration(job.started.elapsed().as_millis() as u64)
+                ),
             ),
             DockSpan::new(
                 "muted",
@@ -789,6 +773,7 @@ mod tests {
         let pids = {
             let mut st = lock();
             st.dock_shown = false;
+            st.refresh_pending = false;
             st.next = 0;
             drain_all_running(&mut st)
         };
@@ -880,14 +865,14 @@ mod tests {
         reset();
     }
 
-    /// `/ps` 三段式切换停靠段；`/ps list` 打印清单；`/ps clear` 丢掉已完成记录。
+    /// `/ps` 三段式切换停靠段；`/ps list` 打印清单；`/ps clear` 丢掉已完成记录；
+    /// 已结束的 job 从面板消失（全部结束段与面板自动收起）。
     #[test]
     fn ps_command_shows_panel_and_clears_finished_jobs() {
         let _g = lock_test();
         reset();
 
-        start_job("printf 'done\\n'", "/tmp").unwrap();
-        wait_finished("job-1").expect("job 应结束");
+        start_job("sleep 30", "/tmp").unwrap();
 
         let mut st = App::new();
         command_ps(&mut st, "ps");
@@ -902,6 +887,7 @@ mod tests {
         assert!(!lock().dock_shown, "面板显示中再按 /ps 应隐藏本段");
         command_ps(&mut st, "ps");
         assert!(lock().dock_shown, "第三次 /ps 应重新显示本段");
+        dock_lines();
 
         command_ps(&mut st, "ps list");
         assert!(
@@ -911,9 +897,13 @@ mod tests {
             "/ps list 应把清单打到聊天区"
         );
 
+        stop(&json!({ "id": "job-1" })).unwrap();
+        wait_finished("job-1").expect("job 应结束");
+        assert!(dock_lines().is_empty(), "已结束的 job 必须从面板移除");
+        assert!(!lock().dock_shown, "无运行中 job 时段落与面板收起");
+
         command_ps(&mut st, "ps clear");
         assert!(lock().jobs.is_empty(), "clear 应丢掉已完成的 job");
-        assert!(dock_lines().len() == 2, "无 job 时只有标题行 + 空提示");
 
         assert!(!command_ps(&mut st, "ps bogus"));
         assert!(
@@ -921,6 +911,29 @@ mod tests {
                 .iter()
                 .any(|(_, m)| sys_spans_text(&m.spans).contains("Usage: /ps"))
         );
+
+        reset();
+    }
+
+    /// job 结束后要有一帧重绘把它的行刷掉（即使它是最后一个运行中的 job）。
+    #[test]
+    fn finished_job_requests_one_redraw() {
+        let _g = lock_test();
+        reset();
+
+        start_job("sleep 30", "/tmp").unwrap();
+        lock().dock_shown = true;
+        assert!(Processes.wants_redraw(), "运行中的 job 要每帧重绘");
+
+        stop(&json!({ "id": "job-1" })).unwrap();
+        wait_finished("job-1").expect("job 应结束");
+        assert!(
+            Processes.wants_redraw(),
+            "最后一个 job 结束也要再刷一帧，否则它的行留在面板上"
+        );
+
+        assert!(dock_lines().is_empty());
+        assert!(!Processes.wants_redraw(), "渲染过一帧后不再持续重绘");
 
         reset();
     }

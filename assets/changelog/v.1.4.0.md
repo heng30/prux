@@ -63,8 +63,9 @@
   and the last N lines; reading does not consume the log, and omitting `id` lists every job),
   while `stop_process` kills the whole process group. `/ps` toggles the dock section (three-stage,
   like `/todos`), `/ps list` prints the job list, `/ps stop <id>` stops a job and `/ps clear`
-  drops finished ones. A job keeps running after the turn ends, and disabling the extension
-  stops every running job. Off by default (`Dev` mode).
+  drops finished ones. The dock section lists only running jobs (freshly finished ones are removed
+  on the next frame, and the section hides itself once none are left). A job keeps running after
+  the turn ends, and disabling the extension stops every running job. Off by default (`Dev` mode).
 
 - **The desktop GUI's session sidebar shows how many sessions each group holds**: the `Today` /
   `This week` / `Older` heading now carries its entry count, right-aligned in the caption colour.
@@ -868,8 +869,9 @@
   返回 `job-N`、pid 与日志路径——stdin 接 `/dev/null`，stdout/stderr 写进那个日志文件而不是
   继承终端。`read_process_output` 返回输出**快照**（状态、pid、耗时、最后 N 行；读不消费日志，
   省略 `id` 列出全部 job），`stop_process` 杀掉整个进程组。`/ps` 三段式切换停靠段显隐
-  （同 `/todos`），`/ps list` 打印清单，`/ps stop <id>` 停止、`/ps clear` 丢掉已完成记录。job 不随回合结束消失，禁用本扩展会停掉
-  全部运行中的 job。默认不启用（`Dev` 模式）。
+  （同 `/todos`），`/ps list` 打印清单，`/ps stop <id>` 停止、`/ps clear` 丢掉已完成记录。停靠段只列
+  运行中的 job——刚结束的行在下一帧被刷掉，全部结束时段落与面板自动收起。job 不随回合结束消失，
+  禁用本扩展会停掉全部运行中的 job。默认不启用（`Dev` 模式）。
 
 - **桌面 GUI 的侧栏分组标题显示该组条目数**：`Today` / `This week` / `Older` 右侧按说明色右对齐
   显示条数，随搜索过滤结果变化，数的是列表里真实呈现的会话。
