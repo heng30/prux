@@ -38,8 +38,8 @@ zeroclaw 与 prux 的定位差得比 kiss / jcode / oh-my-pi 都远：它是**�
 所以 zeroclaw 的功能面里，最大的一块（51 个渠道模块、A2A 服务端、cron/routines 守护、
 observability/OTel、control plane、peers/relay）**在 prux 里没有对应位置**，不是「工作量问题」。
 
-真正能在 prux 扩展面里落地的只有 **5 项第一梯队 + 4 项第二梯队**，且它们的共同特征是：
-**都是一个工具或一个写路径的加固，跟渠道 / 守护进程无关**。
+能在 prux 扩展面里落地的候选共 **9 项**（下表），它们的共同特征是：**都是一个工具或一个写路径的加固，
+跟渠道 / 守护进程无关**。本轮定案：只有 §3.3 落地，§3.1 / §3.2 / §3.4 明确不做。
 
 | # | zeroclaw 位置 | 一句话 | 落成 prux 什么 | 估体量 |
 |---|---|---|---|---|
@@ -53,10 +53,16 @@ observability/OTel、control plane、peers/relay）**在 prux 里没有对应位
 | 8 | `zeroclaw-tools/src/image_gen.rs` (1117) | fal.ai 出图 | 新扩展 `image-gen`（与 codemode 重叠） | ~300 行 |
 | 9 | `zeroclaw-tools/src/hardware_*.rs` (267+215+265) | SWD/JTAG 板卡信息、内存映射、内存读写 | 新扩展 `hardware`（嵌入式专用） | ~500 行 |
 
-### 一句话推荐顺序
+### 定案（本轮）
 
-**§3.1（记忆加固，最小改动、直接堵住 token 写进 `global.json`）→ §3.2 `forge` →
-§3.3 `leak-guard` → §3.4 技能自动生成**，其余按需。
+- **§3.3 `leak-guard`：已落地**（v1.4.0，见 §3.3 落地记录）。
+- **§3.1 记忆写路径加固、§3.2 `forge`、§3.4 技能自动生成：明确不做**（本轮排除，不排期）。
+- §3.5–3.9：维持原判断（§3.5 按需复查，§3.8 / §3.9 不做或看用户群，§3.6 / §3.7 可选）。
+
+### 一句话结论
+
+真正落地的是 §3.3——它是这批候选里唯一「纯检测、不改信任模型、外部无依赖」的一项。
+其余按上表定案执行，不再评估。
 
 ---
 
@@ -124,6 +130,8 @@ observability/OTel、control plane、peers/relay）**在 prux 里没有对应位
   测试的期望分变化，`recall.rs` 的 `#[cfg(test)]` 里那几条断言要跟着改。
 - **建议**：**做**。成本最低、收益是安全边界（防止凭据随记忆外泄 / 反复回灌）。
 
+- **定案（本轮）**：**不做**。
+
 ### 3.2 `forge` 扩展（GitHub / Gitea 类型化操作）
 
 - **是什么**：`zeroclaw-tools/src/git_forge.rs` (1347)。一个工具，`action` 取
@@ -139,6 +147,7 @@ observability/OTel、control plane、peers/relay）**在 prux 里没有对应位
   - `describe` 自描述那套保留 —— 它让模型不用记 schema，是 zeroclaw 这工具最值的设计。
 - **风险**：写操作（建 PR、发 review、改 issue）属信任边界，必须接 `permissions` 的审批，
   不能照抄 zeroclaw 的 `SecurityPolicy` 判定；`raw` 兜底要限定方法与路径前缀。
+- **定案（本轮）**：**不做**。
 
 ### 3.3 `leak-guard` 扩展（凭据外发检测）
 
@@ -152,6 +161,21 @@ observability/OTel、control plane、peers/relay）**在 prux 里没有对应位
   patterns 是精华，1400 行里大部分是类别枚举与测试，实际搬的规则表约 250 行。
 - **风险**：误报会打断正常排障（比如用户就是要传一个测试用假 token）。默认**只 warn 不拦**，
   拦截需显式开设置项。这与 zeroclaw 默认 `GuardAction::Warn` 一致。
+- **落地记录**（v1.4.0）：`src/extensions/leak_guard.rs`，单文件扩展，**零新依赖**
+  （`regex` 已是依赖）。
+  - 规则表是**一条合并正则**，命名分组即类别（`leftmost-first` 保证 `sk-ant-` 先于 `sk-`），
+    覆盖 `private-key` / `anthropic-key` / `openai-key` / `github-token` / `gitlab-token` /
+    `aws-access-key` / `slack-token` / `google-api-key` / `stripe-key` / `jwt`；高熵串单独扫
+    （≥32 字符、大小写与数字齐全、Shannon 熵 ≥4 bits/char，纯 hex 跳过）。
+  - 两个钩子：`transform_context`（每条消息的 `Text` 块；`block` 档替换成
+    `[REDACTED:<category>]`，只改本次请求的副本）+ `before_tool_call_ext`（扫入参 JSON，
+    `block` 档拒绝执行并把类别作为原因回给模型）。
+  - **不碰 thinking 块**：思考块带供应商签名，改文本会让签名失效（请求直接报错），只扫不报。
+  - 档位 `warn`（默认）/ `block` / `off`，落盘 `agent_dir()/extensions/leak-guard.json`，
+    `/leak-guard [warn|block|off]` 设档、裸 `/leak-guard` 打开扩展设置面板；默认不启用
+    （`Dev` / `Creator`）。
+  - 去重：同一 `(类别, 片段)` 只告警一次（上限 64 条），避免每轮重扫历史消息时刷屏。
+  - 与 `permissions` **保持解耦**：本扩展只看内容，不做「这个工具能不能跑」的门控。
 
 ### 3.4 技能自动生成 / 改进（并进 `skills` 扩展）
 
@@ -169,6 +193,7 @@ observability/OTel、control plane、peers/relay）**在 prux 里没有对应位
     路径包含检查（`audit.rs` 里 `Component` 路径校验那套必须保留）。
 - **偏离**：去掉 `creator.rs` 的 embedding 去重（prux 无向量栈），改用名字 + 标题词法近似
   （`utils/text::terms` 已在 `memory/recall.rs` 用过）。
+- **定案（本轮）**：**不做**。
 
 ### 3.5 提示注入防护（`prompt_guard` + `external_content`）
 
@@ -249,14 +274,15 @@ observability/OTel、control plane、peers/relay）**在 prux 里没有对应位
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
-| 1 | §3.1 记忆写路径加固（redact / threat / decay 并入 `memory`） | 候选 |
-| 2 | §3.2 `forge` 扩展 | 候选 |
-| 3 | §3.3 `leak-guard` 扩展 | 候选 |
-| 4 | §3.4 技能自动生成（并入 `skills`） | 候选 |
+| 1 | §3.1 记忆写路径加固（redact / threat / decay 并入 `memory`） | 🚫 不做（本轮明确排除） |
+| 2 | §3.2 `forge` 扩展 | 🚫 不做（同上） |
+| 3 | §3.3 `leak-guard` 扩展 | ✅ 已落地（v1.4.0） |
+| 4 | §3.4 技能自动生成（并入 `skills`） | 🚫 不做（同上） |
 | 5 | §3.5 提示注入防护（复查） | 候选 |
 | — | §3.6–3.9 | 按需，不排期 |
 
-落地后在此表回填状态，并在对应小节末尾补「落地记录」（照 `migration-oh-my-pi.md` 的写法）。
+§3.1 / §3.2 / §3.4 本轮已定案不做，不再评估；若日后要动，另开一份迁移记录，
+不在本档上打补丁。§3.3 的落地细节见该节「落地记录」。
 
 ---
 

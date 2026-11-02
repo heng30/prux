@@ -2,6 +2,20 @@
 
 ### Added
 
+- **A `leak-guard` extension flags credentials before they leave**: the `permissions` extension
+  gates *which* tools may run, not *what* leaves — a `curl -H "Authorization: Bearer …"` or a
+  `.env` pasted into a prompt went out untouched. `leak-guard` scans both sides: every message's
+  text block before each request, and every tool call's arguments. The rule table covers
+  OpenAI / Anthropic / GitHub / GitLab / AWS / Slack / Google / Stripe keys, JWT-shaped tokens,
+  private key blocks, and any run of 32+ characters that mixes case and digits with Shannon
+  entropy of at least 4 bits/char (pure hex is skipped, so commits and content hashes stay
+  quiet). Mode `warn` (the default) only notifies; `block` replaces prompt hits with
+  `[REDACTED:<category>]` in that one request and refuses a tool call that carries one, telling
+  the model which category tripped it. Thinking blocks are scanned but never rewritten — their
+  text is signature-bound. A repeated `(category, snippet)` pair notifies once. Mode lives in
+  `agent_dir()/extensions/leak-guard.json`: `/leak-guard warn|block|off` sets it, a bare
+  `/leak-guard` opens the extension's settings panel. Off by default (`Dev` / `Creator`).
+
 - **A `processes` extension supervises background jobs**: the built-in `bash` tool only runs
   commands in the foreground and kills them on timeout, so a dev server or a watcher blocks the
   whole turn. `background_bash` starts a command in the background and returns `job-N`, its pid
@@ -769,6 +783,16 @@
 ## 中文
 
 ### 新增
+
+- **新增 `leak-guard` 扩展：凭据外发前先拦一道**：`permissions` 管的是「哪个工具能跑」，不管
+  「什么内容出去」——`curl -H "Authorization: Bearer …"`、或者把 `.env` 贴进 prompt，以前都是
+  原样发走的。`leak-guard` 两头都扫：每次请求前扫每条消息的文本块，每次工具调用前扫入参。规则表
+  覆盖 OpenAI / Anthropic / GitHub / GitLab / AWS / Slack / Google / Stripe 的 key、JWT 形状的
+  token、私钥块，以及任何「长度 ≥32、大小写与数字齐全、Shannon 熵 ≥4 bits/字符」的串（纯 hex
+  跳过，所以 commit 与内容哈希不会误报）。档位 `warn`（默认）只提示；`block` 只把**本次请求**
+  的命中替换成 `[REDACTED:<类别>]`，并拒绝携带凭据的工具调用、把命中的类别回给模型。思考块只扫
+  不改——它的文本带签名，改了签名就失效。同一 `(类别, 片段)` 只提示一次。档位存在
+  `agent_dir()/extensions/leak-guard.json`——`/leak-guard warn|block|off` 设档，裸 `/leak-guard` 打开扩展设置面板。默认不启用（`Dev` / `Creator`）。
 
 - **新增 `processes` 扩展：后台进程监督**：内置 `bash` 工具只有「前台执行 + 超时杀进程」，
   dev server、watcher 这类长命命令会把一整轮卡到超时。`background_bash` 把命令丢到后台，立刻

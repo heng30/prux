@@ -25,6 +25,7 @@ pub mod footer;
 pub mod goal;
 pub mod hang_detect;
 pub mod jet;
+pub mod leak_guard;
 pub mod loop_detect;
 pub mod lsp;
 pub mod markit;
@@ -68,6 +69,8 @@ pub const PRIORITY_GOAL: u32 = 90;
 pub const PRIORITY_PLAN_MODE: u32 = 85;
 /// permissions 工具权限门控扩展的注册优先级。
 pub const PRIORITY_PERMISSIONS: u32 = 84;
+/// leak-guard 凭据外发检测扩展的注册优先级。
+pub const PRIORITY_LEAK_GUARD: u32 = 83;
 /// tasks 结构化任务跟踪扩展的注册优先级。
 pub const PRIORITY_TASKS: u32 = 80;
 /// subagent 子代理扩展的注册优先级。
