@@ -111,6 +111,14 @@ fn show(host: &mut dyn CommandHost) {
         lines.push("  external_directory: (not configured — no CWD boundary)".to_string());
     }
 
+    if policy.has_domain() {
+        if let Some(map) = policy.domain.as_ref() {
+            lines.push(format!("  domain: {}", describe(map)));
+        }
+    } else {
+        lines.push("  domain: (not configured — no host gate)".to_string());
+    }
+
     for tool in ["bash", "read", "write", "edit", "grep", "find", "ls", "mcp"] {
         if policy.has_surface(tool)
             && let Some(text) = config::describe_surface(policy, tool)
@@ -178,7 +186,7 @@ fn grant(host: &mut dyn CommandHost, rest: &str, allow: bool) {
     let Some((surface, pattern)) = rest.split_once(char::is_whitespace) else {
         host.push_message(
             &            format!(
-                "Usage: /permissions {} <surface> <pattern>   (surface: path | external_directory | bash | <tool>, pattern: e.g. \"sudo *\")",
+                "Usage: /permissions {} <surface> <pattern>   (surface: path | external_directory | domain | bash | <tool>, pattern: e.g. \"sudo *\")",
                 if allow { "allow" } else { "drop" }
             ),
             UiNotifyLevel::Warning,

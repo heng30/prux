@@ -2,6 +2,29 @@
 
 ### Added
 
+- **A `rollback` extension puts back the files a turn changed**: files are snapshotted right
+  before `edit` / `write` touches them and grouped by **turn** (one user message = one turn).
+  `/rollback` lists the turns that changed files, `/rollback diff <n>` shows which files a turn
+  touched, and `/rollback <n>` puts those files back the way they were when the turn started.
+  Two details matter: a file that did not exist yet is *deleted* rather than left empty, and the
+  current content is snapshotted before it is overwritten — so a mistaken rollback can itself be
+  rolled back. Snapshots live in `agent_dir()/checkpoints/<workspace-key>/` (one bucket per
+  working directory, 500 entries before the oldest 20% is pruned); `/rollback` refuses to run
+  while a turn is in progress. It is deliberately **not** part of `rewind`: that one only moves
+  the session branch back, and asking for a one-line rewind should not silently buy a file copy
+  on every single write. A project under git usually needs only `git restore`; this covers what
+  git cannot — content that was still uncommitted when the turn started. Off by default
+  (`Dev` / `Creator`).
+
+- **`permissions` gates network hosts too**: a fifth layer, `domain`, matches the host of every
+  `http(s)://` URL a call would reach — every command line bash runs (including ones inside
+  `$(…)`) and any URL found anywhere in another tool's arguments, which covers MCP calls that
+  keep the URL in `arguments.url`. Hosts are matched lowercased, with an optional `host:port`
+  spelling (`localhost:8080`) and bracketed IPv6. `{"*": "allow", "*.internal": "deny"}` is
+  enough to keep the agent inside the intranet; leaving the layer out changes nothing, so
+  outbound traffic stays unrestricted by default. `ask` goes through the same approval panel as
+  the other layers, and `/permissions allow domain "*.evil"` grants one pattern for the session.
+
 - **A `papers` extension searches the literature and fetches full texts**: `web_search` gets
   you web pages, never "which papers, and which one's actual text". Four zero-auth sources are
   queried concurrently — alphaXiv (community votes, arXiv only), OpenAlex (citation counts,
@@ -868,6 +891,23 @@
 ## 中文
 
 ### 新增
+
+- **新增 `rollback` 扩展：把某一回合改过的文件退回去**：`edit` / `write` 写盘之前把目标文件快照
+  下来，按**回合**分组（一条用户消息 = 一回合）。`/rollback` 列出改过文件的回合，
+  `/rollback diff <n>` 看某回合动了哪些文件，`/rollback <n>` 把那一回合改过的文件退回回合开始前
+  的样子。两个细节是有意的：回合里**新建**的文件还原等于删掉，而不是留一个空文件；覆盖之前会先给
+  当前内容拍一张快照，所以手滑的还原本身也能再还原回来。快照落在
+  `agent_dir()/checkpoints/<workspace-key>/`（按工作目录分桶，满 500 条清掉最老的 20%）；回合
+  进行中 `/rollback` 一律拒绝。它**不**并进 `rewind`：那个只退会话分支，而「只想撤回一句误发的话」
+  不该顺带为每次写盘买一份文件复制。用 git 的项目通常 `git restore` 就够了，本扩展补的是 git
+  退不了的那部分——本回合开始时尚未提交的内容。默认不启用（`Dev` / `Creator`）。
+
+- **`permissions` 也管网络主机了**：新增第五层 `domain`，按一次调用会连的每个 `http(s)://` URL
+  的主机判定——bash 跑的每条语句（含 `$(…)` 里的）以及其它工具入参里任意深度的 URL，因此把 URL
+  藏在 `arguments.url` 的 MCP 调用也拦得住。主机按小写匹配，可写 `host:port`（如 `localhost:8080`），
+  IPv6 带方括号。`{"*": "allow", "*.internal": "deny"}` 就够把 agent 关在内网里；不写这一层则完全
+  不改变现有行为，出站照旧不设限。`ask` 走与其它层同一个确认面板，`/permissions allow domain
+  "*.evil"` 可为本会话放行一条模式。
 
 - **新增 `papers` 扩展：文献检索与全文获取**：`web_search` 拿得到网页，拿不到「哪些论文、
   哪篇原文」。四个零鉴权源并发查询——alphaXiv（社区票数，只覆盖 arXiv）、OpenAlex（引用数、

@@ -114,6 +114,20 @@ pub fn dir_name(cwd: &str) -> String {
         .unwrap_or_else(|| cwd.to_string())
 }
 
+/// 路径的短形式：只保留最后两段（`/a/b/c.rs` → `b/c.rs`）。
+///
+/// 用于列表里展示一串文件——完整绝对路径会把行撑爆，只留末级名又分不清同名文件
+/// （`src/a.rs` 与 `tests/a.rs`）。段数不够两段时原样返回。按 `/` 切分（POSIX 形式）。
+pub fn short_path(path: &str) -> String {
+    path.rsplit('/')
+        .take(2)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 /// 取路径的最后一段文件名；`/`、`..` 这类没有文件名的路径返回 `Err`（文案带原路径）。
 pub fn file_name_of(path: &Path) -> Result<String, String> {
     path.file_name()
@@ -549,6 +563,15 @@ mod tests {
         assert_eq!(dir_name("/data/Code/rust/prux"), "prux");
         assert_eq!(dir_name("/data/Code/rust/prux/"), "prux");
         assert_eq!(dir_name("/"), "/");
+    }
+
+    /// 短形式保留最后两段，段数不够时原样返回。
+    #[test]
+    fn short_path_keeps_last_two_components() {
+        assert_eq!(short_path("/work/proj/src/a.rs"), "src/a.rs");
+        assert_eq!(short_path("src/a.rs"), "src/a.rs");
+        assert_eq!(short_path("a.rs"), "a.rs");
+        assert_eq!(short_path(""), "");
     }
 
     #[test]

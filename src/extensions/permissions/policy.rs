@@ -1,4 +1,4 @@
-//! 策略模型与求值：三态动作、模式表（last-match-wins）、多表面与四层 most-restrictive-wins 组合。
+//! 策略模型与求值：三态动作、模式表（last-match-wins）、多表面与五层 most-restrictive-wins 组合。
 //!
 //! 动作只有三种：`allow` 静默放行、`ask` 需要确认（本扩展降级为 fail-closed 拒绝，
 //! 见模块根的说明）、`deny` 直接拒绝。严格度 `deny > ask > allow`——任何一层给出
@@ -273,6 +273,8 @@ pub(super) struct Policy {
     pub external_directory_read: Option<PatternMap>,
     /// 只对工作目录之外的写入生效的边界表面。
     pub external_directory_write: Option<PatternMap>,
+    /// 横切域名表面：对所有工具与 bash 命令里出现的 `http(s)://` 主机生效。
+    pub domain: Option<PatternMap>,
 }
 
 impl Policy {
@@ -321,6 +323,20 @@ impl Policy {
         out
     }
 
+    /// `domain` 层求值：`forms` 是一条 URL 的主机拼写候选（见
+    /// [`super::net::host_forms`]），任一拼写命中即算命中。未配置该层时返回 `None`。
+    pub(super) fn domain_decision(&self, forms: &[String]) -> Option<Decision> {
+        self.domain
+            .as_ref()
+            .and_then(|map| map.evaluate(forms))
+            .map(|hit| Decision::from_match("domain", hit))
+    }
+
+    /// 域名层是否配置了任何规则（未配置时整层跳过）。
+    pub(super) fn has_domain(&self) -> bool {
+        self.domain.is_some()
+    }
+
     /// 工具表面求值：`tool` 是工具名，`texts` 是候选拼写（路径类工具传全部路径拼写，
     /// 其它工具传一个占位串让它命中的是兜底规则）。
     pub(super) fn tool_decision(&self, tool: &str, texts: &[String]) -> Option<Decision> {
@@ -367,7 +383,7 @@ impl Policy {
     /// 当前策略覆盖到的表面名（工具名 + 三个固定表面），按字典序。
     pub(super) fn surface_names(&self) -> Vec<String> {
         let mut names: Vec<String> = self.surfaces.keys().cloned().collect();
-        for fixed in ["path", "external_directory"] {
+        for fixed in ["path", "external_directory", "domain"] {
             if !names.iter().any(|n| n == fixed) {
                 names.push(fixed.to_string());
             }

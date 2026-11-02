@@ -63,12 +63,13 @@
   指过去也拦得住；
 - 模式开头可以用 `~`、`$HOME`、`${HOME}`。
 
-### 四层与组合
+### 五层与组合
 
 | 层 | 回答的问题 | 作用面 |
 |---|---|---|
 | `path` | 这个路径模式允许吗？ | 所有工具 + bash 的路径参数 |
 | `external_directory` | 访问工作目录之外可以吗？ | 所有工具 + bash |
+| `domain` | 这个主机允许吗？ | 所有工具入参 + bash 命令里的 `http(s)://` URL |
 | 工具名（`read` / `write` / `bash` / `mcp` / 任意扩展工具名） | 这个工具允许吗？ | 对应工具 |
 | `bash` 命令模式 | 这条命令允许吗？ | bash |
 
@@ -87,6 +88,32 @@
 
 某个工具表面的**所有**模式都是 `deny` 时，该工具会从模型可见工具表里整个摘掉（省 token、
 省一次注定失败的尝试）。只 deny 一部分模式时工具保留，模型仍可尝试，被拒的命令在执行时拦下。
+
+### 域名（domain）
+
+`domain` 层管「这次调用会连哪台机器」，用于给出站网络设边界：
+
+```jsonc
+{
+  "permission": {
+    "bash": { "*": "allow" },
+    "domain": {
+      "*": "allow",
+      "*.internal": "deny",
+      "localhost:8080": "ask"
+    }
+  }
+}
+```
+
+- 只认 `http://` / `https://` 开头的**绝对 URL**；裸域名（`example.com`）与其它协议
+  （`ftp://`、`git+ssh://`）不参与判定——它们的主机语义不可靠，猜错只会拦不相干的东西。
+- bash 按语句逐条抽（与命令层同一份切分，`$(curl https://x)` 里的也算）；其它工具递归遍历
+  入参 JSON 的字符串值，所以 MCP 把 URL 塞在 `arguments.url` 这种深层位置也能命中。
+- 匹配的是**主机名**，大小写不敏感（`API.Example.com` 归一成 `api.example.com`）；
+  带端口时还可以按 `host:port` 写（如 `localhost:8080`）；IPv6 带方括号（`[::1]`）。
+- 一处调用里出现多个主机时**逐个判**，最严格的结果决定整条调用；拒绝文案里列出全部 URL。
+- 该层没配置 = 整层跳过，不说一句话（缺省不限制出站）。
 
 ### 方向：只读 / 只写
 
@@ -174,9 +201,9 @@ heredoc：`<<'EOF'`（分隔符带引号）的 body 是纯文本，不判；`<<E
 
 | 命令 | 作用 |
 |---|---|
-| `/permissions`、`/permissions show` | 打印生效策略：来源文件、四层规则、会话放行、告警 |
+| `/permissions`、`/permissions show` | 打印生效策略：来源文件、五层规则、会话放行、告警 |
 | `/permissions settings` | 打开本扩展的设置面板（再执行一次关闭），见[设置面板](#设置面板) |
-| `/permissions allow <surface> <pattern>` | 会话级放行，`surface` 为 `path` / `external_directory` / `bash` / 工具名，也可以是 `*` |
+| `/permissions allow <surface> <pattern>` | 会话级放行，`surface` 为 `path` / `external_directory` / `domain` / `bash` / 工具名，也可以是 `*` |
 | `/permissions drop <surface> <pattern>` | 撤销一条会话放行 |
 | `/permissions allowlist` | 列出会话放行 |
 | `/permissions init [--force]` | 写一份保守缺省配置 |

@@ -191,7 +191,8 @@ fn parse_settings(root: &Value, sources: Vec<PathBuf>, mut warnings: Vec<String>
             | "path_write"
             | "external_directory"
             | "external_directory_read"
-            | "external_directory_write" => {
+            | "external_directory_write"
+            | "domain" => {
                 let map = parse_pattern_map(value, key, &mut warnings);
                 match key.as_str() {
                     "path" => policy.path = Some(map),
@@ -199,6 +200,7 @@ fn parse_settings(root: &Value, sources: Vec<PathBuf>, mut warnings: Vec<String>
                     "path_write" => policy.path_write = Some(map),
                     "external_directory" => policy.external_directory = Some(map),
                     "external_directory_read" => policy.external_directory_read = Some(map),
+                    "domain" => policy.domain = Some(map),
                     _ => policy.external_directory_write = Some(map),
                 }
             }

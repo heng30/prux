@@ -43,6 +43,7 @@ pub mod processes;
 pub mod proxy;
 pub mod recap_btw;
 pub mod rewind;
+pub mod rollback;
 pub mod session_search;
 pub mod shake;
 pub mod skills;
@@ -90,6 +91,8 @@ pub const PRIORITY_HANG_DETECT: u32 = 73;
 pub const PRIORITY_PROXY: u32 = 72;
 /// rewind 回退上一次用户输入扩展的注册优先级。
 pub const PRIORITY_REWIND: u32 = 71;
+/// rollback 回合文件检查点扩展的注册优先级。
+pub const PRIORITY_ROLLBACK: u32 = 70;
 /// shake 手动丢弃重内容扩展的注册优先级。
 pub const PRIORITY_SHAKE: u32 = 70;
 /// vet 收工前项目检查闭环扩展的注册优先级。
