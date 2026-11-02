@@ -85,8 +85,13 @@ impl Backend {
     fn args(self, cwd: &Path) -> Vec<String> {
         let cwd = cwd.display().to_string();
         match self {
+            // ro-bind 必须排在这些挂载之前：bwrap 按参数顺序叠挂载，晚挂的 `/` 会把先挂的
+            // `/dev`、`/proc`、`/tmp` 一起盖掉，命令照样能跑，但 `/tmp` 写不了、`/dev/null` 直接 EACCES。
             Backend::Bwrap => vec![
                 "--die-with-parent".to_string(),
+                "--ro-bind".to_string(),
+                "/".to_string(),
+                "/".to_string(),
                 "--dev-bind".to_string(),
                 "/dev".to_string(),
                 "/dev".to_string(),
@@ -94,9 +99,6 @@ impl Backend {
                 "/proc".to_string(),
                 "--tmpfs".to_string(),
                 "/tmp".to_string(),
-                "--ro-bind".to_string(),
-                "/".to_string(),
-                "/".to_string(),
                 // 后挂的 bind 覆盖前面的 ro-bind，工作目录因此可写。
                 "--bind".to_string(),
                 cwd.clone(),
@@ -306,6 +308,12 @@ mod tests {
         let ro = args.iter().position(|a| a == "--ro-bind").unwrap();
         let bind = args.iter().position(|a| a == "--bind").unwrap();
         assert!(bind > ro, "{args:?}");
+
+        // 反过来则 `/` 会盖掉先挂的 /dev、/proc、/tmp：/tmp 不可写、/dev/null EACCES。
+        for flag in ["--dev-bind", "--proc", "--tmpfs"] {
+            let pos = args.iter().position(|a| a == flag).unwrap();
+            assert!(pos > ro, "{flag} 必须在 --ro-bind / / 之后: {args:?}");
+        }
         assert_eq!(&args[bind + 1..bind + 3], ["/work/repo", "/work/repo"]);
         assert_eq!(args[args.len() - 2], "--chdir");
         assert_eq!(args[args.len() - 1], "/work/repo");
