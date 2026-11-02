@@ -14,16 +14,26 @@
 //!
 //! 所有 git 调用都走 `tokio::process`（一次副本可能要几秒，同步调用会把 UI 线程一起堵住），
 //! 并且都带超时——`git worktree add` 卡住时不能把整个回合拖死。
+//!
+//! 副本建好后会尽量把主仓库里被 gitignore 的产物（`target/`、`node_modules/` …）以 reflink
+//! 方式搬过去，省掉首次全量编译；搬不动就算了，见 [`share_ignored_artifacts`]。
 
 use super::super::util::git;
 use crate::{
     APP_NAME,
-    utils::{time::now_ms, truncate::truncate_chars},
+    utils::{process::spawn_blocking, time::now_ms, truncate::truncate_chars},
 };
 use std::{
     path::{Path, PathBuf},
+    process::Stdio,
     time::Duration,
 };
+
+/// 最多搬多少条被忽略的产物条目。
+///
+/// `git ls-files --directory` 已把整棵被忽略的目录折叠成一条，正常仓库只有个位数；
+/// 上限只是防止在异常仓库里连开上千个 `cp`。
+const MAX_ARTIFACT_ENTRIES: usize = 32;
 
 /// 一次隔离运行的副本信息。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -97,6 +107,8 @@ pub(crate) async fn create(cwd: &str, agent_id: &str) -> Result<Worktree, String
     .await
     .map_err(|e| format!("could not create the worktree: {e}"))?;
 
+    share_ignored_artifacts(&top, &path_str).await;
+
     let work_path = if subdir.is_empty() {
         path_str.clone()
     } else {
@@ -109,6 +121,83 @@ pub(crate) async fn create(cwd: &str, agent_id: &str) -> Result<Worktree, String
         base_sha,
         work_path,
     })
+}
+
+/// 本平台复制一份文件时让文件系统“共享磁盘块”的 `cp` 参数；`None` 表示本平台没这能力。
+///
+/// Linux 用 `--reflink=always`（btrfs/XFS 支持，ext4 直接报错），macOS 用 `-c`（APFS 的
+/// clonefile）。两者都是**强制**语义：不支持就失败，而不是悄悄退化成全量拷贝。
+fn reflink_cp_args() -> Option<&'static [&'static str]> {
+    #[cfg(target_os = "linux")]
+    {
+        Some(&["-a", "--reflink=always"])
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Some(&["-a", "-c"])
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        None
+    }
+}
+
+/// 把主仓库里被 gitignore 的产物以 reflink 方式搬进副本，省掉隔离运行的首次全量编译。
+///
+/// **只走 reflink，失败一律忽略**：
+/// - 文件系统不支持（ext4 / NTFS / tmpfs）时第一条就失败，等于一个字节都不搬——
+///   几 GB 的 `target/` 全量拷贝比不搬更慢，这里不做「退化成完整拷贝」；
+/// - 搬过去的都是被忽略的文件，`cleanup` 的 `git add -A` 不会把它们提交进分支；
+/// - 这只是加速，隔离的正确性不依赖它，所以任何一步失败都静默跳过。
+///
+/// shortcut: 逐条 `cp` 且不比较大小/时间，条目上限 [`MAX_ARTIFACT_ENTRIES`]；
+/// 需要增量同步或按大小过滤时再换实现。
+async fn share_ignored_artifacts(from: &str, to: &str) {
+    let Some(flags) = reflink_cp_args() else {
+        return;
+    };
+
+    let Ok(list) = git(
+        from,
+        &[
+            "ls-files",
+            "-z",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "--directory",
+        ],
+        Duration::from_secs(10),
+    )
+    .await
+    else {
+        return;
+    };
+
+    for entry in list
+        .split('\0')
+        .filter(|e| !e.is_empty())
+        .take(MAX_ARTIFACT_ENTRIES)
+    {
+        let src = Path::new(from).join(entry);
+        let dst = Path::new(to).join(entry);
+        _ = spawn_blocking(move || {
+            if let Some(parent) = dst.parent() {
+                _ = std::fs::create_dir_all(parent);
+            }
+            std::process::Command::new("cp")
+                .args(flags)
+                .arg(&src)
+                .arg(&dst)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+        })
+        .await;
+    }
 }
 
 /// 收尾：没改动就删副本；有改动就提交到分支（分支留在主仓库）再删副本。
@@ -310,6 +399,39 @@ mod tests {
         assert!(!clean.has_changes, "{clean:?}");
         assert!(clean.branch.is_none());
         assert!(!std::path::Path::new(&wt2.path).exists());
+    }
+
+    /// 搬过去的产物不能算成“改动”：既不该让 `cleanup` 以为发生了事情，
+    /// 也不该被 `git add -A` 提交进分支。
+    #[tokio::test]
+    async fn ignored_artifacts_do_not_leak_into_the_result_branch() {
+        let Some(dir) = repo().await else {
+            return;
+        };
+        let root = dir.path().to_string_lossy().to_string();
+        std::fs::write(dir.path().join(".gitignore"), "cache/\n").unwrap();
+        std::fs::create_dir_all(dir.path().join("cache")).unwrap();
+        std::fs::write(dir.path().join("cache").join("obj.bin"), "blob").unwrap();
+        git(&root, &["add", "-A"], Duration::from_secs(10))
+            .await
+            .unwrap();
+        git(
+            &root,
+            &["commit", "-qm", "ignore cache"],
+            Duration::from_secs(10),
+        )
+        .await
+        .unwrap();
+
+        let mut wt = create(&root, "caches").await.expect("create");
+        // 支持 reflink 的文件系统上会被搬过来，不支持的（ext4 / tmpfs）干脆没有——两种都不算改动。
+        let copied = Path::new(&wt.path).join("cache").join("obj.bin");
+        if copied.exists() {
+            assert_eq!(std::fs::read_to_string(&copied).unwrap(), "blob");
+        }
+        let result = cleanup(&root, &mut wt, "touched nothing").await;
+        assert!(!result.has_changes, "{result:?}");
+        assert!(result.branch.is_none(), "被忽略的产物不能变成一次提交");
     }
 
     #[tokio::test]

@@ -471,6 +471,18 @@
   1px border on each side, so every visual line was laid out 2px wider than it could be and the last
   glyph was squeezed by the flex row before wrapping to the next line. The border is subtracted now.
 
+### Changed
+
+- **An isolated subagent starts from the repository's existing build artifacts instead of a cold
+  tree**: `Agent({ isolation: "worktree" })` creates a fresh worktree, so the first `cargo build`
+  recompiled every dependency. Gitignored artifacts (`target/`, `node_modules/`, …) are now copied
+  into the copy as reflinks where the filesystem supports them (btrfs, XFS, APFS): the copy shares
+  the original's disk blocks, so it costs milliseconds instead of gigabytes. Only reflink is
+  attempted — an unsupported filesystem (ext4, NTFS, tmpfs) or a copy that crosses filesystems is
+  skipped entirely rather than falling back to a full copy that would be slower than copying
+  nothing. Copied artifacts are ignored files, so they never land in the branch an isolated run
+  leaves behind.
+
 ### Fixed
 
 - **Extension panels in the desktop GUI redraw only when their content changes**: an open `/btw`,
@@ -1198,6 +1210,15 @@
 - **桌面 GUI 输入框不再把折行行尾的那个字裁掉一半**：折行宽度取的是输入卡片宽度减去左右内边距，
   而卡片左右还有 1px 边框，于是每个视觉行都多算了 2px 宽，行尾那个字被 flex 压掉一半才换行。现在
   边框也一并扣掉。
+
+### 变更
+
+- **隔离子代理不再从冷目录起步，而是直接复用仓库里已有的编译产物**：`Agent({ isolation: "worktree" })`
+  建出的是一份干净的 worktree，于是第一次 `cargo build` 要把所有依赖重编一遍。现在会把主仓库里被
+  gitignore 的产物（`target/`、`node_modules/` …）以 reflink 方式复制进副本——文件系统支持时
+  （btrfs、XFS、APFS）副本与原目录共享磁盘块，代价是毫秒级而不是几个 GB。只尝试 reflink：
+  不支持的文件系统（ext4、NTFS、tmpfs）或跨文件系统的复制会被整体跳过，而不是退化成一次比不拷
+  更慢的全量拷贝。复制过来的都是被忽略的文件，因此不会混进隔离运行留下的那个分支。
 
 ## 修复
 
