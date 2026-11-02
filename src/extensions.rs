@@ -24,6 +24,8 @@ pub mod extra_themes;
 pub mod footer;
 pub mod goal;
 pub mod hang_detect;
+pub mod hardware;
+pub mod injection_guard;
 pub mod jet;
 pub mod leak_guard;
 pub mod loop_detect;
@@ -71,6 +73,8 @@ pub const PRIORITY_PLAN_MODE: u32 = 85;
 pub const PRIORITY_PERMISSIONS: u32 = 84;
 /// leak-guard 凭据外发检测扩展的注册优先级。
 pub const PRIORITY_LEAK_GUARD: u32 = 83;
+/// injection-guard 提示注入检测扩展的注册优先级。
+pub const PRIORITY_INJECTION_GUARD: u32 = 82;
 /// tasks 结构化任务跟踪扩展的注册优先级。
 pub const PRIORITY_TASKS: u32 = 80;
 /// subagent 子代理扩展的注册优先级。
@@ -135,6 +139,8 @@ pub const PRIORITY_ASK_USER_QUESTION: u32 = 52;
 pub const PRIORITY_DOC_HELPER: u32 = 50;
 /// processes 后台进程监督扩展的注册优先级。
 pub const PRIORITY_PROCESSES: u32 = 49;
+/// hardware 芯片手册本地检索扩展的注册优先级。
+pub const PRIORITY_HARDWARE: u32 = 48;
 /// debug 调试工具集扩展注册优先级。
 pub const PRIORITY_DEBUG: u32 = 45;
 /// tool_search 延迟工具检索扩展的注册优先级。

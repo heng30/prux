@@ -2,6 +2,31 @@
 
 ### Added
 
+- **An `injection-guard` extension warns when a tool result reads like a prompt injection**: an
+  agent feeds untrusted text into its own context all day — fetched pages, parsed PDFs, remote
+  file reads, `curl` output — and a line of "ignore the previous instructions" inside it is
+  exactly what a model is most likely to obey. Every tool result is now scored against a pattern
+  table: instruction overrides, system-prompt dumping, role hijacks, chat template tokens
+  (`<|im_start|>`, `[INST]`, `<<SYS>>`), line-leading role markers, `new instructions:`,
+  `do not tell the user`, data exfiltration, and instructions hidden in HTML comments. A score of
+  3 or more posts one warning in the chat area (not persisted, never sent to the model). The
+  result itself is **never rewritten** — redaction would break diffs and code blocks, and the
+  model needs the original text to judge it. The same tool result is reported once. Off by
+  default (`Dev` / `Creator`).
+
+- **A `hardware` extension searches local chip datasheets and pinout tables**: drop datasheets
+  converted to Markdown (and pinout CSVs) under
+  `agent_dir()/extensions/hardware/datasheets/`, grouped by chip if you like, and the
+  `hardware_search` tool scores every chunk with the same lexical term splitting the rest of the
+  harness uses, returning `file:line` plus the excerpt. A hit in the path weighs that chip up, so
+  searching `usart` prefers `stm32f4/…` over an unrelated file; `path` narrows to prefixes and
+  `limit` caps the result. Pin aliases need no second mechanism — one CSVs line
+  (`PA9,USART1_TX,TIM1_CH2`) is a chunk, searchable by either name. No SWD/JTAG probe channel:
+  reading board info or memory needs an extra hardware dependency and real silicon to verify. The
+  directory is rescanned per call (no index cache). `/hardware` prints the directory and its
+  file/chunk counts. Off by default, `Dev` mode only.
+
+
 - **A `leak-guard` extension flags credentials before they leave**: the `permissions` extension
   gates *which* tools may run, not *what* leaves — a `curl -H "Authorization: Bearer …"` or a
   `.env` pasted into a prompt went out untouched. `leak-guard` scans both sides: every message's
@@ -783,6 +808,23 @@
 ## 中文
 
 ### 新增
+
+- **新增 `injection-guard` 扩展：工具结果像提示注入时先提示一声**：agent 整天在往自己上下文里灌
+  不可信文本——抓回的网页、解析出的 PDF、远端读来的文件、`curl` 的输出——里面一句「忽略上面的
+  指令」，正是模型最容易照做的形态。现在每条工具结果都会过一遍模式表打分：指令覆盖、套系统提示、
+  角色劫持、聊天模板标记（`<|im_start|>` / `[INST]` / `<<SYS>>`）、行首角色标记、
+  `new instructions:`、`do not tell the user`、外传数据、藏在 HTML 注释里的指令。总分 ≥3 就在
+  聊天区提示一次（不落库、不进模型上下文）。结果本身**绝不改写**——打码会破坏 diff 与代码块，
+  而且模型要看原文才能自己判断。同一条结果只提示一次。默认不启用（`Dev` / `Creator`）。
+
+- **新增 `hardware` 扩展：本地芯片手册与引脚表检索**：把转成 Markdown 的手册（和引脚 CSV）放进
+  `agent_dir()/extensions/hardware/datasheets/`，可以按芯片建子目录；`hardware_search` 用与其它
+  检索同一套词法切词给每个块打分，返回 `file:line` + 片段正文。命中在路径里的块额外加权，所以搜
+  `usart` 会优先出 `stm32f4/…` 而不是无关文件；`path` 收窄前缀、`limit` 限条数。引脚别名不需要
+  第二套机制——引脚表的一行（`PA9,USART1_TX,TIM1_CH2`）就是一块，引脚名和复用功能名都能搜到。
+  不做 SWD/JTAG 探针通道：读板卡信息或内存要额外的硬件依赖与真机验证。资料目录每次调用重扫（不建
+  索引缓存）。`/hardware` 打印资料目录与文件/块计数。默认不启用（仅 `Dev` 模式可用）。
+
 
 - **新增 `leak-guard` 扩展：凭据外发前先拦一道**：`permissions` 管的是「哪个工具能跑」，不管
   「什么内容出去」——`curl -H "Authorization: Bearer …"`、或者把 `.env` 贴进 prompt，以前都是

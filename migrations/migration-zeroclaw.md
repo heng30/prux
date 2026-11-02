@@ -55,14 +55,15 @@ observability/OTel、control plane、peers/relay）**在 prux 里没有对应位
 
 ### 定案（本轮）
 
-- **§3.3 `leak-guard`：已落地**（v1.4.0，见 §3.3 落地记录）。
-- **§3.1 记忆写路径加固、§3.2 `forge`、§3.4 技能自动生成：明确不做**（本轮排除，不排期）。
-- §3.5–3.9：维持原判断（§3.5 按需复查，§3.8 / §3.9 不做或看用户群，§3.6 / §3.7 可选）。
+- **已落地（v1.4.0）**：§3.3 `leak-guard`、§3.5 `injection-guard`、§3.9 `hardware`（只做 RAG 那半）。
+- **明确不做**：§3.1 记忆写路径加固、§3.2 `forge`、§3.4 技能自动生成、§3.6 `delegate-agent`、
+  §3.7 `speak`、§3.8 `image-gen`（本轮排除，不排期）。
+- 本档至此**全部定案，无待做项**；若日后要动，另开一份迁移记录。
 
 ### 一句话结论
 
-真正落地的是 §3.3——它是这批候选里唯一「纯检测、不改信任模型、外部无依赖」的一项。
-其余按上表定案执行，不再评估。
+落地的三项（§3.3 / §3.5 / §3.9）有同一个特征：**零新依赖、不改信任模型**——两个是纯检测，
+一个是本地只读检索。其余六项按上表定案执行，不再评估。
 
 ---
 
@@ -204,8 +205,20 @@ observability/OTel、control plane、peers/relay）**在 prux 里没有对应位
 - **落成什么**：一个纯检测扩展（无工具）：在 `tool_result` 钩子上对来自上述工具的结果做标记
   + 打分，命中就在 UI 上提示（`UiNotifyLevel`），并保留现有内容不变（不改写，避免破坏
   diff / 代码块的精确性）。
-- **注意**：这一项的价值取决于阈值调校，误报会变成噪音。**建议在 §3.1–3.4 之后再评估**，
-  且默认只做「标记来源」不做「拦截」。
+- **注意**：这一项的价值取决于阈值调校，误报会变成噪音。默认只做「标记来源」不做「拦截」。
+- **落地记录**（v1.4.0）：`src/extensions/injection_guard.rs`，单文件纯检测扩展，**零新依赖**。
+  - 挂在 `AfterToolCall` 上（`after_tool_call_ext`）：**所有**工具结果都扫，不只外部来源工具——
+    `bash` 里的 `curl` 输出同样是不可信文本，按工具名开白名单只会漏。
+  - 规则表是**一条合并正则**（命名分组 + 权重）：`ignore/disregard previous instructions`(3)、
+    `reveal your system prompt`(3)、角色劫持(3)、聊天模板标记 `<|im_start|>` / `[INST]` /
+    `<<SYS>>`(3)、HTML 注释里的指令(3)、行首 `System:` 之类角色标记(2)、`new instructions:`(2)、
+    `do not tell the user`(2)、外传数据(2)。**总分 ≥3** 才提示。
+  - 同一规则重复出现**只计一次权重**：否则一篇正常技术文档里三次 `System:` 就能把分数堆过阈值。
+  - **不改写结果**：只发 `UiNotifyLevel::Warning` 系统消息（不落库、不进模型上下文），原文照常
+    交给模型——打码会破坏 diff / 代码块，且模型需要原文自己判断。
+  - 去重：同一工具 + 同一段结果（前 200 字符）只提示一次，上限 32 条。
+  - `external_content.rs` 的 provenance 标记**没有搬**：它要求改写工具结果，与上面「不改写」
+    的取舍冲突；真正需要的是「用户知道被喂了什么」，UI 提示已经做到。
 
 ### 3.6 `delegate-agent` 扩展（外部编码 CLI）
 
@@ -216,6 +229,7 @@ observability/OTel、control plane、peers/relay）**在 prux 里没有对应位
 - **必须遵守的硬约定**：子进程输出**绝不继承终端**（AGENTS「外部命令的输出必须有去处」），
   走管道 + 截断；长命的应用用 `utils::process::spawn_detached`。
 - **判断**：**可选**。收益取决于用户是否真有外部 CLI 订阅；不做也不缺手。
+- **定案（本轮）**：**不做**。
 
 ### 3.7 `speak` 扩展（TTS 朗读回复）
 
@@ -227,6 +241,7 @@ observability/OTel、control plane、peers/relay）**在 prux 里没有对应位
   （`afplay` / `paplay` / `ffplay`，走 `spawn_detached`）。
 - **判断**：**可选**。跟编码主线关系弱，属「锦上添花」；ponytail 视角下这是典型的
   「不做也完整」的功能。
+- **定案（本轮）**：**不做**。
 
 ### 3.8 `image-gen` 扩展
 
@@ -236,6 +251,7 @@ observability/OTel、control plane、peers/relay）**在 prux 里没有对应位
   `models.generateImages` 已经能让模型出图（`with_image_impl` 有 7 处调用）。
   再做独立工具只是省掉一层 JS。
 - **判断**：**暂不做**，除非实际用起来发现 codemode 绕。
+- **定案（本轮）**：**不做**。
 
 ### 3.9 `hardware` 扩展（嵌入式）
 
@@ -245,6 +261,21 @@ observability/OTel、control plane、peers/relay）**在 prux 里没有对应位
 - **判断**：**看用户群**。prux 是编码 agent，嵌入式开发者确实会需要「读芯片手册 + 查引脚 +
   读内存」，且别处没有替代；但对非嵌入式用户是纯负重。真要做得**先只做 RAG 那半**
   （手册分块 + 引脚别名，零硬件依赖），probe 那半留后。
+- **落地记录**（v1.4.0）：`src/extensions/hardware.rs`，单文件扩展，**零新依赖**（只做 RAG 那半）。
+  - 资料目录 `agent_dir()/extensions/hardware/datasheets/`（可递归分芯片子目录），收
+    `.md/.markdown/.txt/.csv/.tsv/.json/.rst/.adoc`，单文件上限 4 MB，跳过隐藏目录与二进制。
+  - 分块：按空行或 1200 字符上限切；块记 `file:line`，返回时给 `file:line` + 最多 800 字符正文。
+  - 检索：`utils::text::terms` 切词（与 `memory` / `session_search` 同一套，中日韩按二字组合），
+    词频开方累加，**路径命中额外 +2/词元**——搜 `usart` 时 `stm32f4/…` 会排在无关文件前面。
+    排序确定为「分数降序 → 路径升序 → 行号升序」。
+  - 工具 `hardware_search`（`query` / `path` 前缀过滤 / `limit` 1..=20，默认 8）是**延迟工具**
+    （`ToolExposure::Deferred`），声明 `prerequisite_tools = tool_search`；`/hardware` 打印资料
+    目录与文件/块计数；扩展声明 `Dev` 单档（嵌入式是细分场景，不给 `Creator` 放行）。
+  - **引脚别名不另起机制**：`pins.csv` 的一行（`PA9,USART1_TX,TIM1_CH2`）就是一块，搜引脚名或
+    复用功能名都能命中。zeroclaw 的独立别名表在这里是多余的。
+  - **probe 半（板卡信息 / 内存映射 / 内存读写）没做**：需要 `probe-rs` 这类依赖 + 真实硬件
+    才能验证，而本仓的原则是不做无法验证的硬件通道。要做的话它是独立立项，不是「顺手移植」。
+  - 每次调用重扫目录、不建索引缓存（手册目录通常几十个文件，扫盘毫秒级；已留 `shortcut:` 注释）。
 
 ---
 
@@ -278,11 +309,14 @@ observability/OTel、control plane、peers/relay）**在 prux 里没有对应位
 | 2 | §3.2 `forge` 扩展 | 🚫 不做（同上） |
 | 3 | §3.3 `leak-guard` 扩展 | ✅ 已落地（v1.4.0） |
 | 4 | §3.4 技能自动生成（并入 `skills`） | 🚫 不做（同上） |
-| 5 | §3.5 提示注入防护（复查） | 候选 |
-| — | §3.6–3.9 | 按需，不排期 |
+| 5 | §3.5 提示注入防护 → `injection-guard` | ✅ 已落地（v1.4.0） |
+| 6 | §3.6 `delegate-agent` 外部编码 CLI | 🚫 不做（同上） |
+| 7 | §3.7 `speak` TTS | 🚫 不做（同上） |
+| 8 | §3.8 `image-gen` | 🚫 不做（同上） |
+| 9 | §3.9 `hardware`（只做 RAG 半） | ✅ 已落地（v1.4.0）；probe 半未做 |
 
-§3.1 / §3.2 / §3.4 本轮已定案不做，不再评估；若日后要动，另开一份迁移记录，
-不在本档上打补丁。§3.3 的落地细节见该节「落地记录」。
+本档至此**全部定案**：9 项候选里 3 项落地、6 项明确不做、零待做项。若日后要动其中任何一项
+（包括 §3.9 的 probe 半），另开一份迁移记录，不在本档上打补丁。
 
 ---
 
