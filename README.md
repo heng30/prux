@@ -55,12 +55,23 @@ cargo build --release
 ./target/release/prux --version
 ```
 
+The desktop GUI is an optional build (the `gui` feature, gpui-based); the default build produces the terminal binary only:
+
+```bash
+cargo build --release --bin prux-gui --features gui
+./target/release/prux-gui
+```
+
+`prux` and `prux-gui` share the same `~/.prux` settings and session files, so either can open the other's sessions. See [`assets/docs/gui.md`](assets/docs/gui.md) for the GUI layout and keybindings.
+
 Common commands:
 
 ```bash
 make          # cargo build --release
 make build    # compile only (debug)
 make debug    # cargo run
+make release-gui  # release build of prux-gui
+make debug-gui    # cargo run prux-gui
 make check    # cargo check
 cargo test    # full test suite
 cargo clippy  # static checks

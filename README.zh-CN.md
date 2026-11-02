@@ -55,12 +55,23 @@ cargo build --release
 ./target/release/prux --version
 ```
 
+桌面 GUI 是可选构建（`gui` feature，基于 gpui），默认构建只产出终端二进制：
+
+```bash
+cargo build --release --bin prux-gui --features gui
+./target/release/prux-gui
+```
+
+`prux` 与 `prux-gui` 共用同一份 `~/.prux` 设置与会话文件，两边可以互相打开对方的会话。GUI 的布局与键位见 [`assets/docs/gui.md`](assets/docs/gui.md)。
+
 常用命令：
 
 ```bash
 make          # cargo build --release
 make build    # 仅编译（debug）
 make debug    # cargo run
+make release-gui  # 构建 release 版 prux-gui
+make debug-gui    # cargo run 跑 prux-gui
 make check    # cargo check
 cargo test    # 全量测试
 cargo clippy  # 静态检查
