@@ -22,9 +22,13 @@ mod protocol;
 mod server;
 
 use crate::{
+    APP_NAME,
     core::{
         agent_session::Agent,
-        extensions::{Extension, ExtensionMode, ExtensionTool, register_subcommand_handler},
+        extensions::{
+            Extension, ExtensionMode, ExtensionSubcommand, ExtensionTool,
+            register_subcommand_handler,
+        },
     },
     extensions::{EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_ACP},
 };
@@ -36,6 +40,10 @@ pub(super) const EXT: &str = "acp";
 
 /// 子命令名（`prux acp`）。
 pub(super) const CMD: &str = "acp";
+
+/// 子命令的一行说明（`prux --help` 的 Commands 段）。
+const DESCRIPTION: &str =
+    "Serve the Agent Client Protocol on stdin/stdout (for editors such as Zed)";
 
 /// 自声明工厂：linkme 分布式切片。
 #[linkme::distributed_slice(EXTENSION_FACTORIES)]
@@ -65,14 +73,22 @@ impl Extension for Acp {
         vec![ExtensionMode::Dev]
     }
 
+    /// 默认不启用：`prux acp` 是给编辑器接入用的，属按需开启的能力。
+    fn default_enabled(&self) -> bool {
+        false
+    }
+
     /// 不给模型加工具：本扩展只在 `prux acp` 进程里工作。
     fn tools(&self) -> Vec<ExtensionTool> {
         Vec::new()
     }
 
     /// 注入 `prux acp` 子命令。
-    fn subcommands(&self) -> Vec<&'static str> {
-        vec![CMD]
+    fn subcommands(&self) -> Vec<ExtensionSubcommand> {
+        vec![ExtensionSubcommand {
+            name: CMD,
+            description: DESCRIPTION,
+        }]
     }
 
     /// 接线子命令入口。
@@ -82,7 +98,15 @@ impl Extension for Acp {
 }
 
 /// 子命令入口：Agent 已就绪，跑 ACP 服务端直到 stdin 关闭。
-fn handle(agent: Agent, _args: Vec<String>) -> BoxFuture<'static, i32> {
+///
+/// `-h` / `--help` 由这里自己回（子命令在 clap 里声明了 `disable_help_flag`），
+/// 因为 `prux --help` 只列名字，用法得说清楚。
+fn handle(agent: Agent, args: Vec<String>) -> BoxFuture<'static, i32> {
+    if args.iter().any(|a| a == "-h" || a == "--help") {
+        println!("Usage: {} {CMD}\n\n{DESCRIPTION}", APP_NAME);
+        return Box::pin(async { 0 });
+    }
+
     Box::pin(server::run(agent))
 }
 
@@ -94,10 +118,13 @@ mod tests {
     fn extension_injects_the_acp_subcommand_without_tools() {
         let ext = Acp;
         assert_eq!(ext.name(), "acp");
-        assert!(ext.default_enabled(), "默认启用：不开子命令时它什么都不做");
+        assert!(!ext.default_enabled(), "默认不启用：编辑器接入属按需开启");
         assert!(ext.tools().is_empty(), "本扩展不给模型加工具");
         assert!(ext.hooks().is_empty(), "本扩展不订阅任何钩子");
-        assert_eq!(ext.subcommands(), vec!["acp"]);
+        let subs = ext.subcommands();
+        assert_eq!(subs.len(), 1);
+        assert_eq!(subs[0].name, "acp");
+        assert!(!subs[0].description.is_empty(), "--help 需要一行说明");
         assert_eq!(
             ext.modes(),
             vec![ExtensionMode::Dev],

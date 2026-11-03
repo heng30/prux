@@ -32,6 +32,15 @@ static EXT_SUBCOMMANDS: OnceLock<Mutex<Vec<(String, String, SubcommandHandler)>>
 /// 已注册的执行入口：`(扩展名, 命令名, handler)`，同键覆盖（幂等）。
 static EXT_COMMAND_HANDLERS: OnceLock<Mutex<Vec<(String, String, BoxedHandler)>>> = OnceLock::new();
 
+/// 扩展声明的一个 CLI 子命令（`prux acp` 这类由扩展注入的入口）。
+#[derive(Debug, Clone, Copy)]
+pub struct ExtensionSubcommand {
+    /// 子命令名：`argv` 里第一个非选项词，命中后该扩展接管剩余参数。
+    pub name: &'static str,
+    /// 一行说明（`prux --help` 的 Commands 段与 `prux <子命令> --help` 展示）。
+    pub description: &'static str,
+}
+
 /// 扩展斜杠命令的宿主能力面：命令正文能对宿主做的事。
 ///
 /// 判据：**任何宿主都能满足**的动作才收进来。需要面板/表单/聊天区内部结构的行为

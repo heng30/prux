@@ -14,6 +14,13 @@
   nothing. It is on by default but only in the `Dev` / `Creator` / `All` extension modes: in
   `Minimal` the subcommand does not exist.
 
+- **`prux --help` lists the subcommands extensions inject**: `prux acp` and `prux mcp` are now
+  real clap subcommands, injected from the extension that owns them, so they show up in the
+  Commands section with a one-line summary — and only while that extension is enabled. `mcp`'s
+  subcommand moved out of the built-in CLI and into the `mcp` extension (which is off by
+  default), so `prux mcp ...` now requires enabling that extension; `prux acp --help` prints its
+  own usage.
+
 - **`vet` runs only the checks the diff touches**: with `diffScoped` on (the default) the settle
   path reads `git status --porcelain` first and keeps only the checks matching the languages that
   changed — a Rust-only edit runs the `cargo …` checks, a docs-only edit runs nothing, and a
@@ -1020,8 +1027,13 @@
   思考、工具调用起止以 `session/update` 通知流式推给客户端。回合执行期间同时监听 stdin，取消
   即时生效，不会排在一个慢回合后面。单会话（`session/new` 返回 `bootstrap()` 已打开的会话），
   不支持 `session/load`，prompt 只取文本块。该扩展不注册工具、不订阅钩子——不开 `prux acp`
-  时它什么都不做。默认启用，但只在 `Dev` / `Creator` / `All` 模式下可用：`Minimal` 模式下子命令
-  不存在。
+  时它什么都不做。默认不启用，且只在 `Dev` / `Creator` / `All` 模式下可用：在 `/extension`
+  面板（或 `settings.json`）开启后才有 `prux acp`，`Minimal` 模式下子命令完全不存在。
+
+- **`prux --help` 现在会列出扩展注入的子命令**：`prux acp` 与 `prux mcp` 都成为真正的 clap 子命令，
+  由拥有它们的扩展注入，于是它们带着一行说明出现在 Commands 段——且只在该扩展启用时才出现。
+  `mcp` 的子命令从内置 CLI 移进了 `mcp` 扩展（该扩展默认关闭），因此 `prux mcp ...` 现在需要先
+  启用它；`prux acp --help` 打印自己的用法。
 
 - **`vet` 只跑改动真正涉及的那几条检查**：`diffScoped` 缺省开启，结算前先读 `git status
   --porcelain`，只保留与改动语言匹配的检查——只改 Rust 就跑 `cargo …` 那几条，只改文档就一条

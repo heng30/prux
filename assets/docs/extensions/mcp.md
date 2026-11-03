@@ -446,6 +446,10 @@ OAuth/bearer 推断：
 
 ### `prux mcp`（CLI）
 
+`prux mcp` 是**由本扩展注入**的 CLI 子命令：只有扩展处于启用状态时它才存在（也只在那时出现在
+`prux --help` 的 Commands 段）。扩展被禁用时，`prux mcp ...` 会落回普通消息模式（`mcp` 变成
+发给模型的一个词），而不是报「未知子命令」。
+
 ```
 prux mcp list [--json]
 prux mcp get <name> [--json]

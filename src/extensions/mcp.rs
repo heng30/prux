@@ -13,6 +13,7 @@
 //!
 //! 默认不启用（启用后，会向系统提示注入工具与指引，属按需开启的工作流能力）。
 
+pub mod command;
 pub mod config;
 pub mod error;
 pub mod manager;
@@ -22,10 +23,11 @@ use crate::{
     APP_NAME,
     core::extensions::CommandHost,
     core::{
+        agent_session::Agent,
         extensions::{
-            self, Extension, ExtensionCommand, ExtensionMode, ExtensionTool, ExtensionUiRequest,
-            ForkProjectInfo, SubcommandDef, ToolAnnotations, ToolExecCtx, ToolExposure,
-            UiNotifyLevel,
+            self, Extension, ExtensionCommand, ExtensionMode, ExtensionSubcommand, ExtensionTool,
+            ExtensionUiRequest, ForkProjectInfo, SubcommandDef, ToolAnnotations, ToolExecCtx,
+            ToolExposure, UiNotifyLevel, register_subcommand_handler,
         },
         project_trust::is_project_trusted,
         provider::AgentMessage,
@@ -97,6 +99,13 @@ pub const MAX_SERVER_DESCRIPTION_CHARS: usize = 250;
 
 /// `/mcp` 子命令名的竖线拼接串（仅用于错误提示）。
 const SUBCOMMAND_NAMES: &str = "status|list|tools|test|login|logout|reload";
+
+/// CLI 子命令名（`prux mcp ...`）：配置管理 / OAuth 登录 / 连通性诊断。
+const CLI_SUBCOMMAND: &str = "mcp";
+
+/// `prux mcp` 在 `prux --help` 里的一行说明。
+const CLI_SUBCOMMAND_DESCRIPTION: &str =
+    "Manage MCP servers (list/get/add/update/remove/enable/disable/login/logout/test)";
 
 /// `/mcp` 子命令候选（顺序 = 输入框候选顺序）。
 const SUBCOMMANDS: &[SubcommandDef] = &[
@@ -275,8 +284,17 @@ impl Extension for Mcp {
     }
 
     /// 注册 `/mcp` 命令的执行入口。
+    /// 注入 `prux mcp` 子命令：只有本扩展启用时才出现在 `prux --help` 里。
+    fn subcommands(&self) -> Vec<ExtensionSubcommand> {
+        vec![ExtensionSubcommand {
+            name: CLI_SUBCOMMAND,
+            description: CLI_SUBCOMMAND_DESCRIPTION,
+        }]
+    }
+
     fn on_registered(&self) {
         register_host_command(EXT, CMD, command_mcp);
+        register_subcommand_handler(EXT, CLI_SUBCOMMAND, handle_cli_subcommand);
     }
 
     /// 启用状态变化时丢弃管理器缓存，使下次调用按新配置重建连接。
@@ -974,6 +992,11 @@ fn load_config_with_declarations(cwd: &Path, trusted: bool) -> Result<LoadedConf
         notify_plain(errors.join("; "), UiNotifyLevel::Warning);
     }
     Ok(loaded)
+}
+
+/// `prux mcp` 子命令入口：参数原样交给 [`command::run_mcp_command`]（含 `--help`）。
+fn handle_cli_subcommand(_agent: Agent, args: Vec<String>) -> BoxFuture<'static, i32> {
+    Box::pin(async move { command::run_mcp_command(&args).await })
 }
 
 /// `/mcp` 命令入口。

@@ -10,7 +10,6 @@ use crate::{
         file_processor::{build_initial_messages, process_file_arguments},
         initial_message::compose_initial_parts,
         list_models::run_list_models,
-        mcp_command::run_mcp_command,
         project_trust::resolve_trusted,
         session_picker::{find_session_by_id, pick_session, resolve_session_arg},
     },
@@ -171,11 +170,6 @@ pub async fn bootstrap() -> Startup {
     // auth 子命令：打印凭据 / 检查 provider 认证就绪状态
     if let Some(Command::Auth { args }) = &parsed.command {
         std::process::exit(run_auth_command(args));
-    }
-
-    // mcp 子命令：MCP 服务器配置管理 / OAuth 登录 / 连通性诊断
-    if let Some(Command::Mcp { args }) = &parsed.command {
-        std::process::exit(run_mcp_command(args).await);
     }
 
     // --export <session> [out]：导出 HTML

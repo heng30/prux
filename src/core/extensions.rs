@@ -59,8 +59,8 @@ pub use dock::{DockLine, DockSection, DockSpan, dock_sections};
 pub use footer::{FooterCtx, FooterExtension, FooterLine, FooterSpan, git_branch};
 pub use hooks::ExtensionHook;
 pub use host::{
-    BoxedHandler, CommandHost, SlashCommandHandler, SubcommandHandler, command_handler,
-    register_command, register_host_command, register_subcommand_handler,
+    BoxedHandler, CommandHost, ExtensionSubcommand, SlashCommandHandler, SubcommandHandler,
+    command_handler, register_command, register_host_command, register_subcommand_handler,
 };
 pub use markdown::render as render_markdown_lines;
 pub use overlay::{
@@ -497,10 +497,11 @@ pub trait Extension: Send + Sync {
         Vec::new()
     }
 
-    /// 该扩展注入的 CLI 子命令名（`prux acp`）；默认不注入。
+    /// 该扩展注入的 CLI 子命令（`prux acp`）；默认不注入。
     ///
     /// 子命令在 `bootstrap()` 装配完成后由扩展自己的入口接管，不再回到 TUI。
-    fn subcommands(&self) -> Vec<&'static str> {
+    /// 只有**已启用**扩展声明的子命令才出现在 `prux --help` 里。
+    fn subcommands(&self) -> Vec<ExtensionSubcommand> {
         Vec::new()
     }
 
@@ -1395,7 +1396,7 @@ pub fn declared_mcp_servers() -> Vec<(String, String, Value)> {
 /// 已启用（且当前模式可用）扩展注入的 CLI 子命令：`(扩展名, 声明)`。
 ///
 /// 供 `bootstrap()` 在 clap 解析之前预扫 argv；扩展禁用时其子命令不存在。
-pub fn declared_subcommands() -> Vec<(String, &'static str)> {
+pub fn declared_subcommands() -> Vec<(String, ExtensionSubcommand)> {
     let mut out = Vec::new();
     for ext in registered() {
         for sub in ext.subcommands() {
@@ -1407,7 +1408,7 @@ pub fn declared_subcommands() -> Vec<(String, &'static str)> {
 
 /// 把已装配的 Agent 交给某个扩展注入的子命令接管；无此子命令（或扩展未绑定 handler）返回 `None`。
 pub async fn dispatch_subcommand(agent: Agent, name: &str, args: Vec<String>) -> Option<i32> {
-    if !declared_subcommands().iter().any(|(_, s)| *s == name) {
+    if !declared_subcommands().iter().any(|(_, s)| s.name == name) {
         return None;
     }
     let handler = host::subcommand_handler(name)?;

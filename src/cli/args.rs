@@ -4,7 +4,10 @@
 
 use crate::{
     APP_NAME,
-    core::{self, extensions::CliFlagDef},
+    core::{
+        self,
+        extensions::{CliFlagDef, ExtensionSubcommand},
+    },
 };
 use clap::{ArgAction, CommandFactory, FromArgMatches, Parser, Subcommand, error::ErrorKind};
 use std::collections::HashSet;
@@ -33,20 +36,16 @@ pub fn thinking_level_description(level: &str) -> &'static str {
         .unwrap_or_default()
 }
 
-/// 子命令
+/// 内置（非扩展注入）的子命令。
+///
+/// 扩展子命令（`prux mcp`、`prux acp`）不在这里：声明与入口都归扩展，
+/// 只有**已启用**扩展的子命令才会出现在 `prux --help` 里。
 #[derive(Debug, Clone, Subcommand)]
 pub enum Command {
     /// Print credentials or check provider readiness
     #[command(disable_help_flag = true)]
     Auth {
         /// 原样透传给 auth 子命令的剩余参数，不含子命令名本身。
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<String>,
-    },
-    /// Manage MCP servers (list/get/add/update/remove/enable/disable/login/logout/test)
-    #[command(disable_help_flag = true)]
-    Mcp {
-        /// 原样透传给 mcp 子命令的剩余参数（list/get/add 等操作）。
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
@@ -227,35 +226,6 @@ pub struct ParsedArgs {
     pub extension_subcommand: Option<(String, Vec<String>)>,
 }
 
-/// argv 预扫：第一个词命中某个已启用扩展声明的子命令时返回 `(名字, 其余参数)`。
-///
-/// 只看第一个词——`prux "acp 是什么"` 这类普通消息不会被当成子命令。两个扩展声明
-/// 同名子命令属于配置错误（谁接管参数说不清），与 CLI flag 冲突一样直接报错。
-fn detect_extension_subcommand(
-    raw: &[String],
-) -> Result<Option<(String, Vec<String>)>, clap::Error> {
-    let Some(first) = raw.first() else {
-        return Ok(None);
-    };
-    if first.starts_with('-') {
-        return Ok(None);
-    }
-
-    let owners = core::extensions::declared_subcommands()
-        .into_iter()
-        .filter(|(_, sub)| *sub == first.as_str())
-        .count();
-
-    match owners {
-        0 => Ok(None),
-        1 => Ok(Some((first.clone(), raw[1..].to_vec()))),
-        n => Err(clap::Error::raw(
-            ErrorKind::InvalidValue,
-            format!("CLI subcommand conflict: {n} extensions declare `{first}`"),
-        )),
-    }
-}
-
 /// 校验思考级别（非法级别给出诊断而非报错）
 fn parse_thinking_level(s: &str) -> Result<String, String> {
     if VALID_THINKING_LEVELS.contains(&s) {
@@ -283,19 +253,6 @@ impl Args {
     /// 与内置参数或扩展间同名冲突时报错退出（保持 clap 严格语义）。
     pub fn parse_with_extension_flags() -> Result<ParsedArgs, clap::Error> {
         let raw: Vec<String> = std::env::args().skip(1).collect();
-
-        // 扩展注入的子命令（`prux acp`）优先：命中时它接管剩余参数，clap 不参与。
-        // 只认 argv 第一个词，避免把普通消息里的同名词当成子命令。
-        if let Some((name, rest)) = detect_extension_subcommand(&raw)? {
-            let args = Args::parse_from_args(&[])?;
-            return Ok(ParsedArgs {
-                args,
-                extension_flags: Vec::new(),
-                extension_flag_values: Vec::new(),
-                extension_subcommand: Some((name, rest)),
-            });
-        }
-
         let mut cmd = Self::command();
 
         // 收集已启用扩展的 flag 声明（保留扩展名供报错/分发）
@@ -339,9 +296,56 @@ impl Args {
             cmd = cmd.arg(Self::extension_flag_arg(&flag.1));
         }
 
+        // 扩展子命令注入成**真正的 clap 子命令**：这样 `prux --help` 的 Commands 段
+        // 才会列出它们，且只列出已启用扩展声明的那些。
+        let subcommands = core::extensions::declared_subcommands();
+        let builtin_subs: HashSet<String> = cmd
+            .get_subcommands()
+            .map(|c| c.get_name().to_string())
+            .collect();
+        let mut seen_sub: HashSet<&'static str> = HashSet::new();
+        for (ext, sub) in &subcommands {
+            if builtin_subs.contains(sub.name) {
+                return Err(clap::Error::raw(
+                    ErrorKind::InvalidValue,
+                    format!(
+                        "CLI subcommand conflict: extension \"{ext}\" declares `{}` which conflicts with a built-in subcommand",
+                        sub.name
+                    ),
+                ));
+            }
+
+            if !seen_sub.insert(sub.name) {
+                return Err(clap::Error::raw(
+                    ErrorKind::InvalidValue,
+                    format!(
+                        "CLI subcommand conflict: multiple extensions declare `{}`",
+                        sub.name
+                    ),
+                ));
+            }
+
+            cmd = cmd.subcommand(Self::extension_subcommand_cmd(sub));
+        }
+
         let mut extension_flags: Vec<(String, bool)> = Vec::new();
         let mut extension_flag_values: Vec<(String, String)> = Vec::new();
-        let matches = cmd.try_get_matches_from(std::iter::once(APP_NAME.to_string()).chain(raw))?;
+        let mut matches =
+            cmd.try_get_matches_from(std::iter::once(APP_NAME.to_string()).chain(raw))?;
+
+        // 命中的是扩展子命令：整段摘出来再交给 `Args`，否则 derive 会为未知子命令报错。
+        let extension_subcommand = match matches.subcommand_name() {
+            Some(name) if subcommands.iter().any(|(_, s)| s.name == name) => {
+                let (name, sub_matches) = matches.remove_subcommand().expect("just matched");
+                let rest: Vec<String> = sub_matches
+                    .get_many::<String>("args")
+                    .map(|values| values.cloned().collect())
+                    .unwrap_or_default();
+                Some((name, rest))
+            }
+            _ => None,
+        };
+
         let mut args = Args::from_arg_matches(&matches)?;
         args.normalize();
 
@@ -359,7 +363,7 @@ impl Args {
             args,
             extension_flags,
             extension_flag_values,
-            extension_subcommand: None,
+            extension_subcommand,
         })
     }
 
@@ -377,6 +381,20 @@ impl Args {
         } else {
             arg.action(ArgAction::SetTrue)
         }
+    }
+
+    /// 把一个扩展子命令声明变成 clap 子命令：参数全部原样收下，`-h` 交给扩展自己解释
+    /// （各扩展的帮助详略不同，例如 `mcp` 要列出所有子操作）。
+    fn extension_subcommand_cmd(sub: &ExtensionSubcommand) -> clap::Command {
+        clap::Command::new(sub.name)
+            .about(sub.description)
+            .disable_help_flag(true)
+            .arg(
+                clap::Arg::new("args")
+                    .num_args(0..)
+                    .trailing_var_arg(true)
+                    .allow_hyphen_values(true),
+            )
     }
 
     /// 从给定参数列表解析

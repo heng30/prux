@@ -20,18 +20,18 @@
 //!
 //! 作用域：`--scope user` = `agent_dir()/extensions/mcp/mcp.json`，`--scope project` = `<cwd>/.mcp.json`。
 
+use super::{
+    callback_listener,
+    config::{
+        self, AuthMode, AuthSetting, ClientRegistration, ConfigScope, LoadedConfig, OAuthConfig,
+        OAuthGrantType, ServerEntry,
+    },
+    error::{McpError, bail},
+    manager, oauth, receive_callback,
+};
 use crate::{
     APP_NAME,
     core::{project_trust::is_project_trusted, settings_manager::agent_dir},
-    extensions::mcp::{
-        callback_listener,
-        config::{
-            self, AuthMode, AuthSetting, ClientRegistration, ConfigScope, LoadedConfig,
-            OAuthConfig, OAuthGrantType, ServerEntry,
-        },
-        error::{McpError, bail},
-        manager, oauth, receive_callback,
-    },
     utils::paths::cwd,
 };
 use serde::Serialize;
