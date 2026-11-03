@@ -46,6 +46,20 @@
   git cannot — content that was still uncommitted when the turn started. Off by default
   (`Dev` / `Creator`).
 
+- **A `worktree` extension moves the session into a git worktree copy**: `/worktree enter
+  [name]` creates a snapshot of `HEAD` under `agent_dir()/extensions/worktrees/<repo>-<name>` and switches
+  the session's working directory into it (a caller sitting in a subdirectory keeps the same
+  nesting inside the copy); `/worktree exit` commits whatever the copy changed onto a
+  `prux-wt-<name>` branch (timestamp suffix when that branch already exists), deletes the copy and
+  switches back; `/worktree drop` deletes it and throws the changes away; bare `/worktree` reports
+  the current state. Three rules are deliberate: uncommitted changes in the working directory do
+  **not** travel into the copy (they stay in the original repository, and entering says so), a
+  failed `git commit` **keeps the copy** and reports the error instead of deleting the work, and
+  the switch is refused while a run is in progress. Commits inside the copy use `--no-verify` —
+  your hooks do not run in a throwaway copy — and a copy that cannot be deleted falls back to
+  `git worktree prune`. Commands only, no tool: changing directories is the user's call, and a
+  tool call has no write access to the session `cwd`. Off by default (`Dev` / `Creator`).
+
 - **`permissions` gates network hosts too**: a fifth layer, `domain`, matches the host of every
   `http(s)://` URL a call would reach — every command line bash runs (including ones inside
   `$(…)`) and any URL found anywhere in another tool's arguments, which covers MCP calls that
@@ -1009,6 +1023,16 @@
   进行中 `/rollback` 一律拒绝。它**不**并进 `rewind`：那个只退会话分支，而「只想撤回一句误发的话」
   不该顺带为每次写盘买一份文件复制。用 git 的项目通常 `git restore` 就够了，本扩展补的是 git
   退不了的那部分——本回合开始时尚未提交的内容。默认不启用（`Dev` / `Creator`）。
+
+- **新增 `worktree` 扩展：把当前会话搬进 git worktree 副本里干活**：`/worktree enter [name]` 在
+  `agent_dir()/extensions/worktrees/<仓库名>-<名字>` 建一份 `HEAD` 快照的副本并把会话的工作目录切进去
+  （调用方在仓库子目录时，副本里保留同样的层级）；`/worktree exit` 把副本里的改动提交成
+  `prux-wt-<名字>` 分支（同名已存在就加时间戳后缀）后删副本、切回原目录；`/worktree drop` 直接
+  删副本丢弃改动；裸 `/worktree` 报告当前状态。三条口径是有意的：工作目录里**未提交的改动不会
+  跟着进副本**（它们留在原仓库，进入时会提示），`git commit` 失败时**副本原样保留**并报错而不是
+  把活删掉，回合进行中一律拒绝切换。副本内的提交带 `--no-verify`——用户的钩子不在临时副本里跑；
+  副本删不掉时退一步 `git worktree prune` 清掉注册项。只提供命令、不提供工具：换目录是用户的选择，
+  而工具执行期拿不到会话 `cwd` 的写能力。默认不启用（`Dev` / `Creator`）。
 
 - **`permissions` 也管网络主机了**：新增第五层 `domain`，按一次调用会连的每个 `http(s)://` URL
   的主机判定——bash 跑的每条语句（含 `$(…)` 里的）以及其它工具入参里任意深度的 URL，因此把 URL

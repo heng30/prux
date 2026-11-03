@@ -43,6 +43,11 @@ pub enum AgentCommand {
         /// 新的工作目录绝对路径
         path: String,
     },
+    /// 只改工作目录并重建工具，**不**新开会话（`worktree` 进出副本用）
+    SetCwd {
+        /// 新的工作目录绝对路径
+        path: String,
+    },
     /// 设置 thinking 级别（persist=true 时设置成功后写 settings 默认级别）
     SetThinking { level: String, persist: bool },
     /// 切换会话

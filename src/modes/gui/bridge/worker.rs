@@ -173,6 +173,7 @@ async fn apply(agent: &mut Agent, cmd: AgentCommand, events: &UnboundedSender<Gu
             agent.set_session_name(&name);
         }
         AgentCommand::SwitchCwd { path } => switch_cwd(agent, &path, events),
+        AgentCommand::SetCwd { path } => set_cwd(agent, &path, events),
         AgentCommand::Reload { .. } => reload_assets(agent, events),
         AgentCommand::Tree => {
             let message = match agent.session.as_ref() {
@@ -478,6 +479,21 @@ fn switch_cwd(agent: &mut Agent, path: &str, events: &UnboundedSender<GuiEvent>)
     agent.cwd = path.to_string();
     agent.rebuild_tools();
     new_session(agent, events);
+}
+
+/// 只换目录（`worktree` 用）：会话与历史都不动，只按新目录重建工具与系统提示。
+fn set_cwd(agent: &mut Agent, path: &str, events: &UnboundedSender<GuiEvent>) {
+    if !Path::new(path).is_dir() {
+        _ = events.send(GuiEvent::Error(format!(
+            "Working directory does not exist: {path}"
+        )));
+        return;
+    }
+
+    agent.cwd = path.to_string();
+    agent.rebuild_tools();
+    core::extensions::dispatch_exec_ctx(&agent.exec_ctx());
+    _ = events.send(GuiEvent::Snapshot(Box::new(snapshot(agent))));
 }
 
 /// 开新会话：清空消息、建一个持久会话文件（与 TUI 的 `/new` 一致）。

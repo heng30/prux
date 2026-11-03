@@ -58,6 +58,7 @@ pub mod update_check;
 pub mod usage;
 pub mod vet;
 pub mod web_access;
+pub mod worktree;
 
 pub use plan_mode::PlanMode;
 
@@ -162,6 +163,8 @@ pub const PRIORITY_HARDWARE: u32 = 48;
 pub const PRIORITY_PAPERS: u32 = 47;
 /// debug 调试工具集扩展注册优先级。
 pub const PRIORITY_DEBUG: u32 = 45;
+/// worktree 工作副本扩展的注册优先级。
+pub const PRIORITY_WORKTREE: u32 = 44;
 /// tool_search 延迟工具检索扩展的注册优先级。
 pub const PRIORITY_TOOL_SEARCH: u32 = 40;
 /// codemode 工具编排扩展的注册优先级。

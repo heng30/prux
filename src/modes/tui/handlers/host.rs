@@ -82,6 +82,15 @@ impl CommandHost for App {
         PathBuf::from(&self.cwd)
     }
 
+    /// 换目录（不新开会话）：界面先跟随，agent 在下一个回合间隙应用。
+    fn set_cwd(&mut self, path: &str) {
+        self.cwd = path.to_string();
+        self.dirty = true;
+        self.worker.send(AgentCommand::SetCwd {
+            path: path.to_string(),
+        });
+    }
+
     /// 是否正在流式输出。
     fn is_busy(&self) -> bool {
         self.busy

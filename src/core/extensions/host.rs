@@ -52,6 +52,12 @@ pub trait CommandHost {
     /// 切换当前模型（`persist` 由宿主的常规切换语义决定，命令只请求一次切换）。
     fn switch_model(&mut self, provider: &str, model_id: &str);
 
+    /// 切换会话的工作目录（`worktree` 这类「把会话搬进另一个目录继续」的命令用）。
+    ///
+    /// 只换 cwd 并按新目录重建工具与系统提示：消息、会话文件、历史都不动。
+    /// 需要「顺带开一个新会话」的切换用宿主自己的换目录入口，不要走这里。
+    fn set_cwd(&mut self, path: &str);
+
     /// 当前工作目录：命令解析相对路径、展示路径时用。
     fn cwd(&self) -> PathBuf;
 
@@ -188,6 +194,8 @@ mod tests {
         }
 
         fn switch_model(&mut self, _provider: &str, _model_id: &str) {}
+
+        fn set_cwd(&mut self, _path: &str) {}
 
         fn cwd(&self) -> PathBuf {
             PathBuf::from("/tmp")

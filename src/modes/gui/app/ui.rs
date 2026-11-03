@@ -85,6 +85,13 @@ impl CommandHost for GuiApp {
         PathBuf::from(self.cwd())
     }
 
+    /// 换目录（不新开会话）：交给 worker 应用，刷新后的 cwd 随快照回来。
+    fn set_cwd(&mut self, path: &str) {
+        _ = self.cmd_tx.send(AgentCommand::SetCwd {
+            path: path.to_string(),
+        });
+    }
+
     /// 是否正在流式输出。
     fn is_busy(&self) -> bool {
         self.busy

@@ -271,6 +271,7 @@ async fn dispatch_cmd(
             dispatch_set_thinking(agent, level, persist).await
         }
         AgentCommand::SwitchCwd { path } => dispatch_switch_cwd(agent, path).await,
+        AgentCommand::SetCwd { path } => dispatch_set_cwd(agent, path).await,
         AgentCommand::NewSession => dispatch_new_session(agent).await,
         AgentCommand::ResumeSession { path } => dispatch_resume_session(agent, path).await,
         AgentCommand::ApplyKey { provider, key } => dispatch_apply_key(agent, provider, key).await,
@@ -867,6 +868,24 @@ async fn dispatch_switch_cwd(agent: &Arc<Mutex<Agent>>, path: String) -> Option<
     }
 
     dispatch_new_session(agent).await
+}
+
+/// 处理 AgentCommand::SetCwd：只改工作目录、按新目录重建工具与系统提示，**不**新开会话。
+///
+/// 界面侧 `App::set_cwd` 已经先改了自己的 `cwd`（底栏立刻跟随），这里只同步 worker
+/// 独占的 agent；再投一次执行上下文分发，避免扩展继续用旧目录的快照/工程桶。
+async fn dispatch_set_cwd(agent: &Arc<Mutex<Agent>>, path: String) -> Option<RoundFuture> {
+    if !std::path::Path::new(&path).is_dir() {
+        return None;
+    }
+
+    {
+        let mut a = agent.lock().await;
+        a.cwd = path;
+        a.rebuild_tools();
+        core::extensions::dispatch_exec_ctx(&a.exec_ctx());
+    }
+    None
 }
 
 /// 处理 AgentCommand::NewSession：在当前目录下开新会话。
