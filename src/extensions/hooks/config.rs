@@ -1,30 +1,28 @@
-//! hooks 的配置层：把 `settings.json` 的 `hooks` 段解析成可执行的钩子表。
+//! hooks 的配置层：把 `agent_dir()/extensions/hooks.json` 解析成可执行的钩子表。
 //!
-//! 段名与事件名对齐 Claude Code 的同名格式（`PreToolUse` / `PostToolUse` /
-//! `UserPromptSubmit` / `Stop`），因此已有的 `hooks` 配置可以原样搬进来。
+//! 事件名对齐 Claude Code 的同名格式（`PreToolUse` / `PostToolUse` /
+//! `UserPromptSubmit` / `Stop`），因此已有的 `hooks` 配置去掉外层包装即可搬进来。
 //!
 //! ```json
 //! {
-//!   "hooks": {
-//!     "PreToolUse": [
-//!       { "matcher": "bash|write", "hooks": [{ "type": "command", "command": "./check.sh", "timeout": 10 }] }
-//!     ]
-//!   }
+//!   "PreToolUse": [
+//!     { "matcher": "bash|write", "hooks": [{ "type": "command", "command": "./check.sh", "timeout": 10 }] }
+//!   ]
 //! }
 //! ```
 //!
 //! 校验不通过的条目跳过并把原因记进 [`HooksConfig::errors`]（`/hooks` 打印），
 //! 一条坏钩子不该让整份配置失效。
 
-use crate::core::settings_manager::settings_section;
+use crate::core::settings_manager::agent_dir;
 use regex::{Regex, RegexBuilder};
 use serde::Deserialize;
 use serde_json::Value;
-use std::time::Duration;
+use std::{fs, path::PathBuf, time::Duration};
 use strum_macros::{EnumString, IntoStaticStr};
 
-/// `settings.json` 里本扩展读取的顶层键名。
-pub(super) const SETTINGS_KEY: &str = "hooks";
+/// 配置文件名（位于 `agent_dir()/extensions/` 下）。
+pub(super) const CONFIG_FILE: &str = "hooks.json";
 
 /// 单条钩子的缺省超时（秒）：钩子在工具调用路径上同步等待，不能无限期占着。
 pub(super) const DEFAULT_TIMEOUT_SECS: u64 = 10;
@@ -120,23 +118,44 @@ impl HooksConfig {
     }
 }
 
-/// 读 `settings.json` 的 `hooks` 段（全局 + 受信项目，项目逐键覆盖）并解析。
-///
-/// 每次分发重新读一次：`settings_section` 自带缓存，解析的是一份几十字节的 JSON，
-/// 比维护「配置变了没」的失效判据便宜。
-pub(super) fn load() -> HooksConfig {
-    parse(&settings_section(SETTINGS_KEY))
+/// 配置文件路径：`agent_dir()/extensions/hooks.json`。
+pub(super) fn config_path() -> PathBuf {
+    agent_dir().join("extensions").join(CONFIG_FILE)
 }
 
-/// 把 `hooks` 段的 JSON 值解析成配置；无法解释的条目记进 `errors` 后跳过。
+/// 读配置文件并解析。
+///
+/// 每次分发都重新读一次（钩子之后马上就要起子进程，一次几十字节的读盘不算开销，
+/// 手改配置文件也能立刻生效）。文件缺失 = 没有钩子；读不出来或不是合法 JSON 时
+/// 记一条 [`HooksConfig::errors`]，不当作配置为空静默吞掉。
+pub(super) fn load() -> HooksConfig {
+    let path = config_path();
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return HooksConfig::default(),
+        Err(err) => return load_error(format!("{}: {err}", path.display())),
+    };
+    match serde_json::from_str::<Value>(&text) {
+        Ok(value) => parse(&value),
+        Err(err) => load_error(format!("{}: {err}", path.display())),
+    }
+}
+
+/// 构造一份「只有一条错误」的配置。
+fn load_error(message: String) -> HooksConfig {
+    HooksConfig {
+        errors: vec![message],
+        ..HooksConfig::default()
+    }
+}
+
+/// 把配置 JSON 解析成钩子表；无法解释的条目记进 `errors` 后跳过。
 pub(super) fn parse(value: &Value) -> HooksConfig {
     let mut config = HooksConfig::default();
 
     let Some(events) = value.as_object() else {
         if !value.is_null() {
-            config
-                .errors
-                .push(format!("`{SETTINGS_KEY}` must be an object"));
+            config.errors.push("config must be an object".to_string());
         }
         return config;
     };

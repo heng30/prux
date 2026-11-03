@@ -1,6 +1,6 @@
 //! `hooks` 扩展：在生命周期事件上跑**用户配置的外部命令**，按它们的表态继续 / 拦截 / 改写。
 //!
-//! 与扩展系统里的 Rust 钩子不同，这里的钩子来自 `settings.json` 的 `hooks` 段（格式与
+//! 与扩展系统里的 Rust 钩子不同，这里的钩子来自 `agent_dir()/extensions/hooks.json`（事件名与
 //! Claude Code 同形），改配置即可生效，不需要重新编译。支持四个事件：
 //!
 //! | 事件 | 时机 | 能做什么 |
@@ -187,9 +187,9 @@ impl Extension for Hooks {
         })
     }
 
-    /// 面板说明：跑用户在 `settings.json` 里配置的生命周期命令。
+    /// 面板说明：跑用户在 `extensions/hooks.json` 里配置的生命周期命令。
     fn description(&self) -> &str {
-        "Run user-configured lifecycle hooks (settings.json `hooks`) around tool calls, \
+        "Run user-configured lifecycle hooks (extensions/hooks.json) around tool calls, \
          prompts and turn settlement: block, ask, rewrite tool input or output, or continue \
          the run. /hooks lists the active hooks and config errors"
     }
@@ -213,7 +213,8 @@ impl Extension for Hooks {
     fn commands(&self) -> Vec<ExtensionCommand> {
         vec![ExtensionCommand {
             name: CMD.to_string(),
-            description: "List the hooks configured in settings.json and their config errors"
+            description: "List the hooks configured in extensions/hooks.json and their config \
+                          errors"
                 .to_string(),
             // 只读配置并打印，不锁 agent。
             busy_safe: true,
@@ -491,16 +492,16 @@ fn command_hooks(host: &mut dyn CommandHost, _raw: &str) -> bool {
     let mut lines: Vec<String> = Vec::new();
     if config.is_empty() {
         lines.push(format!(
-            "No hooks configured. Add a `{}` section to settings.json (see docs/extensions/hooks.md).",
-            config::SETTINGS_KEY
+            "No hooks configured. Add them to {} (see docs/extensions/hooks.md).",
+            config::config_path().display()
         ));
     } else {
         let total: usize = config.groups.iter().map(|g| g.commands.len()).sum();
         lines.push(format!(
-            "{} hook command{} from settings.json `{}`:",
+            "{} hook command{} from {}:",
             total,
             if total == 1 { "" } else { "s" },
-            config::SETTINGS_KEY
+            config::config_path().display()
         ));
         for group in &config.groups {
             let matcher = if group.matcher_src.is_empty() {
@@ -541,23 +542,43 @@ mod tests {
         assert_eq!(info.url, "https://github.com/gi-dellav/zerostack");
     }
 
-    /// `settings.json` 的 `hooks` 段真的会被读到（走 `settings_section` 的真实路径）。
+    /// `extensions/hooks.json` 里的钩子真的会被读到。
     #[test]
-    fn loads_hooks_from_settings_json() {
+    fn loads_hooks_from_config_file() {
         let _guard = crate::test_support::AUTH_TEST_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let agent = crate::test_support::AgentDirGuard::temp();
+        let path = config::config_path();
+        std::fs::create_dir_all(path.parent().unwrap()).expect("create extensions dir");
         std::fs::write(
-            crate::core::settings_manager::agent_dir().join("settings.json"),
-            r#"{"hooks":{"PreToolUse":[{"matcher":"bash","hooks":[{"command":"true"}]}]}}"#,
+            &path,
+            r#"{"PreToolUse":[{"matcher":"bash","hooks":[{"command":"true"}]}]}"#,
         )
-        .expect("write settings.json");
+        .expect("write hooks.json");
 
         let config = config::load();
         assert!(config.errors.is_empty(), "{:?}", config.errors);
         assert_eq!(config.groups.len(), 1);
         assert!(config.groups[0].matches(HookEvent::PreToolUse, "bash"));
+        drop(agent);
+    }
+
+    /// 文件缺失 = 没有钩子；损坏的文件报一条错误而不是静默当成没配置。
+    #[test]
+    fn missing_config_is_empty_and_broken_config_reports() {
+        let _guard = crate::test_support::AUTH_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let agent = crate::test_support::AgentDirGuard::temp();
+        assert!(config::load().is_empty());
+
+        let path = config::config_path();
+        std::fs::create_dir_all(path.parent().unwrap()).expect("create extensions dir");
+        std::fs::write(&path, "{ not json").expect("write broken hooks.json");
+        let config = config::load();
+        assert!(config.is_empty());
+        assert_eq!(config.errors.len(), 1, "{:?}", config.errors);
         drop(agent);
     }
 

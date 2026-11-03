@@ -1,6 +1,6 @@
 # hooks（外部命令生命周期钩子）
 
-`hooks` 把 prux 的四个生命周期时机暴露成**外部命令**：你在 `settings.json` 里写几条 shell
+`hooks` 把 prux 的四个生命周期时机暴露成**外部命令**：你在 `extensions/hooks.json` 里写几条 shell
 命令，prux 在该拦的时候把上下文交给它们（JSON 走 stdin），按它们的表态继续、拦下来或者改写。
 
 它和扩展系统里的 Rust 钩子不是一回事：那些要重新编译，这里改配置就生效。适合做项目级的检查
@@ -17,20 +17,19 @@
 
 ## 配置
 
-`settings.json` 的 `hooks` 段，键是事件名，值是分组数组：
+配置文件是 agent 目录下的 `extensions/hooks.json`（`~/.prux/extensions/hooks.json`，或
+`$PRUX_AGENT_DIR/extensions/hooks.json`）。键是事件名，值是分组数组：
 
 ```json
 {
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "bash|write",
-        "hooks": [
-          { "type": "command", "command": "./scripts/check.sh", "timeout": 10 }
-        ]
-      }
-    ]
-  }
+  "PreToolUse": [
+    {
+      "matcher": "bash|write",
+      "hooks": [
+        { "type": "command", "command": "./scripts/check.sh", "timeout": 10 }
+      ]
+    }
+  ]
 }
 ```
 
@@ -41,10 +40,9 @@
 | `hooks[].command` | 交给 shell 执行的命令串（Unix `sh -c`，Windows `cmd /C`） |
 | `hooks[].timeout` | 等待上限（秒），缺省 10；超时连子进程一起杀掉，按「没有表态」处理 |
 
-配置来源与其它 `settings.json` 键一致：全局 `agent_dir()/settings.json`，项目
-`<项目>/.prux/settings.json` **仅在项目受信任时**参与（同一事件名下项目配置整体覆盖全局）。
-解析不了的条目（未知事件名、坏正则、空命令、非 `command` 类型）只会被跳过并在 `/hooks` 里
-列出原因，不会让整份配置失效。
+文件缺失就是「没有钩子」。文件不在时自己建一个即可（只需父目录 `extensions/` 存在）；改完下一次
+工具调用 / 提交就生效，不用重启。解析不了的条目（未知事件名、坏正则、空命令、非 `command` 类型）
+只会被跳过并在 `/hooks` 里列出原因，不会让整份配置失效；整份文件不是合法 JSON 时同样只报错、不执行。
 
 ## 事件
 
@@ -125,18 +123,16 @@
 
 ```json
 {
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "write|edit",
-        "hooks": [
-          {
-            "command": "cargo fmt --check || { echo 'run cargo fmt first' >&2; exit 2; }"
-          }
-        ]
-      }
-    ]
-  }
+  "PreToolUse": [
+    {
+      "matcher": "write|edit",
+      "hooks": [
+        {
+          "command": "cargo fmt --check || { echo 'run cargo fmt first' >&2; exit 2; }"
+        }
+      ]
+    }
+  ]
 }
 ```
 
@@ -144,11 +140,9 @@
 
 ```json
 {
-  "hooks": {
-    "Stop": [
-      { "hooks": [{ "command": "./scripts/must-pass.sh", "timeout": 300 }] }
-    ]
-  }
+  "Stop": [
+    { "hooks": [{ "command": "./scripts/must-pass.sh", "timeout": 300 }] }
+  ]
 }
 ```
 

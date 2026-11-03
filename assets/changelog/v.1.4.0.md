@@ -7,8 +7,9 @@
   `Copied to clipboard` toast.
 
 - **A `hooks` extension runs your own commands at lifecycle points**: four events —
-  `PreToolUse`, `PostToolUse`, `UserPromptSubmit` and `Stop` — are driven from a `hooks` section
-  in `settings.json`, in the same shape Claude Code uses, so an existing config drops in. Each
+  `PreToolUse`, `PostToolUse`, `UserPromptSubmit` and `Stop` — are driven from
+  `extensions/hooks.json` in the agent directory, in the same shape Claude Code uses, so an
+  existing config drops in. Each
   hook gets one line of JSON on stdin (`hook_event_name`, `session_id`, `cwd`, plus
   `tool_name` / `tool_input` / `tool_response` / `prompt` / `stop_hook_active`) and answers with
   an exit code plus optional JSON on stdout: exit `2` blocks with stderr as the reason, exit `0`
@@ -994,8 +995,8 @@
   并弹出 `Copied to clipboard` 提示。
 
 - **新增 `hooks` 扩展：在生命周期时机跑你自己配的命令**：四个事件——`PreToolUse`、
-  `PostToolUse`、`UserPromptSubmit`、`Stop`——由 `settings.json` 的 `hooks` 段驱动，格式与
-  Claude Code 同形，已有配置可以直接搬。每条钩子的 stdin 是一行 JSON（`hook_event_name`、
+  `PostToolUse`、`UserPromptSubmit`、`Stop`——由 agent 目录下的 `extensions/hooks.json` 驱动，
+  格式与 Claude Code 同形，已有配置可以直接搬。每条钩子的 stdin 是一行 JSON（`hook_event_name`、
   `session_id`、`cwd`，以及 `tool_name` / `tool_input` / `tool_response` / `prompt` /
   `stop_hook_active`），结果看退出码加 stdout 上的可选 JSON：退出码 `2` 按阻止处理、stderr 当
   理由；`0` 读 `decision: block` / `approve`、`hookSpecificOutput.permissionDecision`
