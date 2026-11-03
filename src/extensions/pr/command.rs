@@ -41,13 +41,15 @@ pub(super) fn handle(host: &mut dyn CommandHost, raw: &str) -> bool {
 
 /// `/pr run`：交付一次（后台线程，结果回聊天区）。
 fn run_async(host: &mut dyn CommandHost) {
+    // 提交信息要在后台线程里生成，模型得先在这里拿（宿主只在同步回边可得）。
+    let model = host.current_model();
     host.push_message(
         "pr: delivering now — results land here when done",
         UiNotifyLevel::Info,
     );
     // 等 CI 可能是分钟级，不能卡住事件循环：扔到独立线程。
-    std::thread::spawn(|| {
-        let text = run_now();
+    std::thread::spawn(move || {
+        let text = run_now(model);
         notify_text(&format!("pr: {text}"), UiNotifyLevel::Info);
     });
 }

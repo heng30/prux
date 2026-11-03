@@ -4,10 +4,13 @@
 //! **只手动触发**：交付会写远端、产生一个可评审的 PR，这是「这版代码值得被人看」的判断，
 //! 只有用户能下。挂在结算边界上自动跑，等于把每轮还没被看过的改动都推成 PR——包括坏的。
 //!
-//! `/pr run` 的路径：从基线分支新建 `prux/<日期>-<时分>` → `git add -A` + commit →
+//! `/pr run` 的路径：从基线分支新建 `prux/<日期>-<时分>` → `git add -A` + commit（提交信息
+//! 由模型看暂存区写，写不出来才回落会话标题）→
 //! `git push` → 已有**开着**的 PR 就复用、没有（含已关闭 / 已合并）就 `gh pr create` →
-//! 轮询到全绿 / 有阻塞 / 超时，把结论贴回聊天区。CI 红了就把阻塞项原样列出，你让 agent
-//! 修完再跑一次 `/pr run`：这时已经在 `prux/` 分支上，改动提交到同一条分支，同一个 PR 被更新。
+//! 轮询到全绿 / 有阻塞 / 超时，把结论贴回聊天区。工作区干净但本地有没推的提交时同样会
+//! 推上去开 PR——「已经 commit 了」不是停下来等的理由。CI 红了就把阻塞项原样列出，你让
+//! agent 修完再跑一次 `/pr run`：这时已经在 `prux/` 分支上，改动提交到同一条分支，同一个
+//! PR 被更新。
 //!
 //! 三条不做的线（每条都是「替用户做了决定」）：
 //! - **不自动 merge**：合入是人的决定，它最高只到开 PR。
@@ -20,14 +23,17 @@
 //! **默认不启用**，声明 `Dev` 模式——它会写 git 历史并推远端，只能由用户显式打开。
 
 mod command;
+mod commit;
 mod config;
 
 use crate::{
     core::{
+        auth,
         extensions::{
             Extension, ExtensionCommand, ExtensionHook, ExtensionMode, ExtensionTool, UiNotifyLevel,
         },
-        provider::AgentMessage,
+        model_resolver,
+        provider::{self, AgentMessage},
         session_manager::Session,
     },
     extensions::{
@@ -36,6 +42,7 @@ use crate::{
     },
     modes::tui::handlers::register_host_command,
     utils::{
+        async_task,
         gh::{self, Verdict},
         git,
         paths::cwd,
@@ -160,7 +167,7 @@ impl Drop for RunGuard {
 
 /// 一次交付尝试的结论。
 enum Step {
-    /// 没什么要交付的（工作区干净且不在交付分支上 / 不是 git 仓库），静默跳过。
+    /// 没什么要交付的（工作区干净且没有未推送的提交 / 不是 git 仓库），静默跳过。
     Nothing,
     /// 交付完成（消息进聊天区）。
     Done(String),
@@ -302,8 +309,11 @@ fn on_base(top: &Path, current: &str, cfg: &Config) -> bool {
     CONVENTIONAL_BASES.contains(&current)
 }
 
+/// 提交信息用的模型（provider, model_id）；`/pr run` 时从宿主取，取不到就回落会话标题。
+type Model = Option<(String, String)>;
+
 /// 交付主体：量工作区 → 建分支 → 提交 → 推 → 开 PR → 等 CI。
-fn deliver(cfg: &Config) -> Result<Step, String> {
+fn deliver(cfg: &Config, model: Model) -> Result<Step, String> {
     let dir = current_cwd();
     // 不是 git 仓库就没有交付可言：静默跳过（这个扩展不该在非 git 目录里刷提示）
     let Ok(top) = git::toplevel(&dir) else {
@@ -318,19 +328,23 @@ fn deliver(cfg: &Config) -> Result<Step, String> {
     }
 
     let has_changes = git::dirty(&top)?;
-    // 工作区干净、又不在交付分支上：没有本扩展可以接手的东西（在别人的分支上提交不是它的活）
-    if !has_changes && !current.starts_with(BRANCH_PREFIX) {
+    let on_base_branch = on_base(&top, &current, cfg);
+
+    // 工作区干净、也没有本地已提交但没推的提交：没有本扩展可以接手的东西
+    // （亮在基线分支上的提交不归它推，那是直接往 main 上提交）
+    let unpushed = !on_base_branch && git::unpushed(&top)?;
+    if !has_changes && !unpushed && !current.starts_with(BRANCH_PREFIX) {
         return Ok(Step::Nothing);
     }
 
     let mut branch = current;
-    if has_changes && on_base(&top, &branch, cfg) {
+    if has_changes && on_base_branch {
         branch = fresh_branch(&top);
         git::create_branch(&top, &branch)?;
     }
     if has_changes {
-        let message = format!("prux: {}", session_title());
-        git::commit_all(&top, &message)?;
+        git::stage_all(&top)?;
+        git::commit(&top, &commit_message(&top, model.as_ref()))?;
     }
     state().branch = Some(branch.clone());
 
@@ -394,12 +408,54 @@ fn session_body() -> String {
     truncate_chars(&session_title(), BODY_CHARS, None, true)
 }
 
+/// 提交信息：让模型看一眼已暂存的改动写一条，写不出来就回落 [`commit::fallback`]。
+///
+/// 生成失败只提示一句警告：交付照常继续（一条烂提交信息比「交付在本地停住」轻得多）。
+fn commit_message(top: &Path, model: Option<&(String, String)>) -> String {
+    let title = session_title();
+    let fallback = commit::fallback(&title);
+    let Some((provider, model_id)) = model else {
+        return fallback;
+    };
+    let Ok(outline) = git::staged_outline(top, commit::OUTLINE_CHARS) else {
+        return fallback;
+    };
+    if outline.trim().is_empty() {
+        return fallback;
+    }
+    let prompt = commit::build_prompt(&outline, &title);
+    let result = async_task::run_blocking(async {
+        auth::ensure_oauth_valid(provider)
+            .await
+            .map_err(|e| format!("{e}"))?;
+        let model = model_resolver::configured_model(provider, model_id, None, None)
+            .map_err(|e| format!("{e}"))?;
+        let (text, _usage) =
+            provider::simple_completion(&model, commit::SYSTEM, &prompt, Some(commit::MAX_TOKENS))
+                .await
+                .map_err(|e| format!("{e}"))?;
+        Ok::<String, String>(text)
+    });
+    match result {
+        Ok(Ok(text)) => commit::normalize(&text).unwrap_or(fallback),
+        Ok(Err(err)) | Err(err) => {
+            notify_text(
+                &format!(
+                    "pr: could not write the commit message ({err}) — using the session title"
+                ),
+                UiNotifyLevel::Warning,
+            );
+            fallback
+        }
+    }
+}
+
 /// 轮询 PR 直到出结论、超时或阻塞。
 ///
 /// `shortcut`：推完先等一个 `poll` 周期再读状态——`gh` 的检查结论可能还是上一次推送的，
 /// 立刻读会把旧结论当新的。要精确到「这次推送的 head sha」得逐条比对 check run 的
 /// `headSha`，等有人被误判成绿了再说。
-fn wait_for_ci(cfg: &config::Config, top: &Path, selector: &str) -> Result<Step, String> {
+fn wait_for_ci(cfg: &Config, top: &Path, selector: &str) -> Result<Step, String> {
     let started = Instant::now();
     let deadline = started + cfg.timeout;
     loop {
@@ -442,12 +498,12 @@ fn report(failure: &gh::Failure, number: u64, url: &str) -> String {
 }
 
 /// `/pr run` 的同步入口（供 [`command`] 在后台线程里调用）。
-pub(super) fn run_now() -> String {
+pub(super) fn run_now(model: Model) -> String {
     let cfg = config::load();
     let Some(guard) = RunGuard::acquire() else {
         return "a /pr run is already in flight".to_string();
     };
-    let step = deliver(&cfg);
+    let step = deliver(&cfg, model);
     drop(guard);
     let text = match step {
         Ok(Step::Nothing) => "nothing to deliver (clean working tree)".to_string(),
@@ -580,7 +636,7 @@ mod tests {
 
     /// 一次没有远端可推的交付：提交成功，`git push` 失败（结论是 Stop，不 panic）。
     fn deliver_locally(cfg: &Config) -> Step {
-        match deliver(cfg) {
+        match deliver(cfg, None) {
             Ok(step) => step,
             Err(err) => panic!("不该报错: {err}"),
         }
@@ -628,6 +684,45 @@ mod tests {
         deliver_locally(&cfg);
         assert_eq!(git::branch(&repo).unwrap(), first, "第二次交付不该另开分支");
         assert!(!git::dirty(&repo).unwrap());
+    }
+
+    #[test]
+    fn a_committed_but_unpushed_branch_is_still_delivered() {
+        let _serial = serial();
+        let _guard = crate::test_support::AgentDirGuard::temp();
+        let Some(repo) = temp_repo("unpushed") else {
+            return;
+        };
+        remember_cwd(&repo.to_string_lossy());
+        // 用户自己在一个功能分支上已经提交了，工作区干净：此时也得推上去开 PR
+        git::create_branch(&repo, "feature").unwrap();
+        std::fs::write(repo.join("done.txt"), "done\n").unwrap();
+        git::commit_all(&repo, "already committed").unwrap();
+
+        let cfg = config::merge(None);
+        assert!(
+            matches!(deliver_locally(&cfg), Step::Stop(_)),
+            "没有 origin，应当停在推远端而不是当成没东西可交付"
+        );
+        assert_eq!(git::branch(&repo).unwrap(), "feature", "不该另开分支");
+    }
+
+    #[test]
+    fn a_clean_base_branch_with_unpushed_commits_stays_silent() {
+        let _serial = serial();
+        let _guard = crate::test_support::AgentDirGuard::temp();
+        let Some(repo) = temp_repo("base") else {
+            return;
+        };
+        remember_cwd(&repo.to_string_lossy());
+        std::fs::write(repo.join("main.txt"), "x\n").unwrap();
+        git::commit_all(&repo, "直接提交在 main").unwrap();
+
+        let cfg = config::merge(None);
+        assert!(
+            matches!(deliver_locally(&cfg), Step::Nothing),
+            "基线分支上的本地提交不归本扩展推（等于直接推 main）"
+        );
     }
 
     #[test]

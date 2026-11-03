@@ -41,3 +41,40 @@ where
         None => false,
     }
 }
+
+/// 在同步线程上把一个 future 跑完并拿回结果（阻塞当前线程，直到它结束）。
+///
+/// 与 [`spawn`] 是同一件事的两面：那里只负责发出去，这里负责等结果——给“流程本身是同步的、
+/// 中间必须问一次模型或一次网络”的调用方（扩展的后台工作线程）用。
+///
+/// 不复用 [`handle`]：那里给的句柄可能属于当前线程所在的运行时，在运行时内阻塞会 panic；
+/// 自建一个单线程运行时反正只花微秒，而调用方本来就没有运行时上下文。
+///
+/// 返回 `Err` 只表示运行时建不起来（资源耗尽），不是 future 本身的失败——future 的输出
+/// 原样交回调用方。
+pub fn run_blocking<F: std::future::Future>(future: F) -> Result<F::Output, String> {
+    Ok(tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|err| format!("tokio: {err}"))?
+        .block_on(future))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn run_blocking_returns_the_future_output() {
+        assert_eq!(run_blocking(async { 7u32 }).unwrap(), 7);
+    }
+
+    #[test]
+    fn run_blocking_works_on_a_thread_without_a_runtime() {
+        // 扩展的后台工作线程就是这种环境：`Handle::try_current()` 拿不到东西。
+        let out = std::thread::spawn(|| run_blocking(async { "done" }).unwrap())
+            .join()
+            .unwrap();
+        assert_eq!(out, "done");
+    }
+}

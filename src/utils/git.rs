@@ -136,20 +136,65 @@ pub fn branch_exists(dir: &Path, name: &str) -> bool {
     .unwrap_or(false)
 }
 
-/// 把工作区全部改动提交（`git add -A` 后提交，含未跟踪文件）。
+/// 把工作区全部改动暂存（`git add -A`，含未跟踪文件）。
 ///
 /// `git add -A` 的语义是「把眼前这份工作区整个交出去」；调用方要自己保证工作区里
 /// 只有它想提交的东西。
-pub fn commit_all(dir: &Path, message: &str) -> Result<(), String> {
+pub fn stage_all(dir: &Path) -> Result<(), String> {
     let out = git(dir, &["add", "-A"])?;
     if !out.ok {
         return Err(out.failure("git add"));
     }
+    Ok(())
+}
+
+/// 把工作区全部改动提交（`git add -A` 后提交，含未跟踪文件）。
+pub fn commit_all(dir: &Path, message: &str) -> Result<(), String> {
+    stage_all(dir)?;
+    commit(dir, message)
+}
+
+/// 提交已暂存的内容（不 `add`）；暂存区为空时 `git commit` 失败。
+pub fn commit(dir: &Path, message: &str) -> Result<(), String> {
     let out = git(dir, &["commit", "-m", message])?;
     if !out.ok {
         return Err(out.failure("git commit"));
     }
     Ok(())
+}
+
+/// 当前分支上有没有任何远端都没有的提交。
+///
+/// 不看上游：`HEAD --not --remotes` 同时覆盖「有上游但还没推」和「新分支还没有上游」
+/// 两种情况，调用方不需要先问 `@{upstream}` 存不存在。
+pub fn unpushed(dir: &Path) -> Result<bool, String> {
+    let out = git(dir, &["rev-list", "--count", "HEAD", "--not", "--remotes"])?;
+    if !out.ok {
+        return Err(out.failure("git rev-list"));
+    }
+    Ok(out.stdout.trim().parse::<u64>().unwrap_or(0) > 0)
+}
+
+/// 暂存区改动的文字摘要：`--stat` 加截断后的补丁，`chars` 是补丁部分的字符上限。
+///
+/// 用途是给模型当「这批改动是什么」的上下文，不是给人读的，所以补丁按 `--unified=0`
+/// 只留改动行；`--stat` 失败（暂存区空、不是仓库）时返回 `Err`。
+pub fn staged_outline(dir: &Path, chars: usize) -> Result<String, String> {
+    let stat = git(dir, &["diff", "--cached", "--stat", "--no-color"])?;
+    if !stat.ok {
+        return Err(stat.failure("git diff --stat"));
+    }
+    let patch = git(dir, &["diff", "--cached", "--no-color", "--unified=0"])?;
+    let patch = if patch.ok {
+        truncate_chars(&patch.stdout, chars, Some(DEF_ELLIPSIS), true)
+    } else {
+        String::new()
+    };
+    let stat = stat.stdout.trim();
+    if stat.is_empty() && patch.is_empty() {
+        return Ok(String::new());
+    }
+    Ok(format!("{stat}\n\n{patch}"))
 }
 
 /// 把分支推到 `origin`（首次推送建立上游跟踪）。
@@ -228,6 +273,53 @@ mod tests {
         assert!(!branch_exists(&repo, "nope"));
         create_branch(&repo, "feature").unwrap();
         assert_eq!(branch(&repo).unwrap(), "feature");
+    }
+
+    #[test]
+    fn unpushed_is_true_until_the_commit_reaches_a_remote() {
+        let Some(repo) = temp_repo() else {
+            return; // 没有 git 的环境跳过
+        };
+        assert!(unpushed(&repo).unwrap(), "没有远端时本地提交都算没推出去");
+
+        let origin = std::env::temp_dir().join(format!(
+            "{}-origin.git",
+            repo.file_name().unwrap().to_string_lossy()
+        ));
+        let origin_text = origin.to_string_lossy().to_string();
+        let ok = |args: &[&str]| {
+            run(&repo, "git", args, GIT_TIMEOUT)
+                .map(|out| out.ok)
+                .unwrap_or(false)
+        };
+        assert!(ok(&["init", "--bare", &origin_text]), "建 bare 仓库失败");
+        assert!(ok(&["remote", "add", "origin", &origin_text]));
+        assert!(ok(&["push", "-u", "origin", "main"]));
+        assert!(!unpushed(&repo).unwrap(), "推上去之后就没有未推送提交了");
+
+        std::fs::write(repo.join("next.txt"), "x\n").unwrap();
+        commit_all(&repo, "next").unwrap();
+        assert!(unpushed(&repo).unwrap(), "本地又提交了一个");
+        _ = std::fs::remove_dir_all(&origin);
+    }
+
+    #[test]
+    fn staged_outline_sees_only_staged_changes() {
+        let Some(repo) = temp_repo() else {
+            return;
+        };
+        assert_eq!(
+            staged_outline(&repo, 1000).unwrap(),
+            "",
+            "暂存区空时没有摘要"
+        );
+
+        std::fs::write(repo.join("work.txt"), "x\n").unwrap();
+        assert_eq!(staged_outline(&repo, 1000).unwrap(), "", "未暂存的改动不算");
+        stage_all(&repo).unwrap();
+        let outline = staged_outline(&repo, 1000).unwrap();
+        assert!(outline.contains("work.txt"), "{outline}");
+        assert!(outline.contains("+x"), "补丁里带改动行: {outline}");
     }
 
     #[test]
