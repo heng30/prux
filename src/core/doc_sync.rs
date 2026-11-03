@@ -43,6 +43,10 @@ const DOCS: &[(&str, &str)] = &[
     ),
     ("extensions/vet.md", embedded!("docs/extensions/vet.md")),
     (
+        "extensions/delivery.md",
+        embedded!("docs/extensions/delivery.md"),
+    ),
+    (
         "extensions/computer.md",
         embedded!("docs/extensions/computer.md"),
     ),

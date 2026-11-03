@@ -24,6 +24,7 @@
 mod config;
 mod extract;
 mod graph;
+mod maintain;
 mod recall;
 mod store;
 
@@ -44,7 +45,7 @@ use crate::{
     },
     extensions::{
         EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_MEMORY, command_arg,
-        util::{push_context, session_id_of, split_model},
+        util::{notify_text, push_context, session_id_of, split_model},
     },
     modes::tui::handlers::register_host_command,
     utils::{
@@ -86,6 +87,10 @@ const SUBCOMMANDS: &[SubcommandDef] = &[
     SubcommandDef {
         name: "forget",
         description: "Delete one memory by id: /memory forget <id>",
+    },
+    SubcommandDef {
+        name: "maintain",
+        description: "Reconcile stored memories now (keep / rewrite / retire) with one model call",
     },
     SubcommandDef {
         name: "settings",
@@ -132,6 +137,21 @@ struct ExtractNote {
     error: Option<String>,
 }
 
+/// 一次维护轮的结果摘要（`/memory status` 展示）。
+#[derive(Debug, Clone)]
+struct MaintainNote {
+    /// 完成时间（UTC RFC3339）。
+    at: String,
+    /// 保持原样的条数。
+    kept: usize,
+    /// 被改写的条数。
+    adapted: usize,
+    /// 被退役的条数。
+    retired: usize,
+    /// 失败原因；成功为 `None`。
+    error: Option<String>,
+}
+
 /// 扩展的进程级状态。
 struct State {
     /// 运行期配置。
@@ -152,6 +172,12 @@ struct State {
     extracting: bool,
     /// 最近一次抽取结果。
     last_extract: Option<ExtractNote>,
+    /// 距上次维护累计的成功抽取次数。
+    extractions_since_maintain: usize,
+    /// 是否已有一轮维护在飞（避免叠加）。
+    maintaining: bool,
+    /// 最近一次维护结果。
+    last_maintain: Option<MaintainNote>,
 }
 
 impl Default for State {
@@ -166,6 +192,9 @@ impl Default for State {
             extract_pending: false,
             extracting: false,
             last_extract: None,
+            extractions_since_maintain: 0,
+            maintaining: false,
+            last_maintain: None,
         }
     }
 }
@@ -1091,6 +1120,7 @@ fn maybe_spawn_extraction(event: &Value) {
 
     lock().extracting = true;
     let source = session_id.clone().unwrap_or_else(|| "extract".to_string());
+    let maintain_session = session_id.clone();
     handle.spawn(async move {
         let known = known_contents(cwd.as_deref());
         let note = match run_extraction(&provider, &model_id, session_id, &excerpt, &known).await {
@@ -1102,12 +1132,51 @@ fn maybe_spawn_extraction(event: &Value) {
                 error: Some(err),
             },
         };
-        let mut st = lock();
-        st.extracting = false;
-        if note.error.is_none() && (note.added > 0 || note.reinforced > 0) {
-            st.recall_cache = None; // 新条目下一次请求就该能被召回
+        // 剥削成功才算一次剥削：失败的请求不该把维护计数器往前推。
+        let due = {
+            let mut st = lock();
+            st.extracting = false;
+            if note.error.is_none() && (note.added > 0 || note.reinforced > 0) {
+                st.recall_cache = None; // 新条目下一次请求就该能被召回
+            }
+            if note.error.is_none() {
+                st.extractions_since_maintain = st.extractions_since_maintain.saturating_add(1);
+            }
+            let interval = cfg.maintain_every();
+            let due = interval > 0 && st.extractions_since_maintain >= interval && !st.maintaining;
+            if due {
+                st.extractions_since_maintain = 0;
+                st.maintaining = true;
+            }
+            st.last_extract = Some(note);
+            due
+        };
+        if !due {
+            return;
         }
-        st.last_extract = Some(note);
+        let note =
+            match run_maintenance(&provider, &model_id, maintain_session, cwd.as_deref()).await {
+                Ok(applied) => MaintainNote {
+                    at: now_iso(),
+                    kept: applied.kept,
+                    adapted: applied.adapted,
+                    retired: applied.retired,
+                    error: None,
+                },
+                Err(err) => MaintainNote {
+                    at: now_iso(),
+                    kept: 0,
+                    adapted: 0,
+                    retired: 0,
+                    error: Some(err),
+                },
+            };
+        let mut st = lock();
+        st.maintaining = false;
+        if note.error.is_none() && (note.adapted > 0 || note.retired > 0) {
+            st.recall_cache = None; // 改写过/退役了，注入块不能继续用旧的
+        }
+        st.last_maintain = Some(note);
     });
 }
 
@@ -1168,6 +1237,74 @@ async fn run_extraction(
             .await
             .map_err(|err| format!("{err}"))?;
     Ok(extract::parse_response(&text))
+}
+
+/// 维护轮到 reconcile 的条目：更新得最久没动过的排前面（它们最可能已过时），只取前
+/// [`maintain::MAX_ENTRIES`] 条。
+fn maintain_candidates(scoped: &Scoped) -> Vec<maintain::Candidate> {
+    let mut out: Vec<maintain::Candidate> = scoped
+        .active_entries()
+        .into_iter()
+        .map(|(scope, entry)| maintain::Candidate {
+            scope,
+            entry: entry.clone(),
+        })
+        .collect();
+    out.sort_by_key(|candidate| candidate.entry.updated_ms());
+    out.truncate(maintain::MAX_ENTRIES);
+    out
+}
+
+/// 维护请求：两份存储的有效条目 → 一次补全 → 严格校验 → 落图。
+///
+/// 校验失败（缺 id / 重复 / 未知 / `adapt` 无正文）时返回 `Err` 且**不写盘**。
+async fn run_maintenance(
+    provider: &str,
+    model_id: &str,
+    session_id: Option<String>,
+    cwd: Option<&str>,
+) -> Result<maintain::Applied, String> {
+    let scope = if cwd.is_some() {
+        MemoryScope::All
+    } else {
+        MemoryScope::Global
+    };
+    let mut scoped = store::read_scoped(scope, cwd)?;
+    let candidates = maintain_candidates(&scoped);
+    if candidates.len() < 2 {
+        return Ok(maintain::Applied::default());
+    }
+    let known: Vec<String> = candidates
+        .iter()
+        .map(|candidate| candidate.entry.id.clone())
+        .collect();
+    let prompt = maintain::build_prompt(&candidates);
+
+    auth::ensure_oauth_valid(provider)
+        .await
+        .map_err(|err| format!("{err}"))?;
+    let model = model_resolver::configured_model(provider, model_id, None, session_id)
+        .map_err(|err| format!("{err}"))?;
+    let max_tokens = extract::output_cap(&model, maintain::MAX_TOKENS);
+    let (text, _usage) =
+        provider::simple_completion(&model, maintain::SYSTEM, &prompt, Some(max_tokens))
+            .await
+            .map_err(|err| format!("{err}"))?;
+    let decisions = maintain::parse_response(&text, &known)?;
+
+    let mut applied = maintain::Applied::default();
+    for scope in [MemoryScope::Project, MemoryScope::Global] {
+        if let Some(graph) = scoped.graph_mut(scope) {
+            let count = maintain::apply(graph, &decisions);
+            applied.kept += count.kept;
+            applied.adapted += count.adapted;
+            applied.retired += count.retired;
+        }
+    }
+    if applied.changed() {
+        scoped.save()?;
+    }
+    Ok(applied)
 }
 
 /// 把抽取结果写进两份存储，返回结果摘要。
@@ -1244,6 +1381,10 @@ fn merge_into(graph: &mut MemoryGraph, items: &[ExtractedMemory], source: &str) 
         if let Some(id) = duplicate {
             if let Some(entry) = graph.get_mut(&id) {
                 entry.reinforce(source);
+                // 旧条目无证据（早期版本写的）时用本次证据补上，已有证据不换（不抖动）。
+                if entry.evidence.is_none() && !item.evidence.is_empty() {
+                    entry.evidence = Some(item.evidence.clone());
+                }
             }
             reinforced += 1;
             continue;
@@ -1252,7 +1393,8 @@ fn merge_into(graph: &mut MemoryGraph, items: &[ExtractedMemory], source: &str) 
             MemoryEntry::new(item.category, item.content.clone())
                 .with_source(source)
                 .with_tags(item.tags.clone())
-                .with_trust(item.trust),
+                .with_trust(item.trust)
+                .with_evidence(Some(item.evidence.clone())),
         );
         added += 1;
     }
@@ -1279,6 +1421,10 @@ fn command_memory(host: &mut dyn CommandHost, raw: &str) -> bool {
             Some(id) => memory_forget(cwd, id),
             None => "Usage: /memory forget <id>".to_string(),
         },
+        "maintain" => {
+            spawn_maintenance(host);
+            return false;
+        }
         "settings" => {
             extensions::request_ui(ExtensionUiRequest::ShowSettings {
                 ext: EXT.to_string(),
@@ -1286,7 +1432,10 @@ fn command_memory(host: &mut dyn CommandHost, raw: &str) -> bool {
             return false;
         }
         other => {
-            format!("unknown subcommand {other:?}: use status, list, search, forget or settings")
+            format!(
+                "unknown subcommand {other:?}: use status, list, search, forget, maintain or \
+                 settings"
+            )
         }
     };
 
@@ -1294,15 +1443,96 @@ fn command_memory(host: &mut dyn CommandHost, raw: &str) -> bool {
     false
 }
 
+/// `/memory maintain`：手动跑一轮维护（后台请求，结果回聊天区）。
+fn spawn_maintenance(host: &mut dyn CommandHost) {
+    let (cwd, model, maintaining) = {
+        let st = lock();
+        (st.cwd.clone(), st.model.clone(), st.maintaining)
+    };
+    if maintaining {
+        host.push_message(
+            "memory: maintenance is already running",
+            UiNotifyLevel::Warning,
+        );
+        return;
+    }
+    let Some((provider, model_id)) = model else {
+        host.push_message(
+            "memory: no model known yet — send one message first",
+            UiNotifyLevel::Warning,
+        );
+        return;
+    };
+    if runtime::offline() {
+        host.push_message(
+            "memory: maintenance needs a model request (offline mode is on)",
+            UiNotifyLevel::Warning,
+        );
+        return;
+    }
+    let Ok(handle) = tokio::runtime::Handle::try_current() else {
+        host.push_message(
+            "memory: no async runtime available for maintenance",
+            UiNotifyLevel::Warning,
+        );
+        return;
+    };
+
+    lock().maintaining = true;
+    host.push_message(
+        "memory: reconciling stored entries in the background — results land here when done",
+        UiNotifyLevel::Info,
+    );
+    handle.spawn(async move {
+        let note = match run_maintenance(&provider, &model_id, None, cwd.as_deref()).await {
+            Ok(applied) => MaintainNote {
+                at: now_iso(),
+                kept: applied.kept,
+                adapted: applied.adapted,
+                retired: applied.retired,
+                error: None,
+            },
+            Err(err) => MaintainNote {
+                at: now_iso(),
+                kept: 0,
+                adapted: 0,
+                retired: 0,
+                error: Some(err),
+            },
+        };
+        let message = match &note.error {
+            Some(err) => format!("memory: maintenance failed — {err}"),
+            None => format!(
+                "memory: maintenance done — {} kept, {} rewritten, {} retired",
+                note.kept, note.adapted, note.retired
+            ),
+        };
+        let level = if note.error.is_some() {
+            UiNotifyLevel::Warning
+        } else {
+            UiNotifyLevel::Success
+        };
+        let mut st = lock();
+        st.maintaining = false;
+        if note.error.is_none() && (note.adapted > 0 || note.retired > 0) {
+            st.recall_cache = None;
+        }
+        st.last_maintain = Some(note);
+        drop(st);
+        notify_text(&message, level);
+    });
+}
+
 /// `/memory status` 的文本。
 fn memory_status(cwd: Option<&str>) -> String {
-    let (cfg, last, extracting, model) = {
+    let (cfg, last, extracting, model, last_maintain) = {
         let st = lock();
         (
             st.cfg.clone(),
             st.last_extract.clone(),
             st.extracting,
             st.model.clone(),
+            st.last_maintain.clone(),
         )
     };
 
@@ -1325,11 +1555,12 @@ fn memory_status(cwd: Option<&str>) -> String {
     let mut out = format!(
         "memory · {project_count} project / {global_count} global\n\
          tags: {tag_count} · edges: {edge_count}\n\
-         auto recall: {} · extract every {} · budget {} chars\n\
+         auto recall: {} · extract every {} · budget {} chars · maintain every {}\n\
          storage: {}",
         cfg.recall_limit(),
         cfg.extract_interval(),
         cfg.inject_budget(),
+        cfg.maintain_every(),
         store::memory_dir().display()
     );
     match (extracting, &model) {
@@ -1350,6 +1581,18 @@ fn memory_status(cwd: Option<&str>) -> String {
             }
         }
         None => out.push_str("\nlast extract: never"),
+    }
+    match last_maintain {
+        Some(note) => {
+            out.push_str(&format!(
+                "\nlast maintain {}: {} kept / {} rewritten / {} retired",
+                note.at, note.kept, note.adapted, note.retired
+            ));
+            if let Some(err) = note.error {
+                out.push_str(&format!("\n  failed: {err}"));
+            }
+        }
+        None => out.push_str("\nlast maintain: never"),
     }
     out
 }
@@ -1777,6 +2020,7 @@ mod tests {
         let item = |content: &str, category| ExtractedMemory {
             category,
             content: content.to_string(),
+            evidence: "observed in session".to_string(),
             tags: vec!["t".to_string()],
             scope: MemoryScope::Project,
             trust: TrustLevel::Medium,
@@ -1801,6 +2045,7 @@ mod tests {
             ExtractedMemory {
                 category: MemoryCategory::Fact,
                 content: "project fact".to_string(),
+                evidence: "user said so".to_string(),
                 tags: Vec::new(),
                 scope: MemoryScope::Project,
                 trust: TrustLevel::Medium,
@@ -1808,6 +2053,7 @@ mod tests {
             ExtractedMemory {
                 category: MemoryCategory::Preference,
                 content: "global preference".to_string(),
+                evidence: "user said so".to_string(),
                 tags: Vec::new(),
                 scope: MemoryScope::Global,
                 trust: TrustLevel::High,
@@ -1829,6 +2075,7 @@ mod tests {
         let items = vec![ExtractedMemory {
             category: MemoryCategory::Fact,
             content: "needs a project".to_string(),
+            evidence: "user said so".to_string(),
             tags: Vec::new(),
             scope: MemoryScope::Project,
             trust: TrustLevel::Medium,

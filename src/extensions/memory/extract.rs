@@ -39,6 +39,9 @@ pub(super) const MAX_EXTRACTED: usize = 8;
 pub(super) const SYSTEM: &str = "You extract durable memories from a coding session for future \
 sessions. Reply with a JSON array and nothing else. Write memory content in the language the \nconversation is in.";
 
+/// 证据字段的字符上限（证据是出处，不是第二份正文）。
+pub(super) const MAX_EVIDENCE_CHARS: usize = 240;
+
 /// 一条被抽出来的记忆。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ExtractedMemory {
@@ -48,6 +51,8 @@ pub(super) struct ExtractedMemory {
     pub(super) content: String,
     /// 标签。
     pub(super) tags: Vec<String>,
+    /// 证据原文（命令 / 报错 / 文件与符号 / 用户原话）；无证据的条目不会被收下。
+    pub(super) evidence: String,
     /// 该写进哪份存储。
     pub(super) scope: MemoryScope,
     /// 可信度。
@@ -63,6 +68,9 @@ struct RawMemory {
     /// 正文。
     #[serde(default)]
     content: String,
+    /// 证据原文（缺失视为无证据 → 整条丢弃）。
+    #[serde(default)]
+    evidence: String,
     /// 标签。
     #[serde(default)]
     tags: Vec<String>,
@@ -81,6 +89,9 @@ pub(super) fn build_prompt(excerpt: &str, known: &[String]) -> String {
          Return a JSON array. Each element must be an object with:\n\
          - \"category\": one of \"fact\", \"preference\", \"entity\", \"correction\"\n\
          - \"content\": one self-contained sentence, understandable without the conversation\n\
+         - \"evidence\": the concrete thing in the excerpt that supports it: the failing \
+         command and its error, the file and symbol, or the user's own sentence quoted \
+         verbatim. Empty string only when the excerpt really shows none\n\
          - \"tags\": 1-3 short lowercase keywords\n\
          - \"scope\": \"project\" for repo/environment specifics, \"global\" for user-wide \
          preferences\n\
@@ -89,6 +100,8 @@ pub(super) fn build_prompt(excerpt: &str, known: &[String]) -> String {
          Rules:\n\
          - Keep only things that stay true across sessions: user preferences, corrections, \
          project conventions, environment/tooling facts, named entities.\n\
+         - An item without evidence is dropped, so prefer fewer items with real evidence over \
+         guesses.\n\
          - Drop progress reports, todos, transient state, and anything only meaningful in this turn.\n\
          - Write \"content\" in the language of the conversation, and keep code identifiers verbatim.\n\
          - Never invent; if nothing qualifies return [].\n\
@@ -150,7 +163,8 @@ fn role_label(role: &str) -> &str {
 
 /// 解析模型回复：抽出其中的 JSON 数组并折成条目。
 ///
-/// 容忍代码围栏与前后说明文字；数组元素不是对象、缺 `content`、或正文为空的一律丢弃。
+/// 容忍代码围栏与前后说明文字；数组元素不是对象、缺 `content`、正文为空、或**没有证据**的
+/// 一律丢弃（证据门槛：无证据的条目无法被后续维护轮判定，只会累积成噪音）。
 /// 重复（分类 + 归一化正文相同）只保留第一条。返回空向量表示「没有可记的」。
 pub(super) fn parse_response(text: &str) -> Vec<ExtractedMemory> {
     let Some(array) = first_json_array(text) else {
@@ -167,6 +181,16 @@ pub(super) fn parse_response(text: &str) -> Vec<ExtractedMemory> {
         if content.is_empty() {
             continue;
         }
+        let evidence = item.evidence.trim();
+        if evidence.is_empty() {
+            continue;
+        }
+        let evidence = truncate_chars(
+            &super::recall::single_line(evidence),
+            MAX_EVIDENCE_CHARS,
+            Some(DEF_ELLIPSIS),
+            true,
+        );
         let category = MemoryCategory::parse_lenient(&item.category);
         let scope = match item.scope.trim().to_ascii_lowercase().as_str() {
             "global" => MemoryScope::Global,
@@ -193,6 +217,7 @@ pub(super) fn parse_response(text: &str) -> Vec<ExtractedMemory> {
         out.push(ExtractedMemory {
             category,
             content: content.to_string(),
+            evidence,
             tags,
             scope,
             trust,
@@ -207,7 +232,7 @@ pub(super) fn parse_response(text: &str) -> Vec<ExtractedMemory> {
 /// 在文本里找第一个平衡的 JSON 数组（跳过字符串里的方括号与转义）。
 ///
 /// 模型经常把 JSON 包在 ```json 围栏里，或在前面写一句「Here are the memories:」。
-fn first_json_array(text: &str) -> Option<&str> {
+pub(super) fn first_json_array(text: &str) -> Option<&str> {
     let bytes = text.as_bytes();
     let start = text.find('[')?;
     let mut depth = 0usize;
@@ -285,7 +310,7 @@ mod tests {
     #[test]
     fn parse_plain_array() {
         let items = parse_response(
-            r#"[{"category":"preference","content":"Prefers pnpm.","tags":["tooling"],"scope":"global","trust":"high"}]"#,
+            r#"[{"category":"preference","content":"Prefers pnpm.","evidence":"user: always pnpm here","tags":["tooling"],"scope":"global","trust":"high"}]"#,
         );
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].category, MemoryCategory::Preference);
@@ -293,11 +318,12 @@ mod tests {
         assert_eq!(items[0].tags, vec!["tooling".to_string()]);
         assert_eq!(items[0].scope, MemoryScope::Global);
         assert_eq!(items[0].trust, TrustLevel::High);
+        assert_eq!(items[0].evidence, "user: always pnpm here");
     }
 
     #[test]
     fn parse_keeps_chinese_content_and_tags() {
-        let text = r#"[{"category":"纠正","content":"这个仓库要用 make check 而不是 cargo test","tags":["工具链"],"scope":"project"}]"#;
+        let text = r#"[{"category":"纠正","content":"这个仓库要用 make check 而不是 cargo test","evidence":"user: 别用 cargo test","tags":["工具链"],"scope":"project"}]"#;
         let items = parse_response(text);
         assert_eq!(items.len(), 1);
         assert_eq!(
@@ -314,7 +340,7 @@ mod tests {
 
     #[test]
     fn parse_tolerates_code_fences_and_prose() {
-        let text = "Sure, here you go:\n```json\n[{\"content\":\"Repo uses make check\",\"category\":\"fact\"}]\n```\n";
+        let text = "Sure, here you go:\n```json\n[{\"content\":\"Repo uses make check\",\"evidence\":\"Makefile: all\",\"category\":\"fact\"}]\n```\n";
         let items = parse_response(text);
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].content, "Repo uses make check");
@@ -324,8 +350,7 @@ mod tests {
 
     #[test]
     fn parse_handles_brackets_inside_strings() {
-        let text =
-            r#"[{"content":"indexes are written as arr[0] in the parser","category":"fact"}]"#;
+        let text = r#"[{"content":"indexes are written as arr[0] in the parser","evidence":"src/parser.rs","category":"fact"}]"#;
         let items = parse_response(text);
         assert_eq!(items.len(), 1);
         assert!(items[0].content.contains("arr[0]"));
@@ -335,12 +360,19 @@ mod tests {
     fn parse_drops_empty_unknown_and_duplicate_items() {
         let text = r#"[
             {"content":"   "},
-            {"content":"same thing","category":"fact"},
-            {"content":"same thing","category":"fact"},
-            {"content":"other","category":"weird","tags":[" a ","","b","c","d"]}
+            {"content":"no evidence at all","category":"fact"},
+            {"content":"same thing","evidence":"seen once","category":"fact"},
+            {"content":"same thing","evidence":"seen once","category":"fact"},
+            {"content":"other","evidence":"quote","category":"weird","tags":[" a ","","b","c","d"]}
         ]"#;
         let items = parse_response(text);
         assert_eq!(items.len(), 2, "{items:?}");
+        assert!(
+            items
+                .iter()
+                .all(|item| !item.content.contains("no evidence")),
+            "没有证据的条目被丢弃：{items:?}"
+        );
         assert_eq!(items[1].category, MemoryCategory::Fact, "未知分类归事实");
         assert_eq!(
             items[1].tags,
@@ -352,7 +384,9 @@ mod tests {
     fn parse_caps_item_count() {
         let mut parts = Vec::new();
         for i in 0..20 {
-            parts.push(format!(r#"{{"content":"item {i}"}}"#));
+            parts.push(format!(
+                r#"{{"content":"item {i}","evidence":"quote {i}"}}"#
+            ));
         }
         let text = format!("[{}]", parts.join(","));
         assert_eq!(parse_response(&text).len(), MAX_EXTRACTED);

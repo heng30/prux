@@ -13,6 +13,8 @@ pub mod file_lock;
 pub mod find;
 pub mod fuzzy;
 pub mod geometry;
+pub mod gh;
+pub mod git;
 pub mod glyphs;
 pub mod http;
 pub mod ignore;

@@ -616,6 +616,35 @@
   `defaultTools` / `disabledExtensions` / `enabledExtensions`. Grammar errors stay with the startup
   warning; each run re-reads both files.
 
+- **The `delivery` extension hands a turn's change off and follows it to a green PR**: where `vet`
+  only proves the local checks pass, `delivery` does the rest of the mechanical work at settle time
+  — branch, commit, push, open a pull request, wait for CI and review. Failing checks (`name —
+  conclusion`) and `CHANGES_REQUESTED` reviews are folded into one structured report, injected as a
+  user message, and the turn keeps going; the next settle commits and pushes again. It stops on
+  green, on `maxIterations`, when the same report repeats, or when nothing settles within
+  `timeoutSecs` (a pending check is not fed back). `stage` picks how far it goes — `branch`,
+  `push`, or `pr` (default) — and it never merges. Three lines it does not cross: it will not
+  commit a working tree that was already dirty before the turn started (that is your work, not
+  this turn's; `/delivery run` is the explicit override), it will not guess a remote (no `origin`,
+  no `gh` login, no detectable default branch all stop with a reason), and it creates a
+  `prux/<date>-<time>` branch instead of committing onto the base branch. Config lives in
+  `agent_dir()/extensions/delivery.json` with no project-level override — a file committed into a
+  repository should not be able to change where your work is pushed. `/delivery
+  status|run|stage|reset`. Off by default, `Dev` mode only: it writes git history and pushes.
+
+- **Memory entries now need evidence, and a maintenance pass reconciles them**: extraction asks for
+  the concrete thing that supports each item — the failing command and its error, the file and
+  symbol, or the user's own sentence quoted back — and drops items that answer with an empty
+  string. Evidence is stored with the entry and used by the reconcile pass but is never injected
+  into the prompt, so the injected block stays compact and stable. Every `maintainEvery`
+  successful extractions (default 4) one extra request reconciles the stored entries and must
+  return exactly one decision per id: `keep`, `adapt` (rewrite a vague or two-facts-in-one-sentence
+  entry, optionally lowering its confidence) or `retire` (no longer true, or fully covered by
+  another entry). A missing, duplicate or unknown id, or an `adapt` without content, fails the
+  whole batch and writes nothing — half-applied decisions leave the store in a state nobody can
+  reason about. `/memory maintain` runs a pass on demand; older stores without the `evidence` field
+  still load.
+
 ### Changed
 
 - **An isolated subagent starts from the repository's existing build artifacts instead of a cold
@@ -1470,6 +1499,27 @@
   没有问题时只回一行确认。只存在于全局文件的键（`theme`、`skills` 等）写在 `.prux/settings.json`
   里同样会被点名——项目层只认 `defaultTools` / `disabledExtensions` / `enabledExtensions`。
   语法错误仍归启动警告；每次执行都重读这两个文件。
+
+- **新增 `delivery` 扩展：把回合的改动交付出去，并盯到 PR 变绿**：`vet` 只证明本机检查过了，
+  `delivery` 补齐结算时那一串机械动作——建分支、提交、推、开 PR、等 CI 与评审。失败的检查
+  （`名称 — 结论`）与 `CHANGES_REQUESTED` 的评审意见折成一份结构化报告注入成一条 user 消息并
+  续跑，模型修完再结算时又会重新提交、重新推。收敛靠四条：全绿 / 用满 `maxIterations` / 报告
+  与上次完全相同 / 等满 `timeoutSecs` 仍无结论（pending 不喂回模型）。`stage` 决定停在哪一步
+  ——`branch`、`push`、`pr`（缺省），且**永不 merge**。三条不越的线：回合开始前就已存在未提交
+  改动的**工作区不会被替用户提交**（那是用户的活，`/delivery run` 是显式例外）；不猜远端
+  （没 `origin`、`gh` 没登录、探测不出默认分支都停下报原因）；当前就在基线分支时先建
+  `prux/<日期>-<时分>` 分支再干活。配置在 `agent_dir()/extensions/delivery.json`，**没有项目级
+  覆盖**——能提交进仓库的配置不该有权改你的推送目标。命令 `/delivery status|run|stage|reset`。
+  默认不启用，仅 `Dev` 模式：它会写 git 历史并推远端。
+
+- **记忆条目现在需要证据，并有维护轮做 reconcile**：抽取时要求每条附上支撑它的具体证据——失败的
+  命令与报错、文件与符号，或用户自己的原话——答成空串的条目直接丢弃。证据随条目存档并供维护轮
+  判定，但**不进注入块**，注入内容因此仍然紧凑且稳定。每成功抽取 `maintainEvery`（缺省 4）次，
+  额外一次请求把已存条目 reconcile 一遍，要求每个 id 恰好一个决定：`keep`、`adapt`（改写含糊或
+  把两件事挤在一句里的条目，可下调置信度）、`retire`（不再成立，或已被另一条完全覆盖）。缺 id、
+  重复 id、未知 id、`adapt` 没给正文——任何一条不满足就整批失败、一个字节都不改（半套决定会让
+  记忆图处在谁也说不清的状态）。`/memory maintain` 可按需触发一轮；旧存储没有 `evidence` 字段
+  照样能读。
 
 ### 变更
 

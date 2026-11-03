@@ -156,6 +156,12 @@ pub(super) struct MemoryEntry {
     pub(super) category: MemoryCategory,
     /// 记忆正文（面向模型的一句话）。
     pub(super) content: String,
+    /// 支撑这条记忆的具体证据（失败的尝试 / 报错原文 / 文件与符号 / 用户原话）。
+    ///
+    /// 自动抽取只收有证据的条目；`None` 表示手写或早期版本留下的无证据条目。
+    /// 证据**不进召回注入块**（那是给模型看的正文，证据是给人看的出处），只用于维护轮判定。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) evidence: Option<String>,
     /// 标签（小写化前原样保存）。
     #[serde(default)]
     pub(super) tags: Vec<String>,
@@ -212,6 +218,7 @@ impl MemoryEntry {
             category,
             search_text: String::new(),
             content,
+            evidence: None,
             tags: Vec::new(),
             created_at: now.clone(),
             updated_at: now,
@@ -231,6 +238,12 @@ impl MemoryEntry {
     /// 设置来源（链式）。
     pub(super) fn with_source(mut self, source: impl Into<String>) -> Self {
         self.source = Some(source.into());
+        self
+    }
+
+    /// 设置证据（链式）。
+    pub(super) fn with_evidence(mut self, evidence: Option<String>) -> Self {
+        self.evidence = evidence;
         self
     }
 
@@ -333,6 +346,14 @@ impl MemoryEntry {
     pub(super) fn supersede(&mut self, new_id: &str) {
         self.active = false;
         self.superseded_by = Some(new_id.to_string());
+    }
+
+    /// 退役：不再成立 / 太含糊 / 与别的条目重复，因此不再参与召回。
+    ///
+    /// 与 [`Self::supersede`] 的差别是**没有取代者**——条目单纯失效，仍留在文件里可追溯。
+    pub(super) fn retire(&mut self) {
+        self.active = false;
+        self.updated_at = now_iso();
     }
 }
 
@@ -639,6 +660,17 @@ impl MemoryGraph {
         }
         self.add_edge_internal(from, to, kind);
         self.metadata.link_discovery_count = self.metadata.link_discovery_count.saturating_add(1);
+    }
+
+    /// 退役一条记忆，返回该条目是否存在且此前有效。
+    pub(super) fn retire_memory(&mut self, id: &str) -> bool {
+        match self.memories.get_mut(id) {
+            Some(entry) if entry.active => {
+                entry.retire();
+                true
+            }
+            _ => false,
+        }
     }
 
     /// 让 `newer_id` 取代 `older_id`（旧条目保留但不再参与召回）。
