@@ -1076,6 +1076,17 @@ fn suggest_allowed(dismissed: Option<usize>, start: usize) -> bool {
     dismissed != Some(start)
 }
 
+/// 面板还没开时，这批 `@` 扫描结果能不能把面板打开：输入框里必须仍是同一个触发位置的
+/// 同一个 `@前缀`（用户又敲/删了字就是过期结果），且这一处没被手动关过。
+fn pending_scan_matches(
+    detected: Option<(Trigger, usize, String)>,
+    dismissed: Option<usize>,
+    start: usize,
+    query: &str,
+) -> bool {
+    suggest_allowed(dismissed, start) && detected == Some((Trigger::File, start, query.to_string()))
+}
+
 /// 重命名输入 → 最终名字：去掉首尾空白，空输入当作取消。
 fn renamed_name(input: &str) -> Option<&str> {
     let name = input.trim();

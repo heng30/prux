@@ -586,6 +586,12 @@
 
 ### Fixed
 
+- **The `@` completion panel appears only when it has matches**: the file scan runs in the
+  background, so typing `@` (or another character that matches nothing) opened a panel with no
+  rows, showed its empty search box, and only collapsed once the scan came back empty — the
+  composer jumped every keystroke. The panel is now created from the scan result instead: no
+  entries, no panel, same as `/`. A late scan also no longer reopens a panel closed with Esc.
+
 - **Extension panels in the desktop GUI redraw only when their content changes**: an open `/btw`,
   `/doctor` or other extension overlay re-fetched its view ten times a second and asked the window
   for a new frame every time, even with nothing moving. A frame now counts as a redraw only when a
@@ -1399,6 +1405,11 @@
   更慢的全量拷贝。复制过来的都是被忽略的文件，因此不会混进隔离运行留下的那个分支。
 
 ## 修复
+
+- **`@` 补全面板只在真有候选时才出现**：文件候选由后台扫描得出，于是敲 `@`（或敲一个什么都
+  匹配不上的字符）会先弹出只有输入框、一行候选都没有的面板，等扫描回来是空才收起，输入卡
+  每敲一下都跳。现在面板由扫描结果创建：没有条目就没有面板，与 `/` 一致；过期结果也不会
+  把 Esc 关掉的面板重新弹回来。
 
 - **桌面 GUI 的扩展面板只在内容变化时重绘**：打开着的 `/btw`、`/doctor` 等扩展覆盖层原本每秒
   重拉 10 次视图、每次都请求新帧，什么都没动也在刷。现在只有 GUI 实际渲染的字段（标题、抬头、

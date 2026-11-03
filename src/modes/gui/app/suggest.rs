@@ -163,8 +163,9 @@ impl GuiApp {
             }
             Trigger::File => {
                 // 与 TUI 同一套后台遍历（`utils::path_suggest`）：新结果回来前先留着上一批候选，
-                // 否则每敲一个字都会闪一下「No matches」。
-                self.scan_files(query.clone(), cx);
+                // 否则每敲一个字都会闪一下「No matches」。面板还没开时留着空列表＝不开面板，
+                // 有候选了才在 `apply_file_scan` 里开。
+                self.scan_files(start, query.clone(), cx);
                 self.suggest
                     .as_ref()
                     .filter(|old| old.trigger == Trigger::File)
@@ -186,10 +187,10 @@ impl GuiApp {
             },
         };
 
-        // 没有候选就收起面板（同终端 UI）：`/` 命令与子命令的空结果不该留一个「No matches」的空框。
-        // `@` 文件候选要等后台扫描回来才知道有没有（见 `apply_file_scan`），历史面板零匹配时
-        // 留在原地当搜索框用。
-        if items.is_empty() && matches!(trigger, Trigger::Command | Trigger::Subcommand) {
+        // 没有候选就收起面板（同终端 UI）：`/` 命令、子命令与 `@` 文件的空结果都不该留一个空框。
+        // `@` 文件候选要等后台扫描回来才知道有没有（见 `apply_file_scan`），扫描回来是空的就不开面板；
+        // 历史面板零匹配时留在原地当搜索框用。
+        if items.is_empty() && trigger != Trigger::History {
             self.close_empty_suggest();
             return;
         }
@@ -217,7 +218,7 @@ impl GuiApp {
 
     /// `@` 文件候选：派发后台扫描（先作废上一次，用户继续输入时旧 walk 尽快退出），
     /// 结果回来时若面板还在同一触发词、同一前缀下就填进去。
-    pub(super) fn scan_files(&mut self, query: String, cx: &mut Context<Self>) {
+    pub(super) fn scan_files(&mut self, start: usize, query: String, cx: &mut Context<Self>) {
         self.cancel_file_scan();
 
         let cancel = Arc::new(AtomicBool::new(false));
@@ -234,37 +235,74 @@ impl GuiApp {
                 })
                 .await;
             _ = this.update(cx, |this, cx| {
-                this.apply_file_scan(query, hits, images_only, cx);
+                this.apply_file_scan(start, query, hits, images_only, cx);
             });
         })
         .detach();
     }
 
     /// 扫描结果到位：面板已不是同一前缀（用户又输了几个字）就丢弃这一批。
+    ///
+    /// 面板还没开（这次 `@` 一个候选都还没有）时不提前开一个空面板：等这批结果真有条目才开。
     fn apply_file_scan(
         &mut self,
+        start: usize,
         query: String,
         hits: Vec<path_suggest::Candidate>,
         images_only: bool,
         cx: &mut Context<Self>,
     ) {
-        let Some(suggest) = self.suggest.as_mut() else {
-            return;
-        };
+        match self.suggest.as_ref() {
+            Some(suggest) => {
+                if suggest.trigger != Trigger::File || suggest.query != query {
+                    return;
+                }
+            }
+            None => {
+                if !pending_scan_matches(
+                    suggest_engine::detect(&self.editor.text_before_cursor()),
+                    self.suggest_dismissed,
+                    start,
+                    &query,
+                ) {
+                    return;
+                }
+            }
+        }
 
-        if suggest.trigger != Trigger::File || suggest.query != query {
+        let items = suggest_engine::file_items(hits, images_only);
+        let len = items.len();
+        // 扫描回来是空：面板开着（还留着上一批候选）就收起，别留一个「No matches」的空框
+        if len == 0 {
+            if self.suggest.is_some() {
+                self.close_empty_suggest();
+                cx.notify();
+            }
             return;
         }
 
-        suggest.items = suggest_engine::file_items(hits, images_only);
-        // 扫描回来是空：收起面板（同终端 UI），别留一个「No matches」的空框
-        if suggest.items.is_empty() {
-            self.close_empty_suggest();
-            cx.notify();
-            return;
+        match self.suggest.as_mut() {
+            Some(suggest) => {
+                suggest.items = items;
+                suggest.selected = suggest.selected.min(len - 1);
+            }
+            None => {
+                // 面板新建：后续输入由面板输入框接管，前缀要先同步进去，
+                // 否则收起时回填会用空前缀盖掉已经敲好的 `@前缀`。
+                self.suggest_input = Editor::new();
+                if !query.is_empty() {
+                    self.suggest_input.insert(&query);
+                }
+                self.suggest = Some(Suggest {
+                    trigger: Trigger::File,
+                    start,
+                    command: String::new(),
+                    query,
+                    items,
+                    selected: 0,
+                });
+            }
         }
-
-        suggest.selected = suggest.selected.min(suggest.items.len().saturating_sub(1));
         cx.notify();
     }
 

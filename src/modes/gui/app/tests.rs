@@ -189,6 +189,31 @@ fn dismissed_suggest_stays_closed_until_trigger_moves() {
     assert!(suggest_allowed(Some(0), 3));
 }
 
+/// `@` 扫描回来时面板还没开：只有同一位置、同一前缀、没被手动关过才能开面板。
+#[test]
+fn pending_file_scan_only_opens_the_same_trigger() {
+    let hit = Some((Trigger::File, 3, "src".to_string()));
+    assert!(pending_scan_matches(hit.clone(), None, 3, "src"));
+    assert!(
+        !pending_scan_matches(hit.clone(), None, 3, "sr"),
+        "前缀变了"
+    );
+    assert!(
+        !pending_scan_matches(hit, Some(3), 3, "src"),
+        "Esc 关掉的不再弹"
+    );
+    assert!(!pending_scan_matches(None, None, 3, "src"), "`@` 已删掉");
+    assert!(
+        !pending_scan_matches(
+            Some((Trigger::Command, 3, "src".to_string())),
+            None,
+            3,
+            "src"
+        ),
+        "别的触发词不能借这批结果开面板"
+    );
+}
+
 /// 重命名输入：首尾空白去掉，全空白等于取消。
 #[test]
 fn renamed_name_trims_and_rejects_blank() {
