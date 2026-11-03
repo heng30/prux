@@ -144,6 +144,8 @@ pub(super) struct Config {
     pub announce: Announce,
     /// 是否只在本次回合改过文件时才跑（`requireEdits`，缺省开）。
     pub require_edits: bool,
+    /// 是否按 git diff 的改动面缩减检查（`diffScoped`，缺省开）。
+    pub diff_scoped: bool,
     /// 检查项（项目配置整体替换全局配置）。
     pub checks: Vec<Check>,
     /// 实际参与合并的配置文件（`/vet status` 列出）。
@@ -160,6 +162,7 @@ impl Default for Config {
             timeout: Duration::from_secs(DEFAULT_TIMEOUT_SECS),
             announce: Announce::Fail,
             require_edits: true,
+            diff_scoped: true,
             checks: Vec::new(),
             sources: Vec::new(),
             warnings: Vec::new(),
@@ -257,6 +260,10 @@ fn parse(value: &Value, sources: Vec<PathBuf>, mut warnings: Vec<String>) -> Con
         .get("requireEdits")
         .and_then(Value::as_bool)
         .unwrap_or(cfg.require_edits);
+    cfg.diff_scoped = value
+        .get("diffScoped")
+        .and_then(Value::as_bool)
+        .unwrap_or(cfg.diff_scoped);
     cfg.max_iterations = value
         .get("maxIterations")
         .and_then(Value::as_f64)
@@ -489,6 +496,13 @@ pub(super) fn panel_settings(cfg: &Config) -> Vec<ExtensionSetting> {
             on_off_text(cfg.require_edits),
             &["on", "off"],
         ),
+        cycle_setting(
+            "diffScoped",
+            "Only what the diff touches",
+            "Run only the checks whose language the git diff touches; unknown commands always run",
+            on_off_text(cfg.diff_scoped),
+            &["on", "off"],
+        ),
     ]
 }
 
@@ -501,6 +515,7 @@ pub(super) fn apply_panel_choice(
     match key {
         "autoRun" => set_field(Scope::Global, cwd, "autoRun", json!(value == "on")),
         "requireEdits" => set_field(Scope::Global, cwd, "requireEdits", json!(value == "on")),
+        "diffScoped" => set_field(Scope::Global, cwd, "diffScoped", json!(value == "on")),
         "maxIterations" => set_field(
             Scope::Global,
             cwd,
@@ -790,7 +805,7 @@ mod tests {
     fn panel_labels_round_trip_through_the_tables() {
         let cfg = Config::default();
         let settings = panel_settings(&cfg);
-        assert_eq!(settings.len(), 5);
+        assert_eq!(settings.len(), 6);
         // 缺省值必须能在档位表里找到（否则面板会把数字当标签显示）
         assert_eq!(settings[1].value, "2");
         assert_eq!(settings[2].value, "5m");

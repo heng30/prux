@@ -1259,6 +1259,14 @@ impl Agent {
         self.json_sink = Some(Arc::new(Mutex::new(sink)));
     }
 
+    /// 当前回合的取消信号（与内部 `run_abort` 同源，不换 Arc）。
+    ///
+    /// 给「在 prompt future 之外驱动回合」的宿主持有：prompt 期间 `&mut self` 被 future 借走，
+    /// 取消方只能靠提前拿到的这个句柄置位。
+    pub fn abort_handle(&self) -> Arc<AtomicBool> {
+        self.run_abort.clone()
+    }
+
     /// 请求取消当前 run
     pub fn request_abort(&self) {
         self.run_abort.store(true, Ordering::Relaxed);

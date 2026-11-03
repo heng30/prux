@@ -2,6 +2,26 @@
 
 ### Added
 
+- **`prux acp` serves the Agent Client Protocol so an editor can drive the same agent**: the new
+  `acp` extension injects an `acp` subcommand — `bootstrap()` hands it the fully assembled agent,
+  so the editor gets the same model chain, tool set, session file and extension hooks as the TUI,
+  not a second agent loop. Over NDJSON + JSON-RPC 2.0 on stdin/stdout it answers `initialize`,
+  `authenticate`, `session/new`, `session/prompt` and `session/cancel`, streaming text, thinking
+  and tool-call updates as `session/update` notifications. A prompt keeps listening on stdin while
+  it runs, so a cancel lands immediately instead of queueing behind a slow turn. Single session
+  (`session/new` returns the session `bootstrap()` already opened), no `session/load`, text
+  prompts only. The extension registers no tools and no hooks — without `prux acp` it does
+  nothing. It is on by default but only in the `Dev` / `Creator` / `All` extension modes: in
+  `Minimal` the subcommand does not exist.
+
+- **`vet` runs only the checks the diff touches**: with `diffScoped` on (the default) the settle
+  path reads `git status --porcelain` first and keeps only the checks matching the languages that
+  changed — a Rust-only edit runs the `cargo …` checks, a docs-only edit runs nothing, and a
+  change to a manifest or lock file runs everything. Commands whose language cannot be read
+  (`just check`, `cargo test && pnpm test`) always run — skipping them would be a fake pass — and
+  a non-git directory falls back to the full set. `/vet run` still runs everything.
+
+
 - **Every code block in the desktop GUI has a copy button**: the block's header row shows a
   copy icon on the right; one click puts the block's source on the clipboard and raises a
   `Copied to clipboard` toast.
@@ -992,6 +1012,22 @@
 ## 中文
 
 ### 新增
+
+- **`prux acp` 把 prux 变成编辑器的 agent 后端**：新增 `acp` 扩展注入 `acp` 子命令——`bootstrap()`
+  把**已装配好的** Agent 交给它，因此编辑器拿到的是与 TUI 完全相同的模型链、工具表、会话文件与
+  扩展钩子，而不是第二套 agent loop。它在 stdin/stdout 上讲 NDJSON + JSON-RPC 2.0，应答
+  `initialize` / `authenticate` / `session/new` / `session/prompt` / `session/cancel`，把文本、
+  思考、工具调用起止以 `session/update` 通知流式推给客户端。回合执行期间同时监听 stdin，取消
+  即时生效，不会排在一个慢回合后面。单会话（`session/new` 返回 `bootstrap()` 已打开的会话），
+  不支持 `session/load`，prompt 只取文本块。该扩展不注册工具、不订阅钩子——不开 `prux acp`
+  时它什么都不做。默认启用，但只在 `Dev` / `Creator` / `All` 模式下可用：`Minimal` 模式下子命令
+  不存在。
+
+- **`vet` 只跑改动真正涉及的那几条检查**：`diffScoped` 缺省开启，结算前先读 `git status
+  --porcelain`，只保留与改动语言匹配的检查——只改 Rust 就跑 `cargo …` 那几条，只改文档就一条
+  都不跑，改到依赖清单或 lock 文件则全跑。认不出语言的命令（`just check`、`cargo test && pnpm
+  test`）永远跑——跳过它们等于假的通过；不是 git 仓库时退回全量。`/vet run` 手动路径仍然跑全部。
+
 
 - **桌面 GUI 的每个代码块右上角都有复制按钮**：点击代码块首行右侧的复制图标，整块源码进剪贴板，
   并弹出 `Copied to clipboard` 提示。

@@ -25,6 +25,7 @@ pub mod markdown;
 
 use crate::{
     core::{
+        agent_session::Agent,
         provider::{AgentMessage, ContentBlock, Usage},
         session_manager::Session,
         tools::{ToolError, ToolResult},
@@ -58,8 +59,8 @@ pub use dock::{DockLine, DockSection, DockSpan, dock_sections};
 pub use footer::{FooterCtx, FooterExtension, FooterLine, FooterSpan, git_branch};
 pub use hooks::ExtensionHook;
 pub use host::{
-    BoxedHandler, CommandHost, SlashCommandHandler, command_handler, register_command,
-    register_host_command,
+    BoxedHandler, CommandHost, SlashCommandHandler, SubcommandHandler, command_handler,
+    register_command, register_host_command, register_subcommand_handler,
 };
 pub use markdown::render as render_markdown_lines;
 pub use overlay::{
@@ -493,6 +494,13 @@ pub trait Extension: Send + Sync {
     /// 扩展禁用或当前模式不可用时其命令自动移除。执行入口由扩展在自身初始化处经
     /// [`crate::modes::tui::handlers::register_slash_command`] 注册。
     fn commands(&self) -> Vec<ExtensionCommand> {
+        Vec::new()
+    }
+
+    /// 该扩展注入的 CLI 子命令名（`prux acp`）；默认不注入。
+    ///
+    /// 子命令在 `bootstrap()` 装配完成后由扩展自己的入口接管，不再回到 TUI。
+    fn subcommands(&self) -> Vec<&'static str> {
         Vec::new()
     }
 
@@ -1382,6 +1390,28 @@ pub fn declared_mcp_servers() -> Vec<(String, String, Value)> {
         }
     }
     out
+}
+
+/// 已启用（且当前模式可用）扩展注入的 CLI 子命令：`(扩展名, 声明)`。
+///
+/// 供 `bootstrap()` 在 clap 解析之前预扫 argv；扩展禁用时其子命令不存在。
+pub fn declared_subcommands() -> Vec<(String, &'static str)> {
+    let mut out = Vec::new();
+    for ext in registered() {
+        for sub in ext.subcommands() {
+            out.push((ext.name().to_string(), sub));
+        }
+    }
+    out
+}
+
+/// 把已装配的 Agent 交给某个扩展注入的子命令接管；无此子命令（或扩展未绑定 handler）返回 `None`。
+pub async fn dispatch_subcommand(agent: Agent, name: &str, args: Vec<String>) -> Option<i32> {
+    if !declared_subcommands().iter().any(|(_, s)| *s == name) {
+        return None;
+    }
+    let handler = host::subcommand_handler(name)?;
+    Some(handler(agent, args).await)
 }
 
 /// 把 agent 内核事件分发给所有已注册扩展（普通扩展 + footer 扩展）。

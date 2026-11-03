@@ -5,6 +5,8 @@
 //! 命令用 [`CommandHost::as_any_mut`] 取回具体宿主（见 `tui_host`），取不到时给提示。
 
 use super::{command_provider, ui::UiNotifyLevel};
+use crate::core::agent_session::Agent;
+use futures_util::future::BoxFuture;
 use std::{
     any::Any,
     path::PathBuf,
@@ -19,6 +21,13 @@ pub type SlashCommandHandler = fn(&mut dyn CommandHost, &str) -> bool;
 /// 执行入口的装箱形式：注册表存它，这样「只依赖 [`CommandHost`]」与
 /// 「需要具体宿主 App」两类处理器都能放进同一张表（后者由宿主侧适配器包装）。
 pub type BoxedHandler = Arc<dyn Fn(&mut dyn CommandHost, &str) -> bool + Send + Sync>;
+
+/// 扩展注入子命令的处理入口：拿到**已装配好的** [`Agent`] 与子命令之后的剩余参数，
+/// 返回进程退出码。异步是为了能直接驱动 Agent 回合。
+pub type SubcommandHandler = fn(Agent, Vec<String>) -> BoxFuture<'static, i32>;
+
+/// 已绑定的子命令执行入口：`(扩展名, 子命令名, handler)`，同键覆盖（幂等）。
+static EXT_SUBCOMMANDS: OnceLock<Mutex<Vec<(String, String, SubcommandHandler)>>> = OnceLock::new();
 
 /// 已注册的执行入口：`(扩展名, 命令名, handler)`，同键覆盖（幂等）。
 static EXT_COMMAND_HANDLERS: OnceLock<Mutex<Vec<(String, String, BoxedHandler)>>> = OnceLock::new();
@@ -102,6 +111,32 @@ pub trait CommandHost {
 /// 执行入口表（叶级锁；注册与查表都只持有这一把）。
 fn handlers() -> &'static Mutex<Vec<(String, String, BoxedHandler)>> {
     EXT_COMMAND_HANDLERS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// 子命令入口表（叶级锁，与斜杠命令表分开，互不嵌套）。
+fn subcommands() -> &'static Mutex<Vec<(String, String, SubcommandHandler)>> {
+    EXT_SUBCOMMANDS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// 注册扩展注入子命令的执行入口。"存在性"仍由 [`super::Extension::subcommands`] 声明决定。
+pub fn register_subcommand_handler(ext: &str, name: &str, handler: SubcommandHandler) {
+    let mut table = subcommands().lock().unwrap();
+    table.retain(|(e, n, _)| e != ext || n != name);
+    table.push((ext.to_string(), name.to_string(), handler));
+}
+
+/// 查扩展子命令的执行入口：仅当该子命令由**当前已启用**扩展声明时返回。
+pub fn subcommand_handler(name: &str) -> Option<SubcommandHandler> {
+    let enabled: Vec<String> = super::registered()
+        .iter()
+        .map(|e| e.name().to_string())
+        .collect();
+    subcommands()
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(ext, sub, _)| sub == name && enabled.iter().any(|e| e == ext))
+        .map(|(_, _, handler)| *handler)
 }
 
 /// 注册「只依赖 [`CommandHost`]」的扩展命令（TUI 与 GUI 都能跑）。

@@ -142,10 +142,11 @@ fn status(host: &mut dyn CommandHost) {
         "vet: configuration".to_string(),
         format!(
             "  autoRun: {} · maxIterations: {iterations} · timeout: {}s · announce: {announce} · \
-             requireEdits: {}",
+             requireEdits: {} · diffScoped: {}",
             on_off(cfg.auto_run),
             cfg.timeout.as_secs(),
             on_off(cfg.require_edits),
+            on_off(cfg.diff_scoped),
         ),
     ];
 

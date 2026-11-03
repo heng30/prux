@@ -109,6 +109,7 @@ pub async fn bootstrap() -> Startup {
         args: parsed,
         extension_flags,
         extension_flag_values,
+        extension_subcommand,
     } = match Args::parse_with_extension_flags() {
         Ok(a) => a,
         Err(e) => {
@@ -529,6 +530,20 @@ pub async fn bootstrap() -> Startup {
             Some(parsed.append_system_prompt.join("\n\n"))
         },
     };
+
+    // 扩展注入的 CLI 子命令（`prux acp`）：Agent 已装配好，交给扩展自己的入口跑完再退出。
+    // 分发点选在这里是因为扩展要的是「模型/工具/会话都已就绪」的 Agent，而不是裸进程。
+    if let Some((name, rest)) = extension_subcommand {
+        match core::extensions::dispatch_subcommand(agent, &name, rest).await {
+            Some(code) => std::process::exit(code),
+            None => {
+                eprintln!(
+                    "Error: subcommand `{name}` is unavailable — the extension declaring it is disabled or filtered out by the current extension mode"
+                );
+                std::process::exit(1);
+            }
+        }
+    }
 
     Startup {
         agent,

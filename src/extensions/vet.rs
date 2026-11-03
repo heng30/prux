@@ -31,6 +31,7 @@
 mod command;
 mod config;
 mod run;
+mod selector;
 
 use crate::{
     core::{
@@ -49,7 +50,7 @@ use crate::{
     modes::tui::handlers::register_host_command,
     utils::{glyphs::DEF_TRAILING_ELLIPSIS, paths::cwd, time::format_duration_ms},
 };
-use config::{Announce, Config, EXT};
+use config::{Announce, Check, Config, EXT};
 use run::CheckResult;
 use serde_json::Value;
 use std::{
@@ -178,14 +179,13 @@ impl Drop for RunGuard {
 }
 
 /// 把检查项名字列成一行（最多 4 条，多余的折叠成 `+N`）。
-fn check_names(cfg: &Config) -> String {
-    let names: Vec<String> = cfg
-        .checks
+fn check_names(checks: &[Check]) -> String {
+    let names: Vec<String> = checks
         .iter()
         .take(4)
         .map(|c| truncate_chars(&c.name, 24))
         .collect();
-    let extra = cfg.checks.len().saturating_sub(names.len());
+    let extra = checks.len().saturating_sub(names.len());
     let mut text = names.join(", ");
     if extra > 0 {
         text.push_str(&format!(" +{extra} more"));
@@ -365,19 +365,28 @@ fn settle() -> Option<BoundaryOutcome> {
 
     let guard = RunGuard::acquire()?;
 
+    // 按 commit 里的改动面缩减（diffScoped）：不相关的检查不跑，认不出的命令照跑。
+    let checks = selector::narrow(&cwd, &cfg.checks, cfg.diff_scoped);
+    if checks.is_empty() {
+        // 改的只是文档/资源：没有相关检查可跑，也不必告诉用户「这次跳过了」。
+        reset_turn_state();
+        return None;
+    }
+
     if cfg.announce != Announce::Off {
         notify_text(
             &format!(
-                "vet: running {} check{} ({}) {DEF_TRAILING_ELLIPSIS}",
+                "vet: running {} of {} check{} ({}) {DEF_TRAILING_ELLIPSIS}",
+                checks.len(),
                 cfg.checks.len(),
                 if cfg.checks.len() == 1 { "" } else { "s" },
-                check_names(&cfg)
+                check_names(&checks)
             ),
             UiNotifyLevel::Info,
         );
     }
 
-    let results = run::run_all(&cwd, &cfg.checks, cfg.timeout);
+    let results = run::run_all(&cwd, &checks, cfg.timeout);
     drop(guard);
     record_run(&results);
 
@@ -591,7 +600,7 @@ mod tests {
                 .collect(),
             ..Config::default()
         };
-        let text = check_names(&cfg);
+        let text = check_names(&cfg.checks);
         assert!(text.starts_with("c0, c1, c2, c3"));
         assert!(text.contains("+2 more"));
     }
@@ -603,7 +612,7 @@ mod tests {
     }
 
     #[test]
-    fn settings_panel_exposes_the_five_switches() {
+    fn settings_panel_exposes_the_six_switches() {
         let _g = fresh();
         let settings = Vet.settings();
         let keys: Vec<&str> = settings.iter().map(|s| s.key.as_str()).collect();
@@ -614,7 +623,8 @@ mod tests {
                 "maxIterations",
                 "timeout",
                 "announce",
-                "requireEdits"
+                "requireEdits",
+                "diffScoped"
             ]
         );
         for setting in &settings {

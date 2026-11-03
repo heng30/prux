@@ -223,6 +223,37 @@ pub struct ParsedArgs {
     pub extension_flags: Vec<(String, bool)>,
     /// 带值扩展 flag（`--name <value>`）：`(名字, 值)`
     pub extension_flag_values: Vec<(String, String)>,
+    /// 扩展注入的 CLI 子命令：`(子命令名, 其余参数)`。命中时 clap 不参与解析。
+    pub extension_subcommand: Option<(String, Vec<String>)>,
+}
+
+/// argv 预扫：第一个词命中某个已启用扩展声明的子命令时返回 `(名字, 其余参数)`。
+///
+/// 只看第一个词——`prux "acp 是什么"` 这类普通消息不会被当成子命令。两个扩展声明
+/// 同名子命令属于配置错误（谁接管参数说不清），与 CLI flag 冲突一样直接报错。
+fn detect_extension_subcommand(
+    raw: &[String],
+) -> Result<Option<(String, Vec<String>)>, clap::Error> {
+    let Some(first) = raw.first() else {
+        return Ok(None);
+    };
+    if first.starts_with('-') {
+        return Ok(None);
+    }
+
+    let owners = core::extensions::declared_subcommands()
+        .into_iter()
+        .filter(|(_, sub)| *sub == first.as_str())
+        .count();
+
+    match owners {
+        0 => Ok(None),
+        1 => Ok(Some((first.clone(), raw[1..].to_vec()))),
+        n => Err(clap::Error::raw(
+            ErrorKind::InvalidValue,
+            format!("CLI subcommand conflict: {n} extensions declare `{first}`"),
+        )),
+    }
 }
 
 /// 校验思考级别（非法级别给出诊断而非报错）
@@ -251,6 +282,20 @@ impl Args {
     /// flag 会注入 clap：未启用扩展的 flag 不出现，`--xxx` 按未知参数报错。
     /// 与内置参数或扩展间同名冲突时报错退出（保持 clap 严格语义）。
     pub fn parse_with_extension_flags() -> Result<ParsedArgs, clap::Error> {
+        let raw: Vec<String> = std::env::args().skip(1).collect();
+
+        // 扩展注入的子命令（`prux acp`）优先：命中时它接管剩余参数，clap 不参与。
+        // 只认 argv 第一个词，避免把普通消息里的同名词当成子命令。
+        if let Some((name, rest)) = detect_extension_subcommand(&raw)? {
+            let args = Args::parse_from_args(&[])?;
+            return Ok(ParsedArgs {
+                args,
+                extension_flags: Vec::new(),
+                extension_flag_values: Vec::new(),
+                extension_subcommand: Some((name, rest)),
+            });
+        }
+
         let mut cmd = Self::command();
 
         // 收集已启用扩展的 flag 声明（保留扩展名供报错/分发）
@@ -296,7 +341,6 @@ impl Args {
 
         let mut extension_flags: Vec<(String, bool)> = Vec::new();
         let mut extension_flag_values: Vec<(String, String)> = Vec::new();
-        let raw: Vec<String> = std::env::args().skip(1).collect();
         let matches = cmd.try_get_matches_from(std::iter::once(APP_NAME.to_string()).chain(raw))?;
         let mut args = Args::from_arg_matches(&matches)?;
         args.normalize();
@@ -315,6 +359,7 @@ impl Args {
             args,
             extension_flags,
             extension_flag_values,
+            extension_subcommand: None,
         })
     }
 

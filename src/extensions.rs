@@ -9,6 +9,7 @@
 
 pub(crate) mod util;
 
+pub mod acp;
 pub mod ask_user_question;
 pub mod banner;
 pub mod browser;
@@ -153,6 +154,8 @@ pub const PRIORITY_USAGE: u32 = 54;
 pub const PRIORITY_SSH_REMOTE: u32 = 51;
 /// ask-user-question 结构化问卷扩展的注册优先级。
 pub const PRIORITY_ASK_USER_QUESTION: u32 = 52;
+/// acp 编辑器协议服务端（`prux acp` 子命令）扩展的注册优先级。
+pub const PRIORITY_ACP: u32 = 46;
 /// doc-helper 按需文档查询扩展的注册优先级。
 pub const PRIORITY_DOC_HELPER: u32 = 50;
 /// processes 后台进程监督扩展的注册优先级。

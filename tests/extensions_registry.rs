@@ -211,6 +211,11 @@ fn register_all_collects_and_sorts_slices() {
         is_extension_enabled("update-check"),
         "update-check 应默认启用（启动时检查新版本）"
     );
+    // acp 默认启用：不开 `prux acp` 时它不注册工具、不订阅钩子，没有任何副作用
+    assert!(
+        is_extension_enabled("acp"),
+        "acp 应默认启用（子命令入口，闲置时无行为）"
+    );
 
     // 显式启用后（/extension 面板或 settings.json enabledExtensions）参与分发。
     // 注意：loop-detect 声明 default_enabled() == false（与 plan-mode/goal 一致），
@@ -240,7 +245,7 @@ fn register_all_collects_and_sorts_slices() {
     // browser:68 同样默认关闭，也不在其中）
     // （extra-themes:100 → goal:90 → plan-mode:85 → tasks:80 → subagent:78 → loop-detect:75
     //   → notify:74 → hang-detect:73 → proxy:72 → rewind:71 → web-access:70 → mcp:69
-    //   → skills:65 → downloader:60 → update-check:55 → doc-helper:50 → debug:45
+    //   → skills:65 → downloader:60 → update-check:55 → doc-helper:50 → acp:46 → debug:45
     //   → tool-search:40 → jet:38）
     let names: Vec<String> = registered().iter().map(|e| e.name().to_string()).collect();
     assert_eq!(
@@ -262,6 +267,7 @@ fn register_all_collects_and_sorts_slices() {
             "downloader".to_string(),
             "update-check".to_string(),
             "doc-helper".to_string(),
+            "acp".to_string(),
             "debug".to_string(),
             "tool-search".to_string(),
             "jet".to_string()

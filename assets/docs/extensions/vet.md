@@ -32,6 +32,7 @@
   "timeoutSecs": 300,
   "announce": "fail",
   "requireEdits": true,
+  "diffScoped": true,
   "checks": [
     { "name": "test", "command": "cargo test" },
     { "name": "clippy", "command": "cargo clippy --all-targets" },
@@ -47,6 +48,7 @@
 | `timeoutSecs` | `300` | 单条检查的超时。超时的检查按失败处理（连同子进程一起杀掉） |
 | `announce` | `"fail"` | 聊天区通知口径：`off`（不通知）/ `fail`（只报失败与开始）/ `always`（通过也报） |
 | `requireEdits` | `true` | 只在本回合调用过 `edit` / `write` / `bash` / `powershell` 时才跑（纯问答轮不跑） |
+| `diffScoped` | `true` | 只跑本次改动涉及的检查语言（见下文「只跑相关检查」）。关掉就是每次跑全部检查 |
 | `checks` | `[]` | 检查列表。为空时整个扩展什么也不做 |
 
 每条检查：
@@ -79,15 +81,36 @@
 或 `Makefile` 的 `check` 配方、`pyproject.toml` 或 `pytest.ini`（`pytest`，pyproject 里提到
 `ruff` 时再加 `ruff check .`）、`go.mod`、`deno.json`。
 
-设置面板提供五个开关：`autoRun`、`maxIterations`、`timeout`、`announce`、`requireEdits`。
+设置面板提供六个开关：`autoRun`、`maxIterations`、`timeout`、`announce`、`requireEdits`、
+`diffScoped`。
 面板只能表达离散选项，检查列表本身走配置文件或 `/vet add`。
+
+## 只跑相关检查
+
+`diffScoped` 开着时，结算前先看 `git status --porcelain`，把检查按「改动涉及哪几类文件」筛一遍：
+
+| 改动里的文件 | 会跑哪些检查 |
+|---|---|
+| `*.rs` | 命令首词是 `cargo` / `rustc` 的检查 |
+| `*.ts` `*.tsx` `*.js` `*.jsx` `*.vue` `*.svelte` `*.css` `*.scss` `*.html` | `npm` / `pnpm` / `yarn` / `bun` / `node` / `tsc` / `eslint` / `vitest` / `jest` 等 |
+| `*.py` | `pytest` / `python` / `ruff` / `mypy` |
+| `*.go` | `go` |
+| 只有文档、图片、配置 | 以上全部跳过——本轮不跑检查 |
+| `Cargo.toml` / `package.json` / lock 文件 / `Makefile` / `justfile` | 依赖或构建入口变了，**全部检查照跑** |
+
+三条边界：
+
+- **认不出的命令永远跑**。`just check`、`./scripts/verify.sh`、`cargo test && pnpm test` 这类
+  猜不出语言的命令一律保留——跳过它就是假的通过。
+- **判定不出改动就不缩减**。不是 git 仓库、`git` 不可用、或者改动列表为空时，退回跑全部检查。
+- **只影响自动路径**。`/vet run` 是你手动要跑，永远跑全部配置的检查。
 
 ## 一个回合里发生什么
 
 1. 主 agent 准备结算（`agent_before_settle`）。子代理结算不跑检查。
 2. 条件不满足就放行：`autoRun` 关、没有检查、本回合没改过文件、用户刚中断（Esc / Ctrl+C）、
    或者还有排队的用户输入（让位给用户）。
-3. 跑完全部检查，聊天区给一行结论。
+3. 按 `diffScoped` 筛出相关检查并跑完，聊天区给一行结论（`running 1 of 3 checks (test)`）。
 4. **全部通过**（或只有 optional 失败）：不续跑，本回合正常结束。
 5. **有阻塞失败**：把失败检查的名字、命令、退出码、输出尾部拼成一条 user 消息注入上下文
    继续跑一轮。消息里会明确告诉模型「不要再自己跑一遍检查」，避免它重复执行同一条命令。
