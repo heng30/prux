@@ -8,13 +8,15 @@
 //!   （供导出与排查）；
 //! - `system-prompt`：打印当前系统提示词原文，经 worker 回执；
 //! - `receipts`：会话回执——按时间序排出本会话改了哪些文件、跑了哪些命令、MCP / 子代理调用、
-//!   被 permissions 拦下的调用、回合级失败，顶部给汇总（见 [`receipts`]）。
+//!   被 permissions 拦下的调用、回合级失败，顶部给汇总（见 [`receipts`]）；
+//! - `settings-key`：`settings.json` 未知顶层键诊断（行号 + 最接近的已知键，见 [`settings_key`]）。
 //!
 //! 默认**不启用**（声明 `default_enabled() == false`）：`provider` 声明了最高频的订阅面，
 //! 不该默认给所有用户挂上。只在 `/extension` 面板开启（`Dev` 及以上模式可用）。
 
 mod provider;
 mod receipts;
+mod settings_key;
 
 use super::{EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_DEBUG, command_arg};
 use crate::{
@@ -53,6 +55,10 @@ const SUBCOMMANDS: &[SubcommandDef] = &[
         name: "receipts",
         description: "Summarise what this session did ([n] = detail lines)",
     },
+    SubcommandDef {
+        name: "settings-key",
+        description: "Report unknown settings.json keys with line numbers",
+    },
 ];
 
 /// 自声明工厂：linkme 分布式切片
@@ -73,7 +79,7 @@ impl Extension for Debug {
 
     /// 返回 `/extension` 面板展示的一句话描述。
     fn description(&self) -> &str {
-        "Debug helpers: agent status, raw provider stream events, system prompt"
+        "Debug helpers: agent status, raw provider stream events, system prompt, receipts"
     }
 
     /// 默认关闭：高频的 provider 订阅按需开启（/extension 面板空格）
@@ -95,8 +101,9 @@ impl Extension for Debug {
     fn commands(&self) -> Vec<ExtensionCommand> {
         vec![ExtensionCommand {
             name: CMD.to_string(),
-            description: "/debug <info|provider|system-prompt|receipts> - debug helpers"
-                .to_string(),
+            description:
+                "/debug <info|provider|system-prompt|receipts|settings-key> - debug helpers"
+                    .to_string(),
             busy_safe: true, // handler 只碰扩展自身状态、App 消息与命令入队，不锁 agent
             subcommands: SUBCOMMANDS.to_vec(),
         }]
@@ -131,7 +138,7 @@ impl Extension for Debug {
     }
 }
 
-/// `/debug <info|provider|system-prompt|receipts> [args]`：按子命令分派，未知子命令打印用法。
+/// `/debug <info|provider|system-prompt|receipts|settings-key> [args]`：按子命令分派，未知子命令打印用法。
 ///
 /// 参数原文经 [`command_arg`] 去掉命令名后，再按首个空白切成「子命令 + 其余参数」。
 fn command_debug(host: &mut dyn CommandHost, raw: &str) -> bool {
@@ -146,6 +153,7 @@ fn command_debug(host: &mut dyn CommandHost, raw: &str) -> bool {
         "provider" => provider::command(host, rest),
         "system-prompt" => host.debug_system_prompt(),
         "receipts" => _ = receipts::command(host, rest),
+        "settings-key" => _ = settings_key::command(host, rest),
         other => host.push_message(&usage(other), UiNotifyLevel::Warning),
     }
     false
@@ -153,7 +161,7 @@ fn command_debug(host: &mut dyn CommandHost, raw: &str) -> bool {
 
 /// 未知子命令（或未给子命令）时的用法提示；`arg` 非空时一并回显，便于定位敲错的词。
 fn usage(arg: &str) -> String {
-    let head = "Usage: /debug <info|provider|system-prompt|receipts>";
+    let head = "Usage: /debug <info|provider|system-prompt|receipts|settings-key>";
     if arg.is_empty() {
         head.to_string()
     } else {
@@ -218,7 +226,16 @@ mod tests {
     fn subcommands_match_parser() {
         // 候选元数据与 command_debug 的分支一一对应
         let names: Vec<&str> = SUBCOMMANDS.iter().map(|s| s.name).collect();
-        assert_eq!(names, vec!["info", "provider", "system-prompt", "receipts"]);
+        assert_eq!(
+            names,
+            vec![
+                "info",
+                "provider",
+                "system-prompt",
+                "receipts",
+                "settings-key"
+            ]
+        );
 
         let cmds = Debug.commands();
         assert_eq!(cmds[0].subcommands, SUBCOMMANDS.to_vec());
@@ -272,6 +289,31 @@ mod tests {
                 .iter()
                 .any(|(_, m)| { sys_spans_text(&m.spans).contains("(got `bogus`)") })
         );
+    }
+
+    #[test]
+    fn settings_key_reports_unknown_keys_with_line() {
+        let _g = lock();
+        let _ad = AgentDirGuard::temp();
+        let cwd = tempfile::tempdir().unwrap();
+        let _cwd = crate::test_support::CwdGuard::set(cwd.path());
+        std::fs::write(
+            crate::core::settings_manager::agent_dir().join("settings.json"),
+            "{\n  \"theme\": \"dark\",\n  \"themee\": \"x\"\n}",
+        )
+        .unwrap();
+
+        let mut st = App::new();
+        command_debug(&mut st, "debug settings-key");
+        let joined = st
+            .system_messages
+            .iter()
+            .map(|(_, m)| sys_spans_text(&m.spans))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(joined.contains("1 unknown"), "{joined}");
+        assert!(joined.contains("settings.json:3"), "{joined}");
+        assert!(joined.contains("did you mean \"theme\"?"), "{joined}");
     }
 
     #[test]

@@ -4,7 +4,8 @@
 //! 围绕命中点取一段可读摘录。不含打分策略——词元上限、加权系数、停用词之外的过滤
 //! 都由调用方决定。另带几个与检索无关的通用小工具：[`has_cjk`]（按语种换字体之类的判定）、
 //! [`code_fence`]（按内容定代码围栏长度）与 [`escape_special`]（按字符集合做反斜杠转义），
-//! 外加按候选表匹配字体族的 [`pick_font_family`] / [`related_font_families`]。
+//! 外加按候选表匹配字体族的 [`pick_font_family`] / [`related_font_families`] 与在原文里
+//! 定位键所在行的 [`find_key_line`]。
 
 /// 停用词表：只由这些词构成的查询没有检索价值。
 ///
@@ -332,6 +333,17 @@ pub fn related_font_families(
         .collect()
 }
 
+/// 在原文里定位顶层键所在行（1 起）：`"<key>"` 之后紧跟冒号才算（排除同名字符串值）。
+pub fn find_key_line(text: &str, key: &str) -> Option<usize> {
+    let needle = format!("\"{key}\"");
+    text.lines()
+        .position(|line| {
+            line.find(&needle)
+                .is_some_and(|at| line[at + needle.len()..].trim_start().starts_with(':'))
+        })
+        .map(|index| index + 1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -518,5 +530,25 @@ mod tests {
             related_font_families(&families, &["Zen Hei"], &["Sarasa"]),
             vec!["Zen Hei".to_string(), "Sarasa Mono HC".to_string()]
         );
+    }
+
+    /// 行号从 1 起；同名字符串值不算键（后面不是冒号）；缩进/紧凑写法都能定位。
+    #[test]
+    fn find_key_line_locates_keys_but_not_string_values() {
+        let text = "{\n  \"defaultModel\": \"gpt\",\n  \"theme\": \"theme\"\n}";
+        assert_eq!(find_key_line(text, "defaultModel"), Some(2));
+        assert_eq!(
+            find_key_line(text, "theme"),
+            Some(3),
+            "键先出现，用的是键那一行"
+        );
+        assert_eq!(find_key_line(text, "missing"), None);
+
+        // 值里出现 "theme" 与键同形时，只认后面跟冒号的那个
+        assert_eq!(
+            find_key_line("{\n  \"a\": \"theme\",\n  \"theme\": 1\n}", "theme"),
+            Some(3)
+        );
+        assert_eq!(find_key_line("{\"theme\": 1}", "theme"), Some(1));
     }
 }

@@ -9,8 +9,10 @@ use crate::{
     utils::{
         display::random_uuid_v4,
         file_lock::FileLock,
+        fuzzy,
         mime::strip_bom,
         paths::{cwd, expand_home, expand_tilde, home_dir},
+        text,
         wheel::WheelScrollLines,
     },
 };
@@ -49,6 +51,65 @@ pub const TEMPERATURE_TIERS: [&str; 6] = ["default", "0", "0.2", "0.5", "0.7", "
 /// 自身不读取该键（读取侧各 `read_settings_*` 都按具体键取值）。
 pub const SETTINGS_SCHEMA_URL: &str = "https://pi.dev/schemas/settings.schema.json";
 
+/// 全局 `settings.json` 的已知顶层键。
+///
+/// 来源：本模块的 `.get(...)` / `.pointer(...)` / `write_settings_value(...)` 读取点，与
+/// `assets/docs/settings.md` 的「所有设置」一节。**新增设置键时两处一起更新**，否则
+/// [`settings_key_issues`] 会把合法键报成未知（误报比漏报更坏）。
+pub const KNOWN_SETTINGS_KEYS: &[&str] = &[
+    "$schema",
+    "autoCompact",
+    "autocompleteMaxVisible",
+    "cacheWarming",
+    "compactKeepRecentTokens",
+    "compactReserveTokens",
+    "compaction",
+    "defaultModel",
+    "defaultProjectTrust",
+    "defaultProvider",
+    "defaultThinkingLevel",
+    "defaultTools",
+    "deviceId",
+    "disabledExtensions",
+    "enabledExtensions",
+    "enabledModels",
+    "extensionMode",
+    "exposeSessionEnvironment",
+    "externalEditor",
+    "followUpMode",
+    "fullscreenWheelScrollLines",
+    "hideThinkingBlock",
+    "historyMaxEntries",
+    "images",
+    "latex",
+    "mermaid",
+    "quietStartup",
+    "retry",
+    "sessionShareDestination",
+    "shellCommandPrefix",
+    "shellPath",
+    "showCacheMissNotices",
+    "showImages",
+    "sidebar-gui",
+    "skills",
+    "skipUpdateVersion",
+    "steeringMode",
+    "syntaxHighlight",
+    "temperature",
+    "theme",
+    "theme-gui",
+    "themes",
+    "uiScale",
+];
+
+/// 项目级 `.prux/settings.json` 支持的键。
+///
+/// 项目层只覆盖这几项（见 `assets/docs/settings.md` 的「项目级设置与信任」），其余键写在
+/// 项目文件里**不生效**——这正是 [`settings_key_issues`] 要报出来的静默陷阱。
+const PROJECT_SETTINGS_KEYS: &[&str] = &["defaultTools", "disabledExtensions", "enabledExtensions"];
+
+/// 给出「did you mean」的最大编辑距离；再大候选项就跟手滑键名毫无关系了。
+const SUGGESTION_MAX_DISTANCE: usize = 2;
 /// settings.json 读写锁。锁作用域限定在 [`with_settings_read`] / [`with_settings_write`]
 /// 的闭包内；文件另有自己的缓存层（[`GLOBAL_SETTINGS_CACHE`] / [`PROJECT_SETTINGS_CACHE`]），
 /// 以 `(path, mtime, len)` 判定缓存有效性。写入口在写锁内完成整个读-改-写并回填缓存，
@@ -518,6 +579,70 @@ pub fn settings_load_error() -> Option<String> {
         }
     }
     None
+}
+
+/// 一处 `settings.json` 键问题：未知键、出处、最近似候选。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SettingsKeyIssue {
+    /// 出问题的文件绝对路径。
+    pub path: String,
+    /// 未识别的键名，保留用户原始大小写。
+    pub key: String,
+    /// 键在原文中的行号（1 起）；原文里定位不到时为 `None`。
+    pub line: Option<usize>,
+    /// 最接近的已知键名；没有足够接近的候选时为 `None`。
+    pub suggestion: Option<&'static str>,
+}
+
+impl SettingsKeyIssue {
+    /// 单行诊断文案：`<path>:<line> "<key>" is not a known setting (did you mean "<x>"?)`。
+    pub fn describe(&self) -> String {
+        let location = match self.line {
+            Some(line) => format!("{}:{line}", self.path),
+            None => self.path.clone(),
+        };
+        match self.suggestion {
+            Some(found) => format!(
+                "{location} \"{}\" is not a known setting (did you mean \"{found}\"?)",
+                self.key
+            ),
+            None => format!("{location} \"{}\" is not a known setting", self.key),
+        }
+    }
+}
+
+/// 扫描全局与项目级 `settings.json` 的顶层键，返回未知键（带行号与最近似建议）。
+///
+/// 只报**语法合法**的文件：JSON 本身坏了由 [`settings_load_error`] 负责，两处各报一遍没有意义。
+/// 文件不存在、根不是对象、键都认识时返回空 `Vec`。
+pub fn settings_key_issues() -> Vec<SettingsKeyIssue> {
+    let mut issues = issues_in_file(&agent_dir().join("settings.json"), KNOWN_SETTINGS_KEYS);
+    issues.extend(issues_in_file(
+        &cwd().join(PROJECT_SCOPE_NAME).join("settings.json"),
+        PROJECT_SETTINGS_KEYS,
+    ));
+    issues
+}
+
+/// 单个文件的未知顶层键诊断；读不到或解析失败时返回空（不在这里报语法错误）。
+fn issues_in_file(path: &Path, known: &[&'static str]) -> Vec<SettingsKeyIssue> {
+    let Ok(source) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let source = strip_bom(&source);
+    let Ok(Value::Object(obj)) = serde_json::from_str::<Value>(source) else {
+        return Vec::new();
+    };
+
+    obj.keys()
+        .filter(|key| !known.contains(&key.as_str()))
+        .map(|key| SettingsKeyIssue {
+            path: path.display().to_string(),
+            key: key.clone(),
+            line: text::find_key_line(source, key),
+            suggestion: fuzzy::closest_match(key, known, SUGGESTION_MAX_DISTANCE),
+        })
+        .collect()
 }
 
 /// `defaultTools` / `--tools` 的增删条目（`+name` / `-name`）
@@ -2913,5 +3038,98 @@ mod tests {
             write_settings_quiet_startup(QuietStartup::Silent).unwrap();
             assert_eq!(settings_value()["quietStartup"], json!(true));
         });
+    }
+
+    /// 未知顶层键：报出文件、行号与最近似建议，`describe()` 的文案对得上。
+    #[test]
+    fn settings_key_issues_reports_typo_with_line_and_suggestion() {
+        with_temp_agent_dir(|| {
+            let path = agent_dir().join("settings.json");
+            std::fs::write(
+                &path,
+                "{\n  \"defaultModel\": \"gpt\",\n  \"compactReserveToken\": 4096\n}\n",
+            )
+            .unwrap();
+
+            let issues = settings_key_issues();
+            assert_eq!(issues.len(), 1, "issues: {issues:?}");
+            let issue = &issues[0];
+            assert_eq!(issue.key, "compactReserveToken");
+            assert_eq!(issue.line, Some(3));
+            assert_eq!(issue.suggestion, Some("compactReserveTokens"));
+            assert_eq!(
+                issue.describe(),
+                format!(
+                    "{}:3 \"compactReserveToken\" is not a known setting (did you mean \"compactReserveTokens\"?)",
+                    path.display()
+                )
+            );
+        });
+    }
+
+    /// 已知键（含 `$schema`、段名、连字符键）一个都不报。
+    #[test]
+    fn settings_key_issues_accepts_known_keys() {
+        with_temp_agent_dir(|| {
+            let v = json!({
+                "$schema": SETTINGS_SCHEMA_URL,
+                "defaultModel": "m",
+                "theme": "dark",
+                "theme-gui": "dark",
+                "images": { "autoResize": true },
+                "retry": { "enabled": true },
+                "compaction": { "reserveTokens": 1000 },
+                "deviceId": "x",
+                "uiScale": 1.0
+            });
+            std::fs::write(agent_dir().join("settings.json"), v.to_string()).unwrap();
+            assert!(settings_key_issues().is_empty());
+        });
+    }
+
+    /// 项目层只认三个键：写在 `.prux/settings.json` 的其它键不生效，必须报出来。
+    #[test]
+    fn settings_key_issues_flags_global_only_keys_in_project_file() {
+        let dir = std::env::temp_dir().join(format!("prux-key-issues-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let _cwd = crate::test_support::CwdGuard::set(&dir);
+
+        with_temp_agent_dir(|| {
+            let project = cwd().join(PROJECT_SCOPE_NAME);
+            std::fs::create_dir_all(&project).unwrap();
+            std::fs::write(
+                project.join("settings.json"),
+                r#"{"defaultTools": ["read"], "theme": "dark"}"#,
+            )
+            .unwrap();
+
+            let issues = settings_key_issues();
+            assert_eq!(issues.len(), 1, "issues: {issues:?}");
+            assert_eq!(issues[0].key, "theme");
+            assert!(
+                issues[0].path.contains("prux-key-issues-"),
+                "项目层问题应指向项目文件：{}",
+                issues[0].path
+            );
+        });
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 真实键表能给出归一化建议（算法行为见 [`crate::utils::fuzzy::closest_match`] 的测试）。
+    #[test]
+    fn known_key_table_offers_normalized_suggestions() {
+        assert_eq!(
+            fuzzy::closest_match("theme_gui", KNOWN_SETTINGS_KEYS, SUGGESTION_MAX_DISTANCE),
+            Some("theme-gui")
+        );
+        assert_eq!(
+            fuzzy::closest_match(
+                "compactReserveToken",
+                KNOWN_SETTINGS_KEYS,
+                SUGGESTION_MAX_DISTANCE
+            ),
+            Some("compactReserveTokens")
+        );
     }
 }

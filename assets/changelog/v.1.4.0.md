@@ -533,6 +533,15 @@
   turn in order; `/debug receipts <n>` raises the detail cap. Parsing is per line because the
   command is busy-safe: a half-written tail from the running turn is skipped, not fatal.
 
+- **`/debug settings-key` names the settings keys prux does not recognize**: a `settings.json` that
+  parses fine but carries a typo (`"compactReserveToken"`, `"theme_gui"`) used to be ignored
+  silently — the value simply never took effect. The new subcommand lists every unknown top-level
+  key with its `file:line` and, when a known key is within two edits, a `did you mean "…"?` hint;
+  nothing to report prints a single confirmation line. Keys that only exist in the global file
+  (`theme`, `skills`, …) are flagged when they appear in `.prux/settings.json`, which only honours
+  `defaultTools` / `disabledExtensions` / `enabledExtensions`. Grammar errors stay with the startup
+  warning; each run re-reads both files.
+
 ### Changed
 
 - **An isolated subagent starts from the repository's existing build artifacts instead of a cold
@@ -1318,6 +1327,13 @@
   （`deny` / `ask`），后者在会话里不留痕迹。回执先给汇总（改了哪些文件、跑了多少命令、MCP 调用、
   子代理、失败、审批），再按时间序列出本轮经过；`/debug receipts <n>` 抬高明细行上限。解析是逐行的：
   命令 busy-safe，正在跑的这一回合写了一半的尾行被跳过，而不是让整份回执失败。
+
+- **`/debug settings-key` 会点名 prux 不认识的设置键**：能解析、但键名打错的 `settings.json`
+  （`"compactReserveToken"`、`"theme_gui"`）原本被静默忽略——那个值从来没生效过。新增的子命令
+  会列出每个未知的顶层键与它的 `文件:行号`，有已知键的编辑距离在 2 以内时给出 `did you mean "…"?`；
+  没有问题时只回一行确认。只存在于全局文件的键（`theme`、`skills` 等）写在 `.prux/settings.json`
+  里同样会被点名——项目层只认 `defaultTools` / `disabledExtensions` / `enabledExtensions`。
+  语法错误仍归启动警告；每次执行都重读这两个文件。
 
 ### 变更
 

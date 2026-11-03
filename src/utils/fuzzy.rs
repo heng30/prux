@@ -3,6 +3,9 @@
 //! 匹配要求：查询字符按顺序出现在文本中（不必连续）。分数越低越优：
 //! 连续匹配奖励、词边界奖励、靠后位置惩罚、完全一致额外大奖。
 //! 数字/字母连读（如 "v4" / "4v"）二次尝试交换匹配。
+//!
+//! 另带按**编辑距离**判定的近似匹配：[`edit_distance`] 与 [`closest_match`]（后者先试归一化
+//! 相等，再用距离兑“是不是拼错了”），供键名/标识符的 typo 提示使用。
 
 /// 计算 query 对 text 的匹配分；不匹配返回 None。分数越低表示匹配质量越高
 fn fuzzy_match_score(query_lower: &[char], text_lower: &[char]) -> Option<f64> {
@@ -147,6 +150,54 @@ pub fn path_score(path: &str, query: &str, is_dir: bool) -> i32 {
     score
 }
 
+/// 两串的 Levenshtein 距离（键名 / 短标识符这类短串够用，两行 DP）。
+pub fn edit_distance(left: &str, right: &str) -> usize {
+    let right: Vec<char> = right.chars().collect();
+    let mut prev: Vec<usize> = (0..=right.len()).collect();
+    let mut current = vec![0; right.len() + 1];
+
+    for (i, left_char) in left.chars().enumerate() {
+        current[0] = i + 1;
+        for (j, right_char) in right.iter().enumerate() {
+            let cost = usize::from(left_char != *right_char);
+            current[j + 1] = (prev[j] + cost).min(prev[j + 1] + 1).min(current[j] + 1);
+        }
+        std::mem::swap(&mut prev, &mut current);
+    }
+
+    prev[right.len()]
+}
+
+/// 候选表里与 `query` 最接近的一项；“最近”先看归一化相等，再看编辑距离。
+///
+/// 先按 [`normalize_key`]（小写、去连字符）精确匹配：`theme_gui` / `ThemeGui` 这类写法差异
+/// 不该靠距离猜；否则取编辑距离 ≤ `max_distance` 的最小者，并列时取字典序在前者（输出稳定）。
+/// 没有足够接近的候选时返回 `None`。
+pub fn closest_match<'a>(
+    query: &str,
+    candidates: &[&'a str],
+    max_distance: usize,
+) -> Option<&'a str> {
+    let target = normalize_key(query);
+    if let Some(exact) = candidates.iter().find(|c| normalize_key(c) == target) {
+        return Some(*exact);
+    }
+
+    candidates
+        .iter()
+        .filter_map(|candidate| {
+            let distance = edit_distance(&target, &normalize_key(candidate));
+            (distance <= max_distance).then_some((distance, *candidate))
+        })
+        .min_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(right.1)))
+        .map(|(_, found)| found)
+}
+
+/// 键名归一化：小写并去掉连字符（`theme-gui` → `themegui`）。
+fn normalize_key(key: &str) -> String {
+    key.to_ascii_lowercase().replace('-', "")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -187,6 +238,38 @@ mod tests {
             .collect();
         // login(0 词边界) 在 clone 前面；model/export 不含 lo
         assert_eq!(got, vec!["login", "clone"]);
+    }
+
+    #[test]
+    fn edit_distance_counts_insertions_deletions_and_substitutions() {
+        assert_eq!(edit_distance("theme", "theme"), 0);
+        assert_eq!(edit_distance("theme", "themes"), 1);
+        assert_eq!(edit_distance("theme", "thme"), 1);
+        assert_eq!(edit_distance("theme", "thime"), 1);
+        assert_eq!(edit_distance("", "abc"), 3);
+    }
+
+    /// 归一化相等优先于编辑距离（`theme_gui` 不会被猜成 `theme`）；超阈值不给建议。
+    #[test]
+    fn closest_match_prefers_normalized_equality_then_distance() {
+        let candidates = ["theme", "theme-gui", "sidebar-gui", "compactReserveTokens"];
+
+        assert_eq!(
+            closest_match("theme_gui", &candidates, 2),
+            Some("theme-gui")
+        );
+        assert_eq!(closest_match("ThemeGui", &candidates, 2), Some("theme-gui"));
+        assert_eq!(
+            closest_match("sidebar_gui", &candidates, 2),
+            Some("sidebar-gui")
+        );
+        assert_eq!(
+            closest_match("compactReserveToken", &candidates, 2),
+            Some("compactReserveTokens")
+        );
+        assert_eq!(closest_match("zzzzzzzzz", &candidates, 2), None);
+        // 阈值由调用方决定：距离 1 的候选在 max_distance = 0 时不给
+        assert_eq!(closest_match("themes", &candidates, 0), None);
     }
 
     /// 打分优先级：文件名完全匹配=100 > 开头=80 > 子串=50 > 仅完整路径子串=30；目录 +10。
