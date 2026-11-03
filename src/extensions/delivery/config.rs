@@ -7,17 +7,14 @@
 //! | 键 | 缺省 | 含义 |
 //! |----|------|------|
 //! | `stage` | `"pr"` | 停在哪一步：`branch`（只提交）/ `push`（推到 origin）/ `pr`（开 PR 并跟 CI） |
-//! | `maxIterations` | `2` | CI/评审不过时最多把失败喂回模型几次 |
-//! | `timeoutSecs` | `900` | 每次结算等 CI 出结论的总时限 |
+//! | `timeoutSecs` | `900` | `/delivery run` 等 CI 出结论的总时限 |
 //! | `pollSecs` | `20` | 轮询 CI 的间隔 |
 //! | `base` | `""` | PR 的目标分支；空 = 用 `gh` 给的默认分支 |
 //! | `draft` | `false` | 开 PR 时是否用 draft |
-//! | `requireEdits` | `true` | 只在本次回合调用过写类工具时才交付 |
 //!
 //! 缺键回填、损坏文件不覆盖（与其它扩展同口径：用户要能看到自己写坏了什么）。
 //!
-//! 读路径走 [`ConfigCache`]：`load()` 在每次结算都会调用，一个回合里可能问几十次，
-//! 而配置文件几乎不变。缓存以 `(path, mtime, len)` 判定有效性，手改文件仍即时生效。
+//! 读路径走 [`ConfigCache`]：`/delivery` 每次子命令都会问一次配置，而文件几乎不变。缓存以 `(path, mtime, len)` 判定有效性，手改文件仍即时生效。
 //! 锁序恒为「[`CONFIG_LOCK`] → 缓存 `Mutex`」（见 `core::config_cache` 的模块文档）。
 
 use crate::{
@@ -41,19 +38,9 @@ pub(super) const CMD: &str = "delivery";
 pub(super) const DEFAULT_TIMEOUT_SECS: u64 = 900;
 /// 缺省轮询间隔（秒）。
 pub(super) const DEFAULT_POLL_SECS: u64 = 20;
-/// 缺省喂回次数。
-pub(super) const DEFAULT_MAX_ITERATIONS: usize = 2;
 
 /// 全部键（用于判断缺键并回填）。
-const KEYS: &[&str] = &[
-    "stage",
-    "maxIterations",
-    "timeoutSecs",
-    "pollSecs",
-    "base",
-    "draft",
-    "requireEdits",
-];
+const KEYS: &[&str] = &["stage", "timeoutSecs", "pollSecs", "base", "draft"];
 
 /// 配置文件读写锁（锁序恒为「RwLock → 缓存 Mutex」）。
 static CONFIG_LOCK: RwLock<()> = RwLock::new(());
@@ -91,9 +78,7 @@ impl Stage {
 pub(super) struct Config {
     /// 停在哪一步。
     pub(super) stage: Stage,
-    /// CI 失败时最多喂回模型几次。
-    pub(super) max_iterations: usize,
-    /// 每次结算等 CI 的总时限。
+    /// `/delivery run` 等 CI 的总时限。
     pub(super) timeout: Duration,
     /// 轮询 CI 的间隔。
     pub(super) poll: Duration,
@@ -101,8 +86,6 @@ pub(super) struct Config {
     pub(super) base: String,
     /// 开 PR 时是否标记 draft。
     pub(super) draft: bool,
-    /// 只在本回合调用过写类工具时交付。
-    pub(super) require_edits: bool,
 }
 
 /// 配置文件路径 `agent_dir()/extensions/delivery.json`。
@@ -118,10 +101,6 @@ pub(super) fn merge(from_file: Option<&Value>) -> Config {
             .and_then(Value::as_str)
             .and_then(Stage::parse)
             .unwrap_or_default(),
-        max_iterations: get("maxIterations")
-            .and_then(Value::as_u64)
-            .map(|n| n as usize)
-            .unwrap_or(DEFAULT_MAX_ITERATIONS),
         timeout: Duration::from_secs(
             get("timeoutSecs")
                 .and_then(Value::as_u64)
@@ -140,7 +119,6 @@ pub(super) fn merge(from_file: Option<&Value>) -> Config {
             .unwrap_or_default()
             .to_string(),
         draft: get("draft").and_then(Value::as_bool).unwrap_or(false),
-        require_edits: get("requireEdits").and_then(Value::as_bool).unwrap_or(true),
     }
 }
 
@@ -148,12 +126,10 @@ pub(super) fn merge(from_file: Option<&Value>) -> Config {
 fn to_value(cfg: &Config) -> Value {
     json!({
         "stage": cfg.stage.as_label(),
-        "maxIterations": cfg.max_iterations,
         "timeoutSecs": cfg.timeout.as_secs(),
         "pollSecs": cfg.poll.as_secs(),
         "base": cfg.base,
         "draft": cfg.draft,
-        "requireEdits": cfg.require_edits,
     })
 }
 
@@ -207,27 +183,22 @@ mod tests {
     fn defaults_are_the_documented_ones() {
         let cfg = merge(None);
         assert_eq!(cfg.stage, Stage::Pr);
-        assert_eq!(cfg.max_iterations, DEFAULT_MAX_ITERATIONS);
         assert_eq!(cfg.timeout, Duration::from_secs(DEFAULT_TIMEOUT_SECS));
         assert_eq!(cfg.poll, Duration::from_secs(DEFAULT_POLL_SECS));
         assert_eq!(cfg.base, "");
         assert!(!cfg.draft);
-        assert!(cfg.require_edits);
     }
 
     #[test]
     fn file_overrides_defaults_and_rejects_nonsense() {
         let cfg = merge(Some(&json!({
             "stage": "PUSH",
-            "maxIterations": 5,
             "timeoutSecs": 0,
             "pollSecs": 3,
             "base": " develop ",
-            "draft": true,
-            "requireEdits": false
+            "draft": true
         })));
         assert_eq!(cfg.stage, Stage::Push, "大小写不敏感");
-        assert_eq!(cfg.max_iterations, 5);
         assert_eq!(
             cfg.timeout,
             Duration::from_secs(DEFAULT_TIMEOUT_SECS),
@@ -236,7 +207,6 @@ mod tests {
         assert_eq!(cfg.poll, Duration::from_secs(3));
         assert_eq!(cfg.base, "develop");
         assert!(cfg.draft);
-        assert!(!cfg.require_edits);
 
         let cfg = merge(Some(&json!({"stage": "merge"})));
         assert_eq!(cfg.stage, Stage::Pr, "未知阶段回退缺省");
@@ -254,7 +224,7 @@ mod tests {
         let cfg = load();
         assert_eq!(cfg.stage, Stage::Branch, "已有值被保留");
         let text = fs::read_to_string(&path).unwrap();
-        assert!(text.contains("maxIterations"), "缺键被回填: {text}");
+        assert!(text.contains("timeoutSecs"), "缺键被回填: {text}");
 
         // 缓存按 (path, mtime, len) 失效：删掉文件后必须重建，不能拿内存里的旧值。
         fs::remove_file(&path).unwrap();

@@ -1,18 +1,17 @@
-//! `delivery` 扩展：把回合的改动交付出去，并盯着 CI / 评审把它推到绿。
+//! `delivery` 扩展：用 `/delivery run` 把改动交付出去——建分支、提交、推、开 PR，并等 CI
+//! 与评审的结论回到聊天区。
 //!
-//! **问题**：`vet` 只证明「本机检查过了」。改动变成可评审的东西还要一串机械动作：建分支、
-//! 提交、推、开 PR、等 CI、把红掉的日志捞回来。每轮都靠用户手打，agent 自己也拿不到
-//! 「CI 红了什么」——它只能猜。
+//! **只手动触发**：交付会写远端、产生一个可评审的 PR，这是「这版代码值得被人看」的判断，
+//! 只有用户能下。挂在结算边界上自动跑，等于把每轮还没被看过的改动都推成 PR——包括坏的。
 //!
-//! **本扩展**：在结算边界（[`ExtensionHook::Boundary`] 的 `agent_before_settle`）按配置的
-//! `stage` 交付，停在 PR 上；CI 失败或有 `CHANGES_REQUESTED` 评审时，把清单作为一条 user
-//! 消息注入并**续跑一轮**，模型修完下一次结算会再提交、再推、再看——直到全绿、用满
-//! `maxIterations`、或同一条失败反复出现。
+//! `/delivery run` 的路径：从基线分支新建 `prux/<日期>-<时分>` → `git add -A` + commit →
+//! `git push` → 已有 PR 就复用、没有就 `gh pr create` → 轮询到全绿 / 有阻塞 / 超时，把结论
+//! 贴回聊天区。CI 红了就把阻塞项原样列出，你让 agent 修完再跑一次 `/delivery run`：这时
+//! 已经在 `prux/` 分支上，改动提交到同一条分支，同一个 PR 被更新。
 //!
 //! 三条不做的线（每条都是「替用户做了决定」）：
 //! - **不自动 merge**：合入是人的决定（`stage` 只到 `pr`）。
-//! - **不吞掉回合开始前就脏的工作区**：那份改动不是本回合的产物，默认拒绝交付并提示，
-//!   `/delivery run` 是显式的例外。
+//! - **不自动交付、不自动续跑**：没有结算边界钩子，没有把 CI 失败喂回模型的循环。
 //! - **不猜远端**：`origin` 不存在、`gh` 没登录、`base` 探测不出来，都停下来报原因。
 //!
 //! 配置在 `agent_dir()/extensions/delivery.json`（见 [`config`]）；git 在
@@ -26,13 +25,9 @@ mod config;
 
 use crate::{
     core::{
-        extensions::{
-            BeforeToolCallOutcome, BoundaryOutcome, Extension, ExtensionCommand, ExtensionHook,
-            ExtensionMode, ExtensionTool, UiNotifyLevel,
-        },
+        extensions::{Extension, ExtensionCommand, ExtensionHook, ExtensionMode, ExtensionTool, UiNotifyLevel},
         provider::AgentMessage,
         session_manager::Session,
-        tools::ToolError,
     },
     extensions::{
         EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_DELIVERY,
@@ -49,10 +44,7 @@ use crate::{
     },
 };
 use config::{Config, Stage};
-use serde_json::Value;
 use std::{
-    collections::hash_map::DefaultHasher,
-    hash::{Hash, Hasher},
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex, MutexGuard,
@@ -64,8 +56,8 @@ use std::{
 /// 约定俗成的基线分支名：`origin/HEAD` 缺失时（新仓库、没有远端）兜底，免得往 `main` 上直接提交。
 const CONVENTIONAL_BASES: &[&str] = &["main", "master", "trunk"];
 
-/// 视为「可能改动工作区」的工具：调用过它们才认为本回合有东西要交付。
-const WRITE_TOOLS: &[&str] = &["edit", "write", "bash", "powershell"];
+/// 本扩展新建分支的前缀；带这个名字的分支说明是上一次交付留下的，改动就续在它上面。
+const BRANCH_PREFIX: &str = "prux/";
 
 /// 自声明工厂：linkme 分布式切片。
 #[linkme::distributed_slice(EXTENSION_FACTORIES)]
@@ -77,10 +69,10 @@ static DELIVERY_FACTORY: ExtensionFactory = ExtensionFactory {
 /// 当前会话的 cwd（`on_session_start` 记录；拿不到时回落到进程 cwd）。
 static SESSION_CWD: Mutex<Option<PathBuf>> = Mutex::new(None);
 
-/// 本扩展的回合内运行态。
+/// 本扩展的运行态（只用于 `/delivery status` 展示与标题）。
 static STATE: Mutex<State> = Mutex::new(State::new());
 
-/// 交付闸：同一时刻只允许一次交付在跑（自动路径与 `/delivery run` 共享）。
+/// 交付闸：同一时刻只允许一次交付在跑（防止连点 `/delivery run`）。
 static RUNNING: AtomicBool = AtomicBool::new(false);
 
 /// 配置告警只提示一次的开关。
@@ -101,20 +93,10 @@ struct Note {
     at: Instant,
 }
 
-/// 回合内运行态。
+/// 跨回合保留的运行态。
 struct State {
-    /// 本回合已把失败喂回模型的次数。
-    iteration: usize,
-    /// 本回合是否调用过写类工具。
-    dirty: bool,
-    /// 回合开始前工作区是否已有未提交改动（决定能不能 `git add -A`）。
-    pre_existing_dirty: bool,
-    /// 是否已经量过 `pre_existing_dirty`（每回合只量一次）。
-    measured: bool,
     /// 会话标题（第一条用户输入的单行摘要）。
     title: Option<String>,
-    /// 上次注入模型的失败指纹（识别「同一条失败反复出现」）。
-    last_failure: Option<u64>,
     /// 本会话交付过的分支。
     branch: Option<String>,
     /// 本会话交付过的 PR 号。
@@ -127,12 +109,7 @@ impl State {
     /// 全零初值（`static` 初始化要求 `const`，所以不能走 `Default`）。
     const fn new() -> Self {
         State {
-            iteration: 0,
-            dirty: false,
-            pre_existing_dirty: false,
-            measured: false,
             title: None,
-            last_failure: None,
             branch: None,
             pr: None,
             last: None,
@@ -143,16 +120,6 @@ impl State {
 /// 取运行态；锁被毒化时取回内部数据继续用。
 fn state() -> MutexGuard<'static, State> {
     STATE.lock().unwrap_or_else(|e| e.into_inner())
-}
-
-/// 清空回合级状态（保留分支/PR/最近结论这类跨回合信息）。
-fn reset_turn_state() {
-    let mut st = state();
-    st.iteration = 0;
-    st.dirty = false;
-    st.pre_existing_dirty = false;
-    st.measured = false;
-    st.last_failure = None;
 }
 
 /// 记下本次会话的 cwd。
@@ -193,13 +160,11 @@ impl Drop for RunGuard {
 
 /// 一次交付尝试的结论。
 enum Step {
-    /// 没什么要交付的（工作区干净 / 不是 git 仓库），静默跳过。
+    /// 没什么要交付的（工作区干净且不在交付分支上 / 不是 git 仓库），静默跳过。
     Nothing,
     /// 交付完成（消息进聊天区）。
     Done(String),
-    /// 有阻塞，报告可以喂回模型。
-    NeedsFix(String),
-    /// 停下来交回用户（配置问题、认证、超时）。
+    /// 停下来交回用户（CI 红、配置问题、认证、超时）。
     Stop(String),
 }
 
@@ -214,9 +179,9 @@ impl Extension for Delivery {
 
     /// 面板里的功能说明。
     fn description(&self) -> &str {
-        "Deliver the turn's changes: commit to a session branch, push, open a pull request, then \
-         follow CI and review feedback back into the agent until the PR is green. Never merges. \
-         Config: agent_dir()/extensions/delivery.json; /delivery status|run|reset|stage"
+        "Deliver on /delivery run: commit to a session branch, push, open a pull request, then \
+         report the CI and review result. Never merges, never delivers on its own. \
+         Config: agent_dir()/extensions/delivery.json; /delivery status|run|stage"
     }
 
     /// 仅在 Dev 及以上模式可用。
@@ -229,7 +194,7 @@ impl Extension for Delivery {
         false
     }
 
-    /// 不提供工具：交付是结算边界上的动作，模型看不到它。
+    /// 不提供工具：交付是用户敲 `/delivery run` 的动作，模型看不到它。
     fn tools(&self) -> Vec<ExtensionTool> {
         Vec::new()
     }
@@ -238,7 +203,7 @@ impl Extension for Delivery {
     fn commands(&self) -> Vec<ExtensionCommand> {
         vec![ExtensionCommand {
             name: config::CMD.to_string(),
-            description: "Delivery: /delivery status|run|reset|stage <branch|push|pr>".to_string(),
+            description: "Delivery: /delivery status|run|stage <branch|push|pr>".to_string(),
             // handler 只读写本扩展自身的配置与运行态，不锁 agent。
             busy_safe: true,
             subcommands: command::SUBCOMMANDS.to_vec(),
@@ -250,26 +215,21 @@ impl Extension for Delivery {
         register_host_command(config::EXT, config::CMD, command::handle);
     }
 
-    /// 订阅结算边界（交付）、工具前钩子（记脏标记）与提交通知（复位回合状态）。
+    /// 只订阅用户提交（拿会话标题）；交付本身没有任何自动触发点。
     fn hooks(&self) -> Vec<ExtensionHook> {
-        vec![
-            ExtensionHook::Boundary,
-            ExtensionHook::BeforeToolCall,
-            ExtensionHook::UserPrompt,
-        ]
+        vec![ExtensionHook::UserPrompt]
     }
 
-    /// 启用时先加载一次配置（把告警提示出去）；禁用时清空回合状态。
+    /// 启用时先加载一次配置（把告警提示出去）。
     fn on_enabled_changed(&self, enabled: bool) {
         if enabled {
             _ = config::load();
         } else {
-            reset_turn_state();
             WARNED.store(false, Ordering::Relaxed);
         }
     }
 
-    /// 记录会话 cwd 并复位回合状态。
+    /// 记录会话 cwd。
     fn on_session_start(
         &self,
         cwd_text: &str,
@@ -277,142 +237,17 @@ impl Extension for Delivery {
         _session: Option<&Session>,
     ) {
         remember_cwd(cwd_text);
-        reset_turn_state();
         WARNED.store(false, Ordering::Relaxed);
     }
 
-    /// 会话切换后工作区可能换了，重新记 cwd。
-    fn on_session_switched(&self, _session_path: Option<&str>, _messages: &[AgentMessage]) {
-        reset_turn_state();
-    }
-
-    /// 用户（重新）提交输入：新回合，复位续跑计数与失败指纹，并记下标题。
+    /// 用户提交输入：第一条非空行留作提交信息 / PR 标题。
     fn on_user_submit(&self, text: &str, _busy: bool) {
-        reset_turn_state();
         let title = title_of(text);
         if title.is_some() {
             let mut st = state();
             if st.title.is_none() {
                 st.title = title;
             }
-        }
-    }
-
-    /// 工具调用前只做一件事：把「本回合改过东西」记下来（不拦截、不改写参数）。
-    fn before_tool_call_ext(
-        &self,
-        name: &str,
-        _args: &Value,
-        _assistant_message: Option<&AgentMessage>,
-        _context: &[AgentMessage],
-        _all_args: &Value,
-    ) -> std::result::Result<BeforeToolCallOutcome, ToolError> {
-        // 第一次工具调用之前量一次工作区：这时候树还没被本回合改过，脏的就是用户自己的活。
-        // 放到结算时量会把 agent 自己的改动当成「回合前就脏」，那样永远拒交。
-        if !state().measured {
-            let dir = current_cwd();
-            let dirty = git::toplevel(&dir)
-                .map(|top| git::dirty(&top).unwrap_or(false))
-                .unwrap_or(false);
-            let mut st = state();
-            st.pre_existing_dirty = dirty;
-            st.measured = true;
-        }
-        if WRITE_TOOLS.contains(&name) {
-            state().dirty = true;
-        }
-        Ok(BeforeToolCallOutcome::allow())
-    }
-
-    /// 结算边界：交付 + 跟 CI，失败则注入报告并续跑（收敛条件见模块文档）。
-    fn on_boundary(&self, event: &Value) -> Option<BoundaryOutcome> {
-        if event.get("type").and_then(Value::as_str) != Some("agent_before_settle") {
-            return None;
-        }
-        // 子代理的结算不交付：交不交付是主 agent 的事
-        if event.get("agentScope").and_then(Value::as_str) != Some("main") {
-            return None;
-        }
-        // 用户中断：不续跑，也不把计数留着污染下一回合
-        if event.get("outcome").and_then(Value::as_str) == Some("aborted") {
-            reset_turn_state();
-            return None;
-        }
-        // 有排队输入：让位给用户
-        if event
-            .get("hasQueuedMessages")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-        {
-            return None;
-        }
-
-        settle()
-    }
-}
-
-/// 结算边界的完整流程。返回 `Some(continue_with)` 表示注入失败报告并再跑一轮。
-fn settle() -> Option<BoundaryOutcome> {
-    let cfg = config::load();
-    let guard = RunGuard::acquire()?;
-    let step = deliver(&cfg, false);
-    drop(guard);
-
-    match step {
-        Step::Nothing => None,
-        Step::Done(text) => {
-            record(text.clone());
-            reset_turn_state();
-            notify_text(&format!("delivery: {text}"), UiNotifyLevel::Success);
-            None
-        }
-        Step::Stop(text) => {
-            record(text.clone());
-            reset_turn_state();
-            notify_text(&format!("delivery: {text}"), UiNotifyLevel::Warning);
-            None
-        }
-        Step::NeedsFix(report) => {
-            let (iteration, last_failure) = {
-                let st = state();
-                (st.iteration, st.last_failure)
-            };
-            // 收敛 1：用满上限 → 交回用户
-            if iteration >= cfg.max_iterations {
-                record("stopping the CI loop".to_string());
-                reset_turn_state();
-                notify_text(
-                    &format!(
-                        "delivery: stopping after {iteration} attempt{} — the PR is still not \
-                         green. Run /delivery run to retry, or /delivery status to review.",
-                        if iteration == 1 { "" } else { "s" }
-                    ),
-                    UiNotifyLevel::Warning,
-                );
-                return None;
-            }
-            // 收敛 2：同一条失败反复出现 → 再喂一次也没用
-            let fingerprint = fingerprint(&report);
-            if last_failure == Some(fingerprint) {
-                record("the same failures repeated".to_string());
-                reset_turn_state();
-                notify_text(
-                    "delivery: the same CI failures repeated — stopping the loop",
-                    UiNotifyLevel::Warning,
-                );
-                return None;
-            }
-
-            let attempt = iteration + 1;
-            {
-                let mut st = state();
-                st.iteration = attempt;
-                st.last_failure = Some(fingerprint);
-            }
-            record(format!("attempt {attempt} fed back to the model"));
-            Some(BoundaryOutcome::continue_with(vec![
-                AgentMessage::user_text(&report),
-            ]))
         }
     }
 }
@@ -423,13 +258,6 @@ fn record(text: String) {
         text,
         at: Instant::now(),
     });
-}
-
-/// 失败报告的指纹（用于识别「同一批失败反复出现」）。
-fn fingerprint(report: &str) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    report.hash(&mut hasher);
-    hasher.finish()
 }
 
 /// 会话标题：第一条用户输入压成单行并截断。
@@ -456,7 +284,7 @@ fn fresh_branch(top: &Path) -> String {
     let stamp = now_iso();
     let date = short_date(&stamp);
     let time = stamp.get(11..16).unwrap_or("00:00").replace(':', "");
-    let base = format!("prux/{date}-{time}");
+    let base = format!("{BRANCH_PREFIX}{date}-{time}");
     if !git::branch_exists(top, &base) {
         return base;
     }
@@ -474,38 +302,13 @@ fn on_base(top: &Path, current: &str, cfg: &Config) -> bool {
     CONVENTIONAL_BASES.contains(&current)
 }
 
-/// 跑一次交付。`force` = `/delivery run`（忽略「回合前就脏」与 `requireEdits`）。
-fn deliver(cfg: &config::Config, force: bool) -> Step {
-    match run_delivery(cfg, force) {
-        Ok(step) => step,
-        Err(err) => Step::Stop(err),
-    }
-}
-
 /// 交付主体：量工作区 → 建分支 → 提交 → 推 → 开 PR → 等 CI。
-fn run_delivery(cfg: &config::Config, force: bool) -> Result<Step, String> {
+fn run_delivery(cfg: &config::Config) -> Result<Step, String> {
     let dir = current_cwd();
     // 不是 git 仓库就没有交付可言：静默跳过（这个扩展不该在非 git 目录里刷提示）
     let Ok(top) = git::toplevel(&dir) else {
         return Ok(Step::Nothing);
     };
-    let (dirty_this_turn, iteration, pre_existing_dirty) = {
-        let st = state();
-        (st.dirty, st.iteration, st.pre_existing_dirty)
-    };
-
-    // 回合开始前就脏 → 那是用户的活，不替它提交（`/delivery run` 除外）
-    if !force && iteration == 0 && pre_existing_dirty {
-        return Ok(Step::Stop(
-            "the working tree already had uncommitted changes before this turn — committing \
-             them would mix your work into the delivery. Commit or stash them first, or run \
-             /delivery run to deliver anyway."
-                .to_string(),
-        ));
-    }
-    if !force && cfg.require_edits && !dirty_this_turn && iteration == 0 {
-        return Ok(Step::Nothing);
-    }
 
     let current = git::branch(&top)?;
     if current == "HEAD" {
@@ -515,8 +318,8 @@ fn run_delivery(cfg: &config::Config, force: bool) -> Result<Step, String> {
     }
 
     let has_changes = git::dirty(&top)?;
-    // 没有改动、也没有正在跟的 CI 循环：没什么可交付
-    if !has_changes && iteration == 0 && !force {
+    // 工作区干净、又不在交付分支上：没有本扩展可以接手的东西（在别人的分支上提交不是它的活）
+    if !has_changes && !current.starts_with(BRANCH_PREFIX) {
         return Ok(Step::Nothing);
     }
 
@@ -525,16 +328,18 @@ fn run_delivery(cfg: &config::Config, force: bool) -> Result<Step, String> {
         branch = fresh_branch(&top);
         git::create_branch(&top, &branch)?;
     }
-    let message = format!("prux: {}", session_title());
     if has_changes {
+        let message = format!("prux: {}", session_title());
         git::commit_all(&top, &message)?;
-        state().dirty = false; // 已提交，下一轮要新的改动才算脏
     }
     state().branch = Some(branch.clone());
 
     if cfg.stage == Stage::Branch {
-        let summary = format!("committed to `{branch}`");
-        return Ok(Step::Done(summary));
+        return Ok(if has_changes {
+            Step::Done(format!("committed to `{branch}`"))
+        } else {
+            Step::Nothing
+        });
     }
 
     if crate::core::runtime::offline() {
@@ -588,7 +393,7 @@ fn session_body() -> String {
 /// `shortcut`：推完先等一个 `poll` 周期再读状态——`gh` 的检查结论可能还是上一次推送的，
 /// 立刻读会把旧结论当新的。要精确到「这次推送的 head sha」得逐条比对 check run 的
 /// `headSha`，等有人被误判成绿了再说。
-fn wait_for_ci(cfg: &config::Config, top: &std::path::Path, branch: &str) -> Result<Step, String> {
+fn wait_for_ci(cfg: &config::Config, top: &Path, branch: &str) -> Result<Step, String> {
     let started = Instant::now();
     let deadline = started + cfg.timeout;
     loop {
@@ -602,7 +407,7 @@ fn wait_for_ci(cfg: &config::Config, top: &std::path::Path, branch: &str) -> Res
                 )));
             }
             Verdict::Blocked(failure) => {
-                return Ok(Step::NeedsFix(fix_report(
+                return Ok(Step::Stop(report(
                     &failure,
                     status.number,
                     &status.url,
@@ -622,14 +427,14 @@ fn wait_for_ci(cfg: &config::Config, top: &std::path::Path, branch: &str) -> Res
     }
 }
 
-/// 把阻塞项拼成喂回模型的一段报告。
+/// 把阻塞项拼成交回用户的一段报告。
 ///
-/// 事实部分来自 [`gh::Failure::details`]；「改完再收工、会自动重新交付」这层语义属于
+/// 事实部分来自 [`gh::Failure::details`]；「修完再跑一次 `/delivery run`」这层语义属于
 /// 交付扩展，不塞进 `utils::gh`。
-fn fix_report(failure: &gh::Failure, number: u64, url: &str) -> String {
+fn report(failure: &gh::Failure, number: u64, url: &str) -> String {
     format!(
-        "delivery: PR #{number} is not ready ({url}). Fix what is listed, then finish — the \
-         change is committed, pushed and re-checked automatically.\n\n{}",
+        "PR #{number} is not ready ({url}). Fix what is listed, then /delivery run again to \
+         update it.\n\n{}",
         failure.details()
     )
 }
@@ -640,15 +445,12 @@ pub(super) fn run_now() -> String {
     let Some(guard) = RunGuard::acquire() else {
         return "a delivery is already running".to_string();
     };
-    let step = deliver(&cfg, true);
+    let step = run_delivery(&cfg);
     drop(guard);
     let text = match step {
-        Step::Nothing => "nothing to deliver (clean working tree)".to_string(),
-        Step::Done(text) | Step::Stop(text) => text,
-        Step::NeedsFix(report) => format!(
-            "the PR needs work; the next turn will get this:\n{}",
-            truncate_chars(&report, 800, Some(DEF_TRAILING_ELLIPSIS), true)
-        ),
+        Ok(Step::Nothing) => "nothing to deliver (clean working tree)".to_string(),
+        Ok(Step::Done(text) | Step::Stop(text)) => text,
+        Err(err) => err,
     };
     record(text.clone());
     text
@@ -657,15 +459,14 @@ pub(super) fn run_now() -> String {
 /// `/delivery status` 的文本。
 pub(super) fn status_text() -> String {
     let cfg = config::load();
-    let (branch, pr, iteration, last) = {
+    let (branch, pr, last) = {
         let st = state();
-        (st.branch.clone(), st.pr, st.iteration, st.last.clone())
+        (st.branch.clone(), st.pr, st.last.clone())
     };
     let mut out = format!(
-        "delivery: stage {} · maxIterations {} · timeout {}s · poll {}s · base {} · draft {} · \
-         requireEdits {}\nconfig: {}",
+        "delivery: stage {} · timeout {}s · poll {}s · base {} · draft {} · only /delivery run \
+         triggers it\nconfig: {}",
         cfg.stage.as_label(),
-        cfg.max_iterations,
         cfg.timeout.as_secs(),
         cfg.poll.as_secs(),
         if cfg.base.is_empty() {
@@ -674,15 +475,13 @@ pub(super) fn status_text() -> String {
             cfg.base.clone()
         },
         cfg.draft,
-        cfg.require_edits,
         config::config_path().display(),
     );
     out.push_str(&format!(
-        "\nbranch: {} · PR: {} · fed back {} time(s) this turn",
+        "\nbranch: {} · PR: {}",
         branch.as_deref().unwrap_or("—"),
         pr.map(|n| format!("#{n}"))
             .unwrap_or_else(|| "—".to_string()),
-        iteration
     ));
     out.push_str(&match last {
         Some(note) => format!(
@@ -713,20 +512,13 @@ mod tests {
     }
 
     #[test]
-    fn fingerprint_is_stable_for_the_same_report() {
-        let _serial = serial();
-        assert_eq!(fingerprint("a\nb"), fingerprint("a\nb"));
-        assert_ne!(fingerprint("a\nb"), fingerprint("a\nc"));
-    }
-
-    #[test]
     fn fresh_branch_name_is_date_based_and_non_empty() {
         let _serial = serial();
         let dir = std::env::temp_dir();
         let name = fresh_branch(&dir);
-        assert!(name.starts_with("prux/"), "{name}");
+        assert!(name.starts_with(BRANCH_PREFIX), "{name}");
         assert!(!name.contains(':'), "分支名不能带冒号: {name}");
-        assert!(name.len() > "prux/".len());
+        assert!(name.len() > BRANCH_PREFIX.len());
     }
 
     #[test]
@@ -750,7 +542,7 @@ mod tests {
     fn temp_repo(tag: &str) -> Option<PathBuf> {
         let dir = std::env::temp_dir().join(format!(
             "prux-delivery-{tag}-{}",
-            crate::extensions::util::generate_id()
+            generate_id()
         ));
         std::fs::create_dir_all(&dir).ok()?;
         let ok = std::process::Command::new("git")
@@ -797,69 +589,55 @@ mod tests {
             return; // 没有 git 的环境跳过
         };
         remember_cwd(&repo.to_string_lossy());
-        reset_turn_state();
-        {
-            let mut st = state();
-            st.measured = true;
-            st.pre_existing_dirty = false;
-            st.dirty = true;
-        }
         std::fs::write(repo.join("work.txt"), "changes\n").unwrap();
 
         let mut cfg = config::merge(None);
         cfg.stage = Stage::Branch;
         config::write(&cfg).unwrap();
 
-        let step = deliver(&cfg, false);
-        let Step::Done(text) = step else {
-            match step {
-                Step::Stop(text) | Step::Done(text) => panic!("交付失败: {text}"),
-                Step::NeedsFix(text) => panic!("交付失败: {text}"),
-                Step::Nothing => panic!("交付被跳过"),
-            }
+        let Ok(Step::Done(text)) = run_delivery(&cfg) else {
+            panic!("交付失败");
         };
         assert!(text.contains("committed to `prux/"), "{text}");
 
         let branch = git::branch(&repo).unwrap();
-        assert!(branch.starts_with("prux/"), "不在基线分支上提交: {branch}");
+        assert!(branch.starts_with(BRANCH_PREFIX), "不在基线分支上提交: {branch}");
         assert!(!git::dirty(&repo).unwrap(), "改动都已提交");
     }
 
     #[test]
-    fn refuses_to_commit_a_tree_that_was_dirty_before_the_turn() {
+    fn a_second_run_keeps_committing_to_the_branch_it_created() {
         let _serial = serial();
         let _guard = crate::test_support::AgentDirGuard::temp();
-        let Some(repo) = temp_repo("dirty") else {
+        let Some(repo) = temp_repo("reuse") else {
             return;
         };
         remember_cwd(&repo.to_string_lossy());
-        reset_turn_state();
-        std::fs::write(repo.join("user-wip.txt"), "user\n").unwrap();
-        {
-            let mut st = state();
-            st.measured = true;
-            st.pre_existing_dirty = true;
-            st.dirty = true;
-        }
+
         let mut cfg = config::merge(None);
         cfg.stage = Stage::Branch;
+        config::write(&cfg).unwrap();
 
-        let step = deliver(&cfg, false);
-        let Step::Stop(text) = step else {
-            panic!("应当拒绝交付");
-        };
-        assert!(text.contains("/delivery run"), "{text}");
-        assert_eq!(git::branch(&repo).unwrap(), "main", "不该切分支");
-        assert!(git::dirty(&repo).unwrap(), "用户的改动原样留着");
+        std::fs::write(repo.join("one.txt"), "one\n").unwrap();
+        run_delivery(&cfg).unwrap();
+        let first = git::branch(&repo).unwrap();
+
+        std::fs::write(repo.join("two.txt"), "two\n").unwrap();
+        run_delivery(&cfg).unwrap();
+        assert_eq!(git::branch(&repo).unwrap(), first, "第二次交付不该另开分支");
+        assert!(!git::dirty(&repo).unwrap());
     }
 
     #[test]
-    fn skip_paths_are_silent() {
+    fn a_clean_tree_outside_a_delivery_branch_is_silent() {
         let _serial = serial();
         let _guard = HomeGuard::temp();
         // 进程 cwd 不是 git 仓库 / 干净工作区：都该是 Nothing 而不是报错
         let cfg = config::merge(None);
-        let step = deliver(&cfg, false);
-        assert!(matches!(step, Step::Nothing | Step::Stop(_)));
+        match run_delivery(&cfg) {
+            Ok(Step::Nothing) => {}
+            Ok(Step::Done(text) | Step::Stop(text)) => panic!("不该有交付动作: {text}"),
+            Err(err) => panic!("不该报错: {err}"),
+        }
     }
 }

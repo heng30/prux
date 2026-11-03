@@ -1,8 +1,8 @@
-//! `/delivery` 命令族：看配置与最近一次交付、手动跑一次、切 stage、复位回合状态。
+//! `/delivery` 命令族：看配置与最近一次交付、跑一次交付、切 stage。
 //!
 //! 命令只读写本扩展自身的配置与运行态，因此声明 `busy_safe`。
 
-use super::{config, reset_turn_state, run_now, status_text};
+use super::{config, run_now, status_text};
 use crate::{
     core::extensions::{CommandHost, SubcommandDef, UiNotifyLevel},
     extensions::{command_arg, util::notify_text},
@@ -16,15 +16,11 @@ pub(super) const SUBCOMMANDS: &[SubcommandDef] = &[
     },
     SubcommandDef {
         name: "run",
-        description: "Deliver now, ignoring requireEdits and a pre-existing dirty tree",
+        description: "Commit, push and open / update the PR now, then report the CI result",
     },
     SubcommandDef {
         name: "stage",
         description: "Where to stop: /delivery stage branch|push|pr",
-    },
-    SubcommandDef {
-        name: "reset",
-        description: "Clear this turn's attempt counter and failure fingerprint",
     },
 ];
 
@@ -40,15 +36,8 @@ pub(super) fn handle(host: &mut dyn CommandHost, raw: &str) -> bool {
         "" | "status" => host.push_message(&status_text(), UiNotifyLevel::Info),
         "run" => run_async(host),
         "stage" => set_stage(host, rest),
-        "reset" => {
-            reset_turn_state();
-            host.push_message(
-                "delivery: cleared this turn's attempt counter",
-                UiNotifyLevel::Success,
-            );
-        }
         other => host.push_message(
-            &format!("delivery: unknown subcommand `{other}` (status|run|stage|reset)"),
+            &format!("delivery: unknown subcommand `{other}` (status|run|stage)"),
             UiNotifyLevel::Warning,
         ),
     }
