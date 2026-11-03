@@ -30,9 +30,15 @@ use crate::{
         session_manager::Session,
         tools::ToolError,
     },
-    extensions::{EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_HOOKS, util::notify_plain},
+    extensions::{
+        EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_HOOKS, util::notify_plain,
+        util::session_id_of,
+    },
     modes::tui::handlers::register_host_command,
-    utils::{paths::cwd as current_cwd, process::blocking},
+    utils::{
+        paths::cwd as current_cwd,
+        process::{self, blocking},
+    },
 };
 use config::{HookEvent, HooksConfig};
 use exec::{Decision, Verdict};
@@ -41,7 +47,7 @@ use serde_json::{Value, json};
 use std::{
     collections::HashSet,
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicU32, Ordering},
     },
 };
@@ -92,7 +98,7 @@ fn envelope_ctx() -> (String, String) {
 /// 已经提示过的「钩子起不来」命令，避免每次工具调用都刷同一条警告。
 fn warned() -> &'static Mutex<HashSet<String>> {
     /// 已提示过启动失败的命令串集合。
-    static WARNED: std::sync::OnceLock<Mutex<HashSet<String>>> = std::sync::OnceLock::new();
+    static WARNED: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
     WARNED.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
@@ -239,7 +245,7 @@ impl Extension for Hooks {
 
     /// 换会话时同步新会话标识（按会话文件名，`/new` 走的分支没有 `Session` 引用）。
     fn on_session_switched(&self, session_path: Option<&str>, _messages: &[AgentMessage]) {
-        let id = crate::extensions::util::session_id_of(session_path).unwrap_or_default();
+        let id = session_id_of(session_path).unwrap_or_default();
         session_ctx().lock().unwrap_or_else(|e| e.into_inner()).0 = id;
         STOP_CONTINUATIONS.store(0, Ordering::Relaxed);
     }
@@ -266,7 +272,7 @@ impl Extension for Hooks {
 
             let tool = name.clone();
             let original = args.clone();
-            let outcome = crate::utils::process::spawn_blocking(move || {
+            let outcome = process::spawn_blocking(move || {
                 dispatch(&config, HookEvent::PreToolUse, &tool, json!({}), args)
             })
             .await

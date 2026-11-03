@@ -357,7 +357,11 @@ impl GuiApp {
         }
 
         if let Some(Overlay::List(list)) = &mut self.overlay {
-            list.detail = Some(Info::with_rows(name, info_rows(lines)));
+            let rows = match list.detail_source {
+                DetailSource::Extension => extension_rows(lines),
+                _ => info_rows(lines),
+            };
+            list.detail = Some(Info::with_rows(name, rows));
         }
     }
 
@@ -1038,8 +1042,26 @@ pub(super) fn settings_entries(theme_dark: bool) -> Vec<Entry> {
     ]
 }
 
+/// 扩展详情行 → 表格行：首行是整句描述（[`extension_detail_lines`] 的约定），
+/// 不拆；其余行才走 [`info_rows`] 拆键值。
+/// 描述里的 `": "` 若跟着拆，整句会被塞进定宽左列折成好几行。
+pub(super) fn extension_rows(lines: Vec<String>) -> Vec<InfoRow> {
+    let mut iter = lines.into_iter();
+    let Some(first) = iter.next() else {
+        return Vec::new();
+    };
+
+    let mut rows = vec![InfoRow {
+        key: "Description".to_string(),
+        value: first.trim().to_string(),
+        copy: false,
+    }];
+    rows.extend(info_rows(iter.collect()));
+    rows
+}
+
 /// 详情行（`"  key: value"` / 纯描述）→ 表格行：`key: value` 拆成两列，
-/// 首个不是键值对的行作描述；空行是分组分隔，丢掉。
+/// 不是键值对的行作描述；空行是分组分隔，丢掉。
 pub(super) fn info_rows(lines: Vec<String>) -> Vec<InfoRow> {
     let mut rows = Vec::new();
     for line in lines {

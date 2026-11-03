@@ -537,6 +537,7 @@ pub(crate) fn debug_info_text(a: &Agent) -> String {
         format!("provider: {}", a.model.provider),
         format!("model: {}", a.model.model_id),
         format!("api: {}", a.model.api),
+        format!("cwd: {}", a.cwd),
         format!("thinking: {:?}", a.thinking_level),
         format!("messages: {}", a.messages.len()),
         format!("autoCompaction: {}", a.auto_compaction),

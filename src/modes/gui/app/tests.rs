@@ -301,6 +301,24 @@ fn detail_lines_become_table_rows() {
     assert_eq!(rows[2].value, "https://example.com/x");
 }
 
+/// 扩展详情：首行是描述（自带 `: ` 也不拆），其余行照常拆键值。
+#[test]
+fn extension_detail_first_line_stays_description() {
+    let rows = super::panels::extension_rows(vec![
+        "  Rewrite bash commands. Fail-open: never blocks the command.".to_string(),
+        String::new(),
+        "  mode: dev, creator".to_string(),
+    ]);
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].key, "Description");
+    assert_eq!(
+        rows[0].value,
+        "Rewrite bash commands. Fail-open: never blocks the command."
+    );
+    assert_eq!(rows[1].key, "mode");
+    assert_eq!(rows[1].value, "dev, creator");
+}
+
 /// 排队消息：steer 先于 follow-up 出队，同类按 settings 的 mode 取整批或一条，
 /// 待发送区一条一行（steer 标 `Steering:`，follow-up 标 `Follow-up:`，只取首行）。
 #[test]
