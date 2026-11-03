@@ -42,10 +42,7 @@ const DOCS: &[(&str, &str)] = &[
         embedded!("docs/extensions/permissions.md"),
     ),
     ("extensions/vet.md", embedded!("docs/extensions/vet.md")),
-    (
-        "extensions/delivery.md",
-        embedded!("docs/extensions/delivery.md"),
-    ),
+    ("extensions/pr.md", embedded!("docs/extensions/pr.md")),
     (
         "extensions/computer.md",
         embedded!("docs/extensions/computer.md"),

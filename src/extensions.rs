@@ -18,7 +18,6 @@ pub mod cache_watch;
 pub mod codemode;
 pub mod computer;
 pub mod debug;
-pub mod delivery;
 pub mod doc_helper;
 pub mod doctor;
 pub mod downloader;
@@ -42,6 +41,7 @@ pub mod papers;
 pub mod permissions;
 pub mod plan_mode;
 pub mod ponytail;
+pub mod pr;
 pub mod processes;
 pub mod proxy;
 pub mod recap_btw;
@@ -111,8 +111,8 @@ pub const PRIORITY_REWIND: u32 = 71;
 pub const PRIORITY_ROLLBACK: u32 = 70;
 /// shake 手动丢弃重内容扩展的注册优先级。
 pub const PRIORITY_SHAKE: u32 = 70;
-/// delivery 交付闭环（提交 / 推 / PR / 跟 CI）扩展的注册优先级。
-pub const PRIORITY_DELIVERY: u32 = 43;
+/// pr 交付闭环（提交 / 推 / PR / 跟 CI）扩展的注册优先级。
+pub const PRIORITY_PR: u32 = 43;
 /// vet 收工前项目检查闭环扩展的注册优先级。
 pub const PRIORITY_VET: u32 = 76;
 /// web-access 联网搜索与抓取扩展的注册优先级。

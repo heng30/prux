@@ -1,22 +1,21 @@
-//! `delivery` 扩展：用 `/delivery run` 把改动交付出去——建分支、提交、推、开 PR，并等 CI
-//! 与评审的结论回到聊天区。
+//! `pr` 扩展：用 `/pr run` 把改动交付出去——建分支、提交、推、开 PR，并等 CI 与评审的
+//! 结论回到聊天区。
 //!
 //! **只手动触发**：交付会写远端、产生一个可评审的 PR，这是「这版代码值得被人看」的判断，
 //! 只有用户能下。挂在结算边界上自动跑，等于把每轮还没被看过的改动都推成 PR——包括坏的。
 //!
-//! `/delivery run` 的路径：从基线分支新建 `prux/<日期>-<时分>` → `git add -A` + commit →
+//! `/pr run` 的路径：从基线分支新建 `prux/<日期>-<时分>` → `git add -A` + commit →
 //! `git push` → 已有 PR 就复用、没有就 `gh pr create` → 轮询到全绿 / 有阻塞 / 超时，把结论
-//! 贴回聊天区。CI 红了就把阻塞项原样列出，你让 agent 修完再跑一次 `/delivery run`：这时
+//! 贴回聊天区。CI 红了就把阻塞项原样列出，你让 agent 修完再跑一次 `/pr run`：这时
 //! 已经在 `prux/` 分支上，改动提交到同一条分支，同一个 PR 被更新。
 //!
 //! 三条不做的线（每条都是「替用户做了决定」）：
-//! - **不自动 merge**：合入是人的决定（`stage` 只到 `pr`）。
+//! - **不自动 merge**：合入是人的决定，它最高只到开 PR。
 //! - **不自动交付、不自动续跑**：没有结算边界钩子，没有把 CI 失败喂回模型的循环。
 //! - **不猜远端**：`origin` 不存在、`gh` 没登录、`base` 探测不出来，都停下来报原因。
 //!
-//! 配置在 `agent_dir()/extensions/delivery.json`（见 [`config`]）；git 在
-//! [`crate::utils::git`]、`gh` 与 PR 状态解析在 [`crate::utils::gh`]，`/delivery` 命令族在
-//! [`command`]。
+//! 配置在 `agent_dir()/extensions/pr.json`（见 [`config`]）；git 在 [`crate::utils::git`]、
+//! `gh` 与 PR 状态解析在 [`crate::utils::gh`]，`/pr` 命令族在 [`command`]。
 //!
 //! **默认不启用**，声明 `Dev` 模式——它会写 git 历史并推远端，只能由用户显式打开。
 
@@ -25,25 +24,26 @@ mod config;
 
 use crate::{
     core::{
-        extensions::{Extension, ExtensionCommand, ExtensionHook, ExtensionMode, ExtensionTool, UiNotifyLevel},
+        extensions::{
+            Extension, ExtensionCommand, ExtensionHook, ExtensionMode, ExtensionTool, UiNotifyLevel,
+        },
         provider::AgentMessage,
         session_manager::Session,
     },
     extensions::{
-        EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_DELIVERY,
+        EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_PR,
         util::{generate_id, notify_text},
     },
     modes::tui::handlers::register_host_command,
     utils::{
         gh::{self, Verdict},
         git,
-        glyphs::DEF_TRAILING_ELLIPSIS,
         paths::cwd,
         time::{now_iso, short_date},
         truncate::truncate_chars,
     },
 };
-use config::{Config, Stage};
+use config::Config;
 use std::{
     path::{Path, PathBuf},
     sync::{
@@ -61,18 +61,18 @@ const BRANCH_PREFIX: &str = "prux/";
 
 /// 自声明工厂：linkme 分布式切片。
 #[linkme::distributed_slice(EXTENSION_FACTORIES)]
-static DELIVERY_FACTORY: ExtensionFactory = ExtensionFactory {
-    priority: PRIORITY_DELIVERY,
-    make: || -> Arc<dyn Extension> { Arc::new(Delivery) },
+static PR_FACTORY: ExtensionFactory = ExtensionFactory {
+    priority: PRIORITY_PR,
+    make: || -> Arc<dyn Extension> { Arc::new(Pr) },
 };
 
 /// 当前会话的 cwd（`on_session_start` 记录；拿不到时回落到进程 cwd）。
 static SESSION_CWD: Mutex<Option<PathBuf>> = Mutex::new(None);
 
-/// 本扩展的运行态（只用于 `/delivery status` 展示与标题）。
+/// 本扩展的运行态（只用于 `/pr status` 展示与标题）。
 static STATE: Mutex<State> = Mutex::new(State::new());
 
-/// 交付闸：同一时刻只允许一次交付在跑（防止连点 `/delivery run`）。
+/// 交付闸：同一时刻只允许一次交付在跑（防止连点 `/pr run`）。
 static RUNNING: AtomicBool = AtomicBool::new(false);
 
 /// 配置告警只提示一次的开关。
@@ -84,7 +84,7 @@ const TITLE_CHARS: usize = 72;
 /// PR 正文里用户第一条消息的字符上限。
 const BODY_CHARS: usize = 2000;
 
-/// 最近一次交付的结论（`/delivery status` 展示）。
+/// 最近一次交付的结论（`/pr status` 展示）。
 #[derive(Debug, Clone)]
 struct Note {
     /// 结论一句话。
@@ -168,20 +168,20 @@ enum Step {
     Stop(String),
 }
 
-/// `delivery` 扩展。
-pub struct Delivery;
+/// `pr` 扩展。
+pub struct Pr;
 
-impl Extension for Delivery {
-    /// 扩展注册名（`/extension` 面板与 `/delivery` 命令共用）。
+impl Extension for Pr {
+    /// 扩展注册名（`/extension` 面板与 `/pr` 命令共用）。
     fn name(&self) -> &str {
         config::EXT
     }
 
     /// 面板里的功能说明。
     fn description(&self) -> &str {
-        "Deliver on /delivery run: commit to a session branch, push, open a pull request, then \
-         report the CI and review result. Never merges, never delivers on its own. \
-         Config: agent_dir()/extensions/delivery.json; /delivery status|run|stage"
+        "Deliver on /pr run: commit to a session branch, push, open a pull request, then report \
+         the CI and review result. Never merges, never delivers on its own. \
+         Config: agent_dir()/extensions/pr.json; /pr status|run"
     }
 
     /// 仅在 Dev 及以上模式可用。
@@ -194,23 +194,23 @@ impl Extension for Delivery {
         false
     }
 
-    /// 不提供工具：交付是用户敲 `/delivery run` 的动作，模型看不到它。
+    /// 不提供工具：交付是用户敲 `/pr run` 的动作，模型看不到它。
     fn tools(&self) -> Vec<ExtensionTool> {
         Vec::new()
     }
 
-    /// 声明 `/delivery` 命令。
+    /// 声明 `/pr` 命令。
     fn commands(&self) -> Vec<ExtensionCommand> {
         vec![ExtensionCommand {
             name: config::CMD.to_string(),
-            description: "Delivery: /delivery status|run|stage <branch|push|pr>".to_string(),
+            description: "Pull request: /pr status|run".to_string(),
             // handler 只读写本扩展自身的配置与运行态，不锁 agent。
             busy_safe: true,
             subcommands: command::SUBCOMMANDS.to_vec(),
         }]
     }
 
-    /// 接线 `/delivery` 执行入口。
+    /// 接线 `/pr` 执行入口。
     fn on_registered(&self) {
         register_host_command(config::EXT, config::CMD, command::handle);
     }
@@ -252,7 +252,7 @@ impl Extension for Delivery {
     }
 }
 
-/// 记下最近一次结论（`/delivery status` 用）。
+/// 记下最近一次结论（`/pr status` 用）。
 fn record(text: String) {
     state().last = Some(Note {
         text,
@@ -303,7 +303,7 @@ fn on_base(top: &Path, current: &str, cfg: &Config) -> bool {
 }
 
 /// 交付主体：量工作区 → 建分支 → 提交 → 推 → 开 PR → 等 CI。
-fn run_delivery(cfg: &config::Config) -> Result<Step, String> {
+fn deliver(cfg: &config::Config) -> Result<Step, String> {
     let dir = current_cwd();
     // 不是 git 仓库就没有交付可言：静默跳过（这个扩展不该在非 git 目录里刷提示）
     let Ok(top) = git::toplevel(&dir) else {
@@ -334,14 +334,6 @@ fn run_delivery(cfg: &config::Config) -> Result<Step, String> {
     }
     state().branch = Some(branch.clone());
 
-    if cfg.stage == Stage::Branch {
-        return Ok(if has_changes {
-            Step::Done(format!("committed to `{branch}`"))
-        } else {
-            Step::Nothing
-        });
-    }
-
     if crate::core::runtime::offline() {
         return Ok(Step::Stop(
             "offline mode is on — the branch is committed but not pushed".to_string(),
@@ -353,10 +345,6 @@ fn run_delivery(cfg: &config::Config) -> Result<Step, String> {
             "{err} (branch `{branch}` is committed locally)"
         )));
     }
-    if cfg.stage == Stage::Push {
-        return Ok(Step::Done(format!("pushed `{branch}` to origin")));
-    }
-
     gh::auth_ok(&top)?;
     let base = if cfg.base.is_empty() {
         gh::default_branch(&top)?
@@ -373,7 +361,7 @@ fn run_delivery(cfg: &config::Config) -> Result<Step, String> {
             let url = gh::create_pr(&top, &branch, &base, &session_title(), &body, cfg.draft)?;
             let number = gh::pr_number(&top, &branch)?.unwrap_or(0);
             notify_text(
-                &format!("delivery: opened PR #{number} {url}"),
+                &format!("pr: opened PR #{number} {url}"),
                 UiNotifyLevel::Info,
             );
             number
@@ -407,11 +395,7 @@ fn wait_for_ci(cfg: &config::Config, top: &Path, branch: &str) -> Result<Step, S
                 )));
             }
             Verdict::Blocked(failure) => {
-                return Ok(Step::Stop(report(
-                    &failure,
-                    status.number,
-                    &status.url,
-                )));
+                return Ok(Step::Stop(report(&failure, status.number, &status.url)));
             }
             Verdict::Pending(desc) => {
                 if Instant::now() >= deadline {
@@ -429,23 +413,23 @@ fn wait_for_ci(cfg: &config::Config, top: &Path, branch: &str) -> Result<Step, S
 
 /// 把阻塞项拼成交回用户的一段报告。
 ///
-/// 事实部分来自 [`gh::Failure::details`]；「修完再跑一次 `/delivery run`」这层语义属于
-/// 交付扩展，不塞进 `utils::gh`。
+/// 事实部分来自 [`gh::Failure::details`]；「修完再跑一次 `/pr run`」这层语义属于交付
+/// 扩展，不塞进 `utils::gh`。
 fn report(failure: &gh::Failure, number: u64, url: &str) -> String {
     format!(
-        "PR #{number} is not ready ({url}). Fix what is listed, then /delivery run again to \
-         update it.\n\n{}",
+        "PR #{number} is not ready ({url}). Fix what is listed, then /pr run again to update \
+         it.\n\n{}",
         failure.details()
     )
 }
 
-/// `/delivery run` 的同步入口（供 [`command`] 在后台线程里调用）。
+/// `/pr run` 的同步入口（供 [`command`] 在后台线程里调用）。
 pub(super) fn run_now() -> String {
     let cfg = config::load();
     let Some(guard) = RunGuard::acquire() else {
         return "a delivery is already running".to_string();
     };
-    let step = run_delivery(&cfg);
+    let step = deliver(&cfg);
     drop(guard);
     let text = match step {
         Ok(Step::Nothing) => "nothing to deliver (clean working tree)".to_string(),
@@ -456,7 +440,7 @@ pub(super) fn run_now() -> String {
     text
 }
 
-/// `/delivery status` 的文本。
+/// `/pr status` 的文本。
 pub(super) fn status_text() -> String {
     let cfg = config::load();
     let (branch, pr, last) = {
@@ -464,9 +448,7 @@ pub(super) fn status_text() -> String {
         (st.branch.clone(), st.pr, st.last.clone())
     };
     let mut out = format!(
-        "delivery: stage {} · timeout {}s · poll {}s · base {} · draft {} · only /delivery run \
-         triggers it\nconfig: {}",
-        cfg.stage.as_label(),
+        "pr: timeout {}s · poll {}s · base {} · draft {} · only /pr run triggers it\nconfig: {}",
         cfg.timeout.as_secs(),
         cfg.poll.as_secs(),
         if cfg.base.is_empty() {
@@ -540,10 +522,7 @@ mod tests {
 
     /// 造一个临时 git 仓库，返回它的路径；`git` 不可用时返回 `None`。
     fn temp_repo(tag: &str) -> Option<PathBuf> {
-        let dir = std::env::temp_dir().join(format!(
-            "prux-delivery-{tag}-{}",
-            generate_id()
-        ));
+        let dir = std::env::temp_dir().join(format!("prux-delivery-{tag}-{}", generate_id()));
         std::fs::create_dir_all(&dir).ok()?;
         let ok = std::process::Command::new("git")
             .args(["init", "-b", "main"])
@@ -581,6 +560,14 @@ mod tests {
         Some(dir)
     }
 
+    /// 一次没有远端可推的交付：提交成功，`git push` 失败（结论是 Stop，不 panic）。
+    fn deliver_locally(cfg: &Config) -> Step {
+        match deliver(cfg) {
+            Ok(step) => step,
+            Err(err) => panic!("不该报错: {err}"),
+        }
+    }
+
     #[test]
     fn commits_onto_a_fresh_branch_instead_of_the_base_branch() {
         let _serial = serial();
@@ -591,17 +578,17 @@ mod tests {
         remember_cwd(&repo.to_string_lossy());
         std::fs::write(repo.join("work.txt"), "changes\n").unwrap();
 
-        let mut cfg = config::merge(None);
-        cfg.stage = Stage::Branch;
-        config::write(&cfg).unwrap();
-
-        let Ok(Step::Done(text)) = run_delivery(&cfg) else {
-            panic!("交付失败");
-        };
-        assert!(text.contains("committed to `prux/"), "{text}");
+        let cfg = config::merge(None);
+        assert!(
+            matches!(deliver_locally(&cfg), Step::Stop(_)),
+            "没有 origin，应当停在推远端"
+        );
 
         let branch = git::branch(&repo).unwrap();
-        assert!(branch.starts_with(BRANCH_PREFIX), "不在基线分支上提交: {branch}");
+        assert!(
+            branch.starts_with(BRANCH_PREFIX),
+            "不在基线分支上提交: {branch}"
+        );
         assert!(!git::dirty(&repo).unwrap(), "改动都已提交");
     }
 
@@ -613,17 +600,14 @@ mod tests {
             return;
         };
         remember_cwd(&repo.to_string_lossy());
-
-        let mut cfg = config::merge(None);
-        cfg.stage = Stage::Branch;
-        config::write(&cfg).unwrap();
+        let cfg = config::merge(None);
 
         std::fs::write(repo.join("one.txt"), "one\n").unwrap();
-        run_delivery(&cfg).unwrap();
+        deliver_locally(&cfg);
         let first = git::branch(&repo).unwrap();
 
         std::fs::write(repo.join("two.txt"), "two\n").unwrap();
-        run_delivery(&cfg).unwrap();
+        deliver_locally(&cfg);
         assert_eq!(git::branch(&repo).unwrap(), first, "第二次交付不该另开分支");
         assert!(!git::dirty(&repo).unwrap());
     }
@@ -634,10 +618,6 @@ mod tests {
         let _guard = HomeGuard::temp();
         // 进程 cwd 不是 git 仓库 / 干净工作区：都该是 Nothing 而不是报错
         let cfg = config::merge(None);
-        match run_delivery(&cfg) {
-            Ok(Step::Nothing) => {}
-            Ok(Step::Done(text) | Step::Stop(text)) => panic!("不该有交付动作: {text}"),
-            Err(err) => panic!("不该报错: {err}"),
-        }
+        assert!(matches!(deliver_locally(&cfg), Step::Nothing));
     }
 }
