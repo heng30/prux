@@ -4,13 +4,13 @@
 //! `tool_execution_start|update|end` / `agent_settled` …），这里只做 GUI 需要的投影。
 
 use super::{
-    app::GuiApp,
+    app::{GuiApp, ToastKind, icon},
     code,
     components::dot,
     markdown,
     theme::{
         DOT_SIZE, FONT_BODY, FONT_CAPTION, FONT_SMALL, MONO_ADVANCE, MONO_FONT_FAMILY, RADIUS_MD,
-        SPACE_LG, SPACE_MD, SPACE_SM, SPACE_XS, SPACE_XXS, Theme, UI_FONT_FAMILY, px,
+        RADIUS_SM, SPACE_LG, SPACE_MD, SPACE_SM, SPACE_XS, SPACE_XXS, Theme, UI_FONT_FAMILY, px,
     },
 };
 use crate::{
@@ -26,9 +26,9 @@ use crate::{
 };
 use base64::Engine as _;
 use gpui::{
-    AnyElement, Bounds, Context, ElementId, FontStyle, FontWeight, HighlightStyle, Hsla, Image,
-    ImageFormat, ImageSource, InteractiveText, IntoElement, ParentElement, Pixels, SharedString,
-    Styled, StyledText, Window, div, prelude::*, relative,
+    AnyElement, Bounds, Context, ElementId, Entity, FontStyle, FontWeight, HighlightStyle, Hsla,
+    Image, ImageFormat, ImageSource, InteractiveText, IntoElement, ParentElement, Pixels,
+    SharedString, Styled, StyledText, Window, div, prelude::*, relative,
 };
 use serde_json::Value;
 use std::{
@@ -132,6 +132,8 @@ enum Row {
         lang: Option<String>,
         /// 每行的着色片段
         lines: Vec<Vec<(Option<Rgb>, String)>>,
+        /// 代码原文：点复制按钮时写进剪贴板的内容（`Arc` 让每帧克隆只是加引用计数）
+        text: Arc<str>,
     },
     /// 等宽多行块：块级公式与 mermaid 图（都已排版成行，靠行首空格对齐）
     Mono {
@@ -253,12 +255,14 @@ pub fn selected_text(sel: TextSel, lines: &[LineInfo]) -> String {
     out.join("\n")
 }
 
-/// 渲染对话流的版式上下文：内容可用宽度 + 选区/行登记。
+/// 渲染对话流的版式上下文：内容可用宽度 + 选区/行登记 + 所属实体。
 pub struct FlowCtx<'a> {
     /// 内容可用内宽（逻辑像素）：带 padding 的盒子按它算内部换行宽度
     pub width: Pixels,
     /// 选区高亮与行登记
     pub lines: &'a mut TextLines,
+    /// 渲染方实体：行内按钮（代码块复制）要回到它上面写剪贴板/弹 toast
+    pub app: Entity<GuiApp>,
 }
 
 /// 渲染时收集的可选文本上下文：行序号、选区高亮、每行的边界与文本。
@@ -1403,7 +1407,7 @@ fn assistant_block(
     let cols = (f32::from(ctx.width) / (FONT_SMALL * MONO_ADVANCE)) as usize;
     let rows = assistant.body.rows(&assistant.text, theme, cols.max(16));
     column
-        .child(render_rows(rows, theme, ctx.lines))
+        .child(render_rows(rows, theme, ctx.lines, &ctx.app))
         .into_any_element()
 }
 
@@ -1641,7 +1645,7 @@ fn note_block(note: &Note, theme: &Theme) -> AnyElement {
 }
 
 /// Markdown 文本 → 元素（覆盖层面板用：只要排版与配色，不登记选区/行位置）。
-pub fn markdown_body(text: &str, theme: &Theme) -> AnyElement {
+pub fn markdown_body(text: &str, theme: &Theme, app: Entity<GuiApp>) -> AnyElement {
     // 覆盖层面板的宽度在渲染时才量得到，这里按固定列数排等宽内容（公式/mermaid）
     let rows = overlay_rows(text, theme, OVERLAY_COLS);
     let mut lines = TextLines {
@@ -1651,7 +1655,7 @@ pub fn markdown_body(text: &str, theme: &Theme) -> AnyElement {
         text_bounds: Rc::new(RefCell::new(HashMap::new())),
         rows: Rc::new(RefCell::new(Vec::new())),
     };
-    render_rows(&rows, theme, &mut lines)
+    render_rows(&rows, theme, &mut lines, &app)
 }
 
 /// 一份覆盖层文档的预解析结果。
@@ -1712,6 +1716,7 @@ fn parse_rows(text: &str, theme: &Theme, cols: usize) -> Vec<Row> {
                 Row::Code {
                     lines: code::highlight(&code, lang.as_deref(), &syntect_theme),
                     lang,
+                    text: code.into(),
                 }
             }
             markdown::Block::Table(table) => Row::Table(table),
@@ -1722,7 +1727,12 @@ fn parse_rows(text: &str, theme: &Theme, cols: usize) -> Vec<Row> {
 }
 
 /// 预解析行 → 元素（行内样式、标题字号、代码块的逐行着色）。
-fn render_rows(rows: &[Row], theme: &Theme, lines: &mut TextLines) -> AnyElement {
+fn render_rows(
+    rows: &[Row],
+    theme: &Theme,
+    lines: &mut TextLines,
+    app: &Entity<GuiApp>,
+) -> AnyElement {
     let mut column = div().w_full().flex().flex_col().gap(px(SPACE_XS));
     // 子元素下标 → 行序号（规则线之类不参与选区的行记 None）
     let mut child_lines: Vec<Option<usize>> = Vec::new();
@@ -1802,7 +1812,15 @@ fn render_rows(rows: &[Row], theme: &Theme, lines: &mut TextLines) -> AnyElement
                     })
                     .into_any_element()
             }
-            Row::Code { lang, lines: code } => {
+            Row::Code {
+                lang,
+                lines: code,
+                text,
+            } => {
+                let copy_id = link_id;
+                link_id += 1;
+                let source = text.clone();
+                let app = app.clone();
                 let mut card = div()
                     .w_full()
                     .my(px(SPACE_XS))
@@ -1824,7 +1842,25 @@ fn render_rows(rows: &[Row], theme: &Theme, lines: &mut TextLines) -> AnyElement
                         .text_color(theme.text_ghost)
                         .child(SharedString::from(
                             lang.clone().unwrap_or_else(|| "text".into()),
-                        )),
+                        ))
+                        .child(
+                            div()
+                                .id(("code-copy", copy_id))
+                                .p(px(SPACE_XXS))
+                                .rounded(px(RADIUS_SM))
+                                .cursor_pointer()
+                                .hover(|style| style.bg(theme.overlay_strong))
+                                .on_click(move |_, _, cx| {
+                                    let source = source.to_string();
+                                    app.update(cx, |this, cx| {
+                                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                            source,
+                                        ));
+                                        this.toast("Copied to clipboard", ToastKind::Success, cx);
+                                    });
+                                })
+                                .child(icon::copy(theme)),
+                        ),
                 );
 
                 let mut body = div()

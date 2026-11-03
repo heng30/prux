@@ -389,9 +389,11 @@ impl GuiApp {
             text_bounds: self.line_text_bounds.clone(),
             rows: self.line_rows.clone(),
         };
+        let app = cx.entity();
         let mut flow_ctx = transcript::FlowCtx {
             width: flow_width,
             lines: &mut lines,
+            app,
         };
 
         // 默认行高是 φ（1.618em），行内代码/高亮背景会又高又连在一起，

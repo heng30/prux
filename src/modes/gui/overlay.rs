@@ -1152,7 +1152,11 @@ fn render_info(info: &Info, theme: &Theme, cx: &mut gpui::Context<GuiApp>) -> An
     if info.rows.is_empty() {
         let mut body = info_body(&info.scroll);
         if info.markdown {
-            body = body.child(transcript::markdown_body(&info.lines.join("\n"), theme));
+            body = body.child(transcript::markdown_body(
+                &info.lines.join("\n"),
+                theme,
+                cx.entity(),
+            ));
         } else {
             for line in &info.lines {
                 body = body.child(
@@ -1332,7 +1336,7 @@ fn info_table(
                     let text = text.clone();
                     app.update(cx, |this, cx| {
                         cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
-                        this.toast("Copied to clipboard", ToastKind::Info, cx);
+                        this.toast("Copied to clipboard", ToastKind::Success, cx);
                     });
                 })
                 .child(SharedString::from(row.value.clone()))

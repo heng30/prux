@@ -15,7 +15,6 @@
 //! - [`status`]：状态栏文案与驱动它的计时/速率采样。
 
 mod actions;
-mod icon;
 mod input;
 mod keys;
 mod menus;
@@ -24,6 +23,8 @@ mod render;
 mod status;
 mod suggest;
 mod ui;
+
+pub(crate) mod icon;
 
 #[cfg(test)]
 mod tests;

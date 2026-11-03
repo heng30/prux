@@ -2,6 +2,10 @@
 
 ### Added
 
+- **Every code block in the desktop GUI has a copy button**: the block's header row shows a
+  copy icon on the right; one click puts the block's source on the clipboard and raises a
+  `Copied to clipboard` toast.
+
 - **A `hooks` extension runs your own commands at lifecycle points**: four events —
   `PreToolUse`, `PostToolUse`, `UserPromptSubmit` and `Stop` — are driven from a `hooks` section
   in `settings.json`, in the same shape Claude Code uses, so an existing config drops in. Each
@@ -965,6 +969,9 @@
 ## 中文
 
 ### 新增
+
+- **桌面 GUI 的每个代码块右上角都有复制按钮**：点击代码块首行右侧的复制图标，整块源码进剪贴板，
+  并弹出 `Copied to clipboard` 提示。
 
 - **新增 `hooks` 扩展：在生命周期时机跑你自己配的命令**：四个事件——`PreToolUse`、
   `PostToolUse`、`UserPromptSubmit`、`Stop`——由 `settings.json` 的 `hooks` 段驱动，格式与

@@ -379,7 +379,7 @@ impl GuiApp {
             let text = picked.unwrap_or_else(|| self.editor.selected_text());
             if !text.is_empty() {
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
-                self.toast("Copied selection", ToastKind::Info, cx);
+                self.toast("Copied selection", ToastKind::Success, cx);
             }
             return true;
         }
@@ -391,7 +391,7 @@ impl GuiApp {
                 .filter(|text| !text.is_empty())
             {
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
-                self.toast("Copied selection", ToastKind::Info, cx);
+                self.toast("Copied selection", ToastKind::Success, cx);
                 return true;
             }
 
@@ -413,7 +413,7 @@ impl GuiApp {
             let text = self.editor.text();
             if !text.is_empty() {
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
-                self.toast("Copied input", ToastKind::Info, cx);
+                self.toast("Copied input", ToastKind::Success, cx);
             }
             return true;
         }
