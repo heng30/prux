@@ -1,11 +1,12 @@
 //! 进程辅助：执行外部命令时的平台差异、输出收集与回收。
 //!
-//! 十件事：
+//! 十一件事：
 //! - [`shell_command`]：按平台构造「执行一条命令字符串」的 shell 调用；
 //! - [`shell_tokenize`]：按 shell 引号规则把一条命令行拆成参数；
 //! - [`shell_quote`]：把一段文本包成 shell 里的一个安全字面量（[`shell_tokenize`] 的逆操作）；
 //! - [`wrap_cd`]：把一条命令包进「先 cd 到某目录，失败则退出」的壳；
 //! - [`run_stdout`]：跑一条现成的命令并取 stdout，失败时把 stderr 带进错误；
+//! - [`run_timed`]：跑一条命令，可喂 stdin、带超时，stdout/stderr 各留尾部；
 //! - [`drain_tail`]：持续读空管道而只保留尾部（限量，且不会因为管道写满把子进程卡死）；
 //! - [`spawn_detached`]：拉起一个**不占用终端**的长命子进程（GUI 应用等），输出落临时日志；
 //! - [`kill_process_tree`]：连同子进程一起强杀（Unix 进程组 / Windows `taskkill /T`）；
@@ -21,10 +22,23 @@
 
 use crate::utils::output_files::create_output_file_stream;
 use std::{
-    io::Read,
+    io::{Read, Write},
     path::PathBuf,
     process::{Command, Stdio},
+    time::{Duration, Instant},
 };
+
+/// [`run_timed`] 为 stdout / stderr 各自保留的字节上限。
+const TIMED_OUTPUT_LIMIT: usize = 64 * 1024;
+
+/// 轮询子进程退出状态的间隔。
+const TIMED_POLL_INTERVAL: Duration = Duration::from_millis(20);
+
+/// 子进程退出后，等两个读取线程把管道读空的上限。
+///
+/// 正常退出时管道立刻 EOF；但命令若把 stdout 留给了后台的孙进程（`sh -c 'x &'`），
+/// 管道就永远不会关，死等会把整个调用挂住。超出的部分直接丢弃。
+const TIMED_READ_GRACE: Duration = Duration::from_millis(500);
 
 /// 按平台构造执行一条命令字符串的 shell 调用。
 ///
@@ -165,6 +179,105 @@ pub fn drain_tail(mut reader: impl Read, limit: usize) -> (String, bool) {
 
     let text = String::from_utf8_lossy(&buf).to_string();
     (text, truncated)
+}
+
+/// 一次限时执行的原始结果。
+#[derive(Debug, Clone, Default)]
+pub struct TimedOutput {
+    /// 退出码；超时被杀、被信号杀掉或起不来时为 `None`。
+    pub code: Option<i32>,
+    /// 保留的 stdout 尾部；超过 [`TIMED_OUTPUT_LIMIT`] 字节时只留尾部。
+    pub stdout: String,
+    /// 保留的 stderr 尾部，截留规则同上。
+    pub stderr: String,
+    /// 是否因超过限定时间而被强杀。
+    pub timed_out: bool,
+}
+
+/// 跑一条现成的命令：可选喂一段 stdin、限定等待时间，stdout / stderr 各留尾部。
+///
+/// 三个方向都接管道（stdin 只在要喂数据时接）：任意一边被写满或没读完都会把子进程卡死，
+/// 所以 stdin 交给写线程、stdout / stderr 交给 [`drain_tail`] 线程读空，主线程只轮询退出状态。超时后连子进程
+/// 一起强杀（[`kill_process_tree`]），结果里 `timed_out` 为 `true`。
+///
+/// 只有进程**起不来**才返回 `Err`；非零退出码属于正常结果，交给调用方解释。
+pub fn run_timed(
+    mut cmd: Command,
+    stdin: Option<String>,
+    timeout: Duration,
+) -> std::io::Result<TimedOutput> {
+    cmd.stdin(if stdin.is_some() {
+        Stdio::piped()
+    } else {
+        Stdio::null()
+    })
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped());
+    let mut child = cmd.spawn()?;
+
+    if let Some(payload) = stdin
+        && let Some(mut pipe) = child.stdin.take()
+    {
+        std::thread::spawn(move || {
+            let _ = pipe.write_all(payload.as_bytes());
+        });
+    }
+    // 读取结果经 channel 回传：这样收尾时能用带超时的 recv，而不是可能永远阻塞的 join。
+    let (tx, rx) = std::sync::mpsc::channel();
+    let drain = |pipe: Box<dyn Read + Send>,
+                 is_stdout: bool,
+                 tx: &std::sync::mpsc::Sender<(bool, String)>| {
+        let tx = tx.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send((is_stdout, drain_tail(pipe, TIMED_OUTPUT_LIMIT).0));
+        });
+    };
+    if let Some(pipe) = child.stdout.take() {
+        drain(Box::new(pipe), true, &tx);
+    }
+    if let Some(pipe) = child.stderr.take() {
+        drain(Box::new(pipe), false, &tx);
+    }
+    drop(tx);
+
+    let deadline = Instant::now() + timeout;
+    let mut timed_out = false;
+    let code = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status.code(),
+            Ok(None) => {}
+            Err(_) => break None,
+        }
+        if Instant::now() >= deadline {
+            timed_out = true;
+            let pid = child.id();
+            let _ = child.kill();
+            kill_process_tree(pid);
+            break None;
+        }
+        std::thread::sleep(TIMED_POLL_INTERVAL);
+    };
+
+    let mut stdout = String::new();
+    let mut stderr = String::new();
+    let read_deadline = Instant::now() + TIMED_READ_GRACE;
+    while let Some(left) = read_deadline.checked_duration_since(Instant::now()) {
+        let Ok((is_stdout, text)) = rx.recv_timeout(left) else {
+            break;
+        };
+        if is_stdout {
+            stdout = text;
+        } else {
+            stderr = text;
+        }
+    }
+
+    Ok(TimedOutput {
+        code,
+        stdout,
+        stderr,
+        timed_out,
+    })
 }
 
 /// 跑一条命令并取它的 stdout；失败时把 stderr 带进错误。
@@ -311,6 +424,46 @@ where
 mod tests {
     use super::*;
     use std::{io::Cursor, time::Duration};
+
+    /// 信封能从 stdin 喂进去，stdout 原样收回来。
+    #[test]
+    #[cfg(not(windows))]
+    fn run_timed_feeds_stdin_and_returns_stdout() {
+        let out = run_timed(
+            shell_command("cat"),
+            Some("payload\n".to_string()),
+            Duration::from_secs(10),
+        )
+        .expect("spawn cat");
+        assert_eq!(out.code, Some(0));
+        assert_eq!(out.stdout, "payload\n");
+        assert!(!out.timed_out);
+    }
+
+    /// 超时：进程被杀、标记 timed_out，退出码为 None。
+    #[test]
+    #[cfg(not(windows))]
+    fn run_timed_kills_on_timeout() {
+        let out = run_timed(shell_command("sleep 30"), None, Duration::from_millis(50))
+            .expect("spawn sleep");
+        assert!(out.timed_out);
+        assert_eq!(out.code, None);
+    }
+
+    /// 后台孙进程占着 stdout 管道时不能让调用挂住：shell 已经退出，读取有上界就返回。
+    #[test]
+    #[cfg(not(windows))]
+    fn run_timed_does_not_hang_on_inherited_pipe() {
+        let started = std::time::Instant::now();
+        let out = run_timed(shell_command("sleep 30 &"), None, Duration::from_millis(50))
+            .expect("spawn background sleep");
+        assert_eq!(out.code, Some(0));
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "took {:?}",
+            started.elapsed()
+        );
+    }
 
     /// 引号包裹后的文本不能带引号泄漏到参数里；空串必须被引号保住。
     #[test]

@@ -50,6 +50,8 @@ const DOCS: &[(&str, &str)] = &[
         "extensions/papers.md",
         embedded!("docs/extensions/papers.md"),
     ),
+    ("extensions/hooks.md", embedded!("docs/extensions/hooks.md")),
+    ("extensions/rtk.md", embedded!("docs/extensions/rtk.md")),
     ("custom-provider.md", embedded!("docs/custom-provider.md")),
     ("sessions.md", embedded!("docs/sessions.md")),
     ("compaction.md", embedded!("docs/compaction.md")),

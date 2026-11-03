@@ -25,6 +25,7 @@ pub mod footer;
 pub mod goal;
 pub mod hang_detect;
 pub mod hardware;
+pub mod hooks;
 pub mod injection_guard;
 pub mod jet;
 pub mod leak_guard;
@@ -44,6 +45,7 @@ pub mod proxy;
 pub mod recap_btw;
 pub mod rewind;
 pub mod rollback;
+pub mod rtk;
 pub mod sandbox;
 pub mod session_search;
 pub mod shake;
@@ -72,6 +74,10 @@ pub const PRIORITY_EXTRA_THEMES: u32 = 100;
 pub const PRIORITY_GOAL: u32 = 90;
 /// plan-mode 只读探索模式扩展的注册优先级。
 pub const PRIORITY_PLAN_MODE: u32 = 85;
+/// rtk bash 命令改写扩展的注册优先级。
+///
+/// 高于 [`PRIORITY_PERMISSIONS`]：先改写、再判定，权限看到的是真正要执行的命令。
+pub const PRIORITY_RTK: u32 = 86;
 /// permissions 工具权限门控扩展的注册优先级。
 pub const PRIORITY_PERMISSIONS: u32 = 84;
 /// leak-guard 凭据外发检测扩展的注册优先级。
@@ -82,6 +88,10 @@ pub const PRIORITY_INJECTION_GUARD: u32 = 82;
 pub const PRIORITY_SANDBOX: u32 = 81;
 /// tasks 结构化任务跟踪扩展的注册优先级。
 pub const PRIORITY_TASKS: u32 = 80;
+/// hooks 外部命令生命周期钩子扩展的注册优先级。
+///
+/// 低于 [`PRIORITY_PERMISSIONS`] 与 [`PRIORITY_SANDBOX`]：权限与沙箱先拒绝，钩子无权放行。
+pub const PRIORITY_HOOKS: u32 = 79;
 /// subagent 子代理扩展的注册优先级。
 pub const PRIORITY_SUBAGENT: u32 = 78;
 /// loop-detect 循环行为检测扩展的注册优先级。

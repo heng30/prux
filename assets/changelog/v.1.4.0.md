@@ -2,6 +2,32 @@
 
 ### Added
 
+- **A `hooks` extension runs your own commands at lifecycle points**: four events —
+  `PreToolUse`, `PostToolUse`, `UserPromptSubmit` and `Stop` — are driven from a `hooks` section
+  in `settings.json`, in the same shape Claude Code uses, so an existing config drops in. Each
+  hook gets one line of JSON on stdin (`hook_event_name`, `session_id`, `cwd`, plus
+  `tool_name` / `tool_input` / `tool_response` / `prompt` / `stop_hook_active`) and answers with
+  an exit code plus optional JSON on stdout: exit `2` blocks with stderr as the reason, exit `0`
+  reads `decision: block` / `approve`, `hookSpecificOutput.permissionDecision`
+  (`allow` / `ask` / `deny`), `additionalContext` and `updatedInput`. So a hook can deny a call,
+  raise an approval panel, rewrite the tool input, replace what the model sees as the tool
+  result, reject a prompt, or ask the agent to keep going after it tried to stop (`Stop` is
+  capped at 5 consecutive continuations). Verdicts merge most-severe-first, the first `deny`
+  stops the batch, `matcher` is a case-insensitive tool-name regex, each command carries its own
+  timeout (10s default) and is killed with its process tree on expiry — a broken hook prints one
+  warning and never blocks the call. `/hooks` lists the active hooks and any config errors.
+  Off by default (`Dev` / `Creator`).
+
+- **An `rtk` extension compacts bash commands through the external `rtk` CLI**: every `bash`
+  call runs `rtk rewrite <command>` first and executes the compact equivalent when rtk offers one
+  (exit `0` or `3` with output; exit `1` means "no filter"), which keeps tool output — and the
+  context it eats — small. It is fail-open by design: a missing binary, a timeout (5s), empty
+  output or an exit code it does not recognise all run the original command. What it does not do
+  is stay quiet: enabling it without `rtk` in `PATH` reports an error once, with the download
+  address (https://github.com/rtk-ai/rtk). The rewrite happens before permission checks, so
+  `permissions` and the sandbox judge the command that actually runs. Off by default
+  (`Dev` / `Creator`).
+
 - **A `rollback` extension puts back the files a turn changed**: files are snapshotted right
   before `edit` / `write` touches them and grouped by **turn** (one user message = one turn).
   `/rollback` lists the turns that changed files, `/rollback diff <n>` shows which files a turn
@@ -939,6 +965,27 @@
 ## 中文
 
 ### 新增
+
+- **新增 `hooks` 扩展：在生命周期时机跑你自己配的命令**：四个事件——`PreToolUse`、
+  `PostToolUse`、`UserPromptSubmit`、`Stop`——由 `settings.json` 的 `hooks` 段驱动，格式与
+  Claude Code 同形，已有配置可以直接搬。每条钩子的 stdin 是一行 JSON（`hook_event_name`、
+  `session_id`、`cwd`，以及 `tool_name` / `tool_input` / `tool_response` / `prompt` /
+  `stop_hook_active`），结果看退出码加 stdout 上的可选 JSON：退出码 `2` 按阻止处理、stderr 当
+  理由；`0` 读 `decision: block` / `approve`、`hookSpecificOutput.permissionDecision`
+  （`allow` / `ask` / `deny`）、`additionalContext` 与 `updatedInput`。于是钩子可以拒绝一次调用、
+  弹确认面板、改写入参、覆盖模型看到的工具结果、拒绝一次提交，或者在 agent 想收工时要求继续
+  （`Stop` 最多连续续跑 5 次）。多个钩子的意向按最严合并，任何一条 `deny` 就让本批停下；
+  `matcher` 是大小写不敏感的工具名正则；每条命令自带超时（缺省 10 秒），超时连子进程一起杀掉。
+  写坏的钩子只提示一次，绝不挡住调用。`/hooks` 打印生效的钩子与配置错误。默认不启用
+  （`Dev` / `Creator`）。
+
+- **新增 `rtk` 扩展：用外部 `rtk` CLI 压缩 bash 命令**：每次 `bash` 调用前先跑
+  `rtk rewrite <命令>`，rtk 给出紧凑等价写法时就用改写后的命令执行（退出码 `0` 或 `3` 且有
+  输出；`1` 表示没有可用的改写），从而让工具输出、以及它吃掉的上下文小下来。**全程
+  fail-open**：二进制缺失、超时（5 秒）、输出为空、退出码不认，都按原命令执行。它唯一不会
+  沉默的是「启用了但没装」——`PATH` 上找不到 `rtk` 会报一次错并给出下载地址
+  （https://github.com/rtk-ai/rtk）。改写发生在权限判定之前，因此 `permissions` 与沙箱看到的是
+  真正要执行的那条命令。默认不启用（`Dev` / `Creator`）。
 
 - **新增 `rollback` 扩展：把某一回合改过的文件退回去**：`edit` / `write` 写盘之前把目标文件快照
   下来，按**回合**分组（一条用户消息 = 一回合）。`/rollback` 列出改过文件的回合，

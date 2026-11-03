@@ -80,6 +80,7 @@ pub const KNOWN_SETTINGS_KEYS: &[&str] = &[
     "fullscreenWheelScrollLines",
     "hideThinkingBlock",
     "historyMaxEntries",
+    "hooks",
     "images",
     "latex",
     "mermaid",
@@ -106,7 +107,12 @@ pub const KNOWN_SETTINGS_KEYS: &[&str] = &[
 ///
 /// 项目层只覆盖这几项（见 `assets/docs/settings.md` 的「项目级设置与信任」），其余键写在
 /// 项目文件里**不生效**——这正是 [`settings_key_issues`] 要报出来的静默陷阱。
-const PROJECT_SETTINGS_KEYS: &[&str] = &["defaultTools", "disabledExtensions", "enabledExtensions"];
+const PROJECT_SETTINGS_KEYS: &[&str] = &[
+    "defaultTools",
+    "disabledExtensions",
+    "enabledExtensions",
+    "hooks",
+];
 
 /// 给出「did you mean」的最大编辑距离；再大候选项就跟手滑键名毫无关系了。
 const SUGGESTION_MAX_DISTANCE: usize = 2;
