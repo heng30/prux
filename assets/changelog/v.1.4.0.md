@@ -616,21 +616,20 @@
   `defaultTools` / `disabledExtensions` / `enabledExtensions`. Grammar errors stay with the startup
   warning; each run re-reads both files.
 
-- **The `delivery` extension hands a turn's change off and follows it to a green PR**: where `vet`
-  only proves the local checks pass, `delivery` does the rest of the mechanical work at settle time
-  — branch, commit, push, open a pull request, wait for CI and review. Failing checks (`name —
-  conclusion`) and `CHANGES_REQUESTED` reviews are folded into one structured report, injected as a
-  user message, and the turn keeps going; the next settle commits and pushes again. It stops on
-  green, on `maxIterations`, when the same report repeats, or when nothing settles within
-  `timeoutSecs` (a pending check is not fed back). `stage` picks how far it goes — `branch`,
-  `push`, or `pr` (default) — and it never merges. Three lines it does not cross: it will not
-  commit a working tree that was already dirty before the turn started (that is your work, not
-  this turn's; `/delivery run` is the explicit override), it will not guess a remote (no `origin`,
-  no `gh` login, no detectable default branch all stop with a reason), and it creates a
-  `prux/<date>-<time>` branch instead of committing onto the base branch. Config lives in
-  `agent_dir()/extensions/delivery.json` with no project-level override — a file committed into a
-  repository should not be able to change where your work is pushed. `/delivery
-  status|run|stage|reset`. Off by default, `Dev` mode only: it writes git history and pushes.
+- **The `delivery` extension is now `pr`, and only `/pr run` hands a change off**: where `vet`
+  only proves the local checks pass, `pr` does the rest of the mechanical work when you ask for it —
+  branch, commit, push, open a pull request, then report the CI and review result. There is no
+  settle-boundary hook and no feedback loop any more: nothing is committed or pushed behind your
+  back, so a broken turn never becomes a pull request on its own. Failing checks (`name —
+  conclusion`) and `CHANGES_REQUESTED` reviews are listed with the PR link; fix, then `/pr run`
+  again — the change lands on the same branch and the same PR is updated. It stops on green, on
+  blocked, or when nothing settles within `timeoutSecs` (a pending check is not fed back), and it
+  never merges. A `prux/<date>-<time>` branch is created instead of committing onto the base
+  branch; a clean tree outside a `prux/` branch does nothing. It will not guess a remote (no
+  `origin`, no `gh` login, no detectable default branch all stop with a reason). Config lives in
+  `agent_dir()/extensions/pr.json` with no project-level override — a file committed into a
+  repository should not be able to change where your work is pushed. `/pr status|run`. Off by
+  default, `Dev` mode only: it writes git history and pushes.
 
 - **Memory entries now need evidence, and a maintenance pass reconciles them**: extraction asks for
   the concrete thing that supports each item — the failing command and its error, the file and
@@ -658,6 +657,13 @@
   leaves behind.
 
 ### Fixed
+
+- **`/pr run` opens a new pull request when the branch's pull request is already closed**: `gh pr
+  view <branch>` returns a closed or merged pull request too, so a second `/pr run` on the same
+  branch reused it — the pushed commits went nowhere and the run reported the old pull request as
+  green. Only an open pull request is reused now; a closed or merged one is announced in the chat
+  area and a new pull request is opened. The CI poll addresses that pull request by number instead
+  of by branch, so the old one cannot shadow it.
 
 - **The `@` completion panel appears only when it has matches**: the file scan runs in the
   background, so typing `@` (or another character that matches nothing) opened a panel with no
@@ -1500,17 +1506,16 @@
   里同样会被点名——项目层只认 `defaultTools` / `disabledExtensions` / `enabledExtensions`。
   语法错误仍归启动警告；每次执行都重读这两个文件。
 
-- **新增 `delivery` 扩展：把回合的改动交付出去，并盯到 PR 变绿**：`vet` 只证明本机检查过了，
-  `delivery` 补齐结算时那一串机械动作——建分支、提交、推、开 PR、等 CI 与评审。失败的检查
-  （`名称 — 结论`）与 `CHANGES_REQUESTED` 的评审意见折成一份结构化报告注入成一条 user 消息并
-  续跑，模型修完再结算时又会重新提交、重新推。收敛靠四条：全绿 / 用满 `maxIterations` / 报告
-  与上次完全相同 / 等满 `timeoutSecs` 仍无结论（pending 不喂回模型）。`stage` 决定停在哪一步
-  ——`branch`、`push`、`pr`（缺省），且**永不 merge**。三条不越的线：回合开始前就已存在未提交
-  改动的**工作区不会被替用户提交**（那是用户的活，`/delivery run` 是显式例外）；不猜远端
-  （没 `origin`、`gh` 没登录、探测不出默认分支都停下报原因）；当前就在基线分支时先建
-  `prux/<日期>-<时分>` 分支再干活。配置在 `agent_dir()/extensions/delivery.json`，**没有项目级
-  覆盖**——能提交进仓库的配置不该有权改你的推送目标。命令 `/delivery status|run|stage|reset`。
-  默认不启用，仅 `Dev` 模式：它会写 git 历史并推远端。
+- **新增 `pr` 扩展：`/pr run` 时把改动交付成一个 PR**：`vet` 只证明本机检查过了，`pr` 补齐
+  交付那一串机械动作——建分支、提交、推、开 PR、等 CI 与评审，然后把结论贴回聊天区。**没有
+  结算边界钩子，也不把失败喂回模型**：没人替你决定要不要推，坏掉的一轮不会自己变成 PR。失败的
+  检查（`名称 — 结论`）与 `CHANGES_REQUESTED` 的评审意见连同 PR 链接一起列出，修完再跑一次
+  `/pr run`——改动落在同一条分支上，同一个 PR 被更新。停止条件：全绿 / 有阻塞 / 等满
+  `timeoutSecs` 仍无结论（pending 不猜结果），且**永不 merge**。当前就在基线分支时先建
+  `prux/<日期>-<时分>` 分支再干活，已在 `prux/` 分支上则续在同一条；工作区干净且不在 `prux/`
+  分支上什么也不做。不猜远端（没 `origin`、`gh` 没登录、探测不出默认分支都停下报原因）。配置在
+  `agent_dir()/extensions/pr.json`，**没有项目级覆盖**——能提交进仓库的配置不该有权改你的推送
+  目标。命令 `/pr status|run`。默认不启用，仅 `Dev` 模式：它会写 git 历史并推远端。
 
 - **记忆条目现在需要证据，并有维护轮做 reconcile**：抽取时要求每条附上支撑它的具体证据——失败的
   命令与报错、文件与符号，或用户自己的原话——答成空串的条目直接丢弃。证据随条目存档并供维护轮
@@ -1531,6 +1536,11 @@
   更慢的全量拷贝。复制过来的都是被忽略的文件，因此不会混进隔离运行留下的那个分支。
 
 ## 修复
+
+- **分支上的 PR 已经关了时，`/pr run` 另开一个新的**：`gh pr view <分支>` 连已关闭 / 已合并
+  的 PR 也会返回，于是同一条分支上再跑一次 `/pr run` 会复用它——推上去的提交没有去处，还得
+  到一句“旧 PR 全绿”。现在只复用开着的 PR：关着的那条在聊天区说一声，然后另开一个新的，
+  等 CI 也改成按 PR 号读状态，不会读到旧的那条。
 
 - **`@` 补全面板只在真有候选时才出现**：文件候选由后台扫描得出，于是敲 `@`（或敲一个什么都
   匹配不上的字符）会先弹出只有输入框、一行候选都没有的面板，等扫描回来是空才收起，输入卡

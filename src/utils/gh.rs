@@ -10,7 +10,7 @@
 //!   [`crate::utils::git::run`] 统一收 stdout/stderr，绝不继承 TUI 的终端。
 //! - **非零退出码是正常结果**：只有进程起不来（`gh` 不在 PATH）才算 `Err`；`gh pr view`
 //!   在没有 PR 时也是非零退出，所以「没有 PR」与「真出错」只能靠文案区分
-//!   （见 [`pr_number`]）。
+//!   （见 [`pr_for_branch`]）。
 
 use crate::utils::{
     git::{self, Output},
@@ -65,15 +65,31 @@ pub fn default_branch(dir: &Path) -> Result<String, String> {
     Ok(name.to_string())
 }
 
-/// 该分支的 PR 号；没有 PR 时 `Ok(None)`。
+/// 某条分支上的 PR：号与状态。
+#[derive(Debug, Clone, PartialEq)]
+pub struct BranchPr {
+    /// PR 号；`gh` 输出里没有号时调用方拿不到它（[`pr_for_branch`] 返回 `None`）。
+    pub number: u64,
+    /// `gh` 的 `state` 原值：`OPEN` / `CLOSED` / `MERGED`（不认识的取值按「没开着」处理）。
+    pub state: String,
+}
+
+impl BranchPr {
+    /// 这条 PR 是否还开着。只有开着的 PR 才值得往上交付——关闭/合并的那条推上去没人看。
+    pub fn is_open(&self) -> bool {
+        self.state.eq_ignore_ascii_case("OPEN")
+    }
+}
+
+/// 该分支上的 PR；没有 PR 时 `Ok(None)`。
+///
+/// `gh pr view <branch>` 连**已关闭 / 已合并**的 PR 也会返回，所以调用方必须看
+/// [`BranchPr::is_open`]，别把一条关掉的 PR 当成还在的。
 ///
 /// 「没有 PR」与「真出错」都是非零退出码，只能看 `gh` 的文案区分；认不出的错误按出错返回，
 /// 宁可停下来报告，也不要在没 PR 的时候误以为已经开过。
-pub fn pr_number(dir: &Path, branch: &str) -> Result<Option<u64>, String> {
-    let out = gh(
-        dir,
-        &["pr", "view", branch, "--json", "number", "--jq", ".number"],
-    )?;
+pub fn pr_for_branch(dir: &Path, branch: &str) -> Result<Option<BranchPr>, String> {
+    let out = gh(dir, &["pr", "view", branch, "--json", "number,state"])?;
     if !out.ok {
         let text = format!("{}{}", out.stdout, out.stderr).to_ascii_lowercase();
         if text.contains("no pull requests found") || text.contains("no open pull requests") {
@@ -81,7 +97,19 @@ pub fn pr_number(dir: &Path, branch: &str) -> Result<Option<u64>, String> {
         }
         return Err(out.failure("gh pr view"));
     }
-    Ok(out.stdout.trim().parse::<u64>().ok())
+    let value: Value = serde_json::from_str(&out.stdout)
+        .map_err(|err| format!("gh pr view: malformed JSON: {err}"))?;
+    let Some(number) = value.get("number").and_then(Value::as_u64) else {
+        return Ok(None);
+    };
+    Ok(Some(BranchPr {
+        number,
+        state: value
+            .get("state")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+    }))
 }
 
 /// 新建 PR，返回它的 URL。
@@ -169,13 +197,15 @@ impl Failure {
 }
 
 /// 读一次 PR 状态：`statusCheckRollup` 的失败/未完成项 + `latestReviews` 的 CHANGES_REQUESTED。
-pub fn pr_status(dir: &Path, branch: &str) -> Result<Status, String> {
+///
+/// `selector` 是分支名或 PR 号；按号读才不会有「分支上还挂着一条已关闭 PR」的歧义。
+pub fn pr_status(dir: &Path, selector: &str) -> Result<Status, String> {
     let out = gh(
         dir,
         &[
             "pr",
             "view",
-            branch,
+            selector,
             "--json",
             "number,url,statusCheckRollup,latestReviews",
         ],
@@ -333,6 +363,27 @@ mod tests {
         assert!(details.contains("FAILURE"));
         assert!(details.contains("alice: add a test"));
         assert!(!details.contains("bob"), "通过的意见不进报告");
+    }
+
+    #[test]
+    fn only_an_open_pr_counts_as_reusable() {
+        assert!(
+            BranchPr {
+                number: 3,
+                state: "OPEN".to_string(),
+            }
+            .is_open()
+        );
+        for state in ["CLOSED", "MERGED", ""] {
+            assert!(
+                !BranchPr {
+                    number: 4,
+                    state: state.to_string(),
+                }
+                .is_open(),
+                "{state} 不该当成开着的 PR"
+            );
+        }
     }
 
     #[test]
