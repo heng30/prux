@@ -14,11 +14,15 @@
 //! 校验不通过的条目跳过并把原因记进 [`HooksConfig::errors`]（`/hooks` 打印），
 //! 一条坏钩子不该让整份配置失效。
 
-use crate::core::settings_manager::agent_dir;
+use crate::core::{config_cache::ConfigCache, settings_manager::agent_dir};
 use regex::{Regex, RegexBuilder};
 use serde::Deserialize;
-use serde_json::Value;
-use std::{fs, path::PathBuf, time::Duration};
+use serde_json::{Value, json};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 use strum_macros::{EnumString, IntoStaticStr};
 
 /// 配置文件名（位于 `agent_dir()/extensions/` 下）。
@@ -26,6 +30,12 @@ pub(super) const CONFIG_FILE: &str = "hooks.json";
 
 /// 单条钩子的缺省超时（秒）：钩子在工具调用路径上同步等待，不能无限期占着。
 pub(super) const DEFAULT_TIMEOUT_SECS: u64 = 10;
+
+/// hooks.json 的读缓存：`(path, mtime, len)` 不变就直接复用上次数值，不再读盘。
+///
+/// 本配置没有写入方（用户手改文件），故不需要配套的 `RwLock`：锁序里那一层
+/// 只在「有写入要挡读」时才有意义。
+static CONFIG_CACHE: ConfigCache = ConfigCache::new();
 
 /// 钩子的生命周期事件。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString, IntoStaticStr)]
@@ -123,21 +133,39 @@ pub(super) fn config_path() -> PathBuf {
     agent_dir().join("extensions").join(CONFIG_FILE)
 }
 
-/// 读配置文件并解析。
+/// 读配置并解析（走缓存）。
 ///
-/// 每次分发都重新读一次（钩子之后马上就要起子进程，一次几十字节的读盘不算开销，
-/// 手改配置文件也能立刻生效）。文件缺失 = 没有钩子；读不出来或不是合法 JSON 时
-/// 记一条 [`HooksConfig::errors`]，不当作配置为空静默吞掉。
+/// 命中缓存时一次盘都不读；文件被改动（mtime 或长度变化）后下次调用自动重读，
+/// 手改配置立刻生效。要无视缓存强制重读用 [`reload`]。文件缺失 = 没有钩子；
+/// 读不出来或不是合法 JSON 时记一条 [`HooksConfig::errors`]，不静默当成配置为空。
 pub(super) fn load() -> HooksConfig {
     let path = config_path();
-    let text = match fs::read_to_string(&path) {
+    let value = CONFIG_CACHE.read(&path, || load_uncached(&path));
+    if let Some(message) = value.get("error").and_then(Value::as_str) {
+        return load_error(message.to_string());
+    }
+    parse(value.get("config").unwrap_or(&Value::Null))
+}
+
+/// 丢弃缓存后重读（`/hooks reload`）。
+pub(super) fn reload() -> HooksConfig {
+    CONFIG_CACHE.invalidate();
+    load()
+}
+
+/// 读盘结果编码成 JSON：成功 `{"config": <原文>}`，失败 `{"error": "…"}`——
+/// [`ConfigCache`] 只缓存 `Value`，靠这个包装把解析后的内容与错误一起缓存下来。
+fn load_uncached(path: &Path) -> Value {
+    let text = match fs::read_to_string(path) {
         Ok(text) => text,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return HooksConfig::default(),
-        Err(err) => return load_error(format!("{}: {err}", path.display())),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return json!({ "config": Value::Null });
+        }
+        Err(err) => return json!({ "error": format!("{}: {err}", path.display()) }),
     };
     match serde_json::from_str::<Value>(&text) {
-        Ok(value) => parse(&value),
-        Err(err) => load_error(format!("{}: {err}", path.display())),
+        Ok(value) => json!({ "config": value }),
+        Err(err) => json!({ "error": format!("{}: {err}", path.display()) }),
     }
 }
 

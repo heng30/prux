@@ -20,7 +20,9 @@
   capped at 5 consecutive continuations). Verdicts merge most-severe-first, the first `deny`
   stops the batch, `matcher` is a case-insensitive tool-name regex, each command carries its own
   timeout (10s default) and is killed with its process tree on expiry — a broken hook prints one
-  warning and never blocks the call. `/hooks` lists the active hooks and any config errors.
+  warning and never blocks the call. `/hooks` lists the active hooks and any config errors,
+  `/hooks settings` prints the same listing and `/hooks reload` drops the cached config and
+  re-reads the file (hand edits are picked up anyway, the config is cached by mtime and length).
   Off by default (`Dev` / `Creator`).
 
 - **An `rtk` extension compacts bash commands through the external `rtk` CLI**: every `bash`
@@ -1004,8 +1006,9 @@
   弹确认面板、改写入参、覆盖模型看到的工具结果、拒绝一次提交，或者在 agent 想收工时要求继续
   （`Stop` 最多连续续跑 5 次）。多个钩子的意向按最严合并，任何一条 `deny` 就让本批停下；
   `matcher` 是大小写不敏感的工具名正则；每条命令自带超时（缺省 10 秒），超时连子进程一起杀掉。
-  写坏的钩子只提示一次，绝不挡住调用。`/hooks` 打印生效的钩子与配置错误。默认不启用
-  （`Dev` / `Creator`）。
+  写坏的钩子只提示一次，绝不挡住调用。`/hooks` 打印生效的钩子与配置错误，`/hooks settings`
+  打印同一份清单，`/hooks reload` 丢弃缓存后重读文件（手改配置本来就会按修改时间 / 文件长度
+  变化自动生效，缓存只是免掉重复读盘）。默认不启用（`Dev` / `Creator`）。
 
 - **新增 `rtk` 扩展：用外部 `rtk` CLI 压缩 bash 命令**：每次 `bash` 调用前先跑
   `rtk rewrite <命令>`，rtk 给出紧凑等价写法时就用改写后的命令执行（退出码 `0` 或 `3` 且有

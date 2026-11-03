@@ -24,14 +24,14 @@ use crate::{
         extensions::{
             AfterToolCallOutcome, BeforeToolCallOutcome, BoundaryOutcome, CommandHost, Extension,
             ExtensionCommand, ExtensionHook, ExtensionMode, ExtensionTool, ForkProjectInfo,
-            SelectOption, UiNotifyLevel, UserPromptAction, ask_prompt,
+            SelectOption, SubcommandDef, UiNotifyLevel, UserPromptAction, ask_prompt,
         },
         provider::AgentMessage,
         session_manager::Session,
         tools::ToolError,
     },
     extensions::{
-        EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_HOOKS, util::notify_plain,
+        EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_HOOKS, command_arg, util::notify_plain,
         util::session_id_of,
     },
     modes::tui::handlers::register_host_command,
@@ -57,6 +57,18 @@ const EXT: &str = "hooks";
 
 /// 斜杠命令名（`/hooks`）。
 const CMD: &str = "hooks";
+
+/// `/hooks` 子命令（顺序 = 输入框候选顺序）。
+const SUBCOMMANDS: &[SubcommandDef] = &[
+    SubcommandDef {
+        name: "settings",
+        description: "Print the active hooks and config errors (default when no subcommand is given)",
+    },
+    SubcommandDef {
+        name: "reload",
+        description: "Re-read extensions/hooks.json and drop the cached config",
+    },
+];
 
 /// `Stop` 钩子连续要求续跑的次数上限：超过就停下并提示，避免钩子里写错条件把会话焊死。
 const MAX_STOP_CONTINUATIONS: u32 = 5;
@@ -214,11 +226,11 @@ impl Extension for Hooks {
         vec![ExtensionCommand {
             name: CMD.to_string(),
             description: "List the hooks configured in extensions/hooks.json and their config \
-                          errors"
+                          errors; /hooks reload re-reads the file"
                 .to_string(),
             // 只读配置并打印，不锁 agent。
             busy_safe: true,
-            subcommands: Vec::new(),
+            subcommands: SUBCOMMANDS.to_vec(),
         }]
     }
 
@@ -485,9 +497,19 @@ impl Extension for Hooks {
     }
 }
 
-/// `/hooks`：打印当前生效的钩子与配置错误。
-fn command_hooks(host: &mut dyn CommandHost, _raw: &str) -> bool {
-    let config = config::load();
+/// `/hooks`：无参 / `settings` 打印当前生效的钩子与配置错误，`reload` 丢弃缓存后重读。
+fn command_hooks(host: &mut dyn CommandHost, raw: &str) -> bool {
+    let config = match command_arg(raw).trim() {
+        "reload" => config::reload(),
+        "" | "settings" => config::load(),
+        other => {
+            host.push_message(
+                &format!("Unknown /hooks subcommand: {other}. Use `settings` or `reload`."),
+                UiNotifyLevel::Warning,
+            );
+            return false;
+        }
+    };
 
     let mut lines: Vec<String> = Vec::new();
     if config.is_empty() {
@@ -579,6 +601,29 @@ mod tests {
         let config = config::load();
         assert!(config.is_empty());
         assert_eq!(config.errors.len(), 1, "{:?}", config.errors);
+        drop(agent);
+    }
+
+    /// 配置走缓存：文件改动（mtime / 长度）后 `load` 自动重读，`reload` 无视缓存强制重读。
+    #[test]
+    fn load_follows_file_changes_and_reload_forces_reread() {
+        let _guard = crate::test_support::AUTH_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let agent = crate::test_support::AgentDirGuard::temp();
+        let path = config::config_path();
+        std::fs::create_dir_all(path.parent().unwrap()).expect("create extensions dir");
+
+        std::fs::write(&path, r#"{"Stop":[{"hooks":[{"command":"a"}]}]}"#).expect("write");
+        assert_eq!(config::load().groups[0].commands[0].command, "a");
+
+        // 长度变化 → `(path, mtime, len)` 失效 → `load` 自动重读
+        std::fs::write(&path, r#"{"Stop":[{"hooks":[{"command":"bb"}]}]}"#).expect("write");
+        assert_eq!(config::load().groups[0].commands[0].command, "bb");
+
+        // 同长度改写：`load` 可能仍命中缓存，`reload` 必须重读
+        std::fs::write(&path, r#"{"Stop":[{"hooks":[{"command":"cc"}]}]}"#).expect("write");
+        assert_eq!(config::reload().groups[0].commands[0].command, "cc");
         drop(agent);
     }
 
