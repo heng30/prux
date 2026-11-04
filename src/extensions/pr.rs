@@ -1,5 +1,5 @@
-//! `pr` 扩展：用 `/pr run` 把改动交付出去——建分支、提交、推、开 PR，并等 CI 与评审的
-//! 结论回到聊天区。
+//! `pr` 扩展：用 `/pr run` / `/pr new` 把改动交付出去——建分支、提交、推、开 PR，并等 CI
+//! 与评审的结论回到聊天区。
 //!
 //! **只手动触发**：交付会写远端、产生一个可评审的 PR，这是「这版代码值得被人看」的判断，
 //! 只有用户能下。挂在结算边界上自动跑，等于把每轮还没被看过的改动都推成 PR——包括坏的。
@@ -11,6 +11,11 @@
 //! 推上去开 PR——「已经 commit 了」不是停下来等的理由。CI 红了就把阻塞项原样列出，你让
 //! agent 修完再跑一次 `/pr run`：这时已经在 `prux/` 分支上，改动提交到同一条分支，同一个
 //! PR 被更新。
+//!
+//! `/pr new` 走同一条路，但**不查已有 PR、也不续用当前交付分支**：它总是从当前状态新建一条
+//! `prux/` 分支，因此拿到的是一条全新的 PR。GitHub 不允许同一个 head 分支挂两条开着的 PR，
+//! 「全新」只能从新分支来。工作区干净、也没有没推的提交时它什么也不做——否则就是拿同一批
+//! 提交再开一条内容重复的 PR。
 //!
 //! 三条不做的线（每条都是「替用户做了决定」）：
 //! - **不自动 merge**：合入是人的决定，它最高只到开 PR。
@@ -217,8 +222,9 @@ impl Extension for Pr {
     /// 面板里的功能说明。
     fn description(&self) -> &str {
         "Deliver on /pr run: commit to a session branch, push, open a pull request, then report \
-         the CI and review result. Never merges, never delivers on its own. \
-         Config: agent_dir()/extensions/pr.json; /pr status|run"
+         the CI and review result. /pr new always starts a new branch and a new pull request. \
+         Never merges, never delivers on its own. \
+         Config: agent_dir()/extensions/pr.json; /pr status|run|new"
     }
 
     /// 仅在 Dev 及以上模式可用。
@@ -240,7 +246,7 @@ impl Extension for Pr {
     fn commands(&self) -> Vec<ExtensionCommand> {
         vec![ExtensionCommand {
             name: config::CMD.to_string(),
-            description: "Pull request: /pr status|run".to_string(),
+            description: "Pull request: /pr status|run|new".to_string(),
             // handler 只读写本扩展自身的配置与运行态，不锁 agent。
             busy_safe: true,
             subcommands: command::SUBCOMMANDS.to_vec(),
@@ -364,8 +370,17 @@ fn on_base(top: &Path, current: &str, cfg: &Config) -> bool {
 /// 提交信息用的模型（provider, model_id）；`/pr run` 时从宿主取，取不到就回落会话标题。
 type Model = Option<(String, String)>;
 
+/// 交付模式：两种子命令唯一的区别在「要不要复用开着的那条 PR」。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Mode {
+    /// `/pr run`：同一条交付分支上的改动续在同一个 PR 上，已有开着的 PR 就复用它。
+    Run,
+    /// `/pr new`：不查已有 PR，总是从当前状态新建分支、开一条全新的 PR。
+    New,
+}
+
 /// 交付主体：量工作区 → 建分支 → 提交 → 推 → 开 PR → 等 CI。
-fn deliver(cfg: &Config, model: Model) -> Result<Step, String> {
+fn deliver(cfg: &Config, mode: Mode, model: Model) -> Result<Step, String> {
     let dir = current_cwd();
     // 不是 git 仓库就没有交付可言：静默跳过（这个扩展不该在非 git 目录里刷提示）
     let Ok(top) = git::toplevel(&dir) else {
@@ -385,12 +400,18 @@ fn deliver(cfg: &Config, model: Model) -> Result<Step, String> {
     // 工作区干净、也没有本地已提交但没推的提交：没有本扩展可以接手的东西
     // （亮在基线分支上的提交不归它推，那是直接往 main 上提交）
     let unpushed = !on_base_branch && git::unpushed(&top)?;
-    if !has_changes && !unpushed && !current.starts_with(BRANCH_PREFIX) {
+    let pending = has_changes || unpushed;
+
+    // `/pr run` 在交付分支上重复跑仍然有意义（重推 + 接着等 CI）；`/pr new` 没有新东西就什么也不做，
+    // 否则会拿同一批提交再开一条内容重复的 PR。
+    if !pending && (mode == Mode::New || !current.starts_with(BRANCH_PREFIX)) {
         return Ok(Step::Nothing);
     }
 
     let mut branch = current;
-    if has_changes && on_base_branch {
+    // `/pr new` 一律换新分支：GitHub 不允许同一个 head 分支挂两条开着的 PR，
+    // 「全新的 PR」只能从一条新分支来。
+    if mode == Mode::New || (has_changes && on_base_branch) {
         branch = fresh_branch(&top);
         git::create_branch(&top, &branch)?;
     }
@@ -417,39 +438,55 @@ fn deliver(cfg: &Config, model: Model) -> Result<Step, String> {
     } else {
         cfg.base.clone()
     };
-    let number = match gh::pr_for_branch(&top, &branch)? {
-        Some(found) if found.is_open() => found.number,
-        found => {
-            // 关闭 / 合并的那条不能复用：再往上推，那条 PR 也不会重新收到这些提交。
-            if let Some(found) = found {
-                notify_text(
-                    &format!(
-                        "pr: PR #{} is {} — opening a new one",
-                        found.number,
-                        found.state.to_ascii_lowercase()
-                    ),
-                    UiNotifyLevel::Info,
-                );
+    let model = model.as_ref();
+    let number = match mode {
+        // 不查已有 PR：分支是新的，`gh pr create` 不会撞上旧的那条。
+        Mode::New => open_pr(&top, &branch, &base, cfg, model)?,
+        Mode::Run => match gh::pr_for_branch(&top, &branch)? {
+            Some(found) if found.is_open() => found.number,
+            found => {
+                // 关闭 / 合并的那条不能复用：再往上推，那条 PR 也不会重新收到这些提交。
+                if let Some(found) = found {
+                    notify_text(
+                        &format!(
+                            "pr: PR #{} is {} — opening a new one",
+                            found.number,
+                            found.state.to_ascii_lowercase()
+                        ),
+                        UiNotifyLevel::Info,
+                    );
+                }
+                open_pr(&top, &branch, &base, cfg, model)?
             }
-            let (title, body) = pr_describe(&top, &base, model.as_ref());
-            let url = gh::create_pr(&top, &branch, &base, &title, &body, cfg.draft)?;
-            // 号从 `gh pr create` 打印的 URL 尾巴上取：这条分支上还挂着旧 PR 时，再查一次
-            // `gh pr view <branch>` 可能读到那一条。
-            let number = url
-                .rsplit('/')
-                .next()
-                .and_then(|tail| tail.parse::<u64>().ok())
-                .unwrap_or(0);
-            notify_text(
-                &format!("pr: opened PR #{number} {url}"),
-                UiNotifyLevel::Info,
-            );
-            number
-        }
+        },
     };
     state().pr = Some(number);
     // 按 PR 号轮询，不按分支名：同一分支上的旧 PR 会干扰 `gh pr view <branch>`。
     wait_for_ci(cfg, &top, &number.to_string())
+}
+
+/// 开一条新 PR 并把号返回。标题与正文由模型写（见 [`pr_describe`]）。
+fn open_pr(
+    top: &Path,
+    branch: &str,
+    base: &str,
+    cfg: &Config,
+    model: Option<&(String, String)>,
+) -> Result<u64, String> {
+    let (title, body) = pr_describe(top, base, model);
+    let url = gh::create_pr(top, branch, base, &title, &body, cfg.draft)?;
+    // 号从 `gh pr create` 打印的 URL 尾巴上取：这条分支上还挂着旧 PR 时，再查一次
+    // `gh pr view <branch>` 可能读到那一条。
+    let number = url
+        .rsplit('/')
+        .next()
+        .and_then(|tail| tail.parse::<u64>().ok())
+        .unwrap_or(0);
+    notify_text(
+        &format!("pr: opened PR #{number} {url}"),
+        UiNotifyLevel::Info,
+    );
+    Ok(number)
 }
 
 /// PR 标题与正文：让模型看一眼整条分支的改动写一份 JSON，写不出来就回落会话标题 + 固定说明。
@@ -616,21 +653,35 @@ fn report(failure: &gh::Failure, number: u64, url: &str) -> String {
     )
 }
 
-/// `/pr run` 的同步入口（供 [`command`] 在后台线程里调用）。
-pub(super) fn run_now(model: Model) -> String {
+/// `/pr run` / `/pr new` 的同步入口（供 [`command`] 在后台线程里调用）。
+///
+/// 返回结论文本与通知级别：全绿用 `Success`，其余（停下 / 超时 / 没东西可交）保持中性。
+pub(super) fn run_now(mode: Mode, model: Model) -> (String, UiNotifyLevel) {
     let cfg = config::load();
     let Some(guard) = RunGuard::acquire() else {
-        return "a /pr run is already in flight".to_string();
+        return (
+            "a /pr run is already in flight".to_string(),
+            UiNotifyLevel::Info,
+        );
     };
-    let step = deliver(&cfg, model);
+    let step = deliver(&cfg, mode, model);
     drop(guard);
-    let text = match step {
-        Ok(Step::Nothing) => "nothing to deliver (clean working tree)".to_string(),
-        Ok(Step::Done(text) | Step::Stop(text)) => text,
-        Err(err) => err,
-    };
-    record(text.clone());
-    text
+    let outcome = outcome(step);
+    record(outcome.0.clone());
+    outcome
+}
+
+/// 交付结论 → （给用户的一句话, 通知级别）：只有全绿那条带 success 色。
+fn outcome(step: Result<Step, String>) -> (String, UiNotifyLevel) {
+    match step {
+        Ok(Step::Nothing) => (
+            "nothing to deliver (clean working tree)".to_string(),
+            UiNotifyLevel::Info,
+        ),
+        Ok(Step::Done(text)) => (text, UiNotifyLevel::Success),
+        Ok(Step::Stop(text)) => (text, UiNotifyLevel::Info),
+        Err(err) => (err, UiNotifyLevel::Info),
+    }
 }
 
 /// `/pr status` 的文本。
@@ -641,7 +692,7 @@ pub(super) fn status_text() -> String {
         (st.branch.clone(), st.pr, st.last.clone())
     };
     let mut out = format!(
-        "pr: timeout {}s · poll {}s · base {} · draft {} · only /pr run triggers it\nconfig: {}",
+        "pr: timeout {}s · poll {}s · base {} · draft {} · only /pr run|new triggers it\nconfig: {}",
         cfg.timeout.as_secs(),
         cfg.poll.as_secs(),
         if cfg.base.is_empty() {
@@ -702,7 +753,7 @@ mod tests {
         let _guard = HomeGuard::temp();
         let cfg = config::load();
         assert_eq!(cfg.timeout.as_secs(), config::DEFAULT_TIMEOUT_SECS);
-        assert!(status_text().contains("only /pr run triggers it"));
+        assert!(status_text().contains("only /pr run|new triggers it"));
     }
 
     #[test]
@@ -715,6 +766,24 @@ mod tests {
         assert_eq!(
             session_id_of(Some("/sessions/2026-01-01T00-00-00_abc.jsonl")).as_deref(),
             Some(id)
+        );
+    }
+
+    #[test]
+    fn only_a_green_pr_is_reported_as_success() {
+        let _serial = serial();
+        let (text, level) = outcome(Ok(Step::Done("PR #1 is green".to_string())));
+        assert_eq!(text, "PR #1 is green");
+        assert_eq!(level, UiNotifyLevel::Success);
+        assert_eq!(
+            outcome(Ok(Step::Stop("pending after 900s".to_string()))).1,
+            UiNotifyLevel::Info,
+            "超时 / 阻塞不是成功"
+        );
+        assert_eq!(
+            outcome(Ok(Step::Nothing)).1,
+            UiNotifyLevel::Info,
+            "没东西可交也不算成功"
         );
     }
 
@@ -797,7 +866,12 @@ mod tests {
 
     /// 一次没有远端可推的交付：提交成功，`git push` 失败（结论是 Stop，不 panic）。
     fn deliver_locally(cfg: &Config) -> Step {
-        match deliver(cfg, None) {
+        deliver_with(cfg, Mode::Run)
+    }
+
+    /// 同一条临时仓库上按指定模式交付一次。
+    fn deliver_with(cfg: &Config, mode: Mode) -> Step {
+        match deliver(cfg, mode, None) {
             Ok(step) => step,
             Err(err) => panic!("不该报错: {err}"),
         }
@@ -844,6 +918,28 @@ mod tests {
         std::fs::write(repo.join("two.txt"), "two\n").unwrap();
         deliver_locally(&cfg);
         assert_eq!(git::branch(&repo).unwrap(), first, "第二次交付不该另开分支");
+        assert!(!git::dirty(&repo).unwrap());
+    }
+
+    #[test]
+    fn new_mode_always_starts_a_brand_new_branch() {
+        let _serial = serial();
+        let _guard = crate::test_support::AgentDirGuard::temp();
+        let Some(repo) = temp_repo("new") else {
+            return;
+        };
+        remember_cwd(&repo.to_string_lossy());
+        let cfg = config::merge(None);
+
+        std::fs::write(repo.join("one.txt"), "one\n").unwrap();
+        deliver_locally(&cfg);
+        let first = git::branch(&repo).unwrap();
+
+        std::fs::write(repo.join("two.txt"), "two\n").unwrap();
+        deliver_with(&cfg, Mode::New);
+        let second = git::branch(&repo).unwrap();
+        assert!(second.starts_with(BRANCH_PREFIX), "{second}");
+        assert_ne!(second, first, "/pr new 不该落在旧交付分支上");
         assert!(!git::dirty(&repo).unwrap());
     }
 
