@@ -1073,6 +1073,12 @@
   default icon was used. The icon resource now uses the numeric id 1; it is the same artwork as
   `icon.png`.
 
+- **The desktop GUI's working-directory panel moves an entry to the top with `Ctrl-S`**: the recent
+  list is ordered by last use, so a directory reached by `Browse…` and used once sank to the bottom
+  again. `Ctrl-S` now promotes the highlighted entry without switching the session's working
+  directory, and the panel prints its keys (`↑↓ select · Enter confirm · Ctrl-S move to top · Esc
+  close`) as a hint line.
+
 ## 中文
 
 ### 新增
@@ -1878,3 +1884,8 @@
 - **桌面 GUI 的窗口图标取自随二进制打包的图标**：Windows 的标题栏 / 任务栏图标由 gpui 从可执行
   文件的图标资源里取（资源 id 固定为 1），而资源脚本里的图标是一个命名资源，取不到就退回系统默认
   图标。现在图标资源改用数字 id 1，与 `icon.png` 是同一张图。
+
+- **桌面 GUI 的工作目录面板可以用 `Ctrl-S` 把选中目录提到清单最前面**：最近目录清单按最后一次
+  使用排序，用 `Browse…` 选一次很快就沉回底部。`Ctrl-S` 只调整清单顺序，不切换当前会话的工作
+  目录；面板底部同时补了一行按键提示（`↑↓ select · Enter confirm · Ctrl-S move to top · Esc
+  close`）。

@@ -517,7 +517,10 @@ impl GuiApp {
             action: Action::BrowseCwd,
             ..Entry::default()
         });
-        self.overlay = Some(Overlay::List(List::new("Working directory", entries)));
+
+        let mut list = List::new("Working directory", entries);
+        list.hint = Some("↑↓ select · Enter confirm · Ctrl-S move to top · Esc close".to_string());
+        self.overlay = Some(Overlay::List(list));
     }
 
     // 同 [`Self::pick_attachment`]：原生对话框必须在前台执行器（主线程）打开

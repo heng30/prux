@@ -604,6 +604,22 @@ impl GuiApp {
         true
     }
 
+    /// Ctrl-S：工作目录面板把选中目录提到最近目录清单的第一行（不动当前会话目录）。
+    /// 返回 true 表示这次按键已被面板消费。
+    pub(super) fn promote_cwd_entry(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(Overlay::List(list)) = &self.overlay else {
+            return false;
+        };
+        let Some(Action::SwitchCwdTo(path)) = list.take_action().cloned() else {
+            return false;
+        };
+        remember_cwd(&path);
+        self.open_cwd_menu(cx);
+        self.toast("Moved to top", ToastKind::Success, cx);
+        cx.notify();
+        true
+    }
+
     /// Shift+Tab：在当前模型支持的 thinking 级别里循环（同 TUI 的 `app.thinking.cycle`）。
     ///
     /// 当前级别不在列表里（或还不知道）时从头算，保证总能切到下一个。

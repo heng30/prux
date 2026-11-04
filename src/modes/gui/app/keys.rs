@@ -99,6 +99,12 @@ impl GuiApp {
             return;
         }
 
+        // Ctrl-S：工作目录面板把选中目录提到最近目录清单第一行
+        if primary && !shift && keystroke.key == "s" && self.promote_cwd_entry(cx) {
+            cx.notify();
+            return;
+        }
+
         // Ctrl-S 先于覆盖层分发：技能/扩展面板是覆盖层，否则按键被它吃掉
         if primary && !shift && keystroke.key == "s" && self.save_panel_drafts(cx) {
             cx.notify();
