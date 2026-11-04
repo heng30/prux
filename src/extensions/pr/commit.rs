@@ -9,12 +9,6 @@
 
 use crate::utils::truncate::{truncate_chars, truncate_chars_within};
 
-/// 生成请求的系统提示。
-pub(super) const SYSTEM: &str = "You write git commit messages for staged changes. Reply with \
-     the message only: one subject line of at most 72 characters in the imperative mood, then \
-     optionally a blank line and up to three short body lines saying why. No `Subject:` prefix, \
-     no code fences, no quotes, no commentary.";
-
 /// 一次生成请求的输出上限（一条 subject + 几行 body）。
 pub(super) const MAX_TOKENS: u32 = 400;
 
@@ -27,16 +21,26 @@ pub(super) const SUBJECT_CHARS: usize = 72;
 /// body 的字符上限（多出来的行没有信息量，只会撑长历史）。
 pub(super) const BODY_CHARS: usize = 500;
 
+/// 生成请求的系统提示。
+pub(super) const SYSTEM: &str = "You write git commit messages for staged changes. Reply with \
+     the message only: one subject line of at most 72 characters in the imperative mood, then \
+     optionally a blank line and up to three short body lines saying why. No `Subject:` prefix, \
+     no code fences, no quotes, no commentary.";
+
+/// 拼提示：会话标题说明「这批改动是为了什么」，改动摘要说明「改了什么」，末句把输出
+/// 限定在信息本身：没有工具可调、不要跑检查。
+pub(super) fn build_prompt(outline: &str, title: &str) -> String {
+    format!(
+        "The session that produced these changes was about:\n{title}\n\nStaged changes:\n{outline}\n\n\
+         Write the commit message only. There are no tools available in this request and nothing \
+         should be executed: do not emit tool calls or XML tags, do not run any checks, tests, \
+         builds or git commands — the changes are already staged and the commit is made for you."
+    )
+}
+
 /// 写不出提交信息时的兜底文案：扩展名 + 会话标题。
 pub(super) fn fallback(title: &str) -> String {
     format!("prux: {title}")
-}
-
-/// 拼提示：会话标题说明「这批改动是为了什么」，改动摘要说明「改了什么」。
-pub(super) fn build_prompt(outline: &str, title: &str) -> String {
-    format!(
-        "The session that produced these changes was about:\n{title}\n\nStaged changes:\n{outline}"
-    )
 }
 
 /// 把模型输出规整成能直接交给 `git commit -m` 的信息；没有可用的 subject 时返回 `None`。

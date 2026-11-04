@@ -2,10 +2,10 @@
 //!
 //! 命令只读写本扩展自身的配置与运行态，因此声明 `busy_safe`。
 
-use super::{run_now, status_text};
+use super::{remember_session, run_now, status_text};
 use crate::{
     core::extensions::{CommandHost, SubcommandDef, UiNotifyLevel},
-    extensions::{command_arg, util::notify_text},
+    extensions::{command_arg, util::notify_text, util::session_id_of},
 };
 
 /// `/pr` 子命令（顺序 = 输入框候选顺序，与 [`handle`] 的 match 分支一一对应）。
@@ -41,7 +41,10 @@ pub(super) fn handle(host: &mut dyn CommandHost, raw: &str) -> bool {
 
 /// `/pr run`：交付一次（后台线程，结果回聊天区）。
 fn run_async(host: &mut dyn CommandHost) {
-    // 提交信息要在后台线程里生成，模型得先在这里拿（宿主只在同步回边可得）。
+    // 提交信息要在后台线程里生成，模型与会话 id 得先在这里拿（宿主只在同步回边可得）：
+    // 本会话中途启用时 `on_session_start` 没跑过，槽里就没有 id，opencode 系会回 400。
+    remember_session(session_id_of(host.session_path().as_deref()));
+
     let model = host.current_model();
     host.push_message(
         "pr: delivering now — results land here when done",

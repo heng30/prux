@@ -25,6 +25,7 @@
 mod command;
 mod commit;
 mod config;
+mod describe;
 
 use crate::{
     core::{
@@ -38,7 +39,7 @@ use crate::{
     },
     extensions::{
         EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_PR,
-        util::{generate_id, notify_text},
+        util::{generate_id, notify_text, session_id_of},
     },
     modes::tui::handlers::register_host_command,
     utils::{
@@ -74,6 +75,14 @@ const BODY_CHARS: usize = 2000;
 
 /// 当前会话的 cwd（`on_session_start` 记录；拿不到时回落到进程 cwd）。
 static SESSION_CWD: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+/// 当前会话的 provider 会话 id（`on_session_start` 记录）：一次性请求要带上它，
+/// 缺了它 opencode 系 provider 直接回 400（`MissingSessionID`）。
+static SESSION_ID: Mutex<Option<String>> = Mutex::new(None);
+
+/// 当前会话正在用的系统提示词（`ContextWithSystem` 记录）：生成提交信息时原样复用，
+/// 用户的提交约定就写在里面。
+static SESSION_SYSTEM: Mutex<Option<String>> = Mutex::new(None);
 
 /// 本扩展的运行态（只用于 `/pr status` 展示与标题）。
 static STATE: Mutex<State> = Mutex::new(State::new());
@@ -132,6 +141,27 @@ fn state() -> MutexGuard<'static, State> {
 /// 记下本次会话的 cwd。
 fn remember_cwd(cwd_text: &str) {
     *SESSION_CWD.lock().unwrap_or_else(|e| e.into_inner()) = Some(PathBuf::from(cwd_text));
+}
+
+/// 记下当前会话 id；`None` 不覆盖已有值（新建会话尚未落盘时没有 id，别把可用的覆盖成空）。
+pub(super) fn remember_session(id: Option<String>) {
+    if let Some(id) = id {
+        *SESSION_ID.lock().unwrap_or_else(|e| e.into_inner()) = Some(id);
+    }
+}
+
+/// 当前会话 id（可能为空：扩展中途启用、会话尚未落盘）。
+fn session_id() -> Option<String> {
+    SESSION_ID.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// 当前会话的系统提示词（**原样**用）；请求还没发过时为 `None`。
+fn session_system() -> Option<String> {
+    SESSION_SYSTEM
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+        .filter(|text| !text.trim().is_empty())
 }
 
 /// 当前生效的 cwd：会话记录的优先，其次进程 cwd，都拿不到时用 `.`。
@@ -222,9 +252,10 @@ impl Extension for Pr {
         register_host_command(config::EXT, config::CMD, command::handle);
     }
 
-    /// 只订阅用户提交（拿会话标题）；交付本身没有任何自动触发点。
+    /// 只订阅用户提交（拿会话标题）与含 system 的 transcript（拿当前系统提示词）；
+    /// 交付本身没有任何自动触发点。
     fn hooks(&self) -> Vec<ExtensionHook> {
-        vec![ExtensionHook::UserPrompt]
+        vec![ExtensionHook::UserPrompt, ExtensionHook::ContextWithSystem]
     }
 
     /// 启用时先加载一次配置（把告警提示出去）。
@@ -236,15 +267,36 @@ impl Extension for Pr {
         }
     }
 
-    /// 记录会话 cwd。
+    /// 记录会话 cwd 与会话 id。
     fn on_session_start(
         &self,
         cwd_text: &str,
         _messages: &[AgentMessage],
-        _session: Option<&Session>,
+        session: Option<&Session>,
     ) {
         remember_cwd(cwd_text);
+        remember_session(session.map(|s| s.session_id.clone()));
         WARNED.store(false, Ordering::Relaxed);
+    }
+
+    /// 会话切换：换成新会话 id（切回旧会话时旧 id 要被替换）。
+    fn on_session_switched(&self, session_path: Option<&str>, _messages: &[AgentMessage]) {
+        remember_session(session_id_of(session_path));
+    }
+
+    /// 记下本次请求的系统提示词（**不改动** `messages`）：生成提交信息时复用同一份。
+    fn transform_context_with_system(
+        &self,
+        messages: &mut Vec<AgentMessage>,
+    ) -> crate::error::Result<()> {
+        if let Some(system) = messages.first().filter(|message| message.role == "system") {
+            let text = system.text();
+            let mut slot = SESSION_SYSTEM.lock().unwrap_or_else(|e| e.into_inner());
+            if slot.as_deref() != Some(text.as_str()) {
+                *slot = Some(text);
+            }
+        }
+        Ok(())
     }
 
     /// 用户提交输入：第一条非空行留作提交信息 / PR 标题。
@@ -379,11 +431,8 @@ fn deliver(cfg: &Config, model: Model) -> Result<Step, String> {
                     UiNotifyLevel::Info,
                 );
             }
-            let body = format!(
-                "{}\n\n---\nDelivered by prux from this session.\n",
-                session_body()
-            );
-            let url = gh::create_pr(&top, &branch, &base, &session_title(), &body, cfg.draft)?;
+            let (title, body) = pr_describe(&top, &base, model.as_ref());
+            let url = gh::create_pr(&top, &branch, &base, &title, &body, cfg.draft)?;
             // 号从 `gh pr create` 打印的 URL 尾巴上取：这条分支上还挂着旧 PR 时，再查一次
             // `gh pr view <branch>` 可能读到那一条。
             let number = url
@@ -403,7 +452,38 @@ fn deliver(cfg: &Config, model: Model) -> Result<Step, String> {
     wait_for_ci(cfg, &top, &number.to_string())
 }
 
-/// PR 正文：用户最初那条需求的摘录。
+/// PR 标题与正文：让模型看一眼整条分支的改动写一份 JSON，写不出来就回落会话标题 + 固定说明。
+///
+/// 生成失败只提示一句警告：一个标题不准的 PR 也比交付在本地停住强。
+fn pr_describe(top: &Path, base: &str, model: Option<&(String, String)>) -> (String, String) {
+    let title = session_title();
+    let fallback = (title.clone(), session_body());
+    let Some(model) = model else {
+        return fallback;
+    };
+    let Ok(outline) = git::branch_outline(top, base, describe::OUTLINE_CHARS) else {
+        return fallback;
+    };
+    if outline.trim().is_empty() {
+        return fallback;
+    }
+    let prompt = describe::build_prompt(&outline, &title);
+    match one_shot(model, describe::SYSTEM, &prompt, describe::MAX_TOKENS)
+        .ok()
+        .and_then(|text| describe::parse(&text))
+    {
+        Some(pr) => pr,
+        None => {
+            notify_text(
+                "pr: could not write the PR title and body — using the session title",
+                UiNotifyLevel::Warning,
+            );
+            fallback
+        }
+    }
+}
+
+/// PR 正文的兜底：用户最初那条需求的摘录。
 fn session_body() -> String {
     truncate_chars(&session_title(), BODY_CHARS, None, true)
 }
@@ -414,7 +494,7 @@ fn session_body() -> String {
 fn commit_message(top: &Path, model: Option<&(String, String)>) -> String {
     let title = session_title();
     let fallback = commit::fallback(&title);
-    let Some((provider, model_id)) = model else {
+    let Some(model) = model else {
         return fallback;
     };
     let Ok(outline) = git::staged_outline(top, commit::OUTLINE_CHARS) else {
@@ -424,30 +504,69 @@ fn commit_message(top: &Path, model: Option<&(String, String)>) -> String {
         return fallback;
     }
     let prompt = commit::build_prompt(&outline, &title);
-    let result = async_task::run_blocking(async {
-        auth::ensure_oauth_valid(provider)
-            .await
-            .map_err(|e| format!("{e}"))?;
-        let model = model_resolver::configured_model(provider, model_id, None, None)
-            .map_err(|e| format!("{e}"))?;
-        let (text, _usage) =
-            provider::simple_completion(&model, commit::SYSTEM, &prompt, Some(commit::MAX_TOKENS))
-                .await
-                .map_err(|e| format!("{e}"))?;
-        Ok::<String, String>(text)
-    });
-    match result {
-        Ok(Ok(text)) => commit::normalize(&text).unwrap_or(fallback),
-        Ok(Err(err)) | Err(err) => {
+    // 提交信息用会话当前那一份提示词：用户的提交约定（前缀、语言、篇幅）就写在里面
+    let system = session_system().unwrap_or_else(|| commit::SYSTEM.to_string());
+    match one_shot(model, &system, &prompt, commit::MAX_TOKENS)
+        .ok()
+        .and_then(|text| commit::normalize(&text))
+    {
+        Some(message) => message,
+        None => {
             notify_text(
-                &format!(
-                    "pr: could not write the commit message ({err}) — using the session title"
-                ),
+                "pr: could not write the commit message — using the session title",
                 UiNotifyLevel::Warning,
             );
             fallback
         }
     }
+}
+
+/// 一次性模型请求：刷 OAuth → 解析模型（带会话亲和 id）→ 非流式补全。
+///
+/// `system` 由调用方给：提交信息用会话当前那一份（用户写的提交约定就在里面），
+/// PR 描述用它自己那份。
+///
+/// 拿到工具调用块时返回 `Err`：一次性请求**没有** `tools` 参数，而会话系统提示词里
+/// 写着工具协议与工具清单，模型会把调用块当普通文本写出来——那东西不是提交信息，
+/// 也不该进 PR 正文，当失败处理比让它落地强。
+fn one_shot(
+    model: &(String, String),
+    system: &str,
+    prompt: &str,
+    max_tokens: u32,
+) -> Result<String, String> {
+    let (provider, model_id) = model;
+    let text = async_task::run_blocking(async {
+        auth::ensure_oauth_valid(provider)
+            .await
+            .map_err(|e| format!("{e}"))?;
+        let model = model_resolver::configured_model(provider, model_id, None, session_id())
+            .map_err(|e| format!("{e}"))?;
+        let (text, _usage) = provider::simple_completion(&model, system, prompt, Some(max_tokens))
+            .await
+            .map_err(|e| format!("{e}"))?;
+        Ok::<String, String>(text)
+    })??;
+    if looks_like_tool_call(&text) {
+        return Err("the model answered with a tool call".to_string());
+    }
+    Ok(text)
+}
+
+/// 输出里是不是带了一个工具调用块（各家标签写法不同，这里只认开头的标记）。
+///
+/// 不裸匹配 `invoke`：英文提交信息里正常写 “invoke the hook” 很常见，误杀只会白白
+/// 回落成会话标题。
+fn looks_like_tool_call(text: &str) -> bool {
+    [
+        "<｜DSML｜",
+        "<invoke",
+        "<function_calls",
+        "<parameter",
+        "antml:",
+    ]
+    .iter()
+    .any(|marker| text.contains(marker))
 }
 
 /// 轮询 PR 直到出结论、超时或阻塞。
@@ -584,6 +703,48 @@ mod tests {
         let cfg = config::load();
         assert_eq!(cfg.timeout.as_secs(), config::DEFAULT_TIMEOUT_SECS);
         assert!(status_text().contains("only /pr run triggers it"));
+    }
+
+    #[test]
+    fn session_id_is_kept_when_a_later_event_has_none() {
+        let _serial = serial();
+        let id = "2026-01-01T00-00-00_abc";
+        remember_session(Some(id.to_string()));
+        remember_session(session_id_of(None));
+        assert_eq!(session_id().as_deref(), Some(id), "没有会话路径不该清掉 id");
+        assert_eq!(
+            session_id_of(Some("/sessions/2026-01-01T00-00-00_abc.jsonl")).as_deref(),
+            Some(id)
+        );
+    }
+
+    #[test]
+    fn tool_call_blocks_are_rejected_but_the_word_invoke_is_not() {
+        assert!(looks_like_tool_call("<｜DSML｜ invoke name=\"read\">"));
+        assert!(looks_like_tool_call("<function_calls>"));
+        assert!(looks_like_tool_call("antml:invoke"));
+        assert!(
+            !looks_like_tool_call("invoke the hook before the test"),
+            "正文里正常出现的 invoke 不算工具调用"
+        );
+        assert!(!looks_like_tool_call("Add merge sort"));
+    }
+
+    #[test]
+    fn the_session_system_prompt_is_reused_verbatim() {
+        let _serial = serial();
+        let mut system = AgentMessage::user_text("自己的提交约定：中文 + [+/-/*] 前缀");
+        system.role = "system".to_string();
+        let mut messages = vec![system, AgentMessage::user_text("hi")];
+
+        Pr.transform_context_with_system(&mut messages).unwrap();
+
+        assert_eq!(
+            session_system().as_deref(),
+            Some("自己的提交约定：中文 + [+/-/*] 前缀")
+        );
+        assert_eq!(messages.len(), 2, "只读，不该改 transcript");
+        assert_eq!(messages[0].role, "system");
     }
 
     /// 交付测试串行锁：运行态是进程级单例，并发测试会互相踩。

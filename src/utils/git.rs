@@ -180,11 +180,31 @@ pub fn unpushed(dir: &Path) -> Result<bool, String> {
 /// 用途是给模型当「这批改动是什么」的上下文，不是给人读的，所以补丁按 `--unified=0`
 /// 只留改动行；`--stat` 失败（暂存区空、不是仓库）时返回 `Err`。
 pub fn staged_outline(dir: &Path, chars: usize) -> Result<String, String> {
-    let stat = git(dir, &["diff", "--cached", "--stat", "--no-color"])?;
+    diff_outline(dir, &["--cached"], chars)
+}
+
+/// 分支相对基线分支的改动摘要（格式同 [`staged_outline`]）：给模型写 PR 标题 / 正文用。
+///
+/// 先比 `origin/<base>`，拿不到再比本地 `<base>`：交付分支是从本地基线建的，两者
+/// merge-base 一致，取远端名是为了让 `origin` 上后来新增的提交也算进「这次交付」。
+pub fn branch_outline(dir: &Path, base: &str, chars: usize) -> Result<String, String> {
+    let remote = format!("origin/{base}...HEAD");
+    let local = format!("{base}...HEAD");
+    match diff_outline(dir, &[&remote], chars) {
+        Ok(outline) => Ok(outline),
+        Err(_) => diff_outline(dir, &[&local], chars),
+    }
+}
+
+/// `git diff <range> --stat` 加 `git diff <range> --unified=0` 的合并摘要。
+///
+/// 两者都空（没有任何改动）时返回空串，调用方不必区分「空」与「失败」。
+fn diff_outline(dir: &Path, range: &[&str], chars: usize) -> Result<String, String> {
+    let stat = diff(dir, "--stat", range)?;
     if !stat.ok {
         return Err(stat.failure("git diff --stat"));
     }
-    let patch = git(dir, &["diff", "--cached", "--no-color", "--unified=0"])?;
+    let patch = diff(dir, "--unified=0", range)?;
     let patch = if patch.ok {
         truncate_chars(&patch.stdout, chars, Some(DEF_ELLIPSIS), true)
     } else {
@@ -195,6 +215,13 @@ pub fn staged_outline(dir: &Path, chars: usize) -> Result<String, String> {
         return Ok(String::new());
     }
     Ok(format!("{stat}\n\n{patch}"))
+}
+
+/// 跑一条 `git diff`：`mode` 决定要 `--stat` 还是 `--unified=0` 的补丁。
+fn diff(dir: &Path, mode: &str, range: &[&str]) -> Result<Output, String> {
+    let mut args: Vec<&str> = vec!["diff", "--no-color", mode];
+    args.extend_from_slice(range);
+    git(dir, &args)
 }
 
 /// 把分支推到 `origin`（首次推送建立上游跟踪）。
@@ -320,6 +347,24 @@ mod tests {
         let outline = staged_outline(&repo, 1000).unwrap();
         assert!(outline.contains("work.txt"), "{outline}");
         assert!(outline.contains("+x"), "补丁里带改动行: {outline}");
+    }
+
+    #[test]
+    fn branch_outline_covers_the_commits_since_the_base() {
+        let Some(repo) = temp_repo() else {
+            return;
+        };
+        create_branch(&repo, "feature").unwrap();
+        std::fs::write(repo.join("work.txt"), "x\n").unwrap();
+        commit_all(&repo, "work").unwrap();
+
+        let outline = branch_outline(&repo, "main", 2000).unwrap();
+        assert!(outline.contains("work.txt"), "{outline}");
+        assert_eq!(
+            branch_outline(&repo, "feature", 2000).unwrap(),
+            "",
+            "相对自己没有改动"
+        );
     }
 
     #[test]
