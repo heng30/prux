@@ -14,7 +14,7 @@
 use super::servers::ServerSpec;
 use crate::{
     extensions::util::content_hash,
-    utils::{http::path_to_uri, paths::find_in_path},
+    utils::{http::path_to_uri, paths::find_in_path, process::HideConsole},
 };
 use serde_json::{Value, json};
 use std::{
@@ -101,7 +101,8 @@ impl LspClient {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(stderr)
-            .kill_on_drop(true);
+            .kill_on_drop(true)
+            .hide_console();
 
         let mut child = cmd
             .spawn()

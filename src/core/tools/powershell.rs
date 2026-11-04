@@ -10,6 +10,7 @@ use crate::{
     },
     utils::{
         paths,
+        process::HideConsole,
         truncate::{self, DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES},
     },
 };
@@ -101,7 +102,8 @@ pub async fn execute_powershell(
         .arg(command)
         .current_dir(&cwd_path)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::piped())
+        .hide_console();
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,

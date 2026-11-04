@@ -8,7 +8,10 @@ use crate::{
         },
         tools_manager,
     },
-    utils::truncate::{self, DEFAULT_MAX_BYTES},
+    utils::{
+        process::HideConsole,
+        truncate::{self, DEFAULT_MAX_BYTES},
+    },
 };
 
 /// find 未显式传 limit 时的默认返回条数上限。
@@ -81,6 +84,7 @@ pub async fn execute_find_with_ops(
         .args(&args)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
+        .hide_console()
         .spawn()
     {
         Ok(c) => c,

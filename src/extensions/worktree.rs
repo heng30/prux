@@ -30,7 +30,7 @@ use crate::{
     },
     extensions::{EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_WORKTREE, command_arg},
     modes::tui::handlers::register_host_command,
-    utils::{paths::short_path, time::now_ms},
+    utils::{paths::short_path, process::HideConsole, time::now_ms},
 };
 use std::{
     path::{Path, PathBuf},
@@ -457,6 +457,7 @@ fn git(cwd: &str, args: &[&str]) -> Result<String, String> {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .hide_console()
         .output()
         .map_err(|e| format!("git {} could not run: {e}", args.join(" ")))?;
 

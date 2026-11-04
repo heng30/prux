@@ -12,6 +12,7 @@
 //! 手动路径（`/vet run`）不经过这里：用户明确要跑，就是跑全部。
 
 use super::config::Check;
+use crate::utils::process::HideConsole;
 use std::{collections::HashSet, path::Path, process::Command};
 use strum_macros::{EnumString, IntoStaticStr};
 
@@ -141,6 +142,7 @@ fn git_changed_paths(cwd: &Path) -> Option<Vec<String>> {
         .arg("-C")
         .arg(cwd)
         .args(["status", "--porcelain", "--untracked-files=all"])
+        .hide_console()
         .output()
         .ok()?;
     if !out.status.success() {

@@ -7,7 +7,7 @@ use crate::{
     },
     utils::{
         output_files,
-        process::kill_process_tree,
+        process::{HideConsole, kill_process_tree},
         truncate::{
             self, DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, TruncatedBy, head_bytes, tail_bytes,
         },
@@ -353,7 +353,8 @@ pub async fn execute_bash_with_env(
     };
     cmd.current_dir(&cwd_path)
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
+        .stderr(std::process::Stdio::piped())
+        .hide_console();
 
     #[cfg(unix)]
     cmd.process_group(0);

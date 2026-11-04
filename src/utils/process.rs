@@ -1,6 +1,6 @@
 //! 进程辅助：执行外部命令时的平台差异、输出收集与回收。
 //!
-//! 十一件事：
+//! 十二件事：
 //! - [`shell_command`]：按平台构造「执行一条命令字符串」的 shell 调用；
 //! - [`shell_tokenize`]：按 shell 引号规则把一条命令行拆成参数；
 //! - [`shell_quote`]：把一段文本包成 shell 里的一个安全字面量（[`shell_tokenize`] 的逆操作）；
@@ -11,7 +11,8 @@
 //! - [`spawn_detached`]：拉起一个**不占用终端**的长命子进程（GUI 应用等），输出落临时日志；
 //! - [`kill_process_tree`]：连同子进程一起强杀（Unix 进程组 / Windows `taskkill /T`）；
 //! - [`blocking`]：在同步接口里安全地等一个阻塞动作；
-//! - [`spawn_blocking`]：`async fn` 里把阻塞动作丢到阻塞线程池。
+//! - [`spawn_blocking`]：`async fn` 里把阻塞动作丢到阻塞线程池；
+//! - [`HideConsole`]：Windows 上让子进程不分配可见控制台窗口（否则 GUI 里每跑一条外部命令闪一片黑窗口）。
 //!
 //! 这些是「跑一条用户配置的命令」所需的最小公共面：内置 `bash` 工具（异步流式）与
 //! 需要同步等待结果的扩展（如 `vet`）共用同一套进程回收语义，避免各写一份。
@@ -40,6 +41,43 @@ const TIMED_POLL_INTERVAL: Duration = Duration::from_millis(20);
 /// 管道就永远不会关，死等会把整个调用挂住。超出的部分直接丢弃。
 const TIMED_READ_GRACE: Duration = Duration::from_millis(500);
 
+/// Windows 的 `CREATE_NO_WINDOW` 进程创建标志：分配控制台但不显示窗口。
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// 让子进程在 Windows 上不弹出控制台窗口。
+///
+/// `prux-gui` 以 `windows_subsystem = "windows"` 构建，进程自己**没有控制台**：此后每拉起一个
+/// 控制台子系统程序（`bash.exe`、`powershell.exe`、`rg`、`fd`、`git`、`taskkill` …），系统都会
+/// 给它新分配一个控制台并**把窗口显示出来**，屏幕上就闪一片黑窗口。这些子进程的
+/// stdin/stdout/stderr 本来就已经全部接到管道（见上文的输出去处约定），隐掉控制台不影响功能。
+///
+/// 非 Windows 平台是空操作，因此调用方不必写 `cfg` 分支：在 `spawn` / `output` 之前
+/// 链一次 `.hide_console()` 即可。
+pub trait HideConsole {
+    /// 标记子进程不要可见控制台窗口；返回 `self` 便于链式构造命令。
+    fn hide_console(&mut self) -> &mut Self;
+}
+
+impl HideConsole for Command {
+    fn hide_console(&mut self) -> &mut Self {
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            self.creation_flags(CREATE_NO_WINDOW);
+        }
+        self
+    }
+}
+
+impl HideConsole for tokio::process::Command {
+    fn hide_console(&mut self) -> &mut Self {
+        #[cfg(windows)]
+        self.creation_flags(CREATE_NO_WINDOW);
+        self
+    }
+}
+
 /// 按平台构造执行一条命令字符串的 shell 调用。
 ///
 /// Unix 用 `sh -c`，Windows 用 `cmd /C`——两者都是该平台上必然存在的解释器。
@@ -50,6 +88,7 @@ pub fn shell_command(command: &str) -> Command {
     {
         let mut cmd = Command::new("cmd");
         cmd.args(["/C", command]);
+        cmd.hide_console();
         cmd
     }
 
@@ -57,6 +96,7 @@ pub fn shell_command(command: &str) -> Command {
     {
         let mut cmd = Command::new("sh");
         cmd.args(["-c", command]);
+        cmd.hide_console();
         cmd
     }
 }
@@ -212,7 +252,8 @@ pub fn run_timed(
         Stdio::null()
     })
     .stdout(Stdio::piped())
-    .stderr(Stdio::piped());
+    .stderr(Stdio::piped())
+    .hide_console();
     let mut child = cmd.spawn()?;
 
     if let Some(payload) = stdin
@@ -291,6 +332,7 @@ pub fn run_stdout(mut cmd: Command, what: &str) -> Result<Vec<u8>, String> {
         .stdin(Stdio::null())
         .stderr(Stdio::piped())
         .stdout(Stdio::piped())
+        .hide_console()
         .output()
         .map_err(|e| format!("{what}: {e}"))?;
     if !output.status.success() {
@@ -324,6 +366,7 @@ pub fn kill_process_tree(pid: u32) {
             .args(["/F", "/T", "/PID", &pid.to_string()])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
+            .hide_console()
             .status();
     }
 

@@ -13,7 +13,7 @@ use crate::{
         error::{Context as _, McpError, Result, bail},
         oauth,
     },
-    utils::{env, http as http_util, paths::expand_home},
+    utils::{env, http as http_util, paths::expand_home, process::HideConsole},
 };
 use futures_util::stream::BoxStream;
 use http::{HeaderName, HeaderValue};
@@ -867,6 +867,7 @@ async fn connect(
 ) -> Result<Client> {
     if let Some(command) = &server.command {
         let mut process = Command::new(env::expand(command));
+        process.hide_console();
         process.args(server.args.iter().map(|value| env::expand(value)));
         process.envs(
             server

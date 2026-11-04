@@ -33,6 +33,7 @@ use crate::{
         settings_manager::agent_dir,
         tools::{ToolError, ToolResult},
     },
+    utils::process::HideConsole,
 };
 use serde_json::{Value, json};
 use std::{
@@ -614,6 +615,7 @@ async fn run_gate(command: &str, cwd: &str) -> Result<(), String> {
     child.arg(arg).arg(command);
     child.current_dir(cwd);
     child.kill_on_drop(true);
+    child.hide_console();
 
     let out = match tokio::time::timeout(GATE_TIMEOUT, child.output()).await {
         Ok(Ok(out)) => out,

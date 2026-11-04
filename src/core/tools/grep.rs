@@ -8,7 +8,10 @@ use crate::{
         },
         tools_manager,
     },
-    utils::truncate::{self, DEFAULT_MAX_BYTES},
+    utils::{
+        process::HideConsole,
+        truncate::{self, DEFAULT_MAX_BYTES},
+    },
 };
 use serde_json::Value;
 use std::{
@@ -104,6 +107,7 @@ pub async fn execute_grep_with_ops(
         .args(&args)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
+        .hide_console()
         .spawn()
     {
         Ok(c) => c,

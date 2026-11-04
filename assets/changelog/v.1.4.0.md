@@ -1079,6 +1079,18 @@
   directory, and the panel prints its keys (`↑↓ select · Enter confirm · Ctrl-S move to top · Esc
   close`) as a hint line.
 
+- **Windows no longer flashes a console window for every external command**: `prux-gui` is built as
+  a windows-subsystem binary and has no console of its own, so every console-subsystem child it
+  started — `bash`, `powershell`, `rg`, `fd`, `git`, `taskkill`, MCP and LSP servers — was handed a
+  freshly allocated console whose window the system then showed. A shared `HideConsole` trait now
+  sets `CREATE_NO_WINDOW` on every child process prux spawns, covering the `bash` / `powershell` /
+  `find` / `grep` tools, the git helpers, the workflow gate, the timed runner and process-tree
+  kills. Their stdout/stderr were already piped, so nothing else changes; off Windows the call is a
+  no-op.
+
+- **The desktop GUI sidebar's branch row uses `⎇`**: it drew a Nerd Font icon, which rendered as a
+  tofu box under the bundled font.
+
 ## 中文
 
 ### 新增
@@ -1889,3 +1901,12 @@
   使用排序，用 `Browse…` 选一次很快就沉回底部。`Ctrl-S` 只调整清单顺序，不切换当前会话的工作
   目录；面板底部同时补了一行按键提示（`↑↓ select · Enter confirm · Ctrl-S move to top · Esc
   close`）。
+
+- **Windows 上不再为每条外部命令闪一片黑窗口**：`prux-gui` 以 windows 子系统构建、自身没有控制台，
+  于是它拉起的每个控制台子系统子进程（`bash`、`powershell`、`rg`、`fd`、`git`、`taskkill`、MCP
+  与 LSP 服务器）都会被系统新分配一个控制台并把窗口显示出来。现在统一的 `HideConsole` 给每个子
+  进程加 `CREATE_NO_WINDOW`，覆盖 `bash` / `powershell` / `find` / `grep` 工具、git 辅助、workflow
+  的 gate、带超时的执行器与进程树清理；这些子进程的 stdout/stderr 本来就接了管道，功能不受影响，
+  非 Windows 平台是空操作。
+
+- **桌面 GUI 侧栏底部的分支图标改用 `⎇`**：原来画的是 Nerd Font 图标，在随包字体下渲染成一个方块。

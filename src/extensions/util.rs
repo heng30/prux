@@ -10,6 +10,7 @@ use crate::{
     utils::{
         glyphs::{DEF_ELLIPSIS, DEF_SPINNER, DEF_SPINNER_BRAILLE},
         image::{ImageResizeLimits, prepare_image},
+        process::HideConsole,
         time::now_ms,
         truncate::{self, truncate_chars_within},
     },
@@ -410,7 +411,7 @@ pub fn download_spinner() -> &'static str {
 /// （优先用 stderr 文本）。成功时返回去除首尾空白的 stdout。
 pub async fn git(cwd: &str, args: &[&str], timeout: Duration) -> Result<String, String> {
     let mut cmd = tokio::process::Command::new("git");
-    cmd.args(args).current_dir(cwd).kill_on_drop(true);
+    cmd.args(args).current_dir(cwd).kill_on_drop(true).hide_console();
 
     let out = match tokio::time::timeout(timeout, cmd.output()).await {
         Ok(Ok(out)) => out,

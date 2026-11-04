@@ -36,7 +36,7 @@ use crate::{
     utils::{
         glyphs::DEF_DOT_FILLED,
         output_files::create_output_file_stream,
-        process::{kill_process_tree, shell_command},
+        process::{HideConsole, kill_process_tree, shell_command},
         time::format_duration,
     },
 };
@@ -378,6 +378,7 @@ fn shell_cmd(command: &str) -> Command {
         Some(bash) => {
             let mut cmd = Command::new(bash);
             cmd.arg("-c").arg(command);
+            cmd.hide_console();
             cmd
         }
         None => shell_command(command),
