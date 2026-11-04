@@ -319,7 +319,7 @@ impl FooterExtension for RichFooter {
         // 行 1 左：分支 + 模型 + 上下文% + 缓存命中%
         let mut left: Vec<FooterSpan> = Vec::new();
         if let Some(branch) = ctx.git_branch {
-            left.push(FooterSpan::new(DIM.0, DIM.1, " "));
+            left.push(FooterSpan::new(DIM.0, DIM.1, "⎇  "));
             left.push(FooterSpan::new(SUCCESS.0, SUCCESS.1, branch.to_string()));
             left.push(FooterSpan::new(DIM.0, DIM.1, " "));
         }

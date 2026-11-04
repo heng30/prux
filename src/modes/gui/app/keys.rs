@@ -49,6 +49,8 @@ impl GuiApp {
 
             if key == "enter" {
                 self.confirm_dialog(cx);
+            } else if primary && keystroke.key == "v" && !keystroke.modifiers.alt {
+                self.paste_into_dialog(cx);
             } else {
                 self.handle_dialog_key(key, shift);
             }
@@ -753,6 +755,29 @@ impl GuiApp {
             _ => {}
         }
     }
+
+    /// 把系统剪贴板里的文本贴进当前对话框的输入框（`Ctrl-V` / `Cmd-V`）。
+    ///
+    /// 只处理带输入框的对话框；删除确认这类没有输入行，粘贴什么也不做。
+    /// 剪贴板里没有文本（图片等）时同样什么都不做。
+    pub(super) fn paste_into_dialog(&mut self, cx: &mut Context<Self>) {
+        let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
+            return;
+        };
+
+        if let Some(
+            SessionDialog::Rename { editor, .. }
+            | SessionDialog::ApiKey { editor, .. }
+            | SessionDialog::Import { editor }
+            | SessionDialog::Label { editor }
+            | SessionDialog::BugHint { editor }
+            | SessionDialog::Number { editor, .. },
+        ) = self.dialog.as_mut()
+        {
+            editor.insert(&text);
+        }
+    }
+
     /// 覆盖层按键。列表类面板统一支持 `tui.select.*`：
     /// 上下（含 Ctrl-J / Ctrl-K）、首页/末页、翻页、Ctrl-C 取消。
     pub(super) fn handle_overlay_key(

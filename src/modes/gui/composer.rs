@@ -18,13 +18,27 @@ const FONT_SIZE: f32 = FONT_BODY;
 
 /// 输入框行高倍数：gpui 默认是 φ（1.618em），选中/光标背景会比字形高出一截、
 /// 多行时相邻行的背景连成一片，文字也不在背景里垂直居中。
-const LINE_HEIGHT: f32 = 1.3;
+///
+/// 下限受字体几何约束：gpui 逐行把字形裁在自己的行盒里，行盒矮于字体的
+/// ascent + descent（思源黑体 1.16em + 0.288em = 1.448em）就会削掉行底的字尾
+/// （Windows 上落笔位置更低，「g」的下伸部直接被切平）。
+const LINE_HEIGHT: f32 = 1.5;
 
 /// 单行高度（逻辑像素），`max_h` 与逐行布局共用。
 const ROW_HEIGHT: f32 = FONT_SIZE * LINE_HEIGHT;
 
 /// 行间空隙：多行选中时相邻行的背景不至于连成一整块。
 const LINE_GAP: f32 = SPACE_XXS;
+
+/// 光标 / 选中块的高度：字形墨迹（含下伸部）约 0.93em，块上下各留 0.11em 就成了一个
+/// 贴合文字的插入符，而不是顶到行盒上去；取 1.15em 而不取整 1.2em，是为了让块底刚好
+/// 落在行盒里（行盒是滚动容器的子项，溢出会多一条被裁的边）。
+const BLOCK_H: f32 = FONT_SIZE * 1.15;
+
+/// 块相对行盒顶的下移量。行盒按字体的 ascent / descent 居中，而字形落得比行盒的
+/// 几何中心低约 0.17em（与 [`super::theme::TEXT_RAISE_EM`] 说的是同一个不对称）：
+/// 块跟行盒一样居中就会“光标比字高”，所以再往下带这一段。
+const BLOCK_TOP: f32 = (ROW_HEIGHT - BLOCK_H) / 2. + FONT_SIZE * 0.17;
 
 /// 鼠标点选回调：参数是（事件、行号、行内字符下标）。
 pub type PickHandler =
@@ -224,18 +238,22 @@ fn render_inner(
                 let kind = kinds.get(at).copied().unwrap_or(RunKind::Normal);
                 let mut element = div()
                     .id(gpui::ElementId::Name(format!("c{row}:{at}").into()))
-                    .child(SharedString::from(
-                        chars.get(at).map(|ch| ch.to_string()).unwrap_or_default(),
-                    ));
+                    .relative();
+                // 块先画、字形后画：绝对定位的块不参与布局，行盒与字形位置都不动
                 match kind {
                     RunKind::Normal => {}
                     RunKind::Selected => {
-                        element = element.bg(theme.selection);
+                        element = element.child(block(theme.selection));
                     }
                     RunKind::Cursor => {
-                        element = element.bg(theme.accent).text_color(theme.on_inverse);
+                        element = element
+                            .text_color(theme.on_inverse)
+                            .child(block(theme.accent));
                     }
                 }
+                element = element.child(SharedString::from(
+                    chars.get(at).map(|ch| ch.to_string()).unwrap_or_default(),
+                ));
                 if let Some(pick) = pick.clone() {
                     element =
                         element.on_mouse_down(gpui::MouseButton::Left, move |event, window, cx| {
@@ -258,8 +276,9 @@ fn render_inner(
                 line_row = line_row.child(
                     div()
                         .id(gpui::ElementId::Name(format!("c{row}:end").into()))
-                        .bg(theme.accent)
+                        .relative()
                         .text_color(theme.on_inverse)
+                        .child(block(theme.accent))
                         .child(SharedString::from(" ")),
                 );
             }
@@ -275,6 +294,17 @@ fn render_inner(
         }
     }
     column.text_color(text_color).into_any_element()
+}
+
+/// 光标 / 选中块：绝对定位在字符格里，不占布局、也不改字形位置。
+fn block(color: gpui::Hsla) -> gpui::Div {
+    div()
+        .absolute()
+        .left_0()
+        .right_0()
+        .top(px(BLOCK_TOP))
+        .h(px(BLOCK_H))
+        .bg(color)
 }
 
 /// 单个字符的排印宽度：排版器量真字形，不做等宽估算（CJK、回退字体都按实际算）。
