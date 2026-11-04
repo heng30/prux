@@ -87,29 +87,43 @@ impl GuiApp {
         cx.notify();
     }
 
-    /// 附件下拉菜单：文件 / 图片，选完插 `@` 让补全接着列路径。
-    pub(super) fn open_attach_menu(&mut self, anchor: gpui::Point<Pixels>, cx: &mut Context<Self>) {
-        let items = vec![
-            MenuItem {
-                label: "File".into(),
-                detail: "@ reference".into(),
-                action: Action::Attach { images: false },
-            },
-            MenuItem {
-                label: "Image".into(),
-                detail: "@ reference".into(),
-                action: Action::Attach { images: true },
-            },
-        ];
-        self.dropdown = Some(Dropdown {
-            items,
-            anchor,
-            width: 160.,
-            scroll: false,
-            handle: ScrollHandle::new(),
-            selected: 0,
-        });
-        cx.notify();
+    /// 附件按钮：弹系统文件选择框，选中后把 `@路径` 插到光标处。
+    ///
+    /// 图片与文本同一个入口：发送时 `@路径` 指向图片就自动收集成图片附件。
+    pub(super) fn pick_attachment(&mut self, cx: &mut Context<Self>) {
+        // 原生对话框是阻塞调用：丢到后台线程，选完再把结果送回视图
+        let start = self.cwd();
+        cx.spawn(async move |this, cx| {
+            let picked = cx
+                .background_executor()
+                .spawn(async move {
+                    native_dialog::FileDialogBuilder::default()
+                        .set_title("Attach a file")
+                        .set_location(&start)
+                        .open_single_file()
+                        .show()
+                        .ok()
+                        .flatten()
+                })
+                .await;
+
+            if let Some(path) = picked {
+                _ = this.update(cx, |app, cx| {
+                    let cwd = PathBuf::from(app.cwd());
+                    let path = paths::relative_posix(&cwd, &path);
+                    // 带空白的路径要加引号，`@路径` 的解析按空白分词
+                    let insert = if path.contains(char::is_whitespace) {
+                        format!("@\"{path}\" ")
+                    } else {
+                        format!("@{path} ")
+                    };
+                    app.editor.insert(&insert);
+                    app.refresh_suggest(cx);
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
     }
 
     /// 悬浮探测：按滚动区实测 bounds 与鼠标位置判定，指到谁就显谁的滚动条。

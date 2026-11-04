@@ -642,9 +642,7 @@ impl GuiApp {
                 .text_color(theme.text_secondary)
                 .cursor_pointer()
                 .hover(|style| style.bg(theme.overlay).text_color(theme.text))
-                .on_click(cx.listener(|this, event: &gpui::ClickEvent, _, cx| {
-                    this.open_attach_menu(event.position(), cx);
-                }))
+                .on_click(cx.listener(|this, _, _, cx| this.pick_attachment(cx)))
                 .child(SharedString::from("+ Attach")),
         );
         hint = hint.child(

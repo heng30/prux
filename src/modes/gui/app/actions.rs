@@ -552,12 +552,6 @@ impl GuiApp {
             Action::ToggleSidebar => {
                 self.set_sidebar_visible(!self.show_sidebar);
             }
-            Action::Attach { images } => {
-                // 附件就是 `@路径` 引用：插入触发符后让补全面板接着列文件
-                self.attach_images = images;
-                self.editor.insert("@");
-                self.refresh_suggest(cx);
-            }
         }
         cx.notify();
     }

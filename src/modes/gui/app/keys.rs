@@ -268,7 +268,6 @@ impl GuiApp {
                         // （TUI 里退格改的就是同一段文本，面板跟着前缀变短而关闭）
                         self.restore_suggest_input();
                         self.suggest = None;
-                        self.attach_images = false;
                         self.cancel_file_scan();
                         self.editor.backspace();
                     } else {

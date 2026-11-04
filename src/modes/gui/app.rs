@@ -367,8 +367,6 @@ pub struct GuiApp {
     skipped_blocks: usize,
     /// 上一帧测量块区间时的滚动偏移（区间是屏幕坐标，换帧要按它换算）
     block_offset: Rc<Cell<Pixels>>,
-    /// 附件按钮的补全过滤：true 只列图片
-    attach_images: bool,
     /// 标题栏/输入区的下拉菜单
     dropdown: Option<Dropdown>,
     /// 输入卡片在窗口里的实测位置（补全面板贴它上沿）
@@ -494,7 +492,6 @@ impl GuiApp {
             rendered_blocks: 0,
             skipped_blocks: 0,
             block_offset: Rc::new(Cell::new(px(0.))),
-            attach_images: false,
             dropdown: None,
             composer_bounds: Rc::new(Cell::new(None)),
             composer_scroll: ScrollHandle::new(),

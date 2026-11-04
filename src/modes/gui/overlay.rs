@@ -99,11 +99,6 @@ pub enum Action {
         /// 设置项的稳定键（`ExtensionSetting::key`）
         key: String,
     },
-    /// 插入附件引用（`@路径`）：`images` 为真时补全只列图片
-    Attach {
-        /// 是否只列图片
-        images: bool,
-    },
     /// 显示/收起左侧会话列表（同 `/sidebar`）
     ToggleSidebar,
 }

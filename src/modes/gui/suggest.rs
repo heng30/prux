@@ -9,11 +9,9 @@ use crate::{
     utils::{
         display::flatten_line,
         fuzzy::fuzzy_filter,
-        mime::is_image_path,
         path_suggest::{self, is_at_token_start, is_autocomplete_separator},
     },
 };
-use std::path::Path;
 
 /// `/history` 面板里的控制词：(词, 描述, 是否影响所有项目)。
 ///
@@ -341,11 +339,8 @@ pub fn subcommands(defs: &[(String, String)], query: &str) -> Vec<Item> {
 }
 
 /// 后台文件扫描结果 → 候选：主文本取文件名（同 TUI），说明行是路径，补全写回完整路径。
-///
-/// `images_only` 为真时只留图片（附件按钮选「图片」后）。
-pub fn file_items(hits: Vec<path_suggest::Candidate>, images_only: bool) -> Vec<Item> {
+pub fn file_items(hits: Vec<path_suggest::Candidate>) -> Vec<Item> {
     hits.into_iter()
-        .filter(|candidate| !images_only || is_image_path(Path::new(&candidate.display)))
         .map(|candidate| Item {
             label: candidate.name,
             detail: candidate.display,
@@ -545,30 +540,19 @@ mod tests {
         assert!(detect("@my dir").is_none());
     }
 
-    /// 文件候选：主文本是文件名、说明是路径，附件选「图片」时只留图片。
+    /// 文件候选：主文本是文件名、说明是路径。
     #[test]
     fn file_items_use_name_and_path() {
-        let hits = vec![
-            path_suggest::Candidate {
-                name: "b.png".into(),
-                display: "a/b.png".into(),
-                insert: "a/b.png".into(),
-            },
-            path_suggest::Candidate {
-                name: "c.rs".into(),
-                display: "a/c.rs".into(),
-                insert: "a/c.rs".into(),
-            },
-        ];
+        let hits = vec![path_suggest::Candidate {
+            name: "b.png".into(),
+            display: "a/b.png".into(),
+            insert: "a/b.png".into(),
+        }];
 
-        let all = file_items(hits.clone(), false);
+        let all = file_items(hits);
         assert_eq!(all[0].label, "b.png");
         assert_eq!(all[0].detail, "a/b.png");
         assert_eq!(all[0].insert, "a/b.png");
-
-        let images = file_items(hits, true);
-        assert_eq!(images.len(), 1);
-        assert_eq!(images[0].label, "b.png");
     }
 
     /// `/history` 只在行首、且命令名后是空白或结尾时接管；`/historyfoo` 还得走命令候选。

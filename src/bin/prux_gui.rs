@@ -4,6 +4,8 @@
 //! 所以 tokio runtime 由本文件手动创建并保持存活，agent worker 跑在它上面。
 //! `--tui` 时不进 GUI，改跑交互 TUI（参数解析仍由 bootstrap 里的 clap 完成）。
 
+#![windows_subsystem = "windows"]
+
 use prux::{APP_NAME, cli::startup::bootstrap, modes::tui};
 use std::io::IsTerminal;
 

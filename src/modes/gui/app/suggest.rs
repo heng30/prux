@@ -48,7 +48,6 @@ impl GuiApp {
         // 历史浏览（↑/↓ 载入 `/model` 这类历史）不该弹面板，否则抢走 ↑/↓ 焦点
         if self.editor.browsing_history() {
             self.suggest = None;
-            self.attach_images = false;
             self.cancel_file_scan();
             return;
         }
@@ -76,7 +75,6 @@ impl GuiApp {
         let Some((trigger, start, command, query)) = detected else {
             self.suggest = None;
             self.suggest_dismissed = None;
-            self.attach_images = false;
             self.cancel_file_scan();
             return;
         };
@@ -226,7 +224,6 @@ impl GuiApp {
 
         let cwd = self.cwd();
         let scanned = query.clone();
-        let images_only = self.attach_images;
         cx.spawn(async move |this, cx| {
             let hits = cx
                 .background_executor()
@@ -235,7 +232,7 @@ impl GuiApp {
                 })
                 .await;
             _ = this.update(cx, |this, cx| {
-                this.apply_file_scan(start, query, hits, images_only, cx);
+                this.apply_file_scan(start, query, hits, cx);
             });
         })
         .detach();
@@ -249,7 +246,6 @@ impl GuiApp {
         start: usize,
         query: String,
         hits: Vec<path_suggest::Candidate>,
-        images_only: bool,
         cx: &mut Context<Self>,
     ) {
         match self.suggest.as_ref() {
@@ -270,7 +266,7 @@ impl GuiApp {
             }
         }
 
-        let items = suggest_engine::file_items(hits, images_only);
+        let items = suggest_engine::file_items(hits);
         let len = items.len();
         // 扫描回来是空：面板开着（还留着上一批候选）就收起，别留一个「No matches」的空框
         if len == 0 {
@@ -340,7 +336,6 @@ impl GuiApp {
 
         self.restore_suggest_input();
         self.suggest = None;
-        self.attach_images = false;
     }
 
     /// 作废进行中的 `@` 扫描（不阻塞：walk 在下一个条目处退出并丢弃结果）。
