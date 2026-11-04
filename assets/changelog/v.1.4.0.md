@@ -1091,6 +1091,14 @@
 - **The desktop GUI sidebar's branch row uses `⎇`**: it drew a Nerd Font icon, which rendered as a
   tofu box under the bundled font.
 
+- **The copy button on a later code block in the desktop GUI copies again**: interactive elements are
+  told apart by their element id, and gpui keeps exactly one state per id — so the row counter behind
+  the copy button and the inline markdown links restarted at zero in every message, and a block in a
+  newer message shared its id with a block from an earlier one. The element rendered first cleared the
+  shared mouse-down record when the button was released, so the click on the later block never fired;
+  the earlier block's button kept working, which is why only some cards looked broken. Ids now carry
+  the block index as a namespace, and the overlay panel's markdown gets a namespace of its own.
+
 ## 中文
 
 ### 新增
@@ -1597,6 +1605,12 @@
   更慢的全量拷贝。复制过来的都是被忽略的文件，因此不会混进隔离运行留下的那个分支。
 
 ## 修复
+
+- **桌面 GUI 较新消息里的代码块复制按钮能复制了**：可点元素靠元素 id 区分，而 gpui 每个 id 只留
+  一份状态——复制按钮与行内链接的序号在每条消息里都从 0 重数，于是较新消息里的代码块与前面某条
+  消息里的代码块共用了同一个 id。先渲染的那个在鼠标抬起时会把共用的按下记录清掉，后一个的点击
+  因此永远不触发；先渲染的那个照常能用，看上去就像只有部分卡片坏了。现在 id 里带上块下标作为
+  命名空间，覆盖层面板的 Markdown 另用一个命名空间。
 
 - **桌面 GUI 的对话框能粘贴了**：填 API key、重命名会话、导入路径这些对话框以前只能一个字一个字
   敲——对话框开着时按键全部先交给它的输入框，而粘贴分支只在主输入框那条分发路上，于是按 `Ctrl-V`

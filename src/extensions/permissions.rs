@@ -56,7 +56,8 @@ use crate::{
         extensions::{
             BeforeToolCallOutcome, Extension, ExtensionCommand, ExtensionHook, ExtensionMode,
             ExtensionSetting, ExtensionTool, ExtensionUiRequest, ForkProjectInfo, SelectOption,
-            SubcommandDef, UiNotifyLevel, ask_pending, ask_prompt, request_ui, ui_ready,
+            SubcommandDef, ToolExecCtx, UiNotifyLevel, ask_pending, ask_prompt, request_ui,
+            ui_ready,
         },
         provider::AgentMessage,
         session_manager::Session,
@@ -269,6 +270,13 @@ impl Extension for Permissions {
     /// 记录会话 cwd（项目配置据此定位、路径判定据此归一化）。
     fn on_session_start(&self, cwd: &str, _messages: &[AgentMessage], _session: Option<&Session>) {
         remember_cwd(cwd);
+    }
+
+    /// 切目录（`/cwd`、worktree 进出）后同步会话 cwd：外目录判定与项目配置定位靠它。
+    fn on_exec_ctx(&self, ctx: &ToolExecCtx) {
+        if ctx.depth == 0 && !ctx.cwd.trim().is_empty() {
+            remember_cwd(&ctx.cwd);
+        }
     }
 
     /// 会话切换后项目配置可能换了，重新记 cwd 并让告警可以再提示一次。

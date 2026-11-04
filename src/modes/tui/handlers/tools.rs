@@ -3,7 +3,7 @@
 use crate::{
     core::settings_manager,
     modes::tui::app::{App, MsgLevel},
-    utils::stderr_log,
+    utils::{paths::cwd, stderr_log},
 };
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use std::{
@@ -105,8 +105,15 @@ fn edit_via_external_editor(text: &str) -> Option<String> {
 }
 
 /// 执行 shell 命令并捕获输出（!cmd / !!cmd）
+///
+/// 工作目录取会话 cwd（[`crate::utils::paths::cwd`]）：切目录后本地命令要跟着换，
+/// 不能留在进程启动目录。
 pub(crate) fn run_shell_command(cmd: &str) -> String {
-    let output = std::process::Command::new("sh").arg("-c").arg(cmd).output();
+    let output = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(cmd)
+        .current_dir(cwd())
+        .output();
     match output {
         Ok(o) => {
             let mut out = String::from_utf8_lossy(&o.stdout).to_string();

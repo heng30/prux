@@ -37,7 +37,7 @@ use crate::{
     core::{
         extensions::{
             BeforeToolCallOutcome, BoundaryOutcome, Extension, ExtensionCommand, ExtensionHook,
-            ExtensionMode, ExtensionSetting, ExtensionTool, UiNotifyLevel,
+            ExtensionMode, ExtensionSetting, ExtensionTool, ToolExecCtx, UiNotifyLevel,
         },
         provider::AgentMessage,
         session_manager::Session,
@@ -276,6 +276,13 @@ impl Extension for Vet {
         remember_cwd(cwd);
         reset_turn_state();
         WARNED.store(false, Ordering::Relaxed);
+    }
+
+    /// 切目录（`/cwd`、worktree 进出）后同步会话 cwd：检查命令在该目录下跑。
+    fn on_exec_ctx(&self, ctx: &ToolExecCtx) {
+        if ctx.depth == 0 && !ctx.cwd.trim().is_empty() {
+            remember_cwd(&ctx.cwd);
+        }
     }
 
     /// 会话切换后项目配置可能换了，重新记 cwd 并让告警可以再提示一次。

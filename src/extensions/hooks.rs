@@ -24,7 +24,7 @@ use crate::{
         extensions::{
             AfterToolCallOutcome, BeforeToolCallOutcome, BoundaryOutcome, CommandHost, Extension,
             ExtensionCommand, ExtensionHook, ExtensionMode, ExtensionTool, ForkProjectInfo,
-            SelectOption, SubcommandDef, UiNotifyLevel, UserPromptAction, ask_prompt,
+            SelectOption, SubcommandDef, ToolExecCtx, UiNotifyLevel, UserPromptAction, ask_prompt,
         },
         provider::AgentMessage,
         session_manager::Session,
@@ -261,6 +261,13 @@ impl Extension for Hooks {
         let id = session_id_of(session_path).unwrap_or_default();
         session_ctx().lock().unwrap_or_else(|e| e.into_inner()).0 = id;
         STOP_CONTINUATIONS.store(0, Ordering::Relaxed);
+    }
+
+    /// 切目录后同步信封里的 cwd（会话 id 保持不变）。
+    fn on_exec_ctx(&self, ctx: &ToolExecCtx) {
+        if ctx.depth == 0 && !ctx.cwd.trim().is_empty() {
+            session_ctx().lock().unwrap_or_else(|e| e.into_inner()).1 = ctx.cwd.clone();
+        }
     }
 
     /// 真实用户提交：`Stop` 的续跑计数从头算。

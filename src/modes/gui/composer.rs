@@ -2,7 +2,10 @@
 
 use super::{
     text_edit::Editor,
-    theme::{BORDER_WIDTH, COMPOSER_H_PADDING, FONT_BODY, SPACE_XXS, Theme, UI_FONT_FAMILY, px},
+    theme::{
+        BORDER_WIDTH, COMPOSER_H_PADDING, FONT_BODY, RADIUS_MD, SPACE_SM, SPACE_XXS, Theme,
+        UI_FONT_FAMILY, px,
+    },
 };
 use gpui::{
     AnyElement, InteractiveElement, IntoElement, ParentElement, SharedString,
@@ -50,7 +53,44 @@ pub type DragHandler =
 
 /// 渲染输入框内容（只读：对话框、补全过滤框等场景）。
 pub fn render(editor: &Editor, theme: &Theme) -> AnyElement {
-    render_inner(editor, theme, None, None, None)
+    render_inner(editor, theme, None, None, None, true)
+}
+
+/// 搜索框一类单行输入框的渲染（侧栏会话搜索、面板文件搜索、列表面板搜索）。
+///
+/// 字形排版与光标就是 [`render`] 那一套：块状光标贴在字形上，位置自然对得上。
+/// 空且未聚焦时只显示占位文案——不聚焦的框里没有光标，也不需要画字形。
+pub fn render_field(
+    editor: &Editor,
+    theme: &Theme,
+    placeholder: impl Into<SharedString>,
+    focused: bool,
+) -> AnyElement {
+    if !focused && editor.is_empty() {
+        return div()
+            .text_size(px(FONT_SIZE))
+            .text_color(theme.text_ghost)
+            .child(placeholder.into())
+            .into_any_element();
+    }
+    render_inner(editor, theme, None, None, None, focused)
+}
+
+/// 表单输入框的外框：与对话框（设置 API key、重命名会话）里的输入框同一套底色、
+/// 描边与内边距，高度由字形与内边距决定，不写死。
+pub fn field(theme: &Theme, focused: bool) -> gpui::Div {
+    div()
+        .w_full()
+        .rounded(px(RADIUS_MD))
+        .bg(theme.canvas)
+        .border_1()
+        .border_color(if focused {
+            theme.border_strong
+        } else {
+            theme.border
+        })
+        .px(px(SPACE_SM))
+        .py(px(SPACE_SM))
 }
 
 /// 渲染可点选的输入框，并按 `wrap_width` 折行（主输入框用）。
@@ -76,7 +116,7 @@ pub fn render_wrapped(
         cursor_mark,
         window,
     };
-    render_inner(editor, theme, Some(pick), Some(drag), Some(wrap))
+    render_inner(editor, theme, Some(pick), Some(drag), Some(wrap), true)
 }
 
 /// 折行上下文：可用宽度、滚动句柄、上次让光标滚进视口的位置，以及量字宽用的窗口。
@@ -163,6 +203,7 @@ fn render_inner(
     pick: Option<PickHandler>,
     drag: Option<DragHandler>,
     wrap: Option<Wrap<'_>>,
+    show_cursor: bool,
 ) -> AnyElement {
     let text_color = theme.text;
     let mut column = div()
@@ -188,7 +229,7 @@ fn render_inner(
     for row in 0..editor.lines().len() {
         let line = &editor.lines()[row];
         let selection = editor.selection_row(row);
-        let cursor_col = (editor.cursor().row == row).then_some(editor.cursor().col);
+        let cursor_col = (show_cursor && editor.cursor().row == row).then_some(editor.cursor().col);
         // 逐字符的显示类别：普通 / 选中 / 光标所在字符
         let mut kinds: Vec<RunKind> = Vec::new();
         for (text, kind) in runs(line, selection, cursor_col) {

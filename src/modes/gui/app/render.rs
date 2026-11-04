@@ -973,7 +973,6 @@ impl GuiApp {
 
         let cwd = self.cwd();
         let theme = self.theme.clone();
-        let query = self.session_search.text();
 
         div()
             .relative()
@@ -994,7 +993,7 @@ impl GuiApp {
                 branch: self.branch.as_deref(),
                 width: self.sidebar_width,
                 rows: &self.sessions,
-                query: &query,
+                search: &self.session_search,
                 search_focused: self.session_search_focus,
                 focus_search: Box::new(cx.listener(|this, _, _, cx| this.focus_session_search(cx))),
                 current: self
@@ -1565,17 +1564,7 @@ impl GuiApp {
                 );
 
             if let Some(field) = field {
-                card = card.child(
-                    div()
-                        .w_full()
-                        .rounded(px(RADIUS_MD))
-                        .bg(theme.canvas)
-                        .border_1()
-                        .border_color(theme.border)
-                        .px(px(SPACE_SM))
-                        .py(px(SPACE_SM))
-                        .child(field),
-                );
+                card = card.child(composer::field(&theme, false).child(field));
             } else {
                 card = card.child(
                     div()

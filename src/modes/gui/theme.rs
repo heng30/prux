@@ -57,6 +57,7 @@ pub const CONTROL_H_SM: f32 = 20.;
 /// 标准控件高度：页签、主按钮、列表行。
 pub const CONTROL_H_MD: f32 = 24.;
 /// 大控件高度：工具条按钮、搜索框。
+#[allow(dead_code)]
 pub const CONTROL_H_LG: f32 = 32.;
 /// 标题栏高度（窗口头、面板头）。
 pub const HEADER_H: f32 = 40.;

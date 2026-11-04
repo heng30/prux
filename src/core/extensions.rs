@@ -31,11 +31,13 @@ use crate::{
         tools::{ToolError, ToolResult},
     },
     error::Result,
+    utils::paths::set_session_cwd,
 };
 use futures_util::future::BoxFuture;
 use serde_json::Value;
 use std::{
     collections::HashSet,
+    path::Path,
     sync::{
         Mutex, OnceLock,
         atomic::{AtomicBool, Ordering},
@@ -1370,7 +1372,14 @@ pub fn dispatch_user_submit(text: &str, busy: bool) {
 }
 
 /// 会话执行上下文分发：与 `on_session_start` 同性质，不加门控。
+///
+/// 主会话（`depth == 0`）的绝对 cwd 同时写进 [`crate::utils::paths::cwd`] 的会话槽：
+/// 切目录后按「当前工作目录」找项目配置、信任、沙箱、本地命令的模块都跟着换。
 pub fn dispatch_exec_ctx(ctx: &ToolExecCtx) {
+    if ctx.depth == 0 && Path::new(&ctx.cwd).is_absolute() {
+        set_session_cwd(&ctx.cwd);
+    }
+
     for ext in registered() {
         ext.on_exec_ctx(ctx);
     }

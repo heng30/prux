@@ -8,9 +8,11 @@
 
 use super::{
     components::{dot, section_label},
+    composer,
+    text_edit::Editor,
     theme::{
-        CONTROL_H_LG, CONTROL_H_SM, DOT_SIZE, FONT_CAPTION, FONT_SMALL, HEADER_H, RADIUS_MD,
-        RADIUS_SM, SPACE_MD, SPACE_SM, SPACE_XS, SPACE_XXS, Theme, px, text_raise_margin,
+        CONTROL_H_SM, DOT_SIZE, FONT_CAPTION, FONT_SMALL, HEADER_H, RADIUS_MD, RADIUS_SM, SPACE_MD,
+        SPACE_SM, SPACE_XS, SPACE_XXS, Theme, px,
     },
 };
 use crate::{
@@ -139,8 +141,8 @@ pub struct SidebarCtx<'a> {
     pub width: f32,
     /// 会话行
     pub rows: &'a [SessionRow],
-    /// 搜索框内容（空串显示占位文案）
-    pub query: &'a str,
+    /// 搜索框内容（空时显示占位文案）
+    pub search: &'a Editor,
     /// 搜索框是否聚焦（显示光标与高亮边框）
     pub search_focused: bool,
     /// 点搜索框：聚焦它
@@ -173,7 +175,7 @@ pub fn render(ctx: SidebarCtx<'_>) -> AnyElement {
         rows,
         current,
         loading,
-        query,
+        search,
         search_focused,
         focus_search,
         scroll,
@@ -198,8 +200,10 @@ pub fn render(ctx: SidebarCtx<'_>) -> AnyElement {
     column = column.child(brand_row(theme, new_session));
 
     // 会话搜索框
-    column = column.child(search_box(theme, query, search_focused, focus_search));
+    column = column.child(search_box(theme, search, search_focused, focus_search));
 
+    let query = search.text();
+    let query = query.as_str();
     let needle = query.trim().to_lowercase();
     let rows = filter(rows, &needle);
     let active = current_index(&rows, current);
@@ -274,47 +278,20 @@ fn filter<'a>(rows: &'a [SessionRow], needle: &str) -> Vec<&'a SessionRow> {
         .collect()
 }
 
-/// 会话搜索框：点一下开始输入，框内显示光标。
-fn search_box(theme: &Theme, query: &str, focused: bool, focus: ClickHandler) -> AnyElement {
-    let empty = query.is_empty();
-    div()
+/// 会话搜索框：点一下开始输入，光标与对话框里的输入框同一套��
+fn search_box(theme: &Theme, search: &Editor, focused: bool, focus: ClickHandler) -> AnyElement {
+    composer::field(theme, focused)
         .id("session-search")
         .mx(px(SPACE_XS))
         .mb(px(SPACE_XS))
-        .h(px(CONTROL_H_LG))
-        .px(px(SPACE_SM))
-        .rounded(px(RADIUS_MD))
-        .flex()
-        .items_center()
-        .bg(theme.inset)
-        .border_1()
-        .border_color(if focused {
-            theme.border_strong
-        } else {
-            theme.border
-        })
-        .text_size(px(FONT_SMALL))
-        .text_color(if empty { theme.text_ghost } else { theme.text })
         .cursor_pointer()
         .on_click(focus)
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .mb(px(text_raise_margin(FONT_SMALL)))
-                .child(SharedString::from(if empty {
-                    "Search sessions…".to_string()
-                } else {
-                    query.to_string()
-                }))
-                .child(
-                    div()
-                        .w(px(if focused && !empty { 1.5 } else { 0. }))
-                        .h(px(FONT_SMALL))
-                        .ml(px(SPACE_XXS))
-                        .bg(theme.accent),
-                ),
-        )
+        .child(composer::render_field(
+            search,
+            theme,
+            "Search sessions…",
+            focused,
+        ))
         .into_any_element()
 }
 

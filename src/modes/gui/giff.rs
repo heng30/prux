@@ -5,13 +5,12 @@
 
 use super::{
     app::GuiApp,
-    code,
+    code, composer,
     text_edit::Editor,
     theme::{
-        CONTROL_H_LG, CONTROL_H_MD, CONTROL_H_SM, DIFF_GUTTER_W, FONT_CAPTION, FONT_SMALL,
-        HEADER_H, ICON_SIZE, MONO_FONT_FAMILY, RADIUS_MD, RADIUS_SM, SCROLLBAR_HIT_WIDTH,
-        SCROLLBAR_WIDTH, SPACE_MD, SPACE_SM, SPACE_XS, SPACE_XXS, Theme, min_thumb, px,
-        text_raise_margin,
+        CONTROL_H_MD, CONTROL_H_SM, DIFF_GUTTER_W, FONT_CAPTION, FONT_SMALL, HEADER_H, ICON_SIZE,
+        MONO_FONT_FAMILY, RADIUS_MD, RADIUS_SM, SCROLLBAR_HIT_WIDTH, SCROLLBAR_WIDTH, SPACE_MD,
+        SPACE_SM, SPACE_XS, SPACE_XXS, Theme, min_thumb, px, text_raise_margin,
     },
 };
 use crate::utils::{color::Rgb, geometry, process::run_stdout};
@@ -781,47 +780,19 @@ fn files_body(theme: &Theme, panel: &RightPanel, cx: &mut gpui::Context<GuiApp>)
     column.into_any_element()
 }
 
-/// 搜索框：点一下开始输入，框内显示光标。
+/// 搜索框：点一下开始输入，光标与对话框里的输入框同一套。
 fn search_box(theme: &Theme, panel: &RightPanel, cx: &mut gpui::Context<GuiApp>) -> AnyElement {
-    let empty = panel.search.is_empty();
     let focused = panel.search_focus;
-    div()
+    composer::field(theme, focused)
         .id("file-search")
-        .w_full()
-        .h(px(CONTROL_H_LG))
-        .px(px(SPACE_SM))
-        .rounded(px(RADIUS_MD))
-        .flex()
-        .items_center()
-        .bg(theme.inset)
-        .border_1()
-        .border_color(if focused {
-            theme.border_strong
-        } else {
-            theme.border
-        })
-        .text_size(px(FONT_SMALL))
-        .text_color(if empty { theme.text_ghost } else { theme.text })
         .cursor_pointer()
         .on_click(cx.listener(|this, _, _, cx| this.focus_panel_search(cx)))
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .mb(px(text_raise_margin(FONT_SMALL)))
-                .child(SharedString::from(if empty {
-                    "Search files…".to_string()
-                } else {
-                    panel.search.text()
-                }))
-                .child(
-                    div()
-                        .w(px(if focused && !empty { 1.5 } else { 0. }))
-                        .h(px(FONT_SMALL))
-                        .ml(px(SPACE_XXS))
-                        .bg(theme.accent),
-                ),
-        )
+        .child(composer::render_field(
+            &panel.search,
+            theme,
+            "Search files…",
+            focused,
+        ))
         .into_any_element()
 }
 

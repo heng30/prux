@@ -67,6 +67,10 @@ const MONO_LINE_HEIGHT: f32 = 1.55;
 const MIN_COL_WEIGHT: f32 = 8.;
 /// 表格列权重的上限（等效半角列数）：超长描述改为折行，不吃光其他列的宽度。
 const MAX_COL_WEIGHT: f32 = 40.;
+/// 覆盖层面板里 Markdown 交互元素的 id 命名空间。
+///
+/// 面板与对话流同帧渲染，两边的行号都从 0 数，命名空间必须错开，否则 id 撞车。
+const OVERLAY_ID_NAMESPACE: usize = usize::MAX;
 
 thread_local! {
     /// 缩略图图片源缓存：`(路径, (文件长度, 修改时间)) → 图片源`，免掉每帧重读缩略图文件。
@@ -1262,7 +1266,7 @@ pub fn render_block(
         // 用户消息：右对齐气泡，与助手正文拉开层级
         Block::User(message) => user_block(message, theme, expand_tools, index, ctx, window, cx),
         // 助手回复：不加卡片，直接正文；思考内容单独一段细边框提示（Ctrl-T 收起）
-        Block::Assistant(assistant) => assistant_block(assistant, theme, show_thinking, ctx),
+        Block::Assistant(assistant) => assistant_block(assistant, theme, show_thinking, index, ctx),
         // 工具调用：带描边的小卡片，状态用圆点表示
         Block::Tool(tool) => tool_block(tool, theme, expand_tools, index, cx),
         // 系统消息：灰底细边框 + 标签，和用户/助手区分开
@@ -1376,10 +1380,13 @@ fn user_block(
 }
 
 /// 助手回复：正文 + 折叠的思考段（`show_thinking` 为假时整段不渲染，同 TUI 的 Ctrl-T）。
+///
+/// `index` 是块下标，只用来给块内的交互元素（复制按钮、链接）分配 id 命名空间。
 fn assistant_block(
     assistant: &mut Assistant,
     theme: &Theme,
     show_thinking: bool,
+    index: usize,
     ctx: &mut FlowCtx<'_>,
 ) -> AnyElement {
     let mut column = div()
@@ -1407,7 +1414,7 @@ fn assistant_block(
     let cols = (f32::from(ctx.width) / (FONT_SMALL * MONO_ADVANCE)) as usize;
     let rows = assistant.body.rows(&assistant.text, theme, cols.max(16));
     column
-        .child(render_rows(rows, theme, ctx.lines, &ctx.app))
+        .child(render_rows(rows, theme, ctx.lines, &ctx.app, index))
         .into_any_element()
 }
 
@@ -1655,7 +1662,17 @@ pub fn markdown_body(text: &str, theme: &Theme, app: Entity<GuiApp>) -> AnyEleme
         text_bounds: Rc::new(RefCell::new(HashMap::new())),
         rows: Rc::new(RefCell::new(Vec::new())),
     };
-    render_rows(&rows, theme, &mut lines, &app)
+    render_rows(&rows, theme, &mut lines, &app, OVERLAY_ID_NAMESPACE)
+}
+
+/// 交互元素（可点链接、复制按钮）的 id：把 id 命名空间与块内序号拼成一个整数。
+///
+/// gpui 的元素状态存在窗口级的表里，**同一个 id 的两个元素共用一份状态**：后渲染的那个
+/// 接手前者留下的状态，而前者在鼠标抬起时会先把它清掉（见 gpui `div.rs` 的 mouse up 处理），
+/// 于是后者永远收不到点击。块内序号是每块从 0 重数的，跨块必然撞车，所以 id 里必须带
+/// 命名空间（对话流用块下标，覆盖层面板用 [`OVERLAY_ID_NAMESPACE`]）。
+fn row_element_id(kind: &'static str, namespace: usize, index: usize) -> ElementId {
+    ElementId::NamedInteger(kind.into(), ((namespace as u64) << 32) | index as u64)
 }
 
 /// 一份覆盖层文档的预解析结果。
@@ -1727,18 +1744,22 @@ fn parse_rows(text: &str, theme: &Theme, cols: usize) -> Vec<Row> {
 }
 
 /// 预解析行 → 元素（行内样式、标题字号、代码块的逐行着色）。
+///
+/// `namespace` 是本段内容的 id 命名空间（对话流传块下标），块内可点元素（链接、复制按钮）
+/// 的 id 由它与块内序号拼成，见 [`row_element_id`]。
 fn render_rows(
     rows: &[Row],
     theme: &Theme,
     lines: &mut TextLines,
     app: &Entity<GuiApp>,
+    namespace: usize,
 ) -> AnyElement {
     let mut column = div().w_full().flex().flex_col().gap(px(SPACE_XS));
     // 子元素下标 → 行序号（规则线之类不参与选区的行记 None）
     let mut child_lines: Vec<Option<usize>> = Vec::new();
 
-    // 可点文本的元素 id：每帧从 0 递增，跨帧稳定（gpui 靠 id 记住鼠标按下位置，
-    // id 一变点击就失效），同帧且不重复。
+    // 可点文本的元素序号：块内从 0 递增，跨帧稳定（gpui 靠 id 记住鼠标按下位置，
+    // id 一变点击就失效），再与 `namespace` 拼成帧内唯一的 id。
     let mut link_id = 0_usize;
     for row in rows {
         let element: AnyElement = match row {
@@ -1803,7 +1824,12 @@ fn render_rows(
                 let id = link_id;
                 link_id += 1;
                 element
-                    .child(inline_text((plain, highlights, links), theme, selected, id))
+                    .child(inline_text(
+                        (plain, highlights, links),
+                        theme,
+                        selected,
+                        row_element_id("md-link", namespace, id),
+                    ))
                     // 文字元素的实测边界：列定位按它算，外层行盒的 padding/缩进不进列号
                     .on_children_prepainted(move |children: Vec<Bounds<Pixels>>, _, _| {
                         if let Some(child) = children.first() {
@@ -1845,7 +1871,7 @@ fn render_rows(
                         ))
                         .child(
                             div()
-                                .id(("code-copy", copy_id))
+                                .id(row_element_id("code-copy", namespace, copy_id))
                                 .p(px(SPACE_XXS))
                                 .rounded(px(RADIUS_SM))
                                 .cursor_pointer()
@@ -1893,7 +1919,7 @@ fn render_rows(
             }
             Row::Table(table) => {
                 child_lines.push(None);
-                table_body(table, theme, &mut link_id)
+                table_body(table, theme, &mut link_id, namespace)
             }
             Row::Mono { lines: mono } => {
                 child_lines.push(None);
@@ -2003,7 +2029,12 @@ fn mono_run(text: String, height: Pixels) -> AnyElement {
 ///
 /// 表格不按字符画边框（比例字体对不齐）：列宽交给 flex，边框由每行的下边与
 /// 单元格右边拼出——在 gpui 里自己算列宽只会算出对不齐的格子。
-fn table_body(table: &markdown::Table, theme: &Theme, link_id: &mut usize) -> AnyElement {
+fn table_body(
+    table: &markdown::Table,
+    theme: &Theme,
+    link_id: &mut usize,
+    namespace: usize,
+) -> AnyElement {
     let cols = table
         .rows
         .iter()
@@ -2071,7 +2102,7 @@ fn table_body(table: &markdown::Table, theme: &Theme, link_id: &mut usize) -> An
                 inline_runs(None, cell, theme),
                 theme,
                 None,
-                *link_id,
+                row_element_id("md-link", namespace, *link_id),
             )));
             *link_id += 1;
         }
@@ -2092,13 +2123,14 @@ fn table_body(table: &markdown::Table, theme: &Theme, link_id: &mut usize) -> An
 /// `runs` 由调用方用 [`inline_runs`] 算好传入：每帧每行只拼一次文本与高亮，
 /// 长对话流下这是帧内的主要开销之一。
 ///
-/// `id` 由调用方按渲染顺序递增：gpui 靠元素 id 记住鼠标按下的位置，id 每帧变一次
-/// 点击就永远匹配不上（按下在旧 id、抬起找新 id），点击会默默无反应。
+/// `id` 由调用方用 [`row_element_id`] 按「命名空间 + 块内序号」生成：gpui 靠元素 id 记住
+/// 鼠标按下的位置，id 每帧变一次点击就永远匹配不上（按下在旧 id、抬起找新 id），
+/// 而同 id 的两个元素又会共用一份状态，后渲染的那个同样点不动。
 fn inline_text(
     (text, highlights, links): Runs,
     theme: &Theme,
     selection: Option<Range<usize>>,
-    id: usize,
+    id: ElementId,
 ) -> AnyElement {
     let highlights = match selection {
         Some(range) => merge_selection(
@@ -2117,9 +2149,8 @@ fn inline_text(
         return styled.into_any_element();
     }
 
-    // 元素 id 每帧从 0 递增：同帧内唯一，且只要文档不变就跨帧稳定
     let urls: Vec<String> = links.iter().map(|(_, url)| url.clone()).collect();
-    InteractiveText::new(ElementId::NamedInteger("md-link".into(), id as u64), styled)
+    InteractiveText::new(id, styled)
         .on_click(
             links.into_iter().map(|(range, _)| range).collect(),
             move |index, window, _| {
@@ -2439,6 +2470,18 @@ mod tests {
     }
 
     use super::*;
+
+    /// 交互元素 id 不能跨块撞车：gpui 每个 id 只留一份状态，同 id 的两个元素会互相
+    /// 清掉按下记录，后渲染的那个点击不触发。块内序号每块都从 0 重数，靠命名空间错开。
+    #[test]
+    fn row_element_ids_do_not_collide_across_blocks() {
+        let ids: std::collections::HashSet<ElementId> = (0..3)
+            .flat_map(|block| (0..4).map(move |row| row_element_id("code-copy", block, row)))
+            .collect();
+        assert_eq!(ids.len(), 12, "同序号换块必须得到不同的 id");
+        // 覆盖层面板的命名空间与对话流的块下标不重叠
+        assert!(!ids.contains(&row_element_id("code-copy", OVERLAY_ID_NAMESPACE, 0)));
+    }
 
     /// 空助手块（只有 tool call）不该占位；带正文或思考的都算有内容。
     #[test]

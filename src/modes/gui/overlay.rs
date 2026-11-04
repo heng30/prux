@@ -6,9 +6,9 @@ use super::{
     composer,
     text_edit::Editor,
     theme::{
-        CONTROL_H_LG, FONT_BODY, FONT_CAPTION, FONT_SMALL, ICON_SIZE, RADIUS_LG, RADIUS_MD,
-        RADIUS_SM, SCROLLBAR_HIT_WIDTH, SCROLLBAR_WIDTH, SPACE_MD, SPACE_SM, SPACE_XS, SPACE_XXS,
-        Theme, min_thumb, px, text_raise_margin,
+        FONT_BODY, FONT_CAPTION, FONT_SMALL, ICON_SIZE, RADIUS_LG, RADIUS_MD, RADIUS_SM,
+        SCROLLBAR_HIT_WIDTH, SCROLLBAR_WIDTH, SPACE_MD, SPACE_SM, SPACE_XS, SPACE_XXS, Theme,
+        min_thumb, px, text_raise_margin,
     },
     transcript,
 };
@@ -1038,42 +1038,15 @@ fn render_list(list: &List, theme: &Theme, cx: &mut gpui::Context<GuiApp>) -> An
             .child(SharedString::from(format!("{} items", filtered.len()))),
     );
 
-    // 搜索框
+    // 搜索框：光标与对话框里的输入框同一套（空着时只显示占位文案）
+    let searching = !list.query.is_empty();
     column = column.child(
-        div()
-            .w_full()
-            .h(px(CONTROL_H_LG))
-            .px(px(SPACE_SM))
-            .rounded(px(RADIUS_MD))
-            .flex()
-            .items_center()
-            .bg(theme.inset)
-            .border_1()
-            .border_color(theme.border)
-            .text_size(px(FONT_BODY))
-            .text_color(if list.query.is_empty() {
-                theme.text_ghost
-            } else {
-                theme.text
-            })
-            .child(
-                div()
-                    .mb(px(text_raise_margin(FONT_BODY)))
-                    .flex()
-                    .items_center()
-                    .child(SharedString::from(if list.query.is_empty() {
-                        "Search…".to_string()
-                    } else {
-                        list.query.text()
-                    }))
-                    .child(
-                        div()
-                            .w(px(if list.query.is_empty() { 0. } else { 1.5 }))
-                            .h(px(ICON_SIZE))
-                            .ml(px(SPACE_XXS))
-                            .bg(theme.accent),
-                    ),
-            ),
+        composer::field(theme, searching).child(composer::render_field(
+            &list.query,
+            theme,
+            "Search…",
+            searching,
+        )),
     );
 
     // 和搜索框之间留一道空隙：所有列表面板（Ctrl-M、/history、模型、会话…）共用同一个版式

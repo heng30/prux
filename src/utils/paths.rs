@@ -8,6 +8,9 @@ use std::{
     time::SystemTime,
 };
 
+/// 当前会话的工作目录（[`set_session_cwd`] 写入）；未设置时为 `None`。
+static SESSION_CWD: std::sync::RwLock<Option<PathBuf>> = std::sync::RwLock::new(None);
+
 /// 目录项类型：区分普通文件与目录，符号链接会先跟随再判定。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum EntryKind {
@@ -303,14 +306,41 @@ pub fn theme_name_from_arg(arg: &str) -> String {
         .to_string()
 }
 
+/// 记下当前会话的工作目录。
+///
+/// 切目录（`/cwd`、GUI 的最近目录、worktree 进出）后由
+/// [`crate::core::extensions::dispatch_exec_ctx`] 调用。`cwd()` 的调用点遍布项目配置、
+/// MCP、沙箱与本地 `!cmd`，统一靠这个槽跟随会话，而不是留在进程启动目录。
+pub fn set_session_cwd(dir: &str) {
+    #[cfg(any(test, feature = "test-support"))]
+    {
+        let _ = dir;
+        return;
+    }
+
+    let mut slot = SESSION_CWD
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *slot = Some(PathBuf::from(dir));
+}
+
 /// 当前工作目录；读取失败时回退 `.`。
 ///
 /// 测试构建下线程本地 override 优先（[`crate::test_support::CwdGuard`]）：
 /// 项目层配置（`.prux/settings.json`）按它定位，避免并行测试靠进程级
-/// `set_current_dir` 互踩。
+/// `set_current_dir` 互踩。其余构建里会话记录的目录（[`set_session_cwd`]）优先，
+/// 没记录过（启动早期）才回落到进程 cwd。
 pub fn cwd() -> PathBuf {
     #[cfg(any(test, feature = "test-support"))]
     if let Some(dir) = crate::test_support::cwd_override() {
+        return dir;
+    }
+
+    if let Some(dir) = SESSION_CWD
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
+    {
         return dir;
     }
 

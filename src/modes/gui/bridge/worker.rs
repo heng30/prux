@@ -413,6 +413,18 @@ fn reload_assets(agent: &mut Agent, events: &UnboundedSender<GuiEvent>) {
 }
 
 /// 把 fork/clone 出来的新会话接到 agent 上，并把历史推给 GUI。
+/// 会话变了就重发一次切换：plan-mode / tasks / cache 计数等扩展靠它复位。
+///
+/// 新会话尚未落盘时 `path` 为 `None`（与 TUI 的 `/new` 一致）。
+fn dispatch_session_switched(agent: &Agent) {
+    let path = agent
+        .session
+        .as_ref()
+        .and_then(|session| session.get_session_file())
+        .map(|file| file.to_string_lossy().to_string());
+    core::extensions::dispatch_session_switched(path.as_deref(), &agent.messages);
+}
+
 fn adopt_session(
     agent: &mut Agent,
     session: Session,
@@ -423,6 +435,7 @@ fn adopt_session(
     agent.session = Some(session);
     agent.restore_session_tools();
     core::extensions::dispatch_exec_ctx(&agent.exec_ctx());
+    dispatch_session_switched(agent);
     _ = events.send(GuiEvent::Notice(what.to_string()));
     _ = events.send(GuiEvent::History(agent.messages.clone()));
 }
@@ -508,6 +521,7 @@ fn new_session(agent: &mut Agent, events: &UnboundedSender<GuiEvent>) {
             agent.messages.clear();
             agent.session = Some(session);
             core::extensions::dispatch_exec_ctx(&agent.exec_ctx());
+            dispatch_session_switched(agent);
             _ = events.send(GuiEvent::History(Vec::new()));
         }
         Err(e) => {
@@ -524,6 +538,7 @@ fn resume_session(agent: &mut Agent, path: &str, events: &UnboundedSender<GuiEve
             agent.session = Some(*session);
             agent.restore_session_tools();
             core::extensions::dispatch_exec_ctx(&agent.exec_ctx());
+            dispatch_session_switched(agent);
             _ = events.send(GuiEvent::History(agent.messages.clone()));
         }
         OpenSessionResult::Invalid(e) => {

@@ -36,7 +36,8 @@ use crate::{
     core::{
         auth,
         extensions::{
-            Extension, ExtensionCommand, ExtensionHook, ExtensionMode, ExtensionTool, UiNotifyLevel,
+            Extension, ExtensionCommand, ExtensionHook, ExtensionMode, ExtensionTool, ToolExecCtx,
+            UiNotifyLevel,
         },
         model_resolver,
         provider::{self, AgentMessage},
@@ -283,6 +284,13 @@ impl Extension for Pr {
         remember_cwd(cwd_text);
         remember_session(session.map(|s| s.session_id.clone()));
         WARNED.store(false, Ordering::Relaxed);
+    }
+
+    /// 切目录（`/cwd`、worktree 进出）后同步会话 cwd：git/gh 都在该目录下跑。
+    fn on_exec_ctx(&self, ctx: &ToolExecCtx) {
+        if ctx.depth == 0 && !ctx.cwd.trim().is_empty() {
+            remember_cwd(&ctx.cwd);
+        }
     }
 
     /// 会话切换：换成新会话 id（切回旧会话时旧 id 要被替换）。
