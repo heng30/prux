@@ -278,20 +278,23 @@ fn filter<'a>(rows: &'a [SessionRow], needle: &str) -> Vec<&'a SessionRow> {
         .collect()
 }
 
-/// 会话搜索框：点一下开始输入，光标与对话框里的输入框同一套��
+/// 会话搜索框：点一下开始输入，光标与对话框里的输入框同一套
 fn search_box(theme: &Theme, search: &Editor, focused: bool, focus: ClickHandler) -> AnyElement {
-    composer::field(theme, focused)
-        .id("session-search")
-        .mx(px(SPACE_XS))
-        .mb(px(SPACE_XS))
-        .cursor_pointer()
-        .on_click(focus)
-        .child(composer::render_field(
-            search,
-            theme,
-            "Search sessions…",
-            focused,
-        ))
+    div()
+        .px(px(SPACE_SM))
+        .pb(px(SPACE_SM))
+        .child(
+            composer::field(theme, focused)
+                .id("session-search")
+                .cursor_pointer()
+                .on_click(focus)
+                .child(composer::render_field(
+                    search,
+                    theme,
+                    "Search sessions…",
+                    focused,
+                )),
+        )
         .into_any_element()
 }
 

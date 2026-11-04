@@ -486,8 +486,7 @@ impl GuiApp {
         cx.notify();
     }
 
-    /// 底部工作目录：弹输入框，确认后切目录（会顺带在新目录下开会话）。
-    /// 目录菜单：最近用过的目录 + 「Browse…」。
+    /// 目录菜单：最近用过的目录 + 「Browse…」；确认后发 `SwitchCwd`（会顺带在新目录下开会话）。
     pub(super) fn open_cwd_menu(&mut self, _cx: &mut Context<Self>) {
         let current = self.cwd();
         let mut entries: Vec<Entry> = recent_cwds()
