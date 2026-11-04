@@ -371,6 +371,8 @@ pub struct GuiApp {
     dropdown: Option<Dropdown>,
     /// 输入卡片在窗口里的实测位置（补全面板贴它上沿）
     composer_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// 输入正文列的实测宽度（上一帧）：折行按它排，不再从卡片宽推算内边距与边框
+    composer_text_width: Rc<Cell<Option<Pixels>>>,
     /// 输入框多行内容的滚动状态（超出显示行数时靠它滚）
     composer_scroll: ScrollHandle,
     /// 上次把光标滚进视口时的 (行, 列)：光标没动就不抢用户的滚动
@@ -494,6 +496,7 @@ impl GuiApp {
             block_offset: Rc::new(Cell::new(px(0.))),
             dropdown: None,
             composer_bounds: Rc::new(Cell::new(None)),
+            composer_text_width: Rc::new(Cell::new(None)),
             composer_scroll: ScrollHandle::new(),
             composer_cursor: Rc::new(Cell::new(None)),
             scroll_drag: None,

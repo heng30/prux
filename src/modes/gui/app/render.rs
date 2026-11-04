@@ -718,11 +718,10 @@ impl GuiApp {
 
         let ime_layer = self.ime_layer(cx);
 
-        // 输入框可用内宽：上一帧实测的卡片宽减左右内边距与边框（首帧还没量到时按窗口估算）
+        // 输入框可用内宽：上一帧实测的正文列宽（首帧还没量到时按窗口估算）
         let composer_wrap_width = self
-            .composer_bounds
+            .composer_text_width
             .get()
-            .map(|bounds| composer::wrap_width_for(bounds.size.width))
             .filter(|width| *width > px(0.))
             .unwrap_or_else(|| px(600.));
 
@@ -766,6 +765,21 @@ impl GuiApp {
             ))
             .child(hint)
             .child(ime_layer)
+            .on_children_prepainted({
+                let cell = self.composer_text_width.clone();
+                move |bounds: Vec<Bounds<Pixels>>, window, _| {
+                    // 首个子元素就是正文列：它的宽度才是真正能排字的宽度。
+                    // 从卡片宽反推要扣内边距与边框，实测差两次会多出一两个字符。
+                    if let Some(text) = bounds.first()
+                        && cell
+                            .get()
+                            .is_none_or(|last| (last - text.size.width).abs() > px(0.5))
+                    {
+                        cell.set(Some(text.size.width));
+                        window.request_animation_frame();
+                    }
+                }
+            })
     }
 
     /// 主区：空态欢迎页，或对话流 + 输入卡片 + 底部状态。

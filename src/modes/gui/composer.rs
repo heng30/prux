@@ -2,10 +2,7 @@
 
 use super::{
     text_edit::Editor,
-    theme::{
-        BORDER_WIDTH, COMPOSER_H_PADDING, FONT_BODY, RADIUS_MD, SPACE_SM, SPACE_XXS, Theme,
-        UI_FONT_FAMILY, px,
-    },
+    theme::{FONT_BODY, RADIUS_MD, SPACE_SM, SPACE_XXS, Theme, UI_FONT_FAMILY, px},
 };
 use gpui::{
     AnyElement, InteractiveElement, IntoElement, ParentElement, SharedString,
@@ -187,13 +184,6 @@ fn wrap_chunks_for_line(
         }
     }
     chunks
-}
-
-/// 输入框正文的可用宽度：卡片外宽减左右内边距与 1px 边框。
-///
-/// 只扣内边距会宽 2px：每行按多出的宽度排好字后，flex 会把行尾那个字压掉一半才折行。
-pub fn wrap_width_for(card_width: gpui::Pixels) -> gpui::Pixels {
-    card_width - px(COMPOSER_H_PADDING * 2. + BORDER_WIDTH * 2.)
 }
 
 /// [`render`] 与 [`render_wrapped`] 的公共实现。
@@ -489,16 +479,6 @@ mod tests {
             vec![0..4, 4..8]
         );
         assert_eq!(wrap_chunks_for_line("abc", 40., true, |_| 10.), vec![0..3]);
-    }
-
-    /// 折行宽度要把卡片左右边框也扣掉：只扣内边距会宽 2px，
-    /// 每行排好的字被 flex 压掉半个再折行。
-    #[test]
-    fn wrap_width_subtracts_padding_and_border() {
-        assert_eq!(
-            wrap_width_for(px(400.)),
-            px(400. - COMPOSER_H_PADDING * 2. - 2.)
-        );
     }
 
     /// 行尾光标补一个占位方块；选区连续字符合成一段。

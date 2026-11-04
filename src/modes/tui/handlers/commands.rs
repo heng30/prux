@@ -7,7 +7,7 @@ use crate::{
     core::{
         self,
         changelog::CHANGELOG,
-        extensions::{SubcommandDef, command_handler, dispatch_agent_event},
+        extensions::{CommandHost, SubcommandDef, command_handler, dispatch_agent_event},
         keybindings,
         keybindings::KEYBINDINGS,
         prompt_templates::{self, PromptTemplate},
@@ -34,7 +34,7 @@ pub type ExtensionKeybindingHandler = fn(&mut App);
 
 /// 忙碌时可安全执行的内置命令（handler 不锁 agent、纯 UI 操作）。
 /// 其余内置命令忙碌时仍入 steer 队列，避免与可能锁 agent 的 handler 死锁。
-const BUILTIN_BUSY_SAFE: &[&str] = &["dock"];
+const BUILTIN_BUSY_SAFE: &[&str] = &["dock", "cwd"];
 
 /// 内置斜杠命令候选（名称, 描述, 子命令；不显示短命令/别名）。
 /// 内置命令不属于任何扩展、无生命周期，保持静态注册；
@@ -94,6 +94,7 @@ const BUILTIN_COMMANDS: &[(&str, &str, &[SubcommandDef])] = &[
     ("extension", "Enable/disable extensions", &[]),
     ("dock", "Toggle the dock panel", &[]),
     ("giff", "Review uncommitted changes", &[]),
+    ("cwd", "Change the working directory (<path>)", &[]),
 ];
 
 /// `/session` 的子命令（声明顺序 = 补全候选顺序）。
@@ -167,6 +168,7 @@ impl App {
             "hotkeys" => self.cmd_hotkeys(),
             "dock" => self.cmd_dock(),
             "giff" => self.cmd_giff(),
+            "cwd" => self.cmd_cwd(raw),
             "bug" => self.cmd_bug(raw),
             "fork" => self.cmd_fork(),
             "clone" => self.cmd_clone(),
@@ -182,6 +184,7 @@ impl App {
             _ if cmd.starts_with("history ") => self.cmd_history(raw),
             _ if cmd.starts_with("bug ") => self.cmd_bug(raw),
             _ if cmd.starts_with("import ") => self.cmd_import(raw),
+            _ if cmd.starts_with("cwd ") => self.cmd_cwd(raw),
             // 扩展命令：存在性由已启用扩展声明动态决定（禁用/模式过滤后不进入此分支）；
             // 执行入口查 TUI 注册表。命令名取首个空白前的部分（`/plan foo` 命中 `plan`），
             // 原文（含参数，保留大小写）传给 handler。未命中内置与扩展命令 → 未知命令
@@ -880,6 +883,34 @@ impl App {
         }
     }
 
+    /// 处理 `/cwd [路径]`：切换当前工作目录（不写入配置、不新开会话）。
+    ///
+    /// 参数以 `@` 开头时先去掉（输入框里 `@` 是引用前缀），支持 `~` 与相对路径；
+    /// 无参数时只显示当前目录。目标不是已存在目录则报错，不改 cwd。
+    fn cmd_cwd(&mut self, cmd: &str) {
+        let arg = cmd_arg(cmd, "cwd");
+        let arg = arg.strip_prefix('@').unwrap_or(arg).trim();
+        if arg.is_empty() {
+            self.push_msg(format!("cwd: {}", self.cwd), MsgLevel::Info);
+            return;
+        }
+
+        let path = resolve_path(arg, &self.cwd);
+        if !path.is_dir() {
+            self.push_msg(
+                format!("/cwd: {}: No such directory", path.display()),
+                MsgLevel::Error,
+            );
+            return;
+        }
+
+        // canonicalize 让底栏与后续工具看到的都是干净路径（顺手消掉 `..` 与符号链接差异）
+        let path = std::fs::canonicalize(&path).unwrap_or(path);
+        let path = path.to_string_lossy().to_string();
+        self.set_cwd(&path);
+        self.push_msg(format!("cwd: {path}"), MsgLevel::Success);
+    }
+
     /// 处理 `/scoped-models`：打开模型 scope 管理面板。
     fn cmd_scoped_models(&mut self) {
         self.open_scoped_models_panel();
@@ -1011,6 +1042,14 @@ mod tests {
         (WorkerHandle::new(cmd_tx), cmd_rx)
     }
 
+    /// 最后一条系统消息的纯文本（无则为空串）。
+    fn last_sys_text(app: &App) -> String {
+        app.system_messages
+            .last()
+            .map(|(_, s)| crate::modes::tui::app::sys_spans_text(&s.spans))
+            .unwrap_or_default()
+    }
+
     #[test]
     fn session_subcommands_route_before_index_switch() {
         // `/session rm-project` 必须先认子命令，不能被当成序号解析（原来所有参数都走切会话）
@@ -1047,6 +1086,40 @@ mod tests {
         st.pending_session_delete = None;
         st.handle_slash_command("session statistics");
         assert!(!st.panel.active);
+    }
+
+    #[test]
+    fn cmd_cwd_switches_and_strips_at_prefix() {
+        let _ad = crate::test_support::AgentDirGuard::temp();
+        let (agent, mut cmd_rx) = test_agent_cmd();
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+
+        let mut st = App::new();
+        st.worker = agent;
+        st.cwd = dir.path().to_string_lossy().to_string();
+        let target = sub.canonicalize().unwrap().to_string_lossy().to_string();
+
+        // `@` 前缀先去掉再检查目录
+        st.handle_slash_command(&format!("cwd @{}", sub.display()));
+        assert_eq!(st.cwd, target, "应切到目标目录");
+        let cmd = cmd_rx.try_recv().expect("应发出 SetCwd 命令");
+        assert!(matches!(cmd, AgentCommand::SetCwd { .. }), "{cmd:?}");
+
+        // 目录不存在：报错、不改 cwd、不发命令
+        st.handle_slash_command("cwd /definitely/not/here");
+        assert_eq!(st.cwd, target, "不存在时不应改 cwd");
+        assert!(cmd_rx.try_recv().is_err(), "不应发出 SetCwd 命令");
+        assert!(
+            last_sys_text(&st).contains("No such directory"),
+            "{:?}",
+            last_sys_text(&st)
+        );
+
+        // 无参数只显示当前目录
+        st.handle_slash_command("cwd");
+        assert_eq!(last_sys_text(&st), format!("cwd: {target}"));
     }
 
     #[test]

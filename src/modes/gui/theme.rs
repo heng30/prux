@@ -92,8 +92,6 @@ pub const SCROLLBAR_HIT_WIDTH: f32 = 16.0;
 /// 滚动条滑块最小高度。
 pub const SCROLLBAR_MIN_THUMB: f32 = 24.0;
 
-/// 输入卡片每侧的内边距（逻辑像素，与卡片的 `px(SPACE_MD)` 保持一致）：算可用折行宽度时两侧各扣一份
-pub const COMPOSER_H_PADDING: f32 = SPACE_MD;
 /// 补全面板里除候选行以外的固定高度（输入框 + 内边距，逻辑像素）
 pub const SUGGEST_CHROME_HEIGHT: f32 = 46.0;
 /// 补全面板最多显示几行。
@@ -125,9 +123,6 @@ pub const MENU_EDGE_MARGIN: f32 = 16.0;
 pub const DROPDOWN_ROW_HEIGHT: f32 = 24.0;
 /// 下拉菜单的最大高度（超过就滚动）
 pub const DROPDOWN_MAX_HEIGHT: f32 = 360.0;
-
-/// 卡片边框宽度（px），`border_1()` 的实际占用；排版算可用宽度时要扣掉
-pub const BORDER_WIDTH: f32 = 1.0;
 
 /// 同时最多保留几条 toast
 pub const TOAST_MAX: usize = 4;
