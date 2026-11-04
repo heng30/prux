@@ -8,7 +8,7 @@ use super::{
     theme::{
         CONTROL_H_LG, FONT_BODY, FONT_CAPTION, FONT_SMALL, ICON_SIZE, RADIUS_LG, RADIUS_MD,
         RADIUS_SM, SCROLLBAR_HIT_WIDTH, SCROLLBAR_WIDTH, SPACE_MD, SPACE_SM, SPACE_XS, SPACE_XXS,
-        Theme, min_thumb, px,
+        Theme, min_thumb, px, text_raise_margin,
     },
     transcript,
 };
@@ -801,6 +801,9 @@ pub(crate) struct RowSpec<'a> {
 /// `columns` 非空时切到表格版式（名称定宽、每列定宽，描述占剩余宽），
 /// 空时保持「名称撑满 + 说明右对齐」，`detail_inline` 为真则改成「名称自然宽 + 说明吃剩余宽」。
 ///
+/// 行高固定且 `flex_shrink_0`：列表面板是 flex 容器，行数一多默认会被压缩到文字高度，
+/// 高亮块跟着变矮、文字也会跟着浮到上边。
+///
 /// `height` 是行高（面板 30、补全面板 26），`id` 的前半段区分不同列表，
 /// 避免两个列表的同一行号抢同一个元素 id。
 pub(crate) fn list_row(
@@ -825,6 +828,7 @@ pub(crate) fn list_row(
         .cursor_pointer()
         .w_full()
         .h(px(height))
+        .flex_shrink_0()
         .px(px(SPACE_SM))
         .rounded(px(RADIUS_MD))
         .flex()
@@ -852,7 +856,11 @@ pub(crate) fn list_row(
                 .justify_center()
                 .text_size(px(FONT_CAPTION))
                 .text_color(theme.on_inverse)
-                .child(SharedString::from(if checked { "✓" } else { "" })),
+                .child(
+                    div()
+                        .mb(px(text_raise_margin(FONT_CAPTION)))
+                        .child(SharedString::from(if checked { "✓" } else { "" })),
+                ),
         );
     }
 
@@ -875,6 +883,7 @@ pub(crate) fn list_row(
             row = row.child(
                 div()
                     .flex_none()
+                    .mb(px(text_raise_margin(FONT_CAPTION)))
                     .text_size(px(FONT_CAPTION))
                     .text_color(theme.text_ghost)
                     .child(SharedString::from(detail.to_string())),
@@ -885,6 +894,7 @@ pub(crate) fn list_row(
 
     let label_cell = div()
         .min_w_0()
+        .mb(px(text_raise_margin(FONT_BODY)))
         .truncate()
         .child(SharedString::from(label.to_string()));
 
@@ -898,6 +908,7 @@ pub(crate) fn list_row(
     if !detail.is_empty() {
         let detail_cell = div()
             .min_w_0()
+            .mb(px(text_raise_margin(FONT_CAPTION)))
             .truncate()
             .text_size(px(FONT_CAPTION))
             .text_color(theme.text_ghost)
@@ -915,6 +926,11 @@ pub(crate) fn list_row(
 fn table_cell(theme: &Theme, text: &str, width: Option<f32>, muted: bool) -> AnyElement {
     let cell = div()
         .min_w_0()
+        .mb(px(text_raise_margin(if muted {
+            FONT_CAPTION
+        } else {
+            FONT_BODY
+        })))
         .truncate()
         .child(SharedString::from(text.to_string()));
     let cell = match width {
@@ -976,8 +992,7 @@ pub(crate) fn rows_container(
 /// 把第 `index` 行滚进视口：键盘移动选中项后调用，保证选中行始终可见。
 ///
 /// 行位置取容器的真实子元素边界（`bounds_for_item`），不按「行高 × 行号」推算：
-/// 列表面板是 flex 容器，行会被压缩到内容最小高度，推算出来的位置会比实际偏低，
-/// 往上游标时就滚过头、把选中行顶出视口。
+/// 行高由各家面板自己定（30 / 26 / 24），容器还有 `gap`，推算出来的位置会比实际偏低。
 ///
 /// 容器还没登记子元素边界（面板刚打开的那一帧）时什么也不做，下一帧自然会跟上。
 pub(crate) fn reveal_row(scroll: &ScrollHandle, index: usize) {
@@ -1043,6 +1058,7 @@ fn render_list(list: &List, theme: &Theme, cx: &mut gpui::Context<GuiApp>) -> An
             })
             .child(
                 div()
+                    .mb(px(text_raise_margin(FONT_BODY)))
                     .flex()
                     .items_center()
                     .child(SharedString::from(if list.query.is_empty() {

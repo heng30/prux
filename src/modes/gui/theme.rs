@@ -64,6 +64,14 @@ pub const HEADER_H: f32 = 40.;
 pub const ICON_SIZE: f32 = 16.;
 /// 状态圆点直径：列表行前的品牌/状态点。
 pub const DOT_SIZE: f32 = 8.;
+/// 行内文字的垂直补偿比例（相对字号）。
+///
+/// gpui 把行盒按字体的 ascent / descent 垂直居中，而思源黑体的 ascent（1.16em）远大于
+/// descent（0.29em），字形重心因此落在行中心下方约 0.12em —— 这就是固定高度的行、chip、
+/// 按钮里文字看起来偏下的原因。补偿量与字号成正比（不是拍出来的系数，是字体几何），
+/// 所以只留这一个可调参数：想让整界面文字整体抬高/放低，改它。
+pub const TEXT_RAISE_EM: f32 = 0.12;
+
 /// diff 行号 gutter 的最小宽度：容纳 `+1234` 这类带标记的行号。
 pub const DIFF_GUTTER_W: f32 = 34.;
 
@@ -316,6 +324,13 @@ impl Theme {
             ],
         }
     }
+}
+
+/// 固定高度的行 / chip / 按钮里，文字该挂的下外边距（逻辑像素）。
+///
+/// flex 居中按 margin box 对半分，所以边距取抬高量的两倍。
+pub fn text_raise_margin(font_size: f32) -> f32 {
+    font_size * TEXT_RAISE_EM * 2.
 }
 
 /// 当前界面缩放系数（1.0 = 设计稿尺寸）。

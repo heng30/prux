@@ -3,7 +3,9 @@
 
 #include "version.h"
 
-IDI_ICON1 ICON PRODUCT_ICON
+// 资源 ID 必须是数字 1：gpui 用 LoadImageW(module, MAKEINTRESOURCE(1), IMAGE_ICON, …)
+// 取窗口图标（标题栏 / 任务栏），拿不到就退回系统默认图标
+1 ICON PRODUCT_ICON
 
 // 版本信息
 VS_VERSION_INFO VERSIONINFO

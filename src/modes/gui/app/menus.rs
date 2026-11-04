@@ -91,21 +91,18 @@ impl GuiApp {
     ///
     /// 图片与文本同一个入口：发送时 `@路径` 指向图片就自动收集成图片附件。
     pub(super) fn pick_attachment(&mut self, cx: &mut Context<Self>) {
-        // 原生对话框是阻塞调用：丢到后台线程，选完再把结果送回视图
+        // 原生对话框必须在主线程（= 前台执行器）打开：Windows 后端需要主线程的 OLE STA，
+        // macOS 要求主线程，丢到背景线程会直接失败（且错误被 `ok()` 吞掉，表现为点了没反应）。
+        // 代价是对话框期间界面不重绘——系统模态框本来就有自己的消息循环。
         let start = self.cwd();
         cx.spawn(async move |this, cx| {
-            let picked = cx
-                .background_executor()
-                .spawn(async move {
-                    native_dialog::FileDialogBuilder::default()
-                        .set_title("Attach a file")
-                        .set_location(&start)
-                        .open_single_file()
-                        .show()
-                        .ok()
-                        .flatten()
-                })
-                .await;
+            let picked = native_dialog::FileDialogBuilder::default()
+                .set_title("Attach a file")
+                .set_location(&start)
+                .open_single_file()
+                .show()
+                .ok()
+                .flatten();
 
             if let Some(path) = picked {
                 _ = this.update(cx, |app, cx| {
@@ -523,22 +520,17 @@ impl GuiApp {
         self.overlay = Some(Overlay::List(List::new("Working directory", entries)));
     }
 
+    // 同 [`Self::pick_attachment`]：原生对话框必须在前台执行器（主线程）打开
     pub(super) fn pick_working_directory(&mut self, cx: &mut Context<Self>) {
-        // 原生对话框是阻塞调用：丢到后台线程，选完再把结果送回视图
         let start = self.cwd();
         cx.spawn(async move |this, cx| {
-            let picked = cx
-                .background_executor()
-                .spawn(async move {
-                    native_dialog::FileDialogBuilder::default()
-                        .set_title("Select working directory")
-                        .set_location(&start)
-                        .open_single_dir()
-                        .show()
-                        .ok()
-                        .flatten()
-                })
-                .await;
+            let picked = native_dialog::FileDialogBuilder::default()
+                .set_title("Select working directory")
+                .set_location(&start)
+                .open_single_dir()
+                .show()
+                .ok()
+                .flatten();
 
             if let Some(path) = picked {
                 _ = this.update(cx, |app, cx| {

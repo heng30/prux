@@ -11,6 +11,7 @@ use super::{
         CONTROL_H_LG, CONTROL_H_MD, CONTROL_H_SM, DIFF_GUTTER_W, FONT_CAPTION, FONT_SMALL,
         HEADER_H, ICON_SIZE, MONO_FONT_FAMILY, RADIUS_MD, RADIUS_SM, SCROLLBAR_HIT_WIDTH,
         SCROLLBAR_WIDTH, SPACE_MD, SPACE_SM, SPACE_XS, SPACE_XXS, Theme, min_thumb, px,
+        text_raise_margin,
     },
 };
 use crate::utils::{color::Rgb, geometry, process::run_stdout};
@@ -579,7 +580,11 @@ fn tab_button(
         element = element.bg(theme.overlay);
     }
     element
-        .child(SharedString::from(label.to_string()))
+        .child(
+            div()
+                .mb(px(text_raise_margin(FONT_SMALL)))
+                .child(SharedString::from(label.to_string())),
+        )
         .into_any_element()
 }
 
@@ -599,6 +604,7 @@ fn changes_body(theme: &Theme, panel: &RightPanel, cx: &mut gpui::Context<GuiApp
         let mut entry = div()
             .w_full()
             .h(px(CONTROL_H_MD))
+            .flex_shrink_0()
             .px(px(SPACE_SM))
             .rounded(px(RADIUS_SM))
             .flex()
@@ -615,6 +621,7 @@ fn changes_body(theme: &Theme, panel: &RightPanel, cx: &mut gpui::Context<GuiApp
                 div()
                     .w(px(ICON_SIZE))
                     .flex_none()
+                    .mb(px(text_raise_margin(FONT_SMALL)))
                     .text_color(color)
                     .child(SharedString::from(row.status.clone())),
             )
@@ -622,6 +629,7 @@ fn changes_body(theme: &Theme, panel: &RightPanel, cx: &mut gpui::Context<GuiApp
                 div()
                     .min_w_0()
                     .flex_1()
+                    .mb(px(text_raise_margin(FONT_SMALL)))
                     .truncate()
                     .text_color(theme.text_secondary)
                     .child(SharedString::from(row.path.clone())),
@@ -800,6 +808,7 @@ fn search_box(theme: &Theme, panel: &RightPanel, cx: &mut gpui::Context<GuiApp>)
             div()
                 .flex()
                 .items_center()
+                .mb(px(text_raise_margin(FONT_SMALL)))
                 .child(SharedString::from(if empty {
                     "Search files…".to_string()
                 } else {
@@ -835,6 +844,7 @@ fn file_list(theme: &Theme, panel: &RightPanel, cx: &mut gpui::Context<GuiApp>) 
         let mut entry = div()
             .w_full()
             .h(px(CONTROL_H_SM))
+            .flex_shrink_0()
             .px(px(SPACE_XS))
             .rounded(px(RADIUS_SM))
             .flex()
@@ -852,6 +862,7 @@ fn file_list(theme: &Theme, panel: &RightPanel, cx: &mut gpui::Context<GuiApp>) 
                 .child(
                     div()
                         .flex_none()
+                        .mb(px(text_raise_margin(FONT_CAPTION)))
                         .text_size(px(FONT_CAPTION))
                         .text_color(if active {
                             theme.text
@@ -864,6 +875,7 @@ fn file_list(theme: &Theme, panel: &RightPanel, cx: &mut gpui::Context<GuiApp>) 
                     div()
                         .min_w_0()
                         .flex_1()
+                        .mb(px(text_raise_margin(FONT_CAPTION)))
                         .truncate()
                         .text_size(px(FONT_CAPTION))
                         .text_color(theme.text_ghost)

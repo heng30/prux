@@ -10,7 +10,7 @@ use super::{
     components::{dot, section_label},
     theme::{
         CONTROL_H_LG, CONTROL_H_SM, DOT_SIZE, FONT_CAPTION, FONT_SMALL, HEADER_H, RADIUS_MD,
-        RADIUS_SM, SPACE_MD, SPACE_SM, SPACE_XS, SPACE_XXS, Theme, px,
+        RADIUS_SM, SPACE_MD, SPACE_SM, SPACE_XS, SPACE_XXS, Theme, px, text_raise_margin,
     },
 };
 use crate::{
@@ -301,6 +301,7 @@ fn search_box(theme: &Theme, query: &str, focused: bool, focus: ClickHandler) ->
             div()
                 .flex()
                 .items_center()
+                .mb(px(text_raise_margin(FONT_SMALL)))
                 .child(SharedString::from(if empty {
                     "Search sessions…".to_string()
                 } else {

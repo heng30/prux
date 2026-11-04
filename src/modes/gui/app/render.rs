@@ -8,6 +8,7 @@ use super::{
     theme::{
         CONTROL_H_MD, CONTROL_H_SM, DOCK_MAX_H, FONT_BODY, FONT_CAPTION, FONT_HERO, FONT_SMALL,
         RADIUS_LG, RADIUS_MD, RADIUS_SM, SPACE_LG, SPACE_MD, SPACE_SM, SPACE_XL, SPACE_XS,
+        text_raise_margin,
     },
     *,
 };
@@ -643,7 +644,11 @@ impl GuiApp {
                 .cursor_pointer()
                 .hover(|style| style.bg(theme.overlay).text_color(theme.text))
                 .on_click(cx.listener(|this, _, _, cx| this.pick_attachment(cx)))
-                .child(SharedString::from("+ Attach")),
+                .child(
+                    div()
+                        .mb(px(text_raise_margin(FONT_CAPTION)))
+                        .child(SharedString::from("+ Attach")),
+                ),
         );
         hint = hint.child(
             chip(&theme, model, false)
@@ -704,7 +709,10 @@ impl GuiApp {
             .child(if busy {
                 icon::stop(&theme)
             } else {
-                SharedString::from("Send").into_any_element()
+                div()
+                    .mb(px(text_raise_margin(FONT_SMALL)))
+                    .child(SharedString::from("Send"))
+                    .into_any_element()
             });
         hint = hint.child(send);
 
@@ -1268,6 +1276,7 @@ impl GuiApp {
                         div()
                             .min_w_0()
                             .flex_1()
+                            .mb(px(text_raise_margin(FONT_SMALL)))
                             .truncate()
                             .child(SharedString::from(item.label.clone())),
                     );
@@ -1281,6 +1290,7 @@ impl GuiApp {
                     row = row.child(
                         div()
                             .flex_none()
+                            .mb(px(text_raise_margin(FONT_CAPTION)))
                             .text_size(px(FONT_CAPTION))
                             .text_color(theme.text_ghost)
                             .child(SharedString::from(item.detail.clone())),
@@ -1438,7 +1448,11 @@ impl GuiApp {
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.start_rename(&rename_path, cx);
                                     }))
-                                    .child(SharedString::from("Rename")),
+                                    .child(
+                                        div()
+                                            .mb(px(text_raise_margin(FONT_SMALL)))
+                                            .child(SharedString::from("Rename")),
+                                    ),
                             )
                             .child(
                                 div()
@@ -1462,7 +1476,11 @@ impl GuiApp {
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.ask_delete(&path, cx);
                                     }))
-                                    .child(SharedString::from("Delete")),
+                                    .child(
+                                        div()
+                                            .mb(px(text_raise_margin(FONT_SMALL)))
+                                            .child(SharedString::from("Delete")),
+                                    ),
                             ),
                     ),
             );
@@ -1601,7 +1619,11 @@ impl GuiApp {
                                     this.dialog = None;
                                     cx.notify();
                                 }))
-                                .child(SharedString::from("Cancel")),
+                                .child(
+                                    div()
+                                        .mb(px(text_raise_margin(FONT_SMALL)))
+                                        .child(SharedString::from("Cancel")),
+                                ),
                         )
                         .child(
                             div()
@@ -1620,11 +1642,9 @@ impl GuiApp {
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.confirm_dialog(cx);
                                 }))
-                                .child(SharedString::from(if danger {
-                                    "Delete"
-                                } else {
-                                    "Confirm"
-                                })),
+                                .child(div().mb(px(text_raise_margin(FONT_SMALL))).child(
+                                    SharedString::from(if danger { "Delete" } else { "Confirm" }),
+                                )),
                         ),
                 )
                 .child(ime);

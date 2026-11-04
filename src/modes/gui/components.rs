@@ -2,6 +2,7 @@
 
 use super::theme::{
     CONTROL_H_SM, FONT_CAPTION, FONT_SMALL, RADIUS_MD, SPACE_SM, SPACE_XS, Theme, px,
+    text_raise_margin,
 };
 use gpui::{AnyElement, FontWeight, IntoElement, ParentElement, SharedString, Styled, div};
 
@@ -26,7 +27,7 @@ pub fn chip(theme: &Theme, text: impl Into<SharedString>, active: bool) -> gpui:
         } else {
             theme.text_secondary
         })
-        .child(text);
+        .child(div().mb(px(text_raise_margin(FONT_SMALL))).child(text));
     if active {
         element = element.bg(theme.overlay);
     }

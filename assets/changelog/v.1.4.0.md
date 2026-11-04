@@ -1051,6 +1051,28 @@
   directory changed or a session was renamed, so the new row stayed missing and nothing was
   highlighted. A session path appearing or changing now re-reads the list.
 
+- **Text in the desktop GUI's list rows, chips and buttons sits on the optical middle again**: the
+  Source Han Sans ascent (1.16em) is far larger than its descent (0.29em), so a lower-case run
+  centred by its line box lands about 2px below the row's middle, and the effect grows as rows get
+  shorter; fixed-height rows were also being compressed by the flex layout down to the text height,
+  which shrank the highlight bar with them. Fixed-height rows no longer shrink and row text is
+  raised by 0.12em of its font size (`text_raise_margin`), covering the command palette, the model /
+  session / extension / skill / settings panels, the `/` and `@` completion panels, dropdowns, the
+  right panel's file and change lists, and the composer's `+ Attach`, model / thinking chips and
+  `Send`.
+
+- **`Browse…` in the desktop GUI no longer does nothing on Windows**: the native file dialog used to
+  be opened on a background thread, but the Windows dialog needs the main thread's OLE STA (macOS
+  requires the main thread as well) and the failure was swallowed by `ok()`, so a click produced
+  nothing at all. The dialog now opens on the foreground executor for both the working-directory
+  picker and the attach picker.
+
+- **The desktop GUI's window icon now comes from the icon shipped in the binary**: on Windows the
+  title bar / task bar icon is loaded by gpui from the executable's icon resource (fixed resource id
+  1), but the resource script declared the icon under a name, so nothing was found and the system
+  default icon was used. The icon resource now uses the numeric id 1; it is the same artwork as
+  `icon.png`.
+
 ## 中文
 
 ### 新增
@@ -1841,3 +1863,18 @@
 - **桌面 GUI 新建的会话会出现在侧栏并高亮**：会话文件要等首条消息才写出，而侧栏原先只在切换
   工作目录或会话改名时才重读，于是新会话的行一直不出现，当前会话也就高亮不到。现在会话路径
   出现或变化都会重读列表。
+
+- **桌面 GUI 的列表条目、chip 与按钮里的文字回到垂直中线**：思源黑体的 ascent（1.16em）远大于
+  descent（0.29em），按行盒居中的西文小写字形重心比行中心低 0.1–0.2em，行越矮越明显；同时固定
+  高度的行会被 flex 压缩到文字高度，高亮块跟着变窄。现在固定高度的行不再被压缩，行内文字按字号
+  抬高 0.12em（`text_raise_margin`），命令面板、模型 / 会话 / 扩展 / 技能面板、设置面板、`/`、`@`
+  补全面板、下拉菜单、右栏的文件与变更列表，以及输入框里的 `+ Attach`、模型 / 思考 chip 与 `Send`
+  一并生效。
+
+- **桌面 GUI 在 Windows 上点「Browse…」终于会弹对话框**：原生文件对话框原本丢在后台线程打开，而
+  Windows 的对话框需要主线程的 OLE STA（macOS 也要求主线程），失败又被 `ok()` 吞掉，于是点击后
+  什么也不会发生。现在对话框在前台执行器（主线程）打开，工作目录选择与附件选择都改用同一套做法。
+
+- **桌面 GUI 的窗口图标取自随二进制打包的图标**：Windows 的标题栏 / 任务栏图标由 gpui 从可执行
+  文件的图标资源里取（资源 id 固定为 1），而资源脚本里的图标是一个命名资源，取不到就退回系统默认
+  图标。现在图标资源改用数字 id 1，与 `icon.png` 是同一张图。
