@@ -827,6 +827,7 @@ pub(crate) fn list_row(
     theme: &Theme,
     spec: RowSpec<'_>,
     id: (&'static str, usize),
+    on_hover: impl Fn(&gpui::MouseMoveEvent, &mut gpui::Window, &mut gpui::App) + 'static,
     on_click: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
 ) -> AnyElement {
     let RowSpec {
@@ -852,6 +853,8 @@ pub(crate) fn list_row(
         .items_center()
         .gap(px(SPACE_SM))
         .text_size(px(FONT_BODY))
+        // 悬停改的是同一束高亮（不叠一层底色），鼠标与键盘不会同时亮两行
+        .on_mouse_move(on_hover)
         .on_click(on_click);
 
     if let Some(checked) = checked {
@@ -885,7 +888,6 @@ pub(crate) fn list_row(
         row.bg(theme.overlay_strong).text_color(theme.text)
     } else {
         row.text_color(theme.text_secondary)
-            .hover(|style| style.bg(theme.overlay).text_color(theme.text))
     };
 
     if table {
@@ -1103,6 +1105,7 @@ fn render_list(list: &List, theme: &Theme, cx: &mut gpui::Context<GuiApp>) -> An
                 height: ROW_HEIGHT,
             },
             ("overlay-row", index),
+            cx.listener(move |this, _, _, cx| this.hover_entry(index, cx)),
             cx.listener(move |this, _, _, cx| this.pick_entry(index, cx)),
         ));
     }

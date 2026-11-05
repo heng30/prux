@@ -1067,7 +1067,11 @@ pub(super) fn settings_entries(theme_dark: bool) -> Vec<Entry> {
                 "native"
             }
             .into(),
-            "Space to toggle",
+            if cfg!(target_os = "windows") {
+                "Always custom on this platform"
+            } else {
+                "Space to toggle"
+            },
             Action::ToggleSetting(SettingKey::GuiFrame),
         ),
         row(

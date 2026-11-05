@@ -336,6 +336,17 @@ impl GuiApp {
         }
     }
 
+    /// 鼠标移到覆盖层列表某一行：高亮跟着走（与键盘共用 `selected`，只有一束高亮）。
+    pub(crate) fn hover_entry(&mut self, visible: usize, cx: &mut Context<Self>) {
+        if let Some(Overlay::List(list)) = self.overlay.as_mut() {
+            if list.selected == visible {
+                return;
+            }
+            list.selected = visible;
+            cx.notify();
+        }
+    }
+
     /// 点击覆盖层列表的第 `visible` 行：先把该行设为选中（后续重建不跳回第一行），再执行。
     pub(crate) fn pick_entry(&mut self, visible: usize, cx: &mut Context<Self>) {
         let action = match &mut self.overlay {

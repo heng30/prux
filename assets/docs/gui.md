@@ -280,7 +280,7 @@ prux-gui -c         # 接着最近一个会话
 - 界面缩放存 `settings.json` 的 `gui.scale`（默认 `1.5`，范围 0.8–5.0，步进 0.1）。`Ctrl-=` / `Ctrl--`
   逐档调整，`Ctrl-0` 回到 100%；外观面板里也能选。
 - 左侧会话栏的显隐存 `settings.json` 的 `gui.sidebar`（默认展开），下次启动照原样恢复。
-- 窗口边框存 `settings.json` 的 `gui.frame`（Linux 默认自绘，Windows / macOS 默认用系统标题栏）：开启后标题栏由应用绘制，可拖动、双击最大化，右侧是最小化/最大化/关闭按钮（macOS 用系统的红绿灯，不再画这一组）。Linux 在设置面板的 Window frame 一行切换后立即生效，Windows / macOS 需要重启。
+- 窗口边框存 `settings.json` 的 `gui.frame`（Linux 默认自绘，macOS 默认用系统标题栏）：开启后标题栏由应用绘制，可拖动、双击放大/还原，右侧是最小化/最大化/关闭按钮（macOS 用系统的红绿灯，不再画这一组）。Linux 在设置面板的 Window frame 一行切换后立即生效，macOS 需要重启。Windows 上没有系统标题栏可以沿用，因此窗口恒定自绘，该设置在那里的值不起作用。
 - 其余设置（自动压缩、重试、thinking 显示、语法高亮、图片处理、steering / follow-up 模式等）与终端
   界面共用同一份 `settings.json`，改哪边都生效，含义见[设置](settings.md)。
 

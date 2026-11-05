@@ -98,8 +98,9 @@ pub fn run(startup: Startup, rt: &Handle) {
         );
 
         // 建窗一律用系统装饰：Wayland 会忽略建窗参数里的 window_decorations，
-        // 自绘边框在窗口打开后按 `gui.frame` 立刻切过去。Windows / macOS 相反——
-        // 系统标题栏只能在建窗时隐掉，所以在这里读配置
+        // 自绘边框在窗口打开后按 `gui.frame` 立刻切过去。macOS / Windows 反过来——
+        // 系统标题栏只能在建窗时隐掉，所以在这里读配置（Windows 上 `gui.frame` 恒为真：
+        // 那边的 gpui 后端只会建没有系统标题栏的窗口）
         let frame_gui = settings_manager::read_settings_frame_gui();
         let options = WindowOptions {
             titlebar: Some(TitlebarOptions {

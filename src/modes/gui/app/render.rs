@@ -194,6 +194,7 @@ impl GuiApp {
                     height: SUGGEST_ROW_HEIGHT,
                 },
                 ("suggest-row", index),
+                cx.listener(move |this, _, _, cx| this.hover_suggestion(index, cx)),
                 cx.listener(move |this, _, _, cx| this.pick_suggestion(index, cx)),
             ));
         }
@@ -1304,7 +1305,10 @@ impl GuiApp {
                     .text_size(px(FONT_SMALL))
                     .text_color(theme.text_secondary)
                     .cursor_pointer()
-                    .hover(|style| style.bg(theme.overlay).text_color(theme.text))
+                    // 悬停改的是同一束高亮（不是叠加一层底色），鼠标与键盘不会同时亮两行
+                    .on_mouse_move(
+                        cx.listener(move |this, _, _, cx| this.hover_dropdown(index, cx)),
+                    )
                     .child(
                         div()
                             .min_w_0()
@@ -1314,7 +1318,7 @@ impl GuiApp {
                             .child(SharedString::from(item.label.clone())),
                     );
 
-                // 键盘高亮的行（Ctrl-J/K 与方向键移动）
+                // 高亮的行（Ctrl-J/K 与方向键移动，或鼠标悬停）
                 if index == selected {
                     row = row.bg(theme.overlay).text_color(theme.text);
                 }

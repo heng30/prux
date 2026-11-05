@@ -372,6 +372,19 @@ impl GuiApp {
         }
     }
 
+    /// 鼠标移到下拉菜单某一行：高亮跟着走。
+    ///
+    /// 同 [`Self::hover_session_menu`]：菜单只有一束高亮，鼠标悬停与键盘移动改的是同一项。
+    pub(super) fn hover_dropdown(&mut self, index: usize, cx: &mut Context<Self>) {
+        if let Some(dropdown) = self.dropdown.as_mut() {
+            if dropdown.selected == index {
+                return;
+            }
+            dropdown.selected = index;
+            cx.notify();
+        }
+    }
+
     /// 打开会话行右键菜单。
     pub(super) fn open_session_menu(
         &mut self,

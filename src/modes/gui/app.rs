@@ -849,9 +849,19 @@ impl GuiApp {
 
     /// 切换自绘窗口边框并写回 `gui.frame`。
     ///
-    /// Linux 下一帧 `render` 就会换装饰；Windows / macOS 的系统标题栏只能在建窗时隐掉，
-    /// 这里只落盘并提示重启。
+    /// Linux 下一帧 `render` 就会换装饰；macOS 的系统标题栏只能在建窗时隐掉，这里只落盘并提示重启。
+    /// Windows 上没有系统标题栏可切（`gui.frame` 总是 `true`，见
+    /// `settings_manager::read_settings_frame_gui`），直接提示不可切。
     fn set_frame_gui(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if cfg!(target_os = "windows") {
+            self.toast(
+                "This platform always draws its own window frame",
+                ToastKind::Info,
+                cx,
+            );
+            return;
+        }
+
         _ = settings_manager::write_settings_frame_gui(enabled);
 
         if !cfg!(target_os = "linux") {

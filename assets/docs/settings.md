@@ -111,7 +111,7 @@ prux 只有全局一个配置入口，项目级 `.prux/settings.json` 用于覆�
 | `gui.scale` | number | `1.5` | 桌面窗口界面缩放（0.8–5.0，步进 0.1；非有限值或 <= 0 视为未设置）：`Ctrl-=` / `Ctrl--` / `Ctrl-0` 或外观面板调整后自动写回 |
 | `gui.theme` | string | 无 | 桌面窗口的明暗主题（`"dark"`/`"light"`）：在桌面版的外观面板或 `Shift+T` 切换时自动写回，与终端里的 `theme` 互不影响。未设置时沿用 `--theme`，再回落暗色 |
 | `gui.sidebar` | boolean | `true` | 桌面窗口左侧会话栏是否展开：`Ctrl-Shift-B`、`/sidebar` 或侧栏搜索框切换时自动写回，下次启动恢复 |
-| `gui.frame` | boolean | Linux `true`，其它平台 `false` | 桌面窗口是否自绘标题栏（带拖动、最小化/最大化/关闭按钮）：关闭时沿用系统窗口装饰。Linux 切换后立即生效，Windows / macOS 的系统标题栏只能在建窗时隐掉，改动重启后生效；macOS 自绘时用系统的红绿灯按钮，标题栏右侧不再画按钮。设置面板的 Window frame 一行切换并自动写回 |
+| `gui.frame` | boolean | Linux / Windows `true`，macOS `false` | 桌面窗口是否自绘标题栏（带拖动、最小化/最大化/关闭按钮）：关闭时沿用系统窗口装饰。Linux 切换后立即生效，macOS 的系统标题栏只能在建窗时隐掉，改动重启后生效；macOS 自绘时用系统的红绿灯按钮，标题栏右侧不再画按钮。Windows 上没有系统标题栏可用，该值恒读作 `true`（写盘仍存用户的选择），窗口始终自绘。设置面板的 Window frame 一行切换并自动写回 |
 
 ### Shell
 

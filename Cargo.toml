@@ -231,6 +231,7 @@ zbus = { version = "6.0", default-features = false, features = [
 [target.'cfg(target_os = "windows")'.dependencies]
 xcap = { version = "0.9", default-features = false }
 enigo = { version = "0.6", default-features = false }
+raw-window-handle = { version = "0.6", default-features = false }
 windows = { version = "0.62", default-features = false, features = [
   "Win32_Foundation",
   "Win32_System_Com",

@@ -432,6 +432,17 @@ impl GuiApp {
         self.marked_range = None;
     }
 
+    /// 鼠标移到候选行：高亮跟着走（与键盘共用 `selected`，只有一束高亮）。
+    pub(super) fn hover_suggestion(&mut self, index: usize, cx: &mut Context<Self>) {
+        if let Some(suggest) = self.suggest.as_mut() {
+            if suggest.selected == index {
+                return;
+            }
+            suggest.selected = index;
+            cx.notify();
+        }
+    }
+
     /// 点击候选：选中它并写入输入框。
     pub(super) fn pick_suggestion(&mut self, index: usize, cx: &mut Context<Self>) {
         if let Some(suggest) = self.suggest.as_mut() {

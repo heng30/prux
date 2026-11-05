@@ -1016,8 +1016,15 @@ pub fn write_settings_sidebar_gui(visible: bool) -> Result<()> {
 }
 
 /// settings.json: `gui.frame`（GUI 是否自绘窗口边框与标题栏）。
+///
 /// 缺失时 Linux 默认 `true`（窗口管理器不保证画标题栏），其它平台默认 `false`（系统标题栏可用）。
+/// Windows 上**恒为 `true`**：gpui 的 Windows 后端建窗时不给窗口画 `WS_CAPTION`，没有系统标题栏
+/// 可留，关掉自绘等于既没有标题栏也拖不动窗口（写盘仍按用户选择，读取侧按平台收回）。
 pub fn read_settings_frame_gui() -> bool {
+    if cfg!(target_os = "windows") {
+        return true;
+    }
+
     settings_value()
         .get("gui")
         .and_then(|v| v.get("frame"))
@@ -2996,22 +3003,35 @@ mod tests {
         assert_eq!(settings_value()["gui"]["theme"], json!("light"));
     }
 
-    /// `gui.frame`：缺失时 Linux 默认自绘（窗口管理器不保证画标题栏），其它平台默认系统标题栏。
+    /// `gui.frame`：缺失时 Linux 默认自绘（窗口管理器不保证画标题栏），其它平台默认系统标题栏；
+    /// Windows 上无论存了什么都是自绘（gpui 的 Windows 后端没有系统标题栏），但写盘照用户选择。
     #[test]
     fn frame_gui_defaults_per_platform_and_round_trips() {
         let _ad = crate::test_support::AgentDirGuard::temp();
 
         assert_eq!(
             read_settings_frame_gui(),
-            cfg!(target_os = "linux"),
-            "未设置时只有 Linux 默认自绘边框"
+            cfg!(any(target_os = "linux", target_os = "windows")),
+            "未设置时只有 Linux 与 Windows（没有系统标题栏）默认自绘边框"
         );
 
         write_settings_frame_gui(true).unwrap();
         assert!(read_settings_frame_gui());
 
         write_settings_frame_gui(false).unwrap();
-        assert!(!read_settings_frame_gui());
+        if cfg!(target_os = "windows") {
+            assert!(
+                read_settings_frame_gui(),
+                "Windows 上关掉自绘也拿不到系统标题栏，读取侧恒为 true"
+            );
+            assert_eq!(
+                settings_value()["gui"]["frame"],
+                json!(false),
+                "写盘仍按用户选择"
+            );
+        } else {
+            assert!(!read_settings_frame_gui());
+        }
     }
 
     /// `gui.scale`：f32 直接转 f64 会落成 `2.0999999046325684`，写盘必须是一位小数；`None` 删键。

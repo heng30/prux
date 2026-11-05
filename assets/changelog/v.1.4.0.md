@@ -660,11 +660,12 @@
 - **The desktop window can draw its own title bar**: with `gui.frame` on, `prux-gui` paints a
   custom frame — draggable, double-click to maximize, minimize / maximize / close on the right —
   instead of leaving it to the window manager. On Linux it defaults on (window managers do not
-  always draw one) and the Window frame row in the settings panel applies it immediately; on
-  Windows and macOS the system title bar can only be hidden at window creation, so a toggle there
-  writes the setting and waits for a restart (macOS keeps its own traffic lights and draws no
-  buttons of its own). While the window is maximized the maximize button switches to a restore
-  icon, so clicking it again reads as "put it back".
+  always draw one) and the Window frame row in the settings panel applies it immediately; on macOS
+  the system title bar can only be hidden at window creation, so a toggle there writes the setting
+  and waits for a restart (macOS keeps its own traffic lights and draws no buttons of its own).
+  Windows has no system title bar to fall back to, so the frame is always drawn there. While the
+  window is maximized the maximize button switches to a restore icon, so clicking it again reads as
+  "put it back".
 
 ### Changed
 
@@ -699,6 +700,22 @@
   shrinks, and the text (or the placeholder) is vertically centred inside it.
 
 ### Fixed
+
+- **The desktop title bar drags, restores and double-clicks on Windows**: the custom frame consumed
+  the mouse down in its own handlers and then called platform calls Windows does not implement —
+  `start_window_move()` is a no-op there and `zoom_window()` only ever maximizes — so the window
+  could not be dragged by its title bar, and the restore button maximized again instead of
+  restoring. Windows handles both through the non-client hit test (`HTCAPTION` / `HTMAXBUTTON` /
+  `HTMINBUTTON` / `HTCLOSE`), which only works while the app leaves the press alone: the drag area
+  and the three buttons now let it through there and keep their own handlers on macOS / Linux.
+  Double-clicking the title bar toggles maximize / restore too — the platform's
+  `titlebar_double_click` is empty on Windows, so the window handle is used to send `SW_RESTORE`.
+
+- **Windows always draws its own window frame**: the Windows backend never puts a caption on the
+  window, so `gui.frame = false` there left it with no title bar at all — nothing to drag, nothing
+  to close. `gui.frame` now reads as `true` on Windows (the stored value is kept as-is), the window
+  is always created without system decorations, and the settings row says the frame is not
+  switchable on that platform.
 
 - **The desktop GUI's block cursor covers the character, not a whole line box**: the cursor and
   selection block was 1.15em tall and nudged down to follow the glyph's descent, so its top lined up
@@ -1672,9 +1689,9 @@
 
 - **桌面窗口可以自绘标题栏**：`gui.frame` 打开后 `prux-gui` 自己画边框与标题栏——可拖动、双击
   最大化，右侧是最小化 / 最大化 / 关闭按钮，不再交给窗口管理器。Linux 默认开启（窗口管理器
-  不保证画标题栏），设置面板的 Window frame 一行切换后立即生效；Windows / macOS 的系统标题栏
-  只能在建窗时隐掉，因此在那边切换只落盘并提示重启（macOS 保留系统的红绿灯，不再画按钮）。
-  窗口最大化后这颗按钮换成还原图标，不再一直画最大化那一颗。
+  不保证画标题栏），设置面板的 Window frame 一行切换后立即生效；macOS 的系统标题栏只能在建窗时
+  隐掉，因此在那边切换只落盘并提示重启（macOS 保留系统的红绿灯，不再画按钮）。Windows 没有
+  系统标题栏可以沿用，那里总是自绘。窗口最大化后这颗按钮换成还原图标，不再一直画最大化那一颗。
 
 ### 变更
 
@@ -2075,3 +2092,16 @@
 - **桌面 GUI 的四个设置并进 `gui` 段**：`uiScale`、`theme-gui`、`sidebar-gui`、`frame-gui` 现在分别是
   `gui.scale`、`gui.theme`、`gui.sidebar`、`gui.frame`，窗口自己的一套配置收在一个键下，不再占用四个
   带连字符的顶层键。旧键已作废：不再读取，启动时会作为未知设置报出来——写过的话需要手动搬过去。
+
+- **Windows 上自绘标题栏真的能拖动、能还原、能双击了**：自绘标题栏在自己的
+  `on_mouse_down` 里消费掉了按下事件，然后去调 Windows 后端没实现的接口——`start_window_move()`
+  在那儿是空操作，`zoom_window()` 也只会最大化——于是按住标题栏拖不动，最大化之后点「还原」
+  仍是最大化。Windows 的拖动与三颗按钮本来就由非客户区命中（`HTCAPTION` / `HTMAXBUTTON` /
+  `HTMINBUTTON` / `HTCLOSE`）交给系统处理，前提是应用别把按下事件吃掉：拖动区与三颗按钮现在在
+  Windows 上不再消费按下（macOS / Linux 维持由应用自己发起）。双击标题栏放大 / 还原也一并
+  可用——平台的 `titlebar_double_click` 在 Windows 上是空实现，改为用窗口句柄发 `SW_RESTORE`。
+
+- **Windows 上恒定自绘窗口边框**：Windows 后端建窗时从不给窗口画标题栏，因此
+  `gui.frame = false` 在那里的效果是窗口既没有标题栏也没有可拖可关的区域。现在 Windows 上
+  `gui.frame` 恒读作 `true`（写盘仍存用户的选择，读取侧按平台收回），建窗一律不带系统装饰，
+  设置面板那一行也会说明该平台不可切换。
