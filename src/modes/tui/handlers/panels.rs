@@ -279,14 +279,27 @@ impl App {
             }
         }
 
-        // /skills 面板：Ctrl+S 应用草稿（写 settings.json + 落盘扩展技能 + 重建 skill 工具）。
-        // 硬编码，避免与全局表已占用的 ctrl+s 冲突告警
+        // /skills 面板：Ctrl+A 全选 / Ctrl+X 取消全选 / Ctrl+S 应用草稿
+        // （写 settings.json + 落盘扩展技能 + 重建 skill 工具）。
+        // 硬编码，避免与全局表已占用的 ctrl+a/x/s 冲突告警
         if key.modifiers.contains(KeyModifiers::CONTROL)
             && self.panel.top().map(|l| l.kind) == Some(PanelKind::Skill)
-            && matches!(key.code, KeyCode::Char('s') | KeyCode::Char('S'))
         {
-            self.save_skill_states();
-            return true;
+            match key.code {
+                KeyCode::Char('a') | KeyCode::Char('A') => {
+                    self.set_skills_enabled_bulk(true);
+                    return true;
+                }
+                KeyCode::Char('x') | KeyCode::Char('X') => {
+                    self.set_skills_enabled_bulk(false);
+                    return true;
+                }
+                KeyCode::Char('s') | KeyCode::Char('S') => {
+                    self.save_skill_states();
+                    return true;
+                }
+                _ => {}
+            }
         }
 
         match key.code {

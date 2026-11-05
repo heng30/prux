@@ -215,6 +215,10 @@ pub(crate) const TABLE_SOURCE_W: f32 = 150.0;
 /// 表格模式列宽度（逻辑像素）：扩展面板的可用模式。
 pub(crate) const TABLE_MODES_W: f32 = 150.0;
 
+/// 扩展 / 技能面板的底部键位提示：两者都是 Space 切换、Ctrl+A / Ctrl+X 批量、Ctrl+S 存盘。
+pub(crate) const TOGGLE_PANEL_HINT: &str =
+    "↑↓ select · Space toggle · Ctrl+A all · Ctrl+X none · Ctrl+S save · Enter detail · Esc close";
+
 /// 表格 provider 列宽度（逻辑像素）：模型名单面板的 provider 名。
 pub(crate) const TABLE_PROVIDER_W: f32 = 110.0;
 

@@ -825,9 +825,24 @@ impl GuiApp {
             cx.notify();
             return;
         }
+
+        // /scoped-models 批量键（Space 切换 / Ctrl+A 全选 / Ctrl+X 清空 / Ctrl+P 按 provider 切换）：
+        // 要在取出 `overlay` 可变借用之前处理，因为改完草稿要重建面板
+        if self.scoped_draft.is_some() && self.handle_scoped_models_key(keystroke, cx) {
+            cx.notify();
+            return;
+        }
+
+        // /extension / /skills 的 Ctrl+A 全选 / Ctrl+X 取消全选（同样只改草稿）
+        if self.handle_panel_bulk_key(keystroke, cx) {
+            cx.notify();
+            return;
+        }
+
         let Some(overlay) = self.overlay.as_mut() else {
             return;
         };
+
         match overlay {
             // 扩展覆盖层已在上面提前返回
             Overlay::Extension(_) => {}
@@ -910,6 +925,16 @@ impl GuiApp {
         // 输入行聚焦：字符交给输入框（IME 写入），退格/方向本地编辑，Enter 提交，Esc 交出焦点
         if editing {
             match key {
+                // Ctrl+V / Cmd+V：剪贴板文本贴进输入行（与 TUI 一致，多行压成一行）
+                "v" if primary && !keystroke.modifiers.alt => {
+                    if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text())
+                        && let Some(Overlay::Extension(ext)) = self.overlay.as_mut()
+                    {
+                        ext.input
+                            .insert(&text.replace("\r\n", " ").replace(['\r', '\n'], " "));
+                    }
+                    return;
+                }
                 "enter" => {
                     self.submit_overlay_input();
                     return;

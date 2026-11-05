@@ -1331,7 +1331,9 @@ fn login_oauth_authorization_url_lines(
 
 /// /skills 底部键位提示（一行放不下由 [`hint_wrapped_lines`] 拆两行）
 fn skill_hint() -> String {
-    format!("{DEF_ARROW_UP_DOWN} navigate · space toggle · ctrl+s save · enter details · esc back")
+    format!(
+        "{DEF_ARROW_UP_DOWN} navigate · space toggle · ctrl+a all · ctrl+x clear · ctrl+s save · enter details · esc back"
+    )
 }
 
 /// /skills 选择面板（布局对齐 /extension）：标题 / 副标题（Ctrl+S 存盘口径 + 错误行）/

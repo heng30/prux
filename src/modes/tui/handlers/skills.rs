@@ -168,6 +168,26 @@ impl App {
         self.dirty = true;
     }
 
+    /// Ctrl+A / Ctrl+X：把当前列表（有搜索词时为过滤结果）里的技能整体划入草稿，
+    /// 只改草稿，磁盘与 `settings.json` 均不动（同 `/extension` 的批量键）。
+    pub(super) fn set_skills_enabled_bulk(&mut self, enabled: bool) {
+        let names: Vec<String> = self
+            .panel
+            .filtered_items()
+            .iter()
+            .map(|it| it.value.clone())
+            .collect();
+        if names.is_empty() {
+            return;
+        }
+
+        for name in names {
+            self.stage_skill_state(&name, enabled);
+        }
+        self.refresh_skill_labels();
+        self.dirty = true;
+    }
+
     /// 按草稿优先的状态重建面板内全部 `[x]/[ ] 名称` 标签与注记。
     pub(super) fn refresh_skill_labels(&mut self) {
         let labels: Vec<(String, String)> = match self.panel.top() {
@@ -446,6 +466,41 @@ mod tests {
         // 清理：恢复规则与磁盘
         crate::core::settings_manager::write_settings_skills(&[]).ok();
         let _ = std::fs::remove_dir_all(agent.join("skills").join("grill-me"));
+    }
+
+    /// Ctrl+A / Ctrl+X：只改草稿、整组翻转；有搜索词时只作用于过滤结果。
+    #[test]
+    fn ctrl_a_x_bulk_toggle_skills_by_filter() {
+        let _g = lock();
+        let _ad = AgentDirGuard::temp();
+        let _home = crate::test_support::HomeGuard::temp();
+        let agent = crate::core::settings_manager::agent_dir();
+        crate::core::settings_manager::write_settings_skills(&[]).ok();
+        write_skill(&agent.join("skills"), "alpha", "x");
+        write_skill(&agent.join("skills"), "beta", "x");
+
+        let mut st = App::new();
+        st.cwd = agent.display().to_string();
+        st.reload_ctx.include_default_skills = true;
+        st.open_skills_panel();
+        assert!(
+            st.skill_state("alpha") && st.skill_state("beta"),
+            "{:?}",
+            st.skill_rows
+        );
+
+        st.set_skills_enabled_bulk(false);
+        assert!(!st.skill_state("alpha") && !st.skill_state("beta"));
+        assert!(
+            crate::core::settings_manager::read_settings_skills().is_empty(),
+            "批量键不该写 settings.json"
+        );
+
+        // 过滤到 alpha：Ctrl+A 只重开命中的那条
+        st.panel.top_mut().unwrap().filter.set_value("alpha");
+        st.set_skills_enabled_bulk(true);
+        assert!(st.skill_state("alpha"));
+        assert!(!st.skill_state("beta"), "过滤结果之外的条目不该被动");
     }
 
     /// 手写的 `!glob` 排除 → 行标 `[filtered]`，且面板删 `-name` 也开不回来。

@@ -391,3 +391,41 @@ fn model_badge_marks_default_and_current() {
     assert_eq!(super::panels::model_badge(true, false), "✓");
     assert_eq!(super::panels::model_badge(false, false), "");
 }
+
+/// `/scoped-models` 批量键：Ctrl+P 按 provider 整组开关，Space/Ctrl+X 靠草稿增删。
+#[test]
+fn scoped_bulk_keys_toggle_whole_provider_group() {
+    use super::panels::{provider_toggled, toggled_pattern};
+
+    let all = vec!["p1/a".to_string(), "p1/b".to_string(), "p2/c".to_string()];
+    let draft = toggled_pattern(&["p1/a".to_string()], "p1/b");
+    assert_eq!(draft, ["p1/a", "p1/b"]);
+    assert_eq!(toggled_pattern(&draft, "p1/a"), ["p1/b"]);
+
+    // 组已全开 → 整组移除，其他 provider 不动
+    assert_eq!(provider_toggled(&draft, "p1/a", &all), Vec::<String>::new());
+    // 组未全开 → 补齐整组
+    assert_eq!(
+        provider_toggled(&["p2/c".to_string()], "p1/a", &all),
+        ["p2/c", "p1/a", "p1/b"]
+    );
+}
+
+/// `/extension` 与 `/skills` 的 Ctrl+A / Ctrl+X：只取当前可见行（有搜索词时是过滤结果）。
+#[test]
+fn bulk_key_targets_only_visible_rows() {
+    use super::overlay::{Action, Entry, List};
+    use super::panels::bulk_target_names;
+
+    let entry = |name: &str| Entry {
+        label: name.into(),
+        action: Action::ToggleExtension(name.into()),
+        checked: Some(false),
+        ..Entry::default()
+    };
+    let mut list = List::new("Extensions", vec![entry("alpha"), entry("beta")]);
+    assert_eq!(bulk_target_names(&list), ["alpha", "beta"]);
+
+    list.query.insert("bet");
+    assert_eq!(bulk_target_names(&list), ["beta"]);
+}

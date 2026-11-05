@@ -241,6 +241,9 @@ impl GuiApp {
             ],
         );
         self.mark_space_activates();
+        if let Some(Overlay::List(list)) = self.overlay.as_mut() {
+            list.hint = Some(TOGGLE_PANEL_HINT.to_string());
+        }
         cx.notify();
     }
 
@@ -300,6 +303,9 @@ impl GuiApp {
             ],
         );
         self.mark_space_activates();
+        if let Some(Overlay::List(list)) = self.overlay.as_mut() {
+            list.hint = Some(TOGGLE_PANEL_HINT.to_string());
+        }
         cx.notify();
     }
 
@@ -425,7 +431,128 @@ impl GuiApp {
                 Column::flex("Name"),
             ],
         );
+        if let Some(Overlay::List(list)) = self.overlay.as_mut() {
+            list.hint = Some(
+                "↑↓ select · Space/Enter toggle · Ctrl+A all · Ctrl+X clear · Ctrl+P provider · Ctrl+S save · Esc close"
+                    .to_string(),
+            );
+        }
         cx.notify();
+    }
+
+    /// `/scoped-models` 面板的批量键（同 TUI 面板）：Space 切换选中项、Ctrl+A 全选、
+    /// Ctrl+X 清空、Ctrl+P 切换选中项所属 provider 的全部模型。
+    ///
+    /// 有搜索词时 A/X 只作用于当前过滤结果，否则作用于全部可用模型。
+    /// 返回 `true` 表示已消费该键。
+    pub(super) fn handle_scoped_models_key(
+        &mut self,
+        keystroke: &gpui::Keystroke,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let key = keystroke.key.as_str();
+        let primary = keystroke.modifiers.control || keystroke.modifiers.platform;
+        let shift = keystroke.modifiers.shift;
+
+        // 先把面板数据取出来，借用结束才能改草稿
+        let Some(Overlay::List(list)) = self.overlay.as_ref() else {
+            return false;
+        };
+        let pattern_at = |entry: &Entry| match &entry.action {
+            Action::ToggleScopedModel(pattern) => Some(pattern.clone()),
+            _ => None,
+        };
+        let filtered = list.filtered();
+        let selected = filtered
+            .get(list.selected)
+            .and_then(|index| pattern_at(&list.entries[*index]));
+        let all: Vec<String> = list.entries.iter().filter_map(pattern_at).collect();
+        let bulk: Vec<String> = if list.query.is_empty() {
+            all.clone()
+        } else {
+            filtered
+                .iter()
+                .filter_map(|index| pattern_at(&list.entries[*index]))
+                .collect()
+        };
+
+        let Some(draft) = self.scoped_draft.clone() else {
+            return false;
+        };
+        let next = match (key, primary, shift) {
+            ("space", false, _) => match selected {
+                Some(pattern) => {
+                    // 这个空格不该再被 IME 写进过滤框
+                    self.swallow_char = Some(' ');
+                    toggled_pattern(&draft, &pattern)
+                }
+                None => return false,
+            },
+            ("a", true, false) => bulk,
+            ("x", true, false) => draft
+                .iter()
+                .filter(|pattern| !bulk.contains(pattern))
+                .cloned()
+                .collect(),
+            ("p", true, false) => match selected {
+                Some(pattern) => provider_toggled(&draft, &pattern, &all),
+                None => return false,
+            },
+            _ => return false,
+        };
+
+        if next != draft {
+            self.scoped_draft = Some(next);
+            self.rebuild_scoped_models_panel(cx);
+        }
+        true
+    }
+
+    /// `/extension` 与 `/skills` 面板的 Ctrl+A / Ctrl+X：把当前列表（有搜索词时为过滤结果）
+    /// 里的条目整体开/关，只改草稿，`Ctrl+S` 才落盘。返回 `true` 表示已消费该键。
+    pub(super) fn handle_panel_bulk_key(
+        &mut self,
+        keystroke: &gpui::Keystroke,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !(keystroke.modifiers.control || keystroke.modifiers.platform)
+            || keystroke.modifiers.shift
+        {
+            return false;
+        }
+        let enabled = match keystroke.key.as_str() {
+            "a" => true,
+            "x" => false,
+            _ => return false,
+        };
+
+        let Some(Overlay::List(list)) = self.overlay.as_ref() else {
+            return false;
+        };
+        let names = bulk_target_names(list);
+        if names.is_empty() {
+            return false;
+        }
+
+        if let Some(draft) = self.extensions_draft.as_mut() {
+            for (name, on) in draft.iter_mut() {
+                if names.contains(name) {
+                    *on = enabled;
+                }
+            }
+            self.rebuild_extension_panel(cx);
+            return true;
+        }
+
+        if let Some(rules) = self.skills_draft.clone() {
+            let next = names
+                .iter()
+                .fold(rules, |rules, name| skill_rules_with(&rules, name, enabled));
+            self.skills_draft = Some(next);
+            self.rebuild_skills_panel(cx);
+            return true;
+        }
+        false
     }
 
     /// 模型选择器。
@@ -1084,6 +1211,56 @@ pub(super) fn info_rows(lines: Vec<String>) -> Vec<InfoRow> {
         }
     }
     rows
+}
+
+/// 切换一项启用态：草稿里有就删，没有就追加到末尾（顺序即 Ctrl-P 循环顺序）。
+pub(super) fn toggled_pattern(draft: &[String], pattern: &str) -> Vec<String> {
+    let mut next = draft.to_vec();
+    match next.iter().position(|item| item == pattern) {
+        Some(index) => {
+            next.remove(index);
+        }
+        None => next.push(pattern.to_string()),
+    }
+    next
+}
+
+/// Ctrl+P：选中项所属 provider 的整组模型全开则全关，否则全开。
+pub(super) fn provider_toggled(draft: &[String], pattern: &str, all: &[String]) -> Vec<String> {
+    let Some((provider, _)) = pattern.split_once('/') else {
+        return draft.to_vec();
+    };
+    let group: Vec<&String> = all
+        .iter()
+        .filter(|item| item.split_once('/').is_some_and(|(p, _)| p == provider))
+        .collect();
+    if group.is_empty() {
+        return draft.to_vec();
+    }
+
+    let mut next = draft.to_vec();
+    if group.iter().all(|item| next.contains(item)) {
+        next.retain(|item| !group.contains(&item));
+    } else {
+        for item in group {
+            if !next.contains(item) {
+                next.push(item.clone());
+            }
+        }
+    }
+    next
+}
+
+/// 批量键的作用对象：列表当前可见行（有搜索词时为过滤结果）里的扩展 / 技能名。
+pub(super) fn bulk_target_names(list: &List) -> Vec<String> {
+    list.filtered()
+        .iter()
+        .filter_map(|index| match &list.entries[*index].action {
+            Action::ToggleExtension(name) => Some(name.clone()),
+            Action::ToggleSkill { name, .. } => Some(name.clone()),
+            _ => None,
+        })
+        .collect()
 }
 
 /// 已配置 provider 的模型目录：`(provider, id, 显示名)`（本地 JSON，同步读足够快）。

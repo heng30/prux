@@ -38,7 +38,7 @@ use super::{
         self, Action, Column, DetailSource, Entry, Info, InfoKind, InfoRow, List, ListKind,
         Overlay, SettingKey, TABLE_AGE_W, TABLE_COUNT_W, TABLE_INPUT_W, TABLE_MODES_W,
         TABLE_NAME_W, TABLE_PROVIDER_W, TABLE_SETTING_W, TABLE_SOURCE_W, TABLE_STATUS_W,
-        TABLE_VALUE_W,
+        TABLE_VALUE_W, TOGGLE_PANEL_HINT,
     },
     sidebar::{self, SessionRow},
     suggest::{self as suggest_engine, Suggest, Trigger},

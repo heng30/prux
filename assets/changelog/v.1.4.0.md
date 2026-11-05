@@ -644,6 +644,19 @@
   reason about. `/memory maintain` runs a pass on demand; older stores without the `evidence` field
   still load.
 
+- **The desktop `/scoped-models` panel answers to the same keys as the terminal one**: Space toggles
+  the highlighted model just like Enter, `Ctrl+A` enables every model, `Ctrl+X` clears them, and
+  `Ctrl+P` flips the whole provider group of the highlighted row (all on → all off, otherwise all
+  on), so filling the Ctrl-P cycle no longer means clicking each row. While the search box has a
+  term, `Ctrl+A` / `Ctrl+X` only touch the rows it matches. `Ctrl+S` still saves the draft and Esc
+  still throws it away.
+
+- **Selecting or clearing every skill or extension no longer takes a click per row**: `Ctrl+A` and
+  `Ctrl+X` now enable / disable every row in the desktop `/extension` and `/skills` panels, and in
+  the terminal `/skills` panel — the terminal `/extension` panel already had them. As with Space,
+  this only edits the unsaved draft: `Ctrl+S` still applies and writes `settings.json`, and a search
+  term narrows the target to the rows it matches.
+
 ### Changed
 
 - **An isolated subagent starts from the repository's existing build artifacts instead of a cold
@@ -671,6 +684,11 @@
   shrinks, and the text (or the placeholder) is vertically centred inside it.
 
 ### Fixed
+
+- **The desktop `/btw` input line accepts a paste**: `Ctrl+V` / `Cmd+V` in the panel's `btw>` row now
+  inserts the clipboard text — multi-line clipboard content is flattened to one line, the same way
+  the terminal overlay does it. Previously the key did nothing there, so long quotes had to be typed
+  by hand.
 
 - **`--tui` no longer exists on Windows**: `prux-gui` declares the Windows GUI subsystem, so it
   has no console to hand over to the interactive TUI and the flag could only fail there. Both the
@@ -1616,6 +1634,15 @@
   记忆图处在谁也说不清的状态）。`/memory maintain` 可按需触发一轮；旧存储没有 `evidence` 字段
   照样能读。
 
+- **桌面 `/scoped-models` 面板支持与终端面板同一套快捷键**：空格与回车一样切换高亮行，`Ctrl+A`
+  全部启用、`Ctrl+X` 全部取消，`Ctrl+P` 翻转高亮行所属 provider 的整组模型（全开则全关，否则
+  全开），整理 Ctrl-P 循环名单不再需要一行行点。搜索框有词时 `Ctrl+A` / `Ctrl+X` 只作用于命中的
+  行。`Ctrl+S` 仍然保存草稿，Esc 仍然丢弃。
+
+- **技能与扩展不用再一行行点开关**：桌面 `/extension` 与 `/skills` 面板、以及终端 `/skills`
+  面板新增 `Ctrl+A` 全选 / `Ctrl+X` 取消全选（终端 `/extension` 面板本来就有）。与空格一样
+  只改未保存的草稿：`Ctrl+S` 才应用并写回 `settings.json`；搜索框有词时只作用于命中的行。
+
 ### 变更
 
 - **`/pr run` 接手已提交但没推的改动，提交信息改由模型写**：工作区干净、但本地有远端没有的提交
@@ -1656,6 +1683,9 @@
   输入框的 0.8 倍。底色、描边、左右内边距都不动，只收高度，文字（或占位文案）在框内垂直居中。
 
 ## 修复
+
+- **桌面 `/btw` 的输入行可以粘帖了**：面板里 `btw>` 那一行现在支持 `Ctrl+V` / `Cmd+V`，剪贴板里的
+  多行内容会像终端覆盖层那样压成一行。此前这个键在那里什么都不做，长段引用只能手打。
 
 - **Windows 上不再有 `--tui`**：`prux-gui` 声明了 Windows 图形子系统，没有控制台可以交给
   交互 TUI，该参数在 Windows 上只能失败。现在 `--tui` 参数与 `Startup::tui` 字段都只在启用
