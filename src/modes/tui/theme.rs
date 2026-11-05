@@ -12,7 +12,7 @@ use crate::{
     },
     utils::{
         color::{color_to_rgb, indexed_to_rgb, parse_color_str, rgb_to_oklch},
-        paths::home_dir,
+        paths::{cwd as current_cwd, home_dir},
         terminal_caps::detect_terminal_capabilities,
         terminal_colors::terminal_colors,
     },
@@ -414,13 +414,12 @@ impl Theme {
             candidates.push(name_path.to_path_buf());
         }
 
-        if let Ok(cwd) = std::env::current_dir() {
-            candidates.push(
-                cwd.join(PROJECT_SCOPE_NAME)
-                    .join("themes")
-                    .join(format!("{}.json", name)),
-            );
-        }
+        candidates.push(
+            current_cwd()
+                .join(PROJECT_SCOPE_NAME)
+                .join("themes")
+                .join(format!("{}.json", name)),
+        );
 
         for raw in settings_manager::read_settings().themes {
             let p = if raw == "~" {
@@ -739,9 +738,7 @@ fn expand_theme_path(raw: &str) -> PathBuf {
 /// 主题发现是宽松的（非法主题直接忽略、回退内置默认），但静默忽略会让「主题怎么没生效」无从排查，
 /// 因此启动时把每一份非法主题的完整原因报告出来。内置主题不参与校验。
 pub fn theme_load_warnings() -> Vec<String> {
-    let Ok(cwd) = std::env::current_dir() else {
-        return Vec::new();
-    };
+    let cwd = current_cwd();
     let agent_dir = settings_manager::agent_dir();
 
     let mut paths: Vec<PathBuf> = Vec::new();

@@ -30,6 +30,18 @@ const ROW_HEIGHT: f32 = FONT_SIZE * LINE_HEIGHT;
 /// 行间空隙：多行选中时相邻行的背景不至于连成一整块。
 const LINE_GAP: f32 = SPACE_XXS;
 
+/// 表单输入框（[`field`]）的自然高度：上下描边 + 上下内边距 + 单行行高。
+///
+/// 行高取 [`ROW_HEIGHT`]（未按物理像素取整的 19.5），差别不到 1px，
+/// 搜索框只需要一个稳定的基准高度。
+const FIELD_H: f32 = 2. + SPACE_SM * 2. + ROW_HEIGHT;
+
+/// 搜索框高度相对表单输入框自然高度的比例：侧栏会话搜索与面板搜索比对话框输入框矮一档。
+const SEARCH_SCALE: f32 = 0.8;
+
+/// 搜索框（[`field_search`]）的固定高度：表单输入框自然高度的 0.8 倍。
+const SEARCH_FIELD_H: f32 = FIELD_H * SEARCH_SCALE;
+
 /// 光标 / 选中块的高度：字形墨迹（含下伸部）约 0.93em，块上下各留 0.11em 就成了一个
 /// 贴合文字的插入符，而不是顶到行盒上去；取 1.15em 而不取整 1.2em，是为了让块底刚好
 /// 落在行盒里（行盒是滚动容器的子项，溢出会多一条被裁的边）。
@@ -88,6 +100,16 @@ pub fn field(theme: &Theme, focused: bool) -> gpui::Div {
         })
         .px(px(SPACE_SM))
         .py(px(SPACE_SM))
+}
+
+/// 搜索框（侧栏会话搜索、右侧文件面板搜索）的外框：底色、描边、左右内边距与 [`field`] 同一套，
+/// 高度固定为 [`SEARCH_FIELD_H`]（表单输入框的 0.8 倍），内容在框内垂直居中。
+pub fn field_search(theme: &Theme, focused: bool) -> gpui::Div {
+    field(theme, focused)
+        .h(px(SEARCH_FIELD_H))
+        .py_0()
+        .flex()
+        .items_center()
 }
 
 /// 渲染可点选的输入框，并按 `wrap_width` 折行（主输入框用）。

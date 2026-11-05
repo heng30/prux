@@ -144,7 +144,7 @@ impl Drop for HomeGuard {
 /// RAII：测试期间把本线程的工作目录指向 `path`，drop 时还原。
 ///
 /// 用途与 [`HomeGuard`] 一致，但针对的是**项目层**配置（`.prux/settings.json`、项目信任）：
-/// 那些读取走 `std::env::current_dir()`，而 `set_current_dir` 是**进程级**状态，
+/// 那些读取走 `utils::paths::cwd()`，而 `set_current_dir` 是**进程级**状态，
 /// 并行测试下会让别的测试读到本测试的项目目录（或反之）。改用本 guard 后，
 /// 「切目录」只对本线程可见，读项目层的测试也不再需要串行。
 pub struct CwdGuard {

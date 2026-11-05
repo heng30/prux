@@ -15,7 +15,7 @@
 //! 明确**不**下降的地方：`if`/`while`/`for`/`case` 与 `{ … }` 花括号组的内容按外层语句
 //! 的文本一起匹配（不做结构解析）。
 
-use super::policy::Direction;
+use super::{policy::Direction, session_cwd};
 use crate::utils::paths::{absolutize, expand_home};
 use std::path::{Path, PathBuf};
 
@@ -194,7 +194,7 @@ pub(super) fn scan(input: &str) -> Scan {
 /// 非字面 `cd`（`cd "$DIR"`、`cd -`、裸 `cd`）之后工作目录不可知：后续命令标记
 /// `cwd_unknown`，不再做绝对拼写匹配（只按原文匹配），但**路径检查照旧**。
 fn apply_cd_tracking(top: &mut [Command], nested: &mut [Command]) {
-    let mut cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let mut cwd = session_cwd();
     let mut unknown = false;
     for cmd in top.iter_mut() {
         cmd.cwd = cwd.clone();

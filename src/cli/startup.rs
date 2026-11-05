@@ -41,7 +41,7 @@ use crate::{
         self,
         app::{ReloadCtx, RepairAction, SessionRepairRequest, ZombieOperationsRequest},
     },
-    utils::paths::{ensure_home_env, expand_tilde_path, resolve_path, theme_name_from_arg},
+    utils::paths::{cwd, ensure_home_env, expand_tilde_path, resolve_path, theme_name_from_arg},
 };
 use std::{
     io::IsTerminal,
@@ -264,9 +264,7 @@ pub async fn bootstrap() -> Startup {
         }
     };
 
-    let cwd = std::env::current_dir()
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|_| ".".to_string());
+    let cwd = cwd().to_string_lossy().to_string();
     let cwd_path = PathBuf::from(&cwd);
     let agent_dir = agent_dir();
 

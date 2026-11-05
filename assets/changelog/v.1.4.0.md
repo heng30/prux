@@ -665,6 +665,11 @@
   stays in its old directory). Entries whose directory no longer exists are pruned from the list at
   startup, and both UIs read and write the same file.
 
+- **The desktop GUI's search boxes are one notch shorter**: the session search in the sidebar and the
+  file search at the top of the right-hand panel are now 0.8× the height of the dialog text field
+  they share a style with. Background, border and horizontal padding stay the same — only the height
+  shrinks, and the text (or the placeholder) is vertically centred inside it.
+
 ### Fixed
 
 - **The desktop GUI's message list stops scrolling itself down and jittering at a fractional zoom
@@ -1634,6 +1639,9 @@
   `/cwd <路径>` 支持 `~` 与相对路径，目标不是已存在目录就报错且不动工作目录，存在则记入
   `recent-cwds.json` 再切过去并**新开一个会话**（原会话文件留在原目录）。清单里已经不存在的目录
   会在启动时清掉，两种界面共用同一份文件。
+
+- **桌面 GUI 的搜索框矮一档**：侧栏的会话搜索框、右侧文件面板顶部的文件搜索框，高度改为对话框
+  输入框的 0.8 倍。底色、描边、左右内边距都不动，只收高度，文字（或占位文案）在框内垂直居中。
 
 ## 修复
 

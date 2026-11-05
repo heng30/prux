@@ -284,7 +284,7 @@ fn search_box(theme: &Theme, search: &Editor, focused: bool, focus: ClickHandler
         .px(px(SPACE_SM))
         .pb(px(SPACE_SM))
         .child(
-            composer::field(theme, focused)
+            composer::field_search(theme, focused)
                 .id("session-search")
                 .cursor_pointer()
                 .on_click(focus)

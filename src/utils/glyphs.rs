@@ -75,7 +75,7 @@ pub const DEF_SCROLLBAR_THUMB: &str = "█";
 /// 密集 braille spinner（8 帧）
 pub const DEF_SPINNER_DENSE: &[&str] = &["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
 /// 任务执行中的 spinner 帧
-pub const DEF_SPINNER: &[&str] = &["✳", "✴", "✵", "✶", "✷", "✸", "✹", "✺", "✻", "✼", "✽"];
+pub const DEF_SPINNER: &[&str] = &["✳", "✴", "✵", "✶", "✷", "✸", "✹", "✺", "✻", "✼"];
 /// 状态栏忙碌、重试提示、agent 运行图标共用（10 帧）
 pub const DEF_SPINNER_BRAILLE: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 /// sparkline 的 8 档块字符，下标 0 对应最低一档。

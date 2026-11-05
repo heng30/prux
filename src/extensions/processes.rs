@@ -36,6 +36,7 @@ use crate::{
     utils::{
         glyphs::DEF_DOT_FILLED,
         output_files::create_output_file_stream,
+        paths,
         process::{HideConsole, kill_process_tree, shell_command},
         time::format_duration,
     },
@@ -400,8 +401,7 @@ fn start_job(command: &str, cwd: &str) -> Result<String, ToolError> {
     }
 
     let dir = if cwd.trim().is_empty() {
-        std::env::current_dir()
-            .map_err(|e| ToolError(format!("cannot resolve working directory: {e}")))?
+        paths::cwd()
     } else {
         PathBuf::from(cwd)
     };

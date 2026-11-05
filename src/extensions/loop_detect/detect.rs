@@ -91,7 +91,7 @@ use crate::{
     error::Result,
     extensions::{EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_LOOP_DETECT, command_arg},
     modes::tui::handlers::register_host_command,
-    utils::time::now_iso,
+    utils::{paths::cwd, time::now_iso},
 };
 use serde_json::{Value, json};
 use std::{
@@ -519,9 +519,7 @@ fn state() -> &'static Mutex<State> {
             turn_index: 0,
             run_active: false,
             terminate_after_turn: false,
-            cwd: std::env::current_dir()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_default(),
+            cwd: cwd().to_string_lossy().to_string(),
             session_id: String::new(),
             session_file: None,
             model_id: None,

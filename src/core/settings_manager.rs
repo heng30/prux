@@ -570,13 +570,15 @@ pub fn settings_load_error() -> Option<String> {
         return Some(format!("Invalid settings file {}: {}", path.display(), e));
     }
 
-    if let Ok(cwd) = std::env::current_dir() {
-        let p = cwd.join(PROJECT_SCOPE_NAME).join("settings.json");
-        if let Ok(t) = std::fs::read_to_string(&p)
-            && let Err(e) = serde_json::from_str::<Value>(strip_bom(&t))
-        {
-            return Some(format!("Invalid settings file {}: {}", p.display(), e));
-        }
+    let project_settings = cwd().join(PROJECT_SCOPE_NAME).join("settings.json");
+    if let Ok(t) = std::fs::read_to_string(&project_settings)
+        && let Err(e) = serde_json::from_str::<Value>(strip_bom(&t))
+    {
+        return Some(format!(
+            "Invalid settings file {}: {}",
+            project_settings.display(),
+            e
+        ));
     }
     None
 }

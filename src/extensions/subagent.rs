@@ -49,7 +49,7 @@ use crate::{
     },
     extensions::{EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_SUBAGENT, command_arg},
     modes::tui::handlers::register_host_command,
-    utils::time::rel_time,
+    utils::{paths::cwd, time::rel_time},
 };
 use agent_types::{DiscoveryOptions, DiscoveryWarning, ResolveError, Roster};
 use config::SubagentConfig;
@@ -165,18 +165,13 @@ fn session_cwd_slot() -> &'static Mutex<Option<String>> {
     S.get_or_init(|| Mutex::new(None))
 }
 
-/// 发现用 cwd：会话 cwd 优先，回退进程 cwd。
+/// 发现用 cwd：本扩展记下的会话 cwd 优先，回退 [`crate::utils::paths::cwd`]。
 fn discovery_cwd() -> String {
     session_cwd_slot()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .clone()
-        .or_else(|| {
-            std::env::current_dir()
-                .ok()
-                .map(|p| p.to_string_lossy().to_string())
-        })
-        .unwrap_or_else(|| ".".to_string())
+        .unwrap_or_else(|| cwd().to_string_lossy().to_string())
 }
 
 /// 从光标前的整行前缀判断 `@` 是否落在某条 `/agents` 子命令的实参位置。

@@ -8,7 +8,10 @@
 use crate::{
     core::changelog::VERSION,
     core::settings_manager::agent_dir,
-    utils::time::{now_iso, now_ms, parse_iso_ms},
+    utils::{
+        paths::cwd,
+        time::{now_iso, now_ms, parse_iso_ms},
+    },
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -206,9 +209,7 @@ pub fn install_panic_hook() {
         let location = info
             .location()
             .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()));
-        let cwd = std::env::current_dir()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_default();
+        let cwd = cwd().to_string_lossy().to_string();
         _ = record_crash("uncaught_exception", &message, location, None, &cwd);
         previous(info);
     }));

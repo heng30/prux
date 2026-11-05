@@ -783,7 +783,7 @@ fn files_body(theme: &Theme, panel: &RightPanel, cx: &mut gpui::Context<GuiApp>)
 /// 搜索框：点一下开始输入，光标与对话框里的输入框同一套。
 fn search_box(theme: &Theme, panel: &RightPanel, cx: &mut gpui::Context<GuiApp>) -> AnyElement {
     let focused = panel.search_focus;
-    composer::field(theme, focused)
+    composer::field_search(theme, focused)
         .id("file-search")
         .cursor_pointer()
         .on_click(cx.listener(|this, _, _, cx| this.focus_panel_search(cx)))

@@ -7,7 +7,7 @@ use prux::core::model_resolver::find_model;
 async fn main() -> anyhow::Result<()> {
     let dry_run = std::env::args().any(|a| a == "--dry-run");
     let model_entry = find_model("opencode-go", "deepseek-v4-flash")?;
-    let cwd = std::env::current_dir()?.to_string_lossy().to_string();
+    let cwd = prux::utils::paths::cwd().to_string_lossy().to_string();
 
     let mut agent = Agent::new(
         model_entry,

@@ -43,7 +43,7 @@ use crate::{
         util::{SPINNER_TICK_MS, notify_text, push_context, spinner_frame_index},
     },
     modes::tui::handlers::register_host_command,
-    utils::{glyphs::DEF_SPINNER, time::now_ms},
+    utils::{glyphs::DEF_SPINNER, paths::cwd, time::now_ms},
 };
 use auto_clear::AutoClearManager;
 use auto_hide::AutoHideManager;
@@ -852,10 +852,8 @@ fn command_tasks(host: &mut dyn CommandHost, raw: &str) -> bool {
 
     {
         let mut state = lock_state();
-        if state.cwd.is_none()
-            && let Ok(cwd) = std::env::current_dir()
-        {
-            state.cwd = Some(cwd.to_string_lossy().to_string());
+        if state.cwd.is_none() {
+            state.cwd = Some(cwd().to_string_lossy().to_string());
         }
 
         sync_store(&mut state, false);

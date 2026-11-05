@@ -1339,7 +1339,7 @@ fn spawn_test(server: String) {
 fn spawn_logout(server: String) {
     tokio::spawn(async move {
         let result = async {
-            let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            let cwd = cwd();
             let trusted = is_project_trusted(&cwd, &agent_dir());
             let loaded = load_config_with_declarations(&cwd, trusted)?;
             let entry = http_server(&loaded, &server)?;
@@ -1965,7 +1965,7 @@ mod tests {
         let _home = HomeGuard::temp();
         assert!(Mcp.tools().is_empty(), "无服务器时应不注入 mcp 工具");
 
-        let cwd = std::env::current_dir().unwrap();
+        let cwd = cwd();
         let paths = config::ConfigPaths::discover(&cwd);
         config::add_server(
             &paths,
@@ -1989,7 +1989,7 @@ mod tests {
         let _lock = lock();
         let _dir = AgentDirGuard::temp();
         let _home = HomeGuard::temp();
-        let cwd = std::env::current_dir().unwrap();
+        let cwd = cwd();
         crate::core::extensions::register_extension(DeclaredServerProbe);
         assert!(crate::core::extensions::set_extension_enabled(
             PROBE_EXT, true
@@ -2044,7 +2044,7 @@ mod tests {
     fn status_lists_configured_server() {
         let _dir = AgentDirGuard::temp();
         let _home = HomeGuard::temp();
-        let cwd = std::env::current_dir().unwrap();
+        let cwd = cwd();
         let paths = config::ConfigPaths::discover(&cwd);
         config::add_server(
             &paths,
