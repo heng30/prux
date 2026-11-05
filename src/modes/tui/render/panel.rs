@@ -798,6 +798,9 @@ pub(crate) fn panel_hint(layer: &PanelLayer) -> String {
             "Only showing models from configured providers. Use /login to add providers.".to_string()
         }
         PanelKind::Session => "Session history.".to_string(),
+        PanelKind::Cwd => format!(
+            "{DEF_ARROW_UP_DOWN} navigate  type to filter  enter select  escape/ctrl+c cancel"
+        ),
         PanelKind::Theme => "Select a theme.".to_string(),
         PanelKind::Thinking => {
             format!("{DEF_ARROW_UP_DOWN} navigate  type to filter  enter select  escape/ctrl+c cancel")
@@ -1017,6 +1020,7 @@ fn row_is_current(layer: &PanelLayer, item: &PanelItem, app: &App) -> bool {
                 .unwrap_or(false)
         }
         PanelKind::Session => app.current_session_path.as_deref() == Some(item.value.as_str()),
+        PanelKind::Cwd => app.cwd == item.value,
         PanelKind::Thinking => app.thinking_level.as_deref() == Some(item.value.as_str()),
         PanelKind::Theme => app.theme.name == item.value,
         PanelKind::LoginAuthType
@@ -1576,6 +1580,7 @@ pub fn render_panel_text(app: &App, width: usize) -> Vec<String> {
                 })
                 .unwrap_or(false),
             PanelKind::Session => app.current_session_path.as_deref() == Some(item.value.as_str()),
+            PanelKind::Cwd => app.cwd == item.value,
             PanelKind::Thinking => app.thinking_level.as_deref() == Some(item.value.as_str()),
             PanelKind::Theme => app.theme.name == item.value,
             PanelKind::LoginAuthType
@@ -3172,6 +3177,7 @@ mod layout_invariant_tests {
             PanelKind::Theme,
             PanelKind::Model,
             PanelKind::Session,
+            PanelKind::Cwd,
             PanelKind::LoginAuthType,
             PanelKind::LoginMethod,
             PanelKind::LoginProvider,

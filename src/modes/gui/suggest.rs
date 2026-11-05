@@ -78,6 +78,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("share", "Share session (gist)"),
     ("history", "Search prompt history"),
     ("giff", "Review uncommitted changes"),
+    ("cwd", "Change the working directory (<path>)"),
     ("trust", "Trust the current project"),
     ("reload", "Reload skills, extensions and context"),
     ("theme", "Show/switch theme"),
@@ -484,6 +485,7 @@ mod tests {
         // 配置类命令也在 `/` 面板里（TUI 对齐）；Ctrl-M 面板只额外保留三个独立面板入口
         assert_eq!(commands_with(&[], "settings")[0].label, "/settings");
         assert!(COMMANDS.iter().any(|(name, _)| *name == "trust"));
+        assert!(COMMANDS.iter().any(|(name, _)| *name == "cwd"));
     }
 
     /// 技能候选按裸名参与模糊匹配，不因 `skill:` 前缀误命中。

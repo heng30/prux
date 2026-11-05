@@ -10,6 +10,7 @@ use crate::{
         provider::AgentMessage,
         settings_manager,
     },
+    modes::cwd_store,
     modes::tui::{
         self,
         agent_actor::AgentCommand,
@@ -42,6 +43,16 @@ impl App {
 
         self.panel
             .open(PanelKind::Theme, "/theme".to_string(), items);
+    }
+
+    /// /cwd：打开工作目录选择面板（最近目录清单，输入即过滤，Enter 切目录）。
+    pub(super) fn open_cwd_panel(&mut self) {
+        let items: Vec<PanelItem> = cwd_store::recent_cwds()
+            .into_iter()
+            .map(|path| PanelItem::new(path.clone(), path))
+            .collect();
+
+        self.panel.open(PanelKind::Cwd, "/cwd".to_string(), items);
     }
 
     /// /thinking：打开思考级别选择面板（可搜索列表 + 当前级别高亮，Enter 选择）。可用级别缺失时回退全部合法级别。
@@ -526,6 +537,8 @@ impl App {
                     path: item.value.clone(),
                 });
             }
+            // /cwd 目录选择：切到选中目录并在新目录下开会话
+            PanelKind::Cwd => _ = self.switch_cwd(&item.value),
             PanelKind::Theme => self.confirm_theme_selection(&item),
             PanelKind::Thinking => {
                 // persist_default（Ctrl+S）由 worker 在设置成功后写盘默认级别并回执状态栏提示。

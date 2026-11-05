@@ -5,4 +5,5 @@
 #[cfg(feature = "gui")]
 pub mod gui;
 
+pub mod cwd_store;
 pub mod tui;

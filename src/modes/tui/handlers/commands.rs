@@ -7,7 +7,7 @@ use crate::{
     core::{
         self,
         changelog::CHANGELOG,
-        extensions::{CommandHost, SubcommandDef, command_handler, dispatch_agent_event},
+        extensions::{SubcommandDef, command_handler, dispatch_agent_event},
         keybindings,
         keybindings::KEYBINDINGS,
         prompt_templates::{self, PromptTemplate},
@@ -16,11 +16,14 @@ use crate::{
         skills::{self, Skill},
     },
     extensions::skills::bundled_skill_names,
-    modes::tui::{
-        agent_actor::AgentCommand,
-        app::{App, MsgLevel, SessionDeleteScope, WorkingKind},
-        giff::{self, GiffView},
-        theme::{Theme, available_theme_names},
+    modes::{
+        cwd_store,
+        tui::{
+            agent_actor::AgentCommand,
+            app::{App, MsgLevel, SessionDeleteScope, WorkingKind},
+            giff::{self, GiffView},
+            theme::{Theme, available_theme_names},
+        },
     },
     utils::{glyphs::DEF_DONE, paths::resolve_path, wheel::WheelScrollAccelerator},
 };
@@ -34,7 +37,7 @@ pub type ExtensionKeybindingHandler = fn(&mut App);
 
 /// 忙碌时可安全执行的内置命令（handler 不锁 agent、纯 UI 操作）。
 /// 其余内置命令忙碌时仍入 steer 队列，避免与可能锁 agent 的 handler 死锁。
-const BUILTIN_BUSY_SAFE: &[&str] = &["dock", "cwd"];
+const BUILTIN_BUSY_SAFE: &[&str] = &["dock"];
 
 /// 内置斜杠命令候选（名称, 描述, 子命令；不显示短命令/别名）。
 /// 内置命令不属于任何扩展、无生命周期，保持静态注册；
@@ -883,15 +886,15 @@ impl App {
         }
     }
 
-    /// 处理 `/cwd [路径]`：切换当前工作目录（不写入配置、不新开会话）。
+    /// 处理 `/cwd [路径]`：不带参数打开最近目录选择面板；带路径则切到该目录并在新目录下开会话。
     ///
-    /// 参数以 `@` 开头时先去掉（输入框里 `@` 是引用前缀），支持 `~` 与相对路径；
-    /// 无参数时只显示当前目录。目标不是已存在目录则报错，不改 cwd。
+    /// 参数以 `@` 开头时先去掉（输入框里 `@` 是引用前缀），支持 `~` 与相对路径。
+    /// 目标不是已存在目录则报错，不改 cwd。
     fn cmd_cwd(&mut self, cmd: &str) {
         let arg = cmd_arg(cmd, "cwd");
         let arg = arg.strip_prefix('@').unwrap_or(arg).trim();
         if arg.is_empty() {
-            self.push_msg(format!("cwd: {}", self.cwd), MsgLevel::Info);
+            self.open_cwd_panel();
             return;
         }
 
@@ -904,11 +907,25 @@ impl App {
             return;
         }
 
-        // canonicalize 让底栏与后续工具看到的都是干净路径（顺手消掉 `..` 与符号链接差异）
-        let path = std::fs::canonicalize(&path).unwrap_or(path);
-        let path = path.to_string_lossy().to_string();
-        self.set_cwd(&path);
+        let path = self.switch_cwd(&path.to_string_lossy());
         self.push_msg(format!("cwd: {path}"), MsgLevel::Success);
+    }
+
+    /// 换目录并在新目录下开会话：界面先跟随，worker 在回合间隙切目录并新建会话。
+    ///
+    /// 同时把目录记入最近目录清单（决定 `/cwd` 面板的候选）。返回规范化后的路径。
+    pub(super) fn switch_cwd(&mut self, path: &str) -> String {
+        // canonicalize 让底栏与后续工具看到的都是干净路径（顺手消掉 `..` 与符号链接差异）
+        let path = std::fs::canonicalize(path)
+            .map(|path| path.to_string_lossy().to_string())
+            .unwrap_or_else(|_| path.to_string());
+
+        cwd_store::remember_cwd(&path);
+        self.cwd = path.clone();
+        self.dirty = true;
+        self.worker
+            .send(AgentCommand::SwitchCwd { path: path.clone() });
+        path
     }
 
     /// 处理 `/scoped-models`：打开模型 scope 管理面板。
@@ -1101,25 +1118,39 @@ mod tests {
         st.cwd = dir.path().to_string_lossy().to_string();
         let target = sub.canonicalize().unwrap().to_string_lossy().to_string();
 
-        // `@` 前缀先去掉再检查目录
+        // `@` 前缀先去掉再检查目录；切目录要新开会话，并记入最近目录清单
         st.handle_slash_command(&format!("cwd @{}", sub.display()));
         assert_eq!(st.cwd, target, "应切到目标目录");
-        let cmd = cmd_rx.try_recv().expect("应发出 SetCwd 命令");
-        assert!(matches!(cmd, AgentCommand::SetCwd { .. }), "{cmd:?}");
+        let cmd = cmd_rx.try_recv().expect("应发出 SwitchCwd 命令");
+        assert!(matches!(cmd, AgentCommand::SwitchCwd { .. }), "{cmd:?}");
+        assert_eq!(
+            crate::modes::cwd_store::recent_cwds()
+                .first()
+                .map(String::as_str),
+            Some(target.as_str()),
+            "切过的目录应记入最近目录清单"
+        );
 
         // 目录不存在：报错、不改 cwd、不发命令
         st.handle_slash_command("cwd /definitely/not/here");
         assert_eq!(st.cwd, target, "不存在时不应改 cwd");
-        assert!(cmd_rx.try_recv().is_err(), "不应发出 SetCwd 命令");
+        assert!(cmd_rx.try_recv().is_err(), "不应发出 SwitchCwd 命令");
         assert!(
             last_sys_text(&st).contains("No such directory"),
             "{:?}",
             last_sys_text(&st)
         );
 
-        // 无参数只显示当前目录
+        // 无参数打开最近目录选择面板，当前目录在候选里
         st.handle_slash_command("cwd");
-        assert_eq!(last_sys_text(&st), format!("cwd: {target}"));
+        assert_eq!(st.panel.top().map(|l| l.kind), Some(PanelKind::Cwd));
+        assert!(
+            st.panel
+                .filtered_items()
+                .iter()
+                .any(|item| item.value == target),
+            "面板应列出最近用过的目录"
+        );
     }
 
     #[test]

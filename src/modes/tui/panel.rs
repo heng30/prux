@@ -14,6 +14,8 @@ pub enum PanelKind {
     Model,
     /// /session：历史会话选择（恢复）。
     Session,
+    /// /cwd：工作目录选择（最近目录清单，Enter 切到该目录并新开会话）
+    Cwd,
     /// /scoped-models：启用/禁用 Ctrl+P 循环名单（多选，Enter 切换）
     ScopedModels,
     /// /thinking：思考级别选择（off/low/medium/high/xhigh/max）

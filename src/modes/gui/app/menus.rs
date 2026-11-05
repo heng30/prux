@@ -1,7 +1,7 @@
 //! 下拉菜单、侧栏会话菜单与拖拽：标题栏/输入区的浮层与宽度调整。
 
 use super::*;
-use crate::{core, utils::paths};
+use crate::{core, modes::cwd_store, utils::paths};
 use std::path::Path;
 
 impl GuiApp {
@@ -489,7 +489,7 @@ impl GuiApp {
     /// 目录菜单：最近用过的目录 + 「Browse…」；确认后发 `SwitchCwd`（会顺带在新目录下开会话）。
     pub(super) fn open_cwd_menu(&mut self, _cx: &mut Context<Self>) {
         let current = self.cwd();
-        let mut entries: Vec<Entry> = recent_cwds()
+        let mut entries: Vec<Entry> = cwd_store::recent_cwds()
             .into_iter()
             .map(|path| Entry {
                 detail: if path == current {
@@ -518,7 +518,7 @@ impl GuiApp {
         });
 
         let mut list = List::new("Working directory", entries);
-        list.hint = Some("↑↓ select · Enter confirm · Ctrl-S move to top · Esc close".to_string());
+        list.hint = Some("↑↓ select · Enter confirm · Esc close".to_string());
         self.overlay = Some(Overlay::List(list));
     }
 

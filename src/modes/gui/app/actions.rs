@@ -1,7 +1,7 @@
 //! 动作与斜杠命令：把面板/菜单的 [`Action`] 与 `/` 命令落到 agent 命令或状态变更上。
 
 use super::*;
-use crate::{cli, core, modes::gui::bridge::GuiEvent};
+use crate::{cli, core, modes::gui::bridge::GuiEvent, utils::paths};
 
 impl GuiApp {
     /// 斜杠命令：与命令面板共用同一批动作。
@@ -14,6 +14,29 @@ impl GuiApp {
             }
             _ => self.run_slash_with(name, "", cx),
         }
+    }
+
+    /// `/cwd <路径>`：校验目录存在、记入最近目录清单，再在新目录下开会话。
+    ///
+    /// 回合进行中不允许切目录（排队的新会话会把追问带进新目录），由
+    /// [`Self::cwd_switch_blocked`] 拦下并提示。
+    fn cmd_cwd_arg(&mut self, arg: &str, cx: &mut Context<Self>) {
+        if self.cwd_switch_blocked(cx) {
+            return;
+        }
+
+        let path = paths::resolve_path(arg, &self.cwd());
+        if !path.is_dir() {
+            self.transcript.push_note(Note::Error(format!(
+                "/cwd: {}: No such directory",
+                path.display()
+            )));
+            return;
+        }
+
+        let path = path.to_string_lossy().to_string();
+        cwd_store::remember_cwd(&path);
+        _ = self.cmd_tx.send(AgentCommand::SwitchCwd { path });
     }
 
     /// `/session <参数>`：先认子命令（`statistics` / `rm-current` / `rm-project` /
@@ -204,9 +227,7 @@ impl GuiApp {
                 cx.notify();
             }
             "import" => self.open_import_dialog(cx),
-            "clone" => {
-                _ = self.cmd_tx.send(AgentCommand::ForkClone);
-            }
+            "clone" => _ = self.cmd_tx.send(AgentCommand::ForkClone),
             "fork" => {
                 if let Some(path) = self
                     .snapshot
@@ -229,6 +250,8 @@ impl GuiApp {
                 });
             }
             "trust" => self.open_trust_panel(cx),
+            "cwd" if !arg.is_empty() => self.cmd_cwd_arg(arg, cx),
+            "cwd" => self.open_cwd_menu(cx),
             "name" => self.rename_current_session(cx),
             "copy" => self.copy_last_reply(cx),
             "debug" if arg.is_empty() => core::extensions::CommandHost::debug_info(self),
@@ -374,6 +397,7 @@ impl GuiApp {
             }
             Action::SwitchCwdTo(path) => {
                 if !self.cwd_switch_blocked(cx) {
+                    cwd_store::remember_cwd(&path);
                     _ = self.cmd_tx.send(AgentCommand::SwitchCwd { path });
                 }
             }
@@ -968,6 +992,7 @@ fn takes_argument(command: &str) -> bool {
             | "history"
             | "compact"
             | "bug"
+            | "cwd"
     )
 }
 

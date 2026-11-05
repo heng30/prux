@@ -53,6 +53,7 @@ use super::{
     },
     transcript::{self, Note, Transcript},
 };
+use crate::modes::cwd_store;
 use crate::{
     cli::session_picker::ProgressiveMetas,
     core::{
@@ -83,15 +84,12 @@ use std::{
     cell::{Cell, RefCell},
     collections::{HashMap, VecDeque},
     ops::Range,
-    path::{Path, PathBuf},
+    path::PathBuf,
     rc::Rc,
     sync::{Arc, Mutex, atomic::AtomicBool},
     time::{Duration, Instant},
 };
 use tokio::sync::mpsc::UnboundedReceiver;
-
-/// 最近工作目录最多记多少条。
-const RECENT_CWD_LIMIT: usize = 30;
 
 /// 同一行两次切换要间隔多久才算两次操作（长按重建后会再弹一次 click）。
 const TOGGLE_DEBOUNCE: Duration = Duration::from_millis(250);
@@ -514,8 +512,8 @@ impl GuiApp {
         app.refresh_branch();
 
         // 当前目录也算一条「最近用过」，菜单里能直接看到
-        prune_recent_cwds();
-        remember_cwd(&app.cwd());
+        cwd_store::prune_recent_cwds();
+        cwd_store::remember_cwd(&app.cwd());
         app.reload_sessions(cx);
         app
     }
@@ -634,7 +632,7 @@ impl GuiApp {
                 if cwd != previous {
                     self.reload_sessions(cx);
                     self.refresh_branch();
-                    remember_cwd(&cwd);
+                    cwd_store::remember_cwd(&cwd);
                 } else if renamed || appeared {
                     self.reload_sessions(cx);
                 }
@@ -967,55 +965,6 @@ fn restore_text(
     }
 
     Some((combined, count))
-}
-
-/// 最近工作目录清单文件（放在 agent 目录，不动用户的 settings.json）。
-fn recent_cwds_path() -> PathBuf {
-    settings_manager::agent_dir().join("recent-cwds.json")
-}
-
-/// 读最近工作目录（最新的在前，坏文件当空列表）。
-fn recent_cwds() -> Vec<String> {
-    let Ok(text) = std::fs::read_to_string(recent_cwds_path()) else {
-        return Vec::new();
-    };
-    serde_json::from_str::<Vec<String>>(&text)
-        .map(|list| list.into_iter().take(RECENT_CWD_LIMIT).collect())
-        .unwrap_or_default()
-}
-
-/// 记一个新工作目录：去重提到最前，超过上限截断。
-fn remember_cwd(path: &str) {
-    let mut list = recent_cwds();
-    list.retain(|item| item != path);
-    list.insert(0, path.to_string());
-    list.truncate(RECENT_CWD_LIMIT);
-    write_recent_cwds(&list);
-}
-
-/// 写回最近目录清单（清单目录不存在时先建）。
-fn write_recent_cwds(list: &[String]) {
-    if let Some(dir) = recent_cwds_path().parent() {
-        _ = std::fs::create_dir_all(dir);
-    }
-
-    if let Ok(text) = serde_json::to_string_pretty(list) {
-        _ = std::fs::write(recent_cwds_path(), text);
-    }
-}
-
-/// 启动时清清单：已经不存在的目录移除并写回，免得菜单里留下点不开的条目。
-fn prune_recent_cwds() {
-    let list = recent_cwds();
-    let live: Vec<String> = list
-        .iter()
-        .filter(|path| Path::new(path).is_dir())
-        .cloned()
-        .collect();
-
-    if live.len() != list.len() {
-        write_recent_cwds(&live);
-    }
 }
 
 /// 勾选/切换类动作会重建同一个面板：执行前别关覆盖层，否则过滤与选中行都丢了。

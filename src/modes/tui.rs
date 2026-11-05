@@ -49,9 +49,12 @@ use crate::{
         settings_manager, tools_manager,
     },
     error::{Error, Result},
-    modes::tui::{
-        self,
-        panel::{PanelItem, PanelKind},
+    modes::{
+        cwd_store,
+        tui::{
+            self,
+            panel::{PanelItem, PanelKind},
+        },
     },
     utils::{
         stderr_log::StderrLog,
@@ -725,6 +728,10 @@ fn init_app(
         st.no_themes = no_themes;
         st.cwd = agent_cwd.clone();
         st.refresh_context_percent();
+
+        // 当前目录也算一条「最近用过」；顺手把已经不存在的目录清掉，/cwd 面板不留点不开的条目
+        cwd_store::prune_recent_cwds();
+        cwd_store::remember_cwd(&agent_cwd);
 
         st.set_show_thinking(!settings_manager::read_settings_hide_thinking());
         st.show_images = settings_manager::read_settings_show_images();

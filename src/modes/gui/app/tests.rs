@@ -136,37 +136,6 @@ fn skill_toggle_rewrites_exact_rule() {
     assert_eq!(disabled.len(), 2);
 }
 
-/// 最近目录：去重提到最前，超过上限截断。
-#[test]
-fn remember_cwd_dedupes_and_caps() {
-    let _guard = crate::test_support::AgentDirGuard::temp();
-    for index in 0..(RECENT_CWD_LIMIT + 3) {
-        remember_cwd(&format!("/work/{index}"));
-    }
-    remember_cwd("/work/5");
-    let list = recent_cwds();
-    assert_eq!(list.len(), RECENT_CWD_LIMIT);
-    assert_eq!(list[0], "/work/5");
-    assert_eq!(list.iter().filter(|item| *item == "/work/5").count(), 1);
-}
-
-/// 启动清理：清单里已经不存在的目录会被移除并写回，存在的保留。
-#[test]
-fn prune_recent_cwds_drops_missing_dirs() {
-    let _guard = crate::test_support::AgentDirGuard::temp();
-    let dir = std::env::temp_dir().join(format!("prux-cwd-prune-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("temp dir");
-    let live = dir.to_string_lossy().to_string();
-    let gone = dir.join("gone").to_string_lossy().to_string();
-
-    remember_cwd(&gone);
-    remember_cwd(&live);
-    prune_recent_cwds();
-
-    assert_eq!(recent_cwds(), vec![live]);
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
 /// toast 只留在最近 TOAST_MAX 条里，级别决定颜色（这里只测裁剪逻辑）。
 #[test]
 fn toast_queue_keeps_latest_only() {
