@@ -561,6 +561,10 @@ impl GuiApp {
                         self.set_dark(!self.theme.is_dark);
                         Ok(())
                     }
+                    SettingKey::GuiFrame => {
+                        self.set_frame_gui(!settings_manager::read_settings_frame_gui(), cx);
+                        Ok(())
+                    }
                     // 数值项走输入框（上面带 guard 的分支），这里不会命中
                     _ => Ok(()),
                 };

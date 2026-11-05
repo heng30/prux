@@ -1015,6 +1015,20 @@ pub fn write_settings_sidebar_gui(visible: bool) -> Result<()> {
     write_settings_value("sidebar-gui", json!(visible))
 }
 
+/// settings.json: `frame-gui`（GUI 是否自绘窗口边框与标题栏）。
+/// 缺失时 Linux 默认 `true`（窗口管理器不保证画标题栏），其它平台默认 `false`（系统标题栏可用）。
+pub fn read_settings_frame_gui() -> bool {
+    settings_value()
+        .get("frame-gui")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(cfg!(target_os = "linux"))
+}
+
+/// 写回 settings.json 的 `frame-gui`（GUI 设置面板切换时调用，重启后恢复）。
+pub fn write_settings_frame_gui(enabled: bool) -> Result<()> {
+    write_settings_value("frame-gui", json!(enabled))
+}
+
 /// 写回**全局** settings.json 的 disabledExtensions（read-modify-write，保留其他键）。
 /// /extension 面板切换启用状态后调用；项目级禁用靠手写项目 `.prux/settings.json`
 /// （读取侧与全局取并集，见 [`read_disabled_extensions`]）。
@@ -2973,6 +2987,24 @@ mod tests {
         write_settings_sidebar_gui(false).unwrap();
 
         assert!(!read_settings_sidebar_gui());
+    }
+
+    /// `frame-gui`：缺失时 Linux 默认自绘（窗口管理器不保证画标题栏），其它平台默认系统标题栏。
+    #[test]
+    fn frame_gui_defaults_per_platform_and_round_trips() {
+        let _ad = crate::test_support::AgentDirGuard::temp();
+
+        assert_eq!(
+            read_settings_frame_gui(),
+            cfg!(target_os = "linux"),
+            "未设置时只有 Linux 默认自绘边框"
+        );
+
+        write_settings_frame_gui(true).unwrap();
+        assert!(read_settings_frame_gui());
+
+        write_settings_frame_gui(false).unwrap();
+        assert!(!read_settings_frame_gui());
     }
 
     /// `uiScale`：f32 直接转 f64 会落成 `2.0999999046325684`，写盘必须是一位小数。

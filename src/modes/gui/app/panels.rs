@@ -1050,6 +1050,17 @@ pub(super) fn settings_entries(theme_dark: bool) -> Vec<Entry> {
             Action::ToggleSetting(SettingKey::GuiTheme),
         ),
         row(
+            "Window frame",
+            if settings_manager::read_settings_frame_gui() {
+                "custom"
+            } else {
+                "native"
+            }
+            .into(),
+            "Space to toggle",
+            Action::ToggleSetting(SettingKey::GuiFrame),
+        ),
+        row(
             "Auto-compact",
             on_off(settings_manager::read_settings_auto_compact()).into(),
             "Compact when near the limit",

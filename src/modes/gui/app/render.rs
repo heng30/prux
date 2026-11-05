@@ -102,6 +102,9 @@ impl Render for GuiApp {
         #[cfg(debug_assertions)]
         let frame_start = std::time::Instant::now();
 
+        // 窗口装饰只能在渲染时拿到 window：`frame-gui` 变了才请求一次平台装饰
+        frame::apply_decoration(window, &mut self.frame_applied, self.frame_gui);
+
         let transcript = self.render_transcript(window, cx);
         let composer = self.render_composer(window, cx);
         let main = self.render_main(transcript, composer);
@@ -1116,7 +1119,7 @@ impl GuiApp {
         body.into_any_element()
     }
 
-    /// 根节点：侧栏 + 主区并排，挂焦点与键盘监听。
+    /// 根节点：标题栏（可选）+ 侧栏与主区并排，挂焦点与键盘监听。
     fn render_root(
         &mut self,
         sidebar: AnyElement,
@@ -1125,9 +1128,10 @@ impl GuiApp {
     ) -> gpui::Div {
         let theme = self.theme.clone();
 
-        div()
+        let mut root = div()
             .relative()
             .flex()
+            .flex_col()
             .size_full()
             .bg(theme.canvas)
             .text_color(theme.text)
@@ -1138,9 +1142,21 @@ impl GuiApp {
             .on_mouse_down(
                 MouseButton::Middle,
                 cx.listener(|this, _, _, cx| this.middle_click(cx)),
-            )
-            .child(sidebar)
-            .child(body)
+            );
+
+        if self.frame_gui {
+            root = root.child(frame::titlebar(&theme));
+        }
+
+        root.child(
+            div()
+                .flex()
+                .flex_1()
+                .min_h_0()
+                .w_full()
+                .child(sidebar)
+                .child(body),
+        )
     }
 
     /// 盖在根节点上的浮层：模态、toast、下拉菜单、补全面板、会话菜单、对话框。

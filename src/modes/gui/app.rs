@@ -15,6 +15,7 @@
 //! - [`status`]：状态栏文案与驱动它的计时/速率采样。
 
 mod actions;
+mod frame;
 mod input;
 mod keys;
 mod menus;
@@ -77,7 +78,7 @@ use crate::{
 use gpui::{
     AnyElement, App, Bounds, Context, ElementInputHandler, EntityInputHandler, FocusHandle,
     IntoElement, KeyDownEvent, MouseButton, Pixels, Render, ScrollHandle, SharedString, Task,
-    UTF16Selection, Window, canvas, div, prelude::*,
+    UTF16Selection, Window, WindowControlArea, WindowDecorations, canvas, div, prelude::*,
 };
 use status::UsageMeter;
 use std::{
@@ -295,6 +296,10 @@ pub struct GuiApp {
     _session_poll: Option<Task<()>>,
     /// 侧栏是否可见
     show_sidebar: bool,
+    /// 是否自绘窗口边框与标题栏（`frame-gui`）
+    frame_gui: bool,
+    /// 已向窗口请求过的 `frame_gui` 值（`None` = 还没请求过）
+    frame_applied: Option<bool>,
     /// 当前覆盖层
     overlay: Option<Overlay>,
     /// 右侧面板（文件 / 变更）
@@ -456,6 +461,8 @@ impl GuiApp {
             session_search_focus: false,
             _session_poll: None,
             show_sidebar: settings_manager::read_settings_sidebar_gui(),
+            frame_gui: settings_manager::read_settings_frame_gui(),
+            frame_applied: None,
             overlay: None,
             panel: RightPanel::default(),
             expand_tools: false,
@@ -838,6 +845,21 @@ impl GuiApp {
     fn set_sidebar_visible(&mut self, visible: bool) {
         self.show_sidebar = visible;
         _ = settings_manager::write_settings_sidebar_gui(visible);
+    }
+
+    /// 切换自绘窗口边框并写回 `frame-gui`。
+    ///
+    /// Linux 下一帧 `render` 就会换装饰；Windows / macOS 的系统标题栏只能在建窗时隐掉，
+    /// 这里只落盘并提示重启。
+    fn set_frame_gui(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        _ = settings_manager::write_settings_frame_gui(enabled);
+
+        if !cfg!(target_os = "linux") {
+            self.toast("Window frame changes after restart", ToastKind::Info, cx);
+            return;
+        }
+
+        self.frame_gui = enabled;
     }
 
     /// 切换明暗主题并写回 `theme-gui`，下次启动恢复。

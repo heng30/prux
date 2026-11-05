@@ -140,6 +140,8 @@ pub enum SettingKey {
     CompactKeepRecent,
     /// 桌面窗口明暗主题（切换时写回 `theme-gui`）
     GuiTheme,
+    /// 桌面窗口是否自绘边框与标题栏（切换时写回 `frame-gui`）
+    GuiFrame,
 }
 
 impl SettingKey {

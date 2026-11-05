@@ -657,6 +657,14 @@
   this only edits the unsaved draft: `Ctrl+S` still applies and writes `settings.json`, and a search
   term narrows the target to the rows it matches.
 
+- **The desktop window can draw its own title bar**: with `frame-gui` on, `prux-gui` paints a
+  custom frame — draggable, double-click to maximize, minimize / maximize / close on the right —
+  instead of leaving it to the window manager. On Linux it defaults on (window managers do not
+  always draw one) and the Window frame row in the settings panel applies it immediately; on
+  Windows and macOS the system title bar can only be hidden at window creation, so a toggle there
+  writes the setting and waits for a restart (macOS keeps its own traffic lights and draws no
+  buttons of its own).
+
 ### Changed
 
 - **An isolated subagent starts from the repository's existing build artifacts instead of a cold
@@ -1647,6 +1655,11 @@
 - **技能与扩展不用再一行行点开关**：桌面 `/extension` 与 `/skills` 面板、以及终端 `/skills`
   面板新增 `Ctrl+A` 全选 / `Ctrl+X` 取消全选（终端 `/extension` 面板本来就有）。与空格一样
   只改未保存的草稿：`Ctrl+S` 才应用并写回 `settings.json`；搜索框有词时只作用于命中的行。
+
+- **桌面窗口可以自绘标题栏**：`frame-gui` 打开后 `prux-gui` 自己画边框与标题栏——可拖动、双击
+  最大化，右侧是最小化 / 最大化 / 关闭按钮，不再交给窗口管理器。Linux 默认开启（窗口管理器
+  不保证画标题栏），设置面板的 Window frame 一行切换后立即生效；Windows / macOS 的系统标题栏
+  只能在建窗时隐掉，因此在那边切换只落盘并提示重启（macOS 保留系统的红绿灯，不再画按钮）。
 
 ### 变更
 

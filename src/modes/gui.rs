@@ -96,9 +96,15 @@ pub fn run(startup: Startup, rt: &Handle) {
             size(px(DEFAULT_WINDOW_SIZE.0), px(DEFAULT_WINDOW_SIZE.1)),
             cx,
         );
+
+        // 建窗一律用系统装饰：Wayland 会忽略建窗参数里的 window_decorations，
+        // 自绘边框在窗口打开后按 `frame-gui` 立刻切过去。Windows / macOS 相反——
+        // 系统标题栏只能在建窗时隐掉，所以在这里读配置
+        let frame_gui = settings_manager::read_settings_frame_gui();
         let options = WindowOptions {
             titlebar: Some(TitlebarOptions {
                 title: Some(APP_NAME.into()),
+                appears_transparent: frame_gui && !cfg!(target_os = "linux"),
                 ..Default::default()
             }),
             window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -125,6 +131,12 @@ pub fn run(startup: Startup, rt: &Handle) {
         _ = cx.open_window(options, move |window, cx| {
             // Wayland 后端不会用 `TitlebarOptions::title` 设标题，得显式设一次
             window.set_window_title(APP_NAME);
+
+            // 启动就按配置切：`frame-gui` 为真时换成客户端装饰（只有 Linux 有这个运行时接口）
+            if cfg!(target_os = "linux") && settings_manager::read_settings_frame_gui() {
+                window.request_decorations(gpui::WindowDecorations::Client);
+            }
+
             let focus = view.read(cx).focus_handle(cx);
             window.focus(&focus, cx);
             view
