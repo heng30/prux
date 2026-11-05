@@ -24,7 +24,7 @@ use crate::{
         extensions::{
             AfterToolCallOutcome, BeforeToolCallOutcome, BoundaryOutcome, CommandHost, Extension,
             ExtensionCommand, ExtensionHook, ExtensionMode, ExtensionTool, ForkProjectInfo,
-            SelectOption, SubcommandDef, ToolExecCtx, UiNotifyLevel, UserPromptAction, ask_prompt,
+            SelectOption, SubcommandDef, UiNotifyLevel, UserPromptAction, ask_prompt,
         },
         provider::AgentMessage,
         session_manager::Session,
@@ -36,7 +36,7 @@ use crate::{
     },
     modes::tui::handlers::register_host_command,
     utils::{
-        paths::cwd as current_cwd,
+        paths,
         process::{self, blocking},
     },
 };
@@ -86,25 +86,20 @@ static HOOKS_FACTORY: ExtensionFactory = ExtensionFactory {
     make: || -> Arc<dyn Extension> { Arc::new(Hooks) },
 };
 
-/// 当前会话的 `(session_id, cwd)`，由会话钩子填充；缺失时 `session_id` 为空串。
-fn session_ctx() -> &'static Mutex<(String, String)> {
+/// 当前会话的 `session_id`，由会话钩子填充；未初始化时为空串。
+fn session_ctx() -> &'static Mutex<String> {
     /// 信封里的会话标识；进程级单例（会话切换时整体覆盖）。
-    static CTX: Mutex<(String, String)> = Mutex::new((String::new(), String::new()));
+    static CTX: Mutex<String> = Mutex::new(String::new());
     &CTX
 }
 
-/// 当前会话的 `(session_id, cwd)`；cwd 未初始化时回落到进程工作目录。
+/// 信封用的 `(session_id, cwd)`；cwd 取 [`paths::cwd`] 的会话槽（切目录后自动跟随）。
 fn envelope_ctx() -> (String, String) {
-    let (session_id, cwd) = session_ctx()
+    let session_id = session_ctx()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .clone();
-    let cwd = if cwd.is_empty() {
-        current_cwd().to_string_lossy().to_string()
-    } else {
-        cwd
-    };
-    (session_id, cwd)
+    (session_id, paths::cwd().to_string_lossy().into_owned())
 }
 
 /// 已经提示过的「钩子起不来」命令，避免每次工具调用都刷同一条警告。
@@ -249,25 +244,18 @@ impl Extension for Hooks {
         ]
     }
 
-    /// 记住会话 id 与工作目录（信封字段），并复位 `Stop` 续跑计数。
-    fn on_session_start(&self, cwd: &str, _messages: &[AgentMessage], session: Option<&Session>) {
+    /// 记住会话 id（信封字段），并复位 `Stop` 续跑计数。
+    fn on_session_start(&self, _cwd: &str, _messages: &[AgentMessage], session: Option<&Session>) {
         let session_id = session.map(|s| s.session_id.clone()).unwrap_or_default();
-        *session_ctx().lock().unwrap_or_else(|e| e.into_inner()) = (session_id, cwd.to_string());
+        *session_ctx().lock().unwrap_or_else(|e| e.into_inner()) = session_id;
         STOP_CONTINUATIONS.store(0, Ordering::Relaxed);
     }
 
     /// 换会话时同步新会话标识（按会话文件名，`/new` 走的分支没有 `Session` 引用）。
     fn on_session_switched(&self, session_path: Option<&str>, _messages: &[AgentMessage]) {
         let id = session_id_of(session_path).unwrap_or_default();
-        session_ctx().lock().unwrap_or_else(|e| e.into_inner()).0 = id;
+        *session_ctx().lock().unwrap_or_else(|e| e.into_inner()) = id;
         STOP_CONTINUATIONS.store(0, Ordering::Relaxed);
-    }
-
-    /// 切目录后同步信封里的 cwd（会话 id 保持不变）。
-    fn on_exec_ctx(&self, ctx: &ToolExecCtx) {
-        if ctx.depth == 0 && !ctx.cwd.trim().is_empty() {
-            session_ctx().lock().unwrap_or_else(|e| e.into_inner()).1 = ctx.cwd.clone();
-        }
     }
 
     /// 真实用户提交：`Stop` 的续跑计数从头算。

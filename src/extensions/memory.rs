@@ -50,6 +50,7 @@ use crate::{
     modes::tui::handlers::register_host_command,
     utils::{
         glyphs::DEF_ELLIPSIS,
+        paths,
         time::{now_iso, short_date},
         truncate::truncate_chars,
     },
@@ -156,8 +157,6 @@ struct MaintainNote {
 struct State {
     /// 运行期配置。
     cfg: Config,
-    /// 当前工作目录（会话开始 / `on_exec_ctx` 时更新）。
-    cwd: Option<String>,
     /// 当前会话 id（抽取条目的 `source`）。
     session_id: Option<String>,
     /// 当前型号 `(provider, model_id)`（抽取请求用）。
@@ -184,7 +183,6 @@ impl Default for State {
     fn default() -> Self {
         Self {
             cfg: merge_config(None),
-            cwd: None,
             session_id: None,
             model: None,
             recall_cache: None,
@@ -209,6 +207,11 @@ fn state() -> &'static Mutex<State> {
 /// 取状态锁；锁被毒化时取回内部值。
 fn lock() -> MutexGuard<'static, State> {
     state().lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// 当前会话工作目录：直接读 [`paths::cwd`] 的会话槽，切目录后自动跟随。
+fn session_cwd() -> String {
+    paths::cwd().to_string_lossy().into_owned()
 }
 
 /// `memory` 扩展。
@@ -299,10 +302,9 @@ impl Extension for Memory {
         st.extracting = false;
     }
 
-    /// 会话开始：记住 cwd / 会话 id，清掉上一会话的召回缓存与抽取节奏。
-    fn on_session_start(&self, cwd: &str, _messages: &[AgentMessage], session: Option<&Session>) {
+    /// 会话开始：记住会话 id，清掉上一会话的召回缓存与抽取节奏。
+    fn on_session_start(&self, _cwd: &str, _messages: &[AgentMessage], session: Option<&Session>) {
         let mut st = lock();
-        st.cwd = Some(cwd.to_string());
         st.session_id = session.map(|s| s.session_id.clone());
         st.recall_cache = None;
         st.turns_since_extract = 0;
@@ -318,17 +320,13 @@ impl Extension for Memory {
         st.extract_pending = false;
     }
 
-    /// 缓存当前型号与工作目录（抽取请求要用；子代理上下文不覆盖）。
+    /// 缓存当前型号（抽取请求要用；子代理上下文不覆盖）。
     fn on_exec_ctx(&self, ctx: &ToolExecCtx) {
         if ctx.depth > 0 {
             return;
         }
-        let mut st = lock();
-        if !ctx.cwd.trim().is_empty() {
-            st.cwd = Some(ctx.cwd.clone());
-        }
         if let Some(model) = ctx.parent_model.as_deref().and_then(split_model) {
-            st.model = Some(model);
+            lock().model = Some(model);
         }
     }
 
@@ -344,15 +342,16 @@ impl Extension for Memory {
             return Ok(());
         };
 
-        let (cfg, cwd, cached) = {
+        let (cfg, cached) = {
             let st = lock();
-            (st.cfg.clone(), st.cwd.clone(), st.recall_cache.clone())
+            (st.cfg.clone(), st.recall_cache.clone())
         };
 
         let block = match cached {
             Some((cached_query, block)) if cached_query == query => block,
             _ => {
-                let block = build_recall_block(&cfg, cwd.as_deref(), &query);
+                let cwd = session_cwd();
+                let block = build_recall_block(&cfg, Some(&cwd), &query);
                 lock().recall_cache = Some((query, block.clone()));
                 block
             }
@@ -1090,20 +1089,16 @@ fn advance_cadence() {
 
 /// 结算时发起抽取（异步、失败只记录不打扰用户）。
 fn maybe_spawn_extraction(event: &Value) {
-    let (cfg, cwd, session_id, model) = {
+    let (cfg, session_id, model) = {
         let mut st = lock();
         if !st.extract_pending || st.extracting {
             st.extract_pending = false;
             return;
         }
         st.extract_pending = false;
-        (
-            st.cfg.clone(),
-            st.cwd.clone(),
-            st.session_id.clone(),
-            st.model.clone(),
-        )
+        (st.cfg.clone(), st.session_id.clone(), st.model.clone())
     };
+    let cwd = session_cwd();
 
     if cfg.extract_interval() == 0 || runtime::offline() {
         return;
@@ -1122,9 +1117,9 @@ fn maybe_spawn_extraction(event: &Value) {
     let source = session_id.clone().unwrap_or_else(|| "extract".to_string());
     let maintain_session = session_id.clone();
     handle.spawn(async move {
-        let known = known_contents(cwd.as_deref());
+        let known = known_contents(Some(&cwd));
         let note = match run_extraction(&provider, &model_id, session_id, &excerpt, &known).await {
-            Ok(items) => apply_extracted(&items, cwd.as_deref(), &source),
+            Ok(items) => apply_extracted(&items, Some(&cwd), &source),
             Err(err) => ExtractNote {
                 at: now_iso(),
                 added: 0,
@@ -1154,23 +1149,22 @@ fn maybe_spawn_extraction(event: &Value) {
         if !due {
             return;
         }
-        let note =
-            match run_maintenance(&provider, &model_id, maintain_session, cwd.as_deref()).await {
-                Ok(applied) => MaintainNote {
-                    at: now_iso(),
-                    kept: applied.kept,
-                    adapted: applied.adapted,
-                    retired: applied.retired,
-                    error: None,
-                },
-                Err(err) => MaintainNote {
-                    at: now_iso(),
-                    kept: 0,
-                    adapted: 0,
-                    retired: 0,
-                    error: Some(err),
-                },
-            };
+        let note = match run_maintenance(&provider, &model_id, maintain_session, Some(&cwd)).await {
+            Ok(applied) => MaintainNote {
+                at: now_iso(),
+                kept: applied.kept,
+                adapted: applied.adapted,
+                retired: applied.retired,
+                error: None,
+            },
+            Err(err) => MaintainNote {
+                at: now_iso(),
+                kept: 0,
+                adapted: 0,
+                retired: 0,
+                error: Some(err),
+            },
+        };
         let mut st = lock();
         st.maintaining = false;
         if note.error.is_none() && (note.adapted > 0 || note.retired > 0) {
@@ -1445,10 +1439,12 @@ fn command_memory(host: &mut dyn CommandHost, raw: &str) -> bool {
 
 /// `/memory maintain`：手动跑一轮维护（后台请求，结果回聊天区）。
 fn spawn_maintenance(host: &mut dyn CommandHost) {
-    let (cwd, model, maintaining) = {
+    let cwd = session_cwd();
+    let (model, maintaining) = {
         let st = lock();
-        (st.cwd.clone(), st.model.clone(), st.maintaining)
+        (st.model.clone(), st.maintaining)
     };
+
     if maintaining {
         host.push_message(
             "memory: maintenance is already running",
@@ -1484,7 +1480,7 @@ fn spawn_maintenance(host: &mut dyn CommandHost) {
         UiNotifyLevel::Info,
     );
     handle.spawn(async move {
-        let note = match run_maintenance(&provider, &model_id, None, cwd.as_deref()).await {
+        let note = match run_maintenance(&provider, &model_id, None, Some(&cwd)).await {
             Ok(applied) => MaintainNote {
                 at: now_iso(),
                 kept: applied.kept,
