@@ -672,6 +672,11 @@
 
 ### Fixed
 
+- **A debug build of `prux-gui` keeps its console window**: the binary declared the Windows GUI
+  subsystem unconditionally, so even a debug build — the one you run to read logs or to try
+  `prux-gui --tui` — started without a console. The attribute is now gated on
+  `not(debug_assertions)`: release builds still hide the console, debug builds show it.
+
 - **The desktop GUI's message list stops scrolling itself down and jittering at a fractional zoom
   level**: off-screen messages are replaced by a spacer as tall as the message was, and that height
   is recomputed as "distance to the next message's top minus the flow gap". The gap was subtracted
@@ -1644,6 +1649,10 @@
   输入框的 0.8 倍。底色、描边、左右内边距都不动，只收高度，文字（或占位文案）在框内垂直居中。
 
 ## 修复
+
+- **debug 版 `prux-gui` 保留控制台窗口**：此前无条件声明了 Windows 图形子系统，于是连用来查日志、
+  试 `prux-gui --tui` 的 debug 版启动后也没有控制台。现在该属性只在 `not(debug_assertions)` 时
+  生效：release 版照旧隐藏控制台，debug 版显示。
 
 - **桌面 GUI 在非整数倍缩放下对话流不再自己往下滚、也不再抖**：屏幕外的消息会被换成一块与其高度
   相同的空占位，高度按「到下一块上沿的距离减去流的 gap」现算。gap 减的是未吸附的 18，而布局把

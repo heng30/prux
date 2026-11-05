@@ -47,7 +47,7 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// 让子进程在 Windows 上不弹出控制台窗口。
 ///
-/// `prux-gui` 以 `windows_subsystem = "windows"` 构建，进程自己**没有控制台**：此后每拉起一个
+/// release 版的 `prux-gui` 以 `windows_subsystem = "windows"` 构建，进程自己**没有控制台**：此后每拉起一个
 /// 控制台子系统程序（`bash.exe`、`powershell.exe`、`rg`、`fd`、`git`、`taskkill` …），系统都会
 /// 给它新分配一个控制台并**把窗口显示出来**，屏幕上就闪一片黑窗口。这些子进程的
 /// stdin/stdout/stderr 本来就已经全部接到管道（见上文的输出去处约定），隐掉控制台不影响功能。
