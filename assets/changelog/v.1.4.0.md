@@ -685,6 +685,11 @@
 
 ### Fixed
 
+- **The desktop GUI's block cursor covers the character, not a whole line box**: the cursor and
+  selection block was 1.15em tall and nudged down to follow the glyph's descent, so its top lined up
+  with the top of the character while its bottom stuck out below the text. It is now one em tall —
+  the ideograph ink box — and shifted so both edges line up with the character.
+
 - **The desktop `/btw` input line accepts a paste**: `Ctrl+V` / `Cmd+V` in the panel's `btw>` row now
   inserts the clipboard text — multi-line clipboard content is flattened to one line, the same way
   the terminal overlay does it. Previously the key did nothing there, so long quotes had to be typed
@@ -1683,6 +1688,10 @@
   输入框的 0.8 倍。底色、描边、左右内边距都不动，只收高度，文字（或占位文案）在框内垂直居中。
 
 ## 修复
+
+- **桌面 GUI 的块状光标只盖住字符本身**：光标（与选区）方块原本高 1.15em，又为了追字形的下伸部往下带了一
+  截，于是块顶与字顶齐平、块底却从字底伸出一块。现在块高就是一个字符的墨迹（1em，汉字的字身框），
+  整体再按墨迹重心下移，上下沿都与文字齐平。
 
 - **桌面 `/btw` 的输入行可以粘帖了**：面板里 `btw>` 那一行现在支持 `Ctrl+V` / `Cmd+V`，剪贴板里的
   多行内容会像终端覆盖层那样压成一行。此前这个键在那里什么都不做，长段引用只能手打。

@@ -42,15 +42,14 @@ const SEARCH_SCALE: f32 = 0.8;
 /// 搜索框（[`field_search`]）的固定高度：表单输入框自然高度的 0.8 倍。
 const SEARCH_FIELD_H: f32 = FIELD_H * SEARCH_SCALE;
 
-/// 光标 / 选中块的高度：字形墨迹（含下伸部）约 0.93em，块上下各留 0.11em 就成了一个
-/// 贴合文字的插入符，而不是顶到行盒上去；取 1.15em 而不取整 1.2em，是为了让块底刚好
-/// 落在行盒里（行盒是滚动容器的子项，溢出会多一条被裁的边）。
-const BLOCK_H: f32 = FONT_SIZE * 1.15;
+/// 光标 / 选中块的高度：字形墨迹，不取行盒高度。思源黑体的汉字在字身框里上下各留
+/// 0.12em，墨迹正好 1em；块比墨迹高就从字底伸出去一截，看着像“光标过长”。
+const BLOCK_H: f32 = FONT_SIZE;
 
-/// 块相对行盒顶的下移量。行盒按字体的 ascent / descent 居中，而字形落得比行盒的
-/// 几何中心低约 0.17em（与 [`super::theme::TEXT_RAISE_EM`] 说的是同一个不对称）：
-/// 块跟行盒一样居中就会“光标比字高”，所以再往下带这一段。
-const BLOCK_TOP: f32 = (ROW_HEIGHT - BLOCK_H) / 2. + FONT_SIZE * 0.17;
+/// 块相对行盒顶的下移量。行盒按 ascent（1.16em）/ descent（0.288em）居中，墨迹的重心
+/// 因此落在行盒中心下方约 0.06em（与 [`super::theme::TEXT_RAISE_EM`] 说的是同一个不对称）：
+/// 块跟行盒一样居中就会“光标比字高”，所以再往下带这一段。带上之后块顶与字顶齐平，块底也正好落在字底。
+const BLOCK_TOP: f32 = (ROW_HEIGHT - BLOCK_H) / 2. + FONT_SIZE * 0.06;
 
 /// 鼠标点选回调：参数是（事件、行号、行内字符下标）。
 pub type PickHandler =
@@ -501,6 +500,21 @@ mod tests {
             vec![0..4, 4..8]
         );
         assert_eq!(wrap_chunks_for_line("abc", 40., true, |_| 10.), vec![0..3]);
+    }
+
+    /// 光标块只盖字形墨迹：块高一个字身，块顶、块底都与字的墨迹上下沿齐平。
+    #[test]
+    fn cursor_block_covers_the_glyph_ink_only() {
+        // 思源黑体几何：半行距 + ascent 得基线，汉字墨迹在 0.88em…-0.12em
+        let baseline = (LINE_HEIGHT - 1.448) / 2. + 1.16;
+        let ink_top = (baseline - 0.88) * FONT_SIZE;
+        let ink_bottom = (baseline + 0.12) * FONT_SIZE;
+        assert!((BLOCK_H - FONT_SIZE).abs() < 1e-3, "块高应为一字墨迹");
+        assert!((BLOCK_TOP - ink_top).abs() < 0.1, "块顶应与墨迹顶齐平");
+        assert!(
+            (BLOCK_TOP + BLOCK_H - ink_bottom).abs() < 0.1,
+            "块底应与墨迹底齐平"
+        );
     }
 
     /// 行尾光标补一个占位方块；选区连续字符合成一段。
