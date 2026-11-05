@@ -142,7 +142,7 @@ impl GuiApp {
 
                 let wheel = transcript.clone();
                 let wheel_app = app.clone();
-                window.on_mouse_event(move |event: &gpui::ScrollWheelEvent, phase, window, cx| {
+                window.on_mouse_event(move |event: &gpui::ScrollEvent, phase, window, cx| {
                     if phase != gpui::DispatchPhase::Capture
                         || !transcript_live
                         || !wheel.bounds().contains(&event.position)
@@ -280,7 +280,7 @@ impl GuiApp {
             return;
         };
         let viewport = f32::from(scroll.bounds().size.height);
-        let max = f32::from(scroll.max_offset().height);
+        let max = f32::from(scroll.max_offset().y);
         if max <= 0. || viewport <= 0. {
             return;
         }

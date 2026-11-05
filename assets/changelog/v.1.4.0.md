@@ -658,6 +658,12 @@
 
 ### Fixed
 
+- **The desktop GUI no longer eats typed text while a Windows input method is composing**: the
+  input box treated an IME-claimed keystroke as a real key, so pressing Backspace with the candidate
+  window open deleted a character already sitting in the box instead of one inside the composition.
+  The GUI now builds against a gpui that keeps IME-claimed keys (`VK_PROCESSKEY`) from being
+  dispatched to the app and associates an IME context explicitly every frame.
+
 - **`/pr run` opens a new pull request when the branch's pull request is already closed**: `gh pr
   view <branch>` returns a closed or merged pull request too, so a second `/pr run` on the same
   branch reused it — the pushed commits went nowhere and the run reported the old pull request as
@@ -1605,6 +1611,10 @@
   更慢的全量拷贝。复制过来的都是被忽略的文件，因此不会混进隔离运行留下的那个分支。
 
 ## 修复
+
+- **桌面 GUI 在 Windows 输入法组字时不再删掉已输入的字**：以前输入框把输入法认领的按键当成真实
+  按键，候选窗打开时按退格删的是输入框里已有的字，而不是组字中的那一个。现在构建用的 gpui 不再
+  把这类按键（`VK_PROCESSKEY`）投递给应用，并每帧显式关联 IME 上下文。
 
 - **桌面 GUI 较新消息里的代码块复制按钮能复制了**：可点元素靠元素 id 区分，而 gpui 每个 id 只留
   一份状态——复制按钮与行内链接的序号在每条消息里都从 0 重数，于是较新消息里的代码块与前面某条

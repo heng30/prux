@@ -278,9 +278,9 @@ impl RightPanel {
         let bounds = scroll.bounds().size;
         let max_offset = scroll.max_offset();
         let (viewport, max) = if drag.vertical {
-            (f32::from(bounds.height), f32::from(max_offset.height))
+            (f32::from(bounds.height), f32::from(max_offset.y))
         } else {
-            (f32::from(bounds.width), f32::from(max_offset.width))
+            (f32::from(bounds.width), f32::from(max_offset.x))
         };
 
         if max <= 0. || viewport <= 0. {
@@ -956,8 +956,8 @@ fn scrolled(
     let size = scroll.bounds().size;
     let max = scroll.max_offset();
     let offset = scroll.offset();
-    let (viewport_y, limit_y) = (f32::from(size.height), f32::from(max.height));
-    let (viewport_x, limit_x) = (f32::from(size.width), f32::from(max.width));
+    let (viewport_y, limit_y) = (f32::from(size.height), f32::from(max.y));
+    let (viewport_x, limit_x) = (f32::from(size.width), f32::from(max.x));
 
     let mut wrapper = div()
         .relative()

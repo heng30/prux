@@ -24,8 +24,8 @@ use crate::{
 };
 use app::GuiApp;
 use gpui::{
-    App, AppContext, Application, Bounds, TitlebarOptions, WindowBackgroundAppearance,
-    WindowBounds, WindowOptions, px, size,
+    App, AppContext, Bounds, TitlebarOptions, WindowBackgroundAppearance, WindowBounds,
+    WindowOptions, px, size,
 };
 use std::{borrow::Cow, sync::Arc};
 use theme::Theme;
@@ -81,7 +81,7 @@ pub fn run(startup: Startup, rt: &Handle) {
     // 扩展的 UI 请求（`ask_prompt` / `ShowOverlay`…）只在 ui_ready 为真时才发出
     core::extensions::set_ui_ready(true);
 
-    Application::new().run(move |cx: &mut App| {
+    gpui_platform::application().run(move |cx: &mut App| {
         _ = cx.text_system().add_fonts(vec![
             Cow::Borrowed(UI_FONT_BYTES),
             Cow::Borrowed(MONO_FONT_BYTES),
@@ -121,7 +121,7 @@ pub fn run(startup: Startup, rt: &Handle) {
             // Wayland 后端不会用 `TitlebarOptions::title` 设标题，得显式设一次
             window.set_window_title(APP_NAME);
             let focus = view.read(cx).focus_handle(cx);
-            window.focus(&focus);
+            window.focus(&focus, cx);
             view
         });
     });

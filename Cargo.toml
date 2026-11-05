@@ -35,8 +35,8 @@ incremental = true
 
 [features]
 default = ["tui"]
-tui = []                                # 交互 TUI（crossterm + ratatui）
-gui = ["dep:gpui", "dep:native-dialog"] # 桌面 GUI（gpui）：启用后才有 `prux-gui` 二进制
+tui = []
+gui = ["dep:gpui", "dep:gpui_platform", "dep:native-dialog"]
 test-support = []
 
 [[bin]]
@@ -191,11 +191,18 @@ tokio-tungstenite = { version = "0.30", default-features = false, features = [
   "connect",
   "rustls",
 ] }
-gpui = { version = "0.2", optional = true, default-features = false, features = [
+
+# gpui 不走 crates.io 的 0.2.x：那一版的 Windows 后端把 IME 认领的按键（VK_PROCESSKEY）
+# 解成真实键再投递给应用，只靠「应用自报组字状态」兜着，中文输入法组字时按退格会把
+# 输入框里的字删掉。上游后来改成「IME 认领的按键不投递给应用」+ 每帧显式关联 IME 上下文。
+# 这里钉死一个上游 commit（= 发布过的 gpui 0.3.11 快照），避免浮动的 API/行为漂移。
+gpui = { git = "https://github.com/zed-industries/zed", rev = "f816e1f9263e3a8ef63c4baaa02e1441ce1c6038", optional = true, features = [
+  "windows-manifest", # Windows 资源清单（DPI 感知 / 系统版本声明）：gpui 的 build.rs 靠它内嵌 gpui.rc，缺了 Windows 上窗口缩放与圆角会退化成 XP 行为
+] }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "f816e1f9263e3a8ef63c4baaa02e1441ce1c6038", optional = true, features = [
   "x11",
-  "wayland",          # Linux 渲染后端；x11 / wayland 二者都要留（用户环境都可能有）
-  "font-kit",         # 文本系统：关掉会退化成 NoopTextSystem，界面无字
-  "windows-manifest", # Windows 可执行文件的资源清单（build.rs 生成）
+  "wayland",  # Linux 渲染后端；x11 / wayland 二者都要留（用户环境都可能有）
+  "font-kit", # 文本系统：缺了会退化成 NoopTextSystem，界面无字
 ] }
 
 [target.'cfg(unix)'.dependencies]

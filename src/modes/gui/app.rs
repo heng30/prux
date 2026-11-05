@@ -662,7 +662,7 @@ impl GuiApp {
     /// 对话流翻页：`dir` 为 -1 向上、1 向下，步长取滚动区高度（同 TUI 的 shift+pageUp/Down）。
     fn page_transcript(&mut self, dir: f32) {
         let viewport = f32::from(self.scroll.bounds().size.height);
-        let max = f32::from(self.scroll.max_offset().height);
+        let max = f32::from(self.scroll.max_offset().y);
         if viewport <= 0. || max <= 0. {
             return;
         }
@@ -678,7 +678,7 @@ impl GuiApp {
     ///
     /// 加速系数乘在系统给的增量上（触控板的小增量仍然平滑），不用「一格 = 固定行数」去
     /// 覆盖它。返回 true 时调用方要吞掉事件——原生滚动在 bubble 阶段，否则会再滚一遍。
-    fn wheel_transcript(&mut self, event: &gpui::ScrollWheelEvent, line_height: Pixels) -> bool {
+    fn wheel_transcript(&mut self, event: &gpui::ScrollEvent, line_height: Pixels) -> bool {
         // shortcut: 只按对话区 bounds 判定，盖住它的面板/菜单不单独算，
         // 面板变多或与对话区大面积重叠时改成按各自 bounds 判定
         if self.overlay.is_some()
@@ -701,7 +701,7 @@ impl GuiApp {
             factor *= ALT_WHEEL_MULTIPLIER;
         }
 
-        let max = f32::from(self.scroll.max_offset().height);
+        let max = f32::from(self.scroll.max_offset().y);
         let next = (f32::from(self.scroll.offset().y) + dy * factor).clamp(-max, 0.);
         // 偏移是物理像素，不能再走 `px()`（那是「设计像素 × 缩放」）
         self.scroll

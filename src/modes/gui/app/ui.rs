@@ -645,7 +645,7 @@ impl GuiApp {
             return;
         };
 
-        let max = f32::from(ext.scroll.max_offset().height);
+        let max = f32::from(ext.scroll.max_offset().y);
         let current = f32::from(ext.scroll.offset().y);
         let next = if rows >= f32::MAX {
             0.

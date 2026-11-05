@@ -488,7 +488,7 @@ impl Info {
     /// 滚到纵坐标 `y`：偏移取 `-max..=0`（负数为向下滚动，`0` 是顶端，
     /// [`f32::NEG_INFINITY`] 即滚到底），越界夹回实际可滚范围。
     pub fn scroll_to(&mut self, y: f32) {
-        let max = f32::from(self.scroll.max_offset().height);
+        let max = f32::from(self.scroll.max_offset().y);
         let y = y.clamp(-max, 0.);
         self.scroll
             .set_offset(gpui::point(gpui::px(0.), gpui::px(y)));
@@ -1001,7 +1001,7 @@ pub(crate) fn reveal_row(scroll: &ScrollHandle, index: usize) {
     };
 
     let viewport = f32::from(area.size.height);
-    let max = f32::from(scroll.max_offset().height);
+    let max = f32::from(scroll.max_offset().y);
     let offset = f32::from(scroll.offset().y);
     let top = f32::from(row.top() - area.top());
     let height = f32::from(row.size.height);
@@ -1195,7 +1195,7 @@ fn info_scrollbar(
     cx: &mut gpui::Context<GuiApp>,
 ) -> AnyElement {
     let viewport = f32::from(scroll.bounds().size.height);
-    let max = f32::from(scroll.max_offset().height);
+    let max = f32::from(scroll.max_offset().y);
     if max <= 0. || viewport <= 0. {
         return div().into_any_element();
     }
