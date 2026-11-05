@@ -1,7 +1,7 @@
 //! 动作与斜杠命令：把面板/菜单的 [`Action`] 与 `/` 命令落到 agent 命令或状态变更上。
 
 use super::*;
-use crate::{cli, core};
+use crate::{cli, core, modes::gui::bridge::GuiEvent};
 
 impl GuiApp {
     /// 斜杠命令：与命令面板共用同一批动作。
@@ -576,12 +576,16 @@ impl GuiApp {
     /// worker 直接 drop 回合 future，agent 不会再发 `agent_settled`，忙状态只能
     /// 本地复位，中断提示也只能自己补（同 TUI 的硬中止）。
     pub(super) fn abort_turn(&mut self, cx: &mut Context<Self>) {
-        // 回合 future 被 drop 后不会再有 agent_end，靠事件断电的扩展（hang-detect 等）
-        // 会一直以为回合还在跑，静默超时后把已停下的会话又拉起来（同 TUI 的硬中止）。
-        core::extensions::dispatch_agent_event(&serde_json::json!({
-            "type": "agent_end",
-            "reason": "aborted",
-        }));
+        // 回合 future 被 drop 后不会再有 agent_end，补一条走与正常事件相同的分发路径：
+        // 靠事件断电的扩展（hang-detect 等）才不会以为回合还在跑、静默超时后把已停下的
+        // 会话又拉起来；本地的状态栏计量（⌛ 耗时 / 速率 / 在途流式计数）也只有收到它才会定格。
+        self.apply_event(
+            GuiEvent::Agent(serde_json::json!({
+                "type": "agent_end",
+                "reason": "aborted",
+            })),
+            cx,
+        );
         _ = self.cmd_tx.send(AgentCommand::Abort);
         self.busy = false;
         self.transcript.abort();

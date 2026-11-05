@@ -1024,6 +1024,12 @@
 - **Restarting a turn in the desktop GUI no longer drops queued input**: steer messages that piled
   up while an extension rebuilt the prompt are now sent with the new prompt instead of being lost.
 
+- **The desktop GUI's turn timer stops when a turn is aborted**: the elapsed time in the status bar
+  kept counting after `Esc`, the stop button or an extension aborted a turn, and every later turn
+  inherited that baseline, so `⌛` grew across the whole session. The synthesized `agent_end` now goes
+  through the same handler as real agent events, freezing the timer and clearing the in-flight
+  streaming count.
+
 - **The `browser` extension no longer clicks through a banner**: `click` and `dblclick` check the
   element's center point first and refuse when another element covers it (naming it, e.g.
   `covered by <div#banner>`), when the element is disabled, or when it has no clickable area. The old
@@ -1873,6 +1879,10 @@
 
 - **桌面 GUI 重启回合不再丢掉已排队的输入**：扩展重建 prompt 期间积压的 steer 消息现在与新 prompt
   一起发出，而不是被丢弃。
+
+- **桌面 GUI 中断回合后状态栏计时真的停下**：`Esc`、停止按钮或扩展中断回合后 `⌛` 仍继续走字，
+  后续每一轮都接着这个基线，整段会话的时间越积越大。补发的 `agent_end` 现在走与真实 agent 事件
+  相同的处理路径，计时定格、在途流式计数清零。
 
 - **`browser` 扩展不再点穿遮罩**：`click` / `dblclick` 先检查元素中心点，被别的元素盖住时直接报错并
   点名盖住它的元素（如 `covered by <div#banner>`），元素 `disabled` 或没有可点面积时同样报错——以前
