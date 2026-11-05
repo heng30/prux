@@ -34,7 +34,7 @@ use crate::{
     },
     error::{Error, Result},
     modes::tui::app::SessionRepairRequest,
-    utils::time::now_iso,
+    utils::{process::HideConsole, time::now_iso},
 };
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
@@ -628,6 +628,7 @@ pub(crate) fn share_via_gist(session: &Session, theme: Option<&str>) -> String {
 
     match std::process::Command::new("gh")
         .args(["gist", "create", "--public=false", &path])
+        .hide_console()
         .output()
     {
         Ok(o) if o.status.success() => {

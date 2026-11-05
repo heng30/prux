@@ -12,6 +12,7 @@
 //! 视图转成 [`GiffRestore`] 留在 `App` 上，下次 `/giff` 重新采集数据但恢复上次看的文件
 //! 与滚动位置。
 
+use crate::utils::process::HideConsole;
 use crate::{
     error::{Error, Result},
     modes::tui::theme::{Theme, color},
@@ -57,6 +58,7 @@ pub fn collect_uncommitted() -> Result<(FileChanges, String, String)> {
 fn git_diff() -> Result<String> {
     let output = Command::new("git")
         .args(["diff", "--no-color"])
+        .hide_console()
         .output()
         .map_err(|e| Error::Message(format!("failed to run git: {e}")))?;
 

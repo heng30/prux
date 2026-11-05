@@ -10,7 +10,10 @@
 use super::{CaptureRequest, CaptureTarget, Display, Launched, Shot, ShotFormat, Window};
 use crate::{
     extensions::computer::state::Rect,
-    utils::{paths::find_in_path, process::run_stdout},
+    utils::{
+        paths::find_in_path,
+        process::{HideConsole, run_stdout},
+    },
 };
 use serde_json::Value;
 use std::{
@@ -320,6 +323,7 @@ fn grim_capture(req: &CaptureRequest, plan: &Plan) -> Result<Shot, String> {
     }
     cmd.arg("-");
     let child = cmd
+        .hide_console()
         .stdin(Stdio::null())
         .stderr(Stdio::piped())
         .stdout(Stdio::piped())

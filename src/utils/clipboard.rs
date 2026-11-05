@@ -1,6 +1,6 @@
 //! 系统剪贴板：Wayland 命令优先，fallback arboard
 
-use crate::utils::time::now_ms;
+use crate::utils::{process::HideConsole, time::now_ms};
 use std::{
     io::Write,
     path::Path,
@@ -87,6 +87,7 @@ fn is_termux() -> bool {
 /// 用 `termux-clipboard-get` 读取 Termux 剪贴板文本；命令缺失或退出码非 0 时返回错误。
 fn paste_from_termux_clipboard() -> Result<String> {
     let out = std::process::Command::new("termux-clipboard-get")
+        .hide_console()
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -105,6 +106,7 @@ fn paste_from_termux_clipboard() -> Result<String> {
 /// 用 `termux-clipboard-set` 写入 Termux 剪贴板文本；文本经 stdin 传入以避免 argv 长度限制。
 fn copy_to_termux_clipboard(text: &str) -> Result<()> {
     let mut child = Command::new("termux-clipboard-set")
+        .hide_console()
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -247,6 +249,7 @@ fn copy_to_wayland_clipboard(text: &str) -> Result<()> {
     use std::{os::unix::process::CommandExt, process::Stdio};
     std::process::Command::new("wl-copy")
         .arg(text)
+        .hide_console()
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -262,6 +265,7 @@ fn paste_from_wayland_clipboard() -> Result<String> {
     use std::process::Stdio;
     let out = std::process::Command::new("wl-paste")
         .arg("--no-newline")
+        .hide_console()
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -324,12 +328,13 @@ pub fn clipboard_advertises_image() -> Option<bool> {
 fn linux_advertises_image() -> Option<bool> {
     let mut command = if is_wayland() {
         let mut c = std::process::Command::new("wl-paste");
-        c.arg("-l");
+        c.arg("-l").hide_console();
         c
     } else {
         // X11：TARGETS 是剪贴板自身的类型清单
         let mut c = std::process::Command::new("xclip");
-        c.args(["-selection", "clipboard", "-t", "TARGETS", "-o"]);
+        c.args(["-selection", "clipboard", "-t", "TARGETS", "-o"])
+            .hide_console();
         c
     };
 
@@ -363,6 +368,7 @@ pub fn read_clipboard_image(tmp_dir: &Path) -> Option<String> {
             && let Ok(bytes) = std::process::Command::new("wl-paste")
                 .arg("-t")
                 .arg("image/png")
+                .hide_console()
                 .output()
             && bytes.status.success()
             && !bytes.stdout.is_empty()
@@ -383,6 +389,7 @@ pub fn read_clipboard_image(tmp_dir: &Path) -> Option<String> {
 fn wayland_file_paths() -> Option<Vec<String>> {
     let listed = std::process::Command::new("wl-paste")
         .arg("-l")
+        .hide_console()
         .output()
         .ok()?;
     let has_uri_list = String::from_utf8_lossy(&listed.stdout)
@@ -396,6 +403,7 @@ fn wayland_file_paths() -> Option<Vec<String>> {
     let out = std::process::Command::new("wl-paste")
         .arg("-t")
         .arg("text/uri-list")
+        .hide_console()
         .output()
         .ok()?;
     if !out.status.success() {

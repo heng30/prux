@@ -21,7 +21,11 @@
 use super::super::util::git;
 use crate::{
     APP_NAME,
-    utils::{process::spawn_blocking, time::now_ms, truncate::truncate_chars},
+    utils::{
+        process::{HideConsole, spawn_blocking},
+        time::now_ms,
+        truncate::truncate_chars,
+    },
 };
 use std::{
     path::{Path, PathBuf},
@@ -189,6 +193,7 @@ async fn share_ignored_artifacts(from: &str, to: &str) {
                 .args(flags)
                 .arg(&src)
                 .arg(&dst)
+                .hide_console()
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())

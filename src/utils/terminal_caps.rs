@@ -2,6 +2,7 @@
 //! - OSC8 超链接可用性（tmux 需转发 client_termfeatures 探测；screen 强制禁 OSC8）
 //! - 环境变量覆盖 PRUX_HYPERLINKS / PRUX_TRUE_COLOR（1/0/auto）
 
+use crate::utils::process::HideConsole;
 use std::{
     io::Read,
     process::Command,
@@ -52,6 +53,7 @@ pub(crate) fn in_tmux() -> bool {
 fn tmux_output(args: &[&str], timeout_ms: u64) -> Option<String> {
     let mut child = Command::new("tmux")
         .args(args)
+        .hide_console()
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .spawn()
@@ -127,6 +129,7 @@ pub(crate) fn tmux_show_pane_value(option: &str) -> Option<String> {
 pub(crate) fn tmux_set_pane_value(option: &str, value: &str) {
     _ = Command::new("tmux")
         .args(["set", "-p", option, value])
+        .hide_console()
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())

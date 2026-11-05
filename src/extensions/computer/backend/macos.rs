@@ -7,7 +7,7 @@
 //! 坐标单位与 `xcap` 一致：`CGDisplayBounds` 的逻辑点（全局桌面坐标，主显示器左上为原点，y 向下）。
 
 use super::{CaptureRequest, Display, Launched, Shot, Window, xcap_common as common};
-use crate::extensions::computer::input;
+use crate::{extensions::computer::input, utils::process::HideConsole};
 use core_graphics::{
     event::CGEvent,
     event_source::{CGEventSource, CGEventSourceStateID},
@@ -46,6 +46,7 @@ pub fn focus_window(id: u64) -> Result<(), String> {
     // `open` 的 stdout/stderr 必须收进管道：继承终端就会把它的输出/告警盖到 TUI 上。
     let output = Command::new("open")
         .args(["-a", &window.app])
+        .hide_console()
         .stdin(std::process::Stdio::null())
         .output()
         .map_err(|e| format!("could not run open -a {:?}: {e}", window.app))?;

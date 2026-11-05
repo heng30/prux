@@ -3,7 +3,7 @@
 use crate::{
     core::settings_manager,
     modes::tui::app::{App, MsgLevel},
-    utils::{paths::cwd, stderr_log},
+    utils::{paths::cwd, process::HideConsole, stderr_log},
 };
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use std::{
@@ -113,6 +113,7 @@ pub(crate) fn run_shell_command(cmd: &str) -> String {
         .arg("-c")
         .arg(cmd)
         .current_dir(cwd())
+        .hide_console()
         .output();
     match output {
         Ok(o) => {

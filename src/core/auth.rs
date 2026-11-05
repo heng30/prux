@@ -20,7 +20,7 @@ use crate::{
         settings_manager::{agent_dir, atomic_write_config},
     },
     error::{Error, Result},
-    utils::{mime::strip_bom, time::now_ms},
+    utils::{mime::strip_bom, process::HideConsole, time::now_ms},
 };
 use serde_json::{Value, json};
 use std::{
@@ -123,7 +123,11 @@ fn resolve_key_with_interpolation(raw: &str, _cred: &Value) -> String {
             return v.clone();
         }
 
-        if let Ok(out) = std::process::Command::new("sh").arg("-c").arg(cmd).output()
+        if let Ok(out) = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(cmd)
+            .hide_console()
+            .output()
             && out.status.success()
         {
             let value = String::from_utf8_lossy(&out.stdout).trim().to_string();
