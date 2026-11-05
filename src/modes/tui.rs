@@ -193,7 +193,7 @@ struct HighlightDone {
 
 /// 从装配好的 [`Startup`] 进入交互 TUI：stdin/stdout 非 TTY 或运行出错都打印错误并退出进程。
 ///
-/// `prux` 与 `prux-gui --tui` 共用，让终端检查与错误文案只存在一处。
+/// `prux` 与 `prux-gui --tui`（非 Windows）共用，让终端检查与错误文案只存在一处。
 pub async fn run_from_startup(startup: Startup) {
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         eprintln!(

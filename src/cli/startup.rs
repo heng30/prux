@@ -64,8 +64,8 @@ pub struct Startup {
     pub reload_ctx: ReloadCtx,
     /// `--verbose`：显示完整诊断输出。
     pub verbose: bool,
-    /// `--tui`：GUI 二进制改跑交互 TUI（仅 `gui` feature 存在该参数）。
-    #[cfg(feature = "gui")]
+    /// `--tui`：GUI 二进制改跑交互 TUI（仅 `gui` feature 且非 Windows 时存在该参数）。
+    #[cfg(all(feature = "gui", not(windows)))]
     pub tui: bool,
 }
 
@@ -545,7 +545,7 @@ pub async fn bootstrap() -> Startup {
         no_themes: parsed.no_themes,
         reload_ctx,
         verbose: parsed.verbose,
-        #[cfg(feature = "gui")]
+        #[cfg(all(feature = "gui", not(windows)))]
         tui: parsed.tui,
     }
 }

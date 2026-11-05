@@ -672,6 +672,11 @@
 
 ### Fixed
 
+- **`--tui` no longer exists on Windows**: `prux-gui` declares the Windows GUI subsystem, so it
+  has no console to hand over to the interactive TUI and the flag could only fail there. Both the
+  `--tui` argument and `Startup::tui` now exist only when the `gui` feature is on and the target is
+  not Windows, and `prux-gui` skips the TUI branch on Windows; run `prux` for the interactive TUI.
+
 - **A debug build of `prux-gui` keeps its console window**: the binary declared the Windows GUI
   subsystem unconditionally, so even a debug build — the one you run to read logs or to try
   `prux-gui --tui` — started without a console. The attribute is now gated on
@@ -1649,6 +1654,11 @@
   输入框的 0.8 倍。底色、描边、左右内边距都不动，只收高度，文字（或占位文案）在框内垂直居中。
 
 ## 修复
+
+- **Windows 上不再有 `--tui`**：`prux-gui` 声明了 Windows 图形子系统，没有控制台可以交给
+  交互 TUI，该参数在 Windows 上只能失败。现在 `--tui` 参数与 `Startup::tui` 字段都只在启用
+  `gui` feature 且非 Windows 时存在，`prux-gui` 在 Windows 上也不再走 TUI 分支；交互 TUI
+  请直接运行 `prux`。
 
 - **debug 版 `prux-gui` 保留控制台窗口**：此前无条件声明了 Windows 图形子系统，于是连用来查日志、
   试 `prux-gui --tui` 的 debug 版启动后也没有控制台。现在该属性只在 `not(debug_assertions)` 时
