@@ -45,10 +45,12 @@ git 历史以「同步 pi-vX.Y.Z」为节奏推进，与上游保持行为/文�
 | `utils/` | 通用工具：diff、mime、路径、截断、终端、网络、图片、cron、zip 等 | **不依赖 `core`** |
 | `mermaid_text/` | 内嵌第三方库：Mermaid 源码 → Unicode 盒图（上游 `mermaid-text` 0.57.0，含其内部 `parser` / `render` / `layout` 子树） | 只依赖 `ascii-dag` / `chrono` / `unicode-width`，不是本仓分层的一部分 |
 | `test_support/` | 测试接缝：线程本地目录/HOME override、超时护栏 | 仅 `cfg(test)` 或 `test-support` feature 编译 |
-| `bin/prux_gui.rs` | GUI 二进制入口：自建 tokio runtime → `cli::startup::bootstrap()` → `modes::gui::run()` | 仅 `--features gui` 构建 |
+| `bin/prux.rs` | TUI 二进制入口（`default-run`）：`bootstrap()` → `modes::tui::run_from_startup()` | 默认构建 |
+| `bin/prux_gui.rs` | GUI 二进制入口：自建 tokio runtime → `cli::startup::bootstrap()` → `modes::gui::run()`（`--tui` 时改走 `tui::run_from_startup()`） | 仅 `--features gui` 构建 |
 
 两个二进制共用 `cli/startup.rs::bootstrap()`（= 进程初始化 + 参数/会话/模型/工具/技能装配），
-启动逻辑只能加在那里：写进 `main.rs` 的 GUI 就看不到。
+启动逻辑只能加在那里：写进任何一个 `src/bin/*.rs` 的入口都只对一个模式生效。
+交互 TUI 的终端检查与出错退出也只写在 `modes::tui::run_from_startup()` 一处。
 
 `core` 内部三层（`src/core.rs` 顶部是唯一真源，此处摘要）：
 
@@ -61,7 +63,7 @@ git 历史以「同步 pi-vX.Y.Z」为节奏推进，与上游保持行为/文�
 `src/extensions.rs` 用 `#[linkme::distributed_slice]` 声明三类工厂切片（扩展 / footer / banner），
 启动时 `register_all` 遍历切片按 `priority` **降序**注册。因此：
 
-- **新增内置扩展 = 声明 `pub mod x` + 在模块内放一个工厂静态**，不要去改 `main.rs` 的注册函数；
+- **新增内置扩展 = 声明 `pub mod x` + 在模块内放一个工厂静态**，不要去改 `src/bin/*.rs` 入口；
 - `priority` 值越大越先注册，影响两类语义：footer 三布局互斥（*最后注册的启用者生效*，
   故默认底栏 `footer(normal)` 的 priority 最小）、面板条目/同名命令的先到先得顺序；
 - 多数扩展**注册后为禁用态**（如 `doc-helper`），需用户在 `/extension` 面板开启——新扩展默认不要抢行为。

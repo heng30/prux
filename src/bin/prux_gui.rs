@@ -6,8 +6,7 @@
 
 #![windows_subsystem = "windows"]
 
-use prux::{APP_NAME, cli::startup::bootstrap, modes::tui};
-use std::io::IsTerminal;
+use prux::{cli::startup::bootstrap, modes::tui};
 
 fn main() {
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -18,29 +17,7 @@ fn main() {
     let startup = runtime.block_on(bootstrap());
 
     if startup.tui {
-        // TUI 需要交互终端：stdin/stdout 非 TTY 时无法渲染
-        if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
-            eprintln!(
-                "Error: {APP_NAME} only supports the interactive TUI mode, which requires stdin and stdout to be a TTY.",
-            );
-            std::process::exit(1);
-        }
-
-        let result = runtime.block_on(tui::run_interactive(
-            startup.agent,
-            startup.initial_messages,
-            startup.prompt_templates,
-            startup.theme_override.as_deref(),
-            startup.no_themes,
-            startup.reload_ctx,
-            startup.verbose,
-        ));
-
-        if let Err(e) = result {
-            eprintln!("Error: {}", e);
-            std::process::exit(1);
-        }
-
+        runtime.block_on(tui::run_from_startup(startup));
         return;
     }
 

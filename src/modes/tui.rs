@@ -40,6 +40,7 @@ use self::{
 };
 use crate::{
     APP_NAME,
+    cli::startup::Startup,
     core::{
         self,
         agent_session::Agent,
@@ -76,7 +77,7 @@ use ratatui::{Terminal, backend::CrosstermBackend};
 use std::{
     cell::RefCell,
     collections::HashMap,
-    io::{self, Write as _},
+    io::{self, IsTerminal, Write as _},
     path::{Path, PathBuf},
     rc::Rc,
     sync::{
@@ -188,6 +189,44 @@ struct HighlightDone {
     images: ImageLayout,
     /// 渲染结果，键为（消息时间戳 ts，序号 seq）。
     results: HashMap<(u64, usize), CachedMsg>,
+}
+
+/// 从装配好的 [`Startup`] 进入交互 TUI：stdin/stdout 非 TTY 或运行出错都打印错误并退出进程。
+///
+/// `prux` 与 `prux-gui --tui` 共用，让终端检查与错误文案只存在一处。
+pub async fn run_from_startup(startup: Startup) {
+    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+        eprintln!(
+            "Error: {APP_NAME} only supports the interactive TUI mode, which requires stdin and stdout to be a TTY.",
+        );
+        std::process::exit(1);
+    }
+
+    let Startup {
+        agent,
+        initial_messages,
+        prompt_templates,
+        theme_override,
+        no_themes,
+        reload_ctx,
+        verbose,
+        ..
+    } = startup;
+
+    if let Err(e) = run_interactive(
+        agent,
+        initial_messages,
+        prompt_templates,
+        theme_override.as_deref(),
+        no_themes,
+        reload_ctx,
+        verbose,
+    )
+    .await
+    {
+        eprintln!("Error: {}", e);
+        std::process::exit(1);
+    }
 }
 
 /// 交互模式入口

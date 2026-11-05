@@ -25,7 +25,7 @@ use std::{
     sync::Mutex,
 };
 
-/// 启动路径在 TUI 事件循环起来之前 stage 的会话修复请求（main.rs 在 run_interactive 前调用）；
+/// 启动路径在 TUI 事件循环起来之前 stage 的会话修复请求（`bootstrap()` 在进入 TUI 前调用）；
 /// 事件循环首帧经 [`take_staged_session_repair`] 取出并弹修复面板。
 static STAGED_SESSION_REPAIR: Mutex<Option<SessionRepairRequest>> = Mutex::new(None);
 
