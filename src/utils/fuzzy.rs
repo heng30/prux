@@ -193,7 +193,7 @@ pub fn closest_match<'a>(
         .map(|(_, found)| found)
 }
 
-/// 键名归一化：小写并去掉连字符（`theme-gui` → `themegui`）。
+/// 键名归一化：小写并去掉连字符（`auto-compact` → `autocompact`）。
 fn normalize_key(key: &str) -> String {
     key.to_ascii_lowercase().replace('-', "")
 }

@@ -138,9 +138,9 @@ pub enum SettingKey {
     CompactReserve,
     /// 压缩保留最近 token 数（数字输入）
     CompactKeepRecent,
-    /// 桌面窗口明暗主题（切换时写回 `theme-gui`）
+    /// 桌面窗口明暗主题（切换时写回 `gui.theme`）
     GuiTheme,
-    /// 桌面窗口是否自绘边框与标题栏（切换时写回 `frame-gui`）
+    /// 桌面窗口是否自绘边框与标题栏（切换时写回 `gui.frame`）
     GuiFrame,
 }
 

@@ -102,7 +102,7 @@ impl Render for GuiApp {
         #[cfg(debug_assertions)]
         let frame_start = std::time::Instant::now();
 
-        // 窗口装饰只能在渲染时拿到 window：`frame-gui` 变了才请求一次平台装饰
+        // 窗口装饰只能在渲染时拿到 window：`gui.frame` 变了才请求一次平台装饰
         frame::apply_decoration(window, &mut self.frame_applied, self.frame_gui);
 
         let transcript = self.render_transcript(window, cx);

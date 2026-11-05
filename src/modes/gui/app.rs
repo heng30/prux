@@ -296,7 +296,7 @@ pub struct GuiApp {
     _session_poll: Option<Task<()>>,
     /// 侧栏是否可见
     show_sidebar: bool,
-    /// 是否自绘窗口边框与标题栏（`frame-gui`）
+    /// 是否自绘窗口边框与标题栏（`gui.frame`）
     frame_gui: bool,
     /// 已向窗口请求过的 `frame_gui` 值（`None` = 还没请求过）
     frame_applied: Option<bool>,
@@ -841,13 +841,13 @@ impl GuiApp {
             .unwrap_or_else(|| cwd().to_string_lossy().to_string())
     }
 
-    /// 展开/收起会话栏并写回 `sidebar-gui`，下次启动恢复。
+    /// 展开/收起会话栏并写回 `gui.sidebar`，下次启动恢复。
     fn set_sidebar_visible(&mut self, visible: bool) {
         self.show_sidebar = visible;
         _ = settings_manager::write_settings_sidebar_gui(visible);
     }
 
-    /// 切换自绘窗口边框并写回 `frame-gui`。
+    /// 切换自绘窗口边框并写回 `gui.frame`。
     ///
     /// Linux 下一帧 `render` 就会换装饰；Windows / macOS 的系统标题栏只能在建窗时隐掉，
     /// 这里只落盘并提示重启。
@@ -862,7 +862,7 @@ impl GuiApp {
         self.frame_gui = enabled;
     }
 
-    /// 切换明暗主题并写回 `theme-gui`，下次启动恢复。
+    /// 切换明暗主题并写回 `gui.theme`，下次启动恢复。
     fn set_dark(&mut self, is_dark: bool) {
         self.theme = Theme::new(is_dark);
         _ = settings_manager::write_settings_theme_gui(if is_dark { "dark" } else { "light" });

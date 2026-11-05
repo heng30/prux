@@ -388,11 +388,11 @@
   count towards that width, so they are never clipped.
 
 - **The desktop GUI remembers whether the session sidebar is open**: `Ctrl-Shift-B`, `/sidebar` and
-  the sidebar search box write the choice to `sidebar-gui` in `settings.json` and restore it on the
+  the sidebar search box write the choice to `gui.sidebar` in `settings.json` and restore it on the
   next launch; with no key set the sidebar starts open.
 
 - **The desktop GUI remembers its own light or dark theme**: `Shift+T` and the appearance panel in
-  `/settings` write the choice to `theme-gui` in `settings.json` and restore it on the next
+  `/settings` write the choice to `gui.theme` in `settings.json` and restore it on the next
   launch, so the window theme no longer follows `--theme` once you have picked one. The terminal's
   `theme` is a separate key and is left alone.
 
@@ -657,7 +657,7 @@
   this only edits the unsaved draft: `Ctrl+S` still applies and writes `settings.json`, and a search
   term narrows the target to the rows it matches.
 
-- **The desktop window can draw its own title bar**: with `frame-gui` on, `prux-gui` paints a
+- **The desktop window can draw its own title bar**: with `gui.frame` on, `prux-gui` paints a
   custom frame — draggable, double-click to maximize, minimize / maximize / close on the right —
   instead of leaving it to the window manager. On Linux it defaults on (window managers do not
   always draw one) and the Window frame row in the settings panel applies it immediately; on
@@ -685,6 +685,12 @@
   `recent-cwds.json`, then switches to it **and opens a new session** (the previous session file
   stays in its old directory). Entries whose directory no longer exists are pruned from the list at
   startup, and both UIs read and write the same file.
+
+- **The desktop GUI's four settings moved into one `gui` object**: `uiScale`, `theme-gui`,
+  `sidebar-gui` and `frame-gui` are now `gui.scale`, `gui.theme`, `gui.sidebar` and `gui.frame`, so
+  everything the window owns sits under one key instead of four hyphenated top-level names. The old
+  keys are gone: they are no longer read, and startup reports them as unknown settings — move the
+  values by hand if you had set them.
 
 - **The desktop GUI's search boxes are one notch shorter**: the session search in the sidebar and the
   file search at the top of the right-hand panel are now 0.8× the height of the dialog text field
@@ -894,7 +900,7 @@
   be edited first. `@` file candidates still only complete on `Enter` and never send, matching the
   terminal UI.
 
-- **`uiScale` lands in `settings.json` as one decimal**: writing the float straight through turned
+- **`gui.scale` lands in `settings.json` as one decimal**: writing the float straight through turned
   `2.1` into `2.0999999046325684`; it is now quantised to one decimal before saving.
 
 - **`!` and `!!` no longer open a completion panel in the desktop GUI**: shell lines run on
@@ -1463,10 +1469,10 @@
   由内容决定，上限不变，长消息照旧在那里折行。折叠提示与图片缩略图也是气泡的子项，不会被裁。
 
 - **桌面 GUI 记住会话栏是否展开**：`Ctrl-Shift-B`、`/sidebar` 与侧栏搜索框把选择写进 `settings.json`
-  的 `sidebar-gui`，下次启动照原样恢复；没写过时默认展开。
+  的 `gui.sidebar`，下次启动照原样恢复；没写过时默认展开。
 
 - **桌面 GUI 记住自己选的明暗主题**：`Shift+T` 与 `/settings` 的外观面板把选择写进 `settings.json`
-  的 `theme-gui`，下次启动照样恢复，选过一次之后窗口主题就不再跟着 `--theme` 走；终端里的 `theme`
+  的 `gui.theme`，下次启动照样恢复，选过一次之后窗口主题就不再跟着 `--theme` 走；终端里的 `theme`
   是另一个键，互不影响。
 
 - **桌面 GUI 的技能、扩展与模型名单面板改成表格**：有表头行，名称、来源（扩展是可用模式、模型是
@@ -1663,7 +1669,7 @@
   面板新增 `Ctrl+A` 全选 / `Ctrl+X` 取消全选（终端 `/extension` 面板本来就有）。与空格一样
   只改未保存的草稿：`Ctrl+S` 才应用并写回 `settings.json`；搜索框有词时只作用于命中的行。
 
-- **桌面窗口可以自绘标题栏**：`frame-gui` 打开后 `prux-gui` 自己画边框与标题栏——可拖动、双击
+- **桌面窗口可以自绘标题栏**：`gui.frame` 打开后 `prux-gui` 自己画边框与标题栏——可拖动、双击
   最大化，右侧是最小化 / 最大化 / 关闭按钮，不再交给窗口管理器。Linux 默认开启（窗口管理器
   不保证画标题栏），设置面板的 Window frame 一行切换后立即生效；Windows / macOS 的系统标题栏
   只能在建窗时隐掉，因此在那边切换只落盘并提示重启（macOS 保留系统的红绿灯，不再画按钮）。
@@ -1860,7 +1866,7 @@
 - **桌面 GUI 的 `/` 面板里 Tab 只补全、Enter 才执行**：Tab 把选中的命令连同尾随空格写进输入框，
   执行留给 Enter，因此补全完还能先改；`@` 文件候选仍然只在 Enter 时补全、不发送，与终端一致。
 
-- **`uiScale` 在 `settings.json` 里只留一位小数**：直接把 f32 转过去会写成 `2.0999999046325684`，
+- **`gui.scale` 在 `settings.json` 里只留一位小数**：直接把 f32 转过去会写成 `2.0999999046325684`，
   现在存盘前量化到一位小数。
 
 - **桌面 GUI 里 `!` / `!!` 不再弹出补全面板**：shell 行按 `Enter` 就执行，面板只是自报一句说明，
@@ -2063,3 +2069,7 @@
 - **桌面 GUI 设置面板改一项配置后仍停在原来那行**：此前切换一行会整个重建面板，过滤词和选中行一起
   丢掉，列表跳回第一条。现在面板就地换行，且高亮跟的是原来那个条目而不是下标——刚改的那行不再
   匹配过滤词时（搜 `on`、把某项切成 `off`），高亮也不会滑到邻居身上。
+
+- **桌面 GUI 的四个设置并进 `gui` 段**：`uiScale`、`theme-gui`、`sidebar-gui`、`frame-gui` 现在分别是
+  `gui.scale`、`gui.theme`、`gui.sidebar`、`gui.frame`，窗口自己的一套配置收在一个键下，不再占用四个
+  带连字符的顶层键。旧键已作废：不再读取，启动时会作为未知设置报出来——写过的话需要手动搬过去。

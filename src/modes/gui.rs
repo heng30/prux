@@ -98,7 +98,7 @@ pub fn run(startup: Startup, rt: &Handle) {
         );
 
         // 建窗一律用系统装饰：Wayland 会忽略建窗参数里的 window_decorations，
-        // 自绘边框在窗口打开后按 `frame-gui` 立刻切过去。Windows / macOS 相反——
+        // 自绘边框在窗口打开后按 `gui.frame` 立刻切过去。Windows / macOS 相反——
         // 系统标题栏只能在建窗时隐掉，所以在这里读配置
         let frame_gui = settings_manager::read_settings_frame_gui();
         let options = WindowOptions {
@@ -132,7 +132,7 @@ pub fn run(startup: Startup, rt: &Handle) {
             // Wayland 后端不会用 `TitlebarOptions::title` 设标题，得显式设一次
             window.set_window_title(APP_NAME);
 
-            // 启动就按配置切：`frame-gui` 为真时换成客户端装饰（只有 Linux 有这个运行时接口）
+            // 启动就按配置切：`gui.frame` 为真时换成客户端装饰（只有 Linux 有这个运行时接口）
             if cfg!(target_os = "linux") && settings_manager::read_settings_frame_gui() {
                 window.request_decorations(gpui::WindowDecorations::Client);
             }

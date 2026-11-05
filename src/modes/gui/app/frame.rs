@@ -1,6 +1,6 @@
 //! 自绘窗口边框：窗口装饰请求 + 标题栏（拖动、最小化/最大化/关闭）。
 //!
-//! `frame-gui` 为真时窗口不带系统边框，标题栏由这里绘制；为假时全部交给窗口管理器/系统。
+//! `gui.frame` 为真时窗口不带系统边框，标题栏由这里绘制；为假时全部交给窗口管理器/系统。
 
 use super::{
     theme::{FONT_CAPTION, FONT_SMALL, RADIUS_SM, SPACE_MD},
@@ -15,7 +15,7 @@ const TITLEBAR_H: f32 = 24.;
 /// macOS 红绿灯（关闭/最小化/最大化）按钮占掉的左边宽度（逻辑像素）：自绘标题栏要让开这段。
 const MAC_TRAFFIC_LIGHT_W: f32 = 72.;
 
-/// 把 `frame-gui` 应用到窗口装饰：值变了才请求一次，避免每帧都发请求。
+/// 把 `gui.frame` 应用到窗口装饰：值变了才请求一次，避免每帧都发请求。
 ///
 /// Linux 上立刻生效；Windows / macOS 的 `request_decorations` 是空实现，装饰在建窗时定。
 pub(super) fn apply_decoration(window: &mut Window, applied: &mut Option<bool>, frame_gui: bool) {

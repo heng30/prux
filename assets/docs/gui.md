@@ -14,7 +14,7 @@ prux-gui -c         # 接着最近一个会话
 
 启动参数与终端界面相同（会话选择、初始消息、模型覆盖、`--theme`、项目信任的 `-a` / `--no-approve`
 等，见[快速开始](quickstart.md)）。`--theme` 只在还没存过桌面主题时生效，存过之后以 `settings.json`
-的 `theme-gui` 为准。
+的 `gui.theme` 为准。
 
 - 窗口默认 1180×780，最小 760×560；界面字体内置（思源黑体 CN），不需要系统装中文字体。
 - 项目里有需要信任的资源、又没存过决定时，启动会先弹出信任面板（`/trust` 可以重新打开）。
@@ -276,11 +276,11 @@ prux-gui -c         # 接着最近一个会话
 ## 外观与缩放
 
 - 桌面版只有明暗两套主题（中性石墨配色 + 珊瑚强调色），与终端界面的多主题体系相互独立：
-  桌面主题存 `settings.json` 的 `theme-gui`，终端主题存 `theme`，互不覆盖。
-- 界面缩放存 `settings.json` 的 `uiScale`（默认 `1.5`，范围 0.8–5.0，步进 0.1）。`Ctrl-=` / `Ctrl--`
+  桌面主题存 `settings.json` 的 `gui.theme`，终端主题存 `theme`，互不覆盖。
+- 界面缩放存 `settings.json` 的 `gui.scale`（默认 `1.5`，范围 0.8–5.0，步进 0.1）。`Ctrl-=` / `Ctrl--`
   逐档调整，`Ctrl-0` 回到 100%；外观面板里也能选。
-- 左侧会话栏的显隐存 `settings.json` 的 `sidebar-gui`（默认展开），下次启动照原样恢复。
-- 窗口边框存 `settings.json` 的 `frame-gui`（Linux 默认自绘，Windows / macOS 默认用系统标题栏）：开启后标题栏由应用绘制，可拖动、双击最大化，右侧是最小化/最大化/关闭按钮（macOS 用系统的红绿灯，不再画这一组）。Linux 在设置面板的 Window frame 一行切换后立即生效，Windows / macOS 需要重启。
+- 左侧会话栏的显隐存 `settings.json` 的 `gui.sidebar`（默认展开），下次启动照原样恢复。
+- 窗口边框存 `settings.json` 的 `gui.frame`（Linux 默认自绘，Windows / macOS 默认用系统标题栏）：开启后标题栏由应用绘制，可拖动、双击最大化，右侧是最小化/最大化/关闭按钮（macOS 用系统的红绿灯，不再画这一组）。Linux 在设置面板的 Window frame 一行切换后立即生效，Windows / macOS 需要重启。
 - 其余设置（自动压缩、重试、thinking 显示、语法高亮、图片处理、steering / follow-up 模式等）与终端
   界面共用同一份 `settings.json`，改哪边都生效，含义见[设置](settings.md)。
 
@@ -299,7 +299,7 @@ prux-gui -c         # 接着最近一个会话
 ## 故障排查
 
 - **没有 `prux-gui` 可执行文件**：这个二进制只在启用桌面界面构建时才产出，用 `prux` 即可。
-- **界面太小 / 太大**：`Ctrl-=` / `Ctrl--`，或直接改 `settings.json` 的 `uiScale`；缩放过大时侧栏与输入
+- **界面太小 / 太大**：`Ctrl-=` / `Ctrl--`，或直接改 `settings.json` 的 `gui.scale`；缩放过大时侧栏与输入
   卡片会被挤，`Ctrl-0` 快速回到 100%。
 - **窗口里看不到自己的会话**：两侧共用 `agent_dir()` 下的会话目录，先确认两边用的是同一个
   `agent_dir()`（见[环境变量](environment-variables.md)）。
