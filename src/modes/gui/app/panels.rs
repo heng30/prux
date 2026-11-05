@@ -174,8 +174,18 @@ impl GuiApp {
     }
 
     /// 设置面板：`Setting / Value / Notes` 三列表格，Space 改值并落盘到 settings.json。
+    ///
+    /// 面板已打开时只换行（改一项就会重开）：沿用过滤词与高亮行。
     pub(super) fn open_settings_panel(&mut self, _cx: &mut Context<Self>) {
-        let mut list = List::new("Settings", settings_entries(self.theme.is_dark));
+        let entries = settings_entries(self.theme.is_dark);
+        if let Some(Overlay::List(list)) = self.overlay.as_mut()
+            && list.title == "Settings"
+        {
+            list.refresh("Settings", entries);
+            return;
+        }
+
+        let mut list = List::new("Settings", entries);
         list.space_activates = true;
         list.columns = vec![
             Column::fixed("Setting", TABLE_SETTING_W),

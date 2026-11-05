@@ -1164,6 +1164,13 @@
 - **The desktop GUI sidebar's branch row uses `⎇`**: it drew a Nerd Font icon, which rendered as a
   tofu box under the bundled font.
 
+- **The desktop GUI's settings panel keeps the highlighted row when a value changes**: toggling a
+  row rebuilt the panel from scratch, so the filter text and the highlighted row were dropped and the
+  list jumped back to the first entry. The panel now re-fills its rows in place, and the highlight
+  follows the entry it was on rather than its index — a filter that stops matching the row you just
+  changed (searching `on`, switching a value to `off`) no longer slides the highlight onto a
+  neighbour.
+
 - **The copy button on a later code block in the desktop GUI copies again**: interactive elements are
   told apart by their element id, and gpui keeps exactly one state per id — so the row counter behind
   the copy button and the inline markdown links restarted at zero in every message, and a block in a
@@ -2052,3 +2059,7 @@
   就接了管道，功能不受影响，非 Windows 平台是空操作。
 
 - **桌面 GUI 侧栏底部的分支图标改用 `⎇`**：原来画的是 Nerd Font 图标，在随包字体下渲染成一个方块。
+
+- **桌面 GUI 设置面板改一项配置后仍停在原来那行**：此前切换一行会整个重建面板，过滤词和选中行一起
+  丢掉，列表跳回第一条。现在面板就地换行，且高亮跟的是原来那个条目而不是下标——刚改的那行不再
+  匹配过滤词时（搜 `on`、把某项切成 `off`），高亮也不会滑到邻居身上。

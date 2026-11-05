@@ -363,10 +363,21 @@ impl List {
     }
 
     /// 用新条目重算列表：保留过滤框与选中行（勾选切换后不跳回第一行）。
+    ///
+    /// 高亮按标签钉回原条目：取值一变，上一行可能掉出过滤结果，只按下标保留会滑到邻居身上。
     pub fn refresh(&mut self, title: impl Into<String>, entries: Vec<Entry>) {
+        let previous = self.selected_label().map(str::to_string);
         self.title = title.into();
         self.entries = entries;
-        self.selected = self.selected.min(self.filtered().len().saturating_sub(1));
+
+        let filtered = self.filtered();
+        self.selected = previous
+            .and_then(|label| {
+                filtered
+                    .iter()
+                    .position(|&index| self.entries[index].label == label)
+            })
+            .unwrap_or(self.selected.min(filtered.len().saturating_sub(1)));
         self.move_selection(0);
     }
 
@@ -1394,6 +1405,29 @@ mod tests {
         assert_eq!(list.query.text(), "a");
         assert_eq!(list.filtered(), vec![0]);
         assert_eq!(list.selected, 0);
+    }
+
+    /// 过滤态下上一行掉出过滤结果：高亮跟的是原条目，不是原下标。
+    #[test]
+    fn refresh_keeps_selected_entry_when_filter_shrinks() {
+        let cell = |label: &str, value: &str| Entry {
+            label: label.to_string(),
+            cells: vec![value.to_string()],
+            ..Entry::default()
+        };
+        let mut list = List::new(
+            "Settings",
+            vec![cell("a", "on"), cell("b", "on"), cell("c", "on")],
+        );
+        list.query.insert("on");
+        list.selected = 1;
+        assert_eq!(list.selected_label(), Some("b"));
+
+        list.refresh(
+            "Settings",
+            vec![cell("a", "off"), cell("b", "on"), cell("c", "on")],
+        );
+        assert_eq!(list.selected_label(), Some("b"));
     }
 
     use crate::core::extensions::{Extension, ExtensionHook, OverlayEvent, register_extension};
