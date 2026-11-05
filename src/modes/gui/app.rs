@@ -406,6 +406,7 @@ impl GuiApp {
         initial_messages: Vec<AgentMessage>,
         steer_inbox: Arc<Mutex<VecDeque<AgentMessage>>>,
         trust_override: Option<bool>,
+        needs_login: bool,
         cx: &mut Context<Self>,
     ) -> Self {
         let focus = cx.focus_handle();
@@ -509,6 +510,12 @@ impl GuiApp {
         };
         app.start_request_poll(cx);
         app.maybe_ask_trust(cx);
+
+        // 信任面板优先（安全门控），它没弹时才让登录面板占位
+        if needs_login && app.overlay.is_none() {
+            app.open_login_panel(cx);
+        }
+
         app.refresh_branch();
 
         // 当前目录也算一条「最近用过」，菜单里能直接看到

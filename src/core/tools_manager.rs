@@ -12,7 +12,7 @@
 use crate::{
     core::{runtime, settings_manager::agent_dir},
     error::{Error, Result},
-    utils::http,
+    utils::{http, process::HideConsole},
 };
 use std::{
     ffi::{OsStr, OsString},
@@ -352,7 +352,11 @@ fn parse_version_output(stdout: &str) -> Option<String> {
 
 /// 起一次 `--version` 探测版本；命令缺失/非零退出/输出为空都返回 None
 fn probe_version(cmd: &str) -> Option<String> {
-    let out = Command::new(cmd).arg("--version").output().ok()?;
+    let out = Command::new(cmd)
+        .arg("--version")
+        .hide_console()
+        .output()
+        .ok()?;
     if !out.status.success() {
         return None;
     }
@@ -569,7 +573,7 @@ async fn download_file(url: &str, dest: &Path) -> Result<()> {
 
 /// 运行系统命令（解压用）；成功返回 None，失败返回错误信息
 fn run_extraction(command: &str, args: &[&str]) -> Option<String> {
-    match Command::new(command).args(args).output() {
+    match Command::new(command).args(args).hide_console().output() {
         Ok(o) if o.status.success() => None,
         Ok(o) => Some(
             String::from_utf8_lossy(&o.stderr).trim().to_string()

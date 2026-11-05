@@ -91,7 +91,7 @@ use crate::{
     error::Result,
     extensions::{EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_LOOP_DETECT, command_arg},
     modes::tui::handlers::register_host_command,
-    utils::{paths::cwd, time::now_iso},
+    utils::{paths::cwd, process::HideConsole, time::now_iso},
 };
 use serde_json::{Value, json};
 use std::{
@@ -913,7 +913,8 @@ fn spawn_hook(cmd: &str, payload: &str, timeout_ms: u64) {
         .arg(payload)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stderr(Stdio::null())
+        .hide_console();
 
     match command.spawn() {
         Ok(mut child) => {

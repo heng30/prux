@@ -18,6 +18,7 @@ use crate::{
         tools::{ToolError, ToolResult},
     },
     extensions::{EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_OPEN},
+    utils::process::HideConsole,
 };
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
@@ -262,6 +263,7 @@ async fn spawn_opener(program: &str, args: &[String]) -> std::io::Result<OpenerO
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
+        .hide_console()
         .kill_on_drop(true);
     let child = cmd.spawn()?;
 

@@ -27,7 +27,7 @@ impl GuiApp {
 
         if items.is_empty() {
             items.push(MenuItem {
-                label: "No models configured".into(),
+                label: "No models configured, use `/login` or `/model`".into(),
                 detail: String::new(),
                 action: Action::None,
             });

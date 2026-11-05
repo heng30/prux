@@ -67,6 +67,10 @@ pub fn run(startup: Startup, rt: &Handle) {
     // 运行中 steer 注入箱与 agent 共享：忙碌时提交的消息由 run_loop 在回合内注入
     let steer_inbox = startup.agent.runtime_steer_inbox.clone();
 
+    // 没有任何可用凭据（且没给 --api-key）时启动就打开登录面板，空着主界面没法发第一轮
+    let needs_login = startup.agent.api_key_override.is_none()
+        && core::auth::list_configured_providers().is_empty();
+
     rt.spawn(bridge::worker::run(
         Arc::new(Mutex::new(startup.agent)),
         cmd_rx,
@@ -113,6 +117,7 @@ pub fn run(startup: Startup, rt: &Handle) {
                 initial_messages,
                 steer_inbox,
                 trust_override,
+                needs_login,
                 cx,
             )
         });

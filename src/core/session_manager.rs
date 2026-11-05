@@ -14,6 +14,7 @@ use crate::{
     error::{Error, Result},
     utils::{
         paths::{normalize_dir, read_first_line, strip_verbatim_prefix},
+        process::HideConsole,
         time::{chrono_ms_to_iso, now_ms},
     },
 };
@@ -194,7 +195,7 @@ pub fn delete_session_file(path: &str) -> std::result::Result<&'static str, Stri
     if path.starts_with('-') {
         cmd.arg("--");
     }
-    cmd.arg(path);
+    cmd.arg(path).hide_console();
 
     let trash_ok = match cmd.output() {
         Ok(o) => o.status.success() || !Path::new(path).exists(),

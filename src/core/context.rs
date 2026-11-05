@@ -1,6 +1,6 @@
 // AGENTS.md / CLAUDE.md 上下文文件加载
 
-use crate::PROJECT_SCOPE_NAME;
+use crate::{PROJECT_SCOPE_NAME, utils::process::HideConsole};
 use std::{
     collections::HashSet,
     path::{Path, PathBuf},
@@ -18,10 +18,14 @@ const CANDIDATES: [&str; 5] = [
 /// 加载项目上下文文件：全局（agentDir） + 从 cwd 到根目录的祖先链
 /// git 链接 worktree 遮蔽判定：cwd 位于 git worktree 时（`git rev-parse --git-common-dir` 指向非本地 .git），
 /// 主仓库的上下文文件与 worktree 指向同一逻辑仓库，跳过主仓库文件避免双重加载。
+///
+/// 本节所有 `git` 调用都走 [`HideConsole`]：`git` 是控制台程序，GUI 版 prux 自己没有控制台，
+/// 不隐藏的话每次启动都会在屏幕上闪一个黑窗口。
 fn is_worktree_shadow(cwd: &Path) -> Option<PathBuf> {
     let out = std::process::Command::new("git")
         .args(["rev-parse", "--git-common-dir"])
         .current_dir(cwd)
+        .hide_console()
         .output()
         .ok()?;
 
@@ -39,6 +43,7 @@ fn is_worktree_shadow(cwd: &Path) -> Option<PathBuf> {
         return std::process::Command::new("git")
             .args(["rev-parse", "--show-toplevel"])
             .current_dir(cwd)
+            .hide_console()
             .output()
             .ok()
             .and_then(|o| {
@@ -71,11 +76,13 @@ fn shadowed_by_worktree(file: &Path, worktree_root: &Path, cwd: &Path) -> bool {
     let file_git = std::process::Command::new("git")
         .args(["rev-parse", "--show-toplevel"])
         .current_dir(fc.parent().unwrap_or_else(|| Path::new("/")))
+        .hide_console()
         .output()
         .ok();
     let cwd_git = std::process::Command::new("git")
         .args(["rev-parse", "--show-toplevel"])
         .current_dir(cwd)
+        .hide_console()
         .output()
         .ok();
 

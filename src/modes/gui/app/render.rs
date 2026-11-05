@@ -13,10 +13,7 @@ use super::{
     *,
 };
 use crate::core::extensions::cancel_background_work;
-use std::{
-    rc::Rc,
-    time::{Duration, Instant},
-};
+use std::rc::Rc;
 
 #[cfg(debug_assertions)]
 thread_local! {
@@ -29,7 +26,7 @@ thread_local! {
 #[cfg(debug_assertions)]
 struct FrameStats {
     /// 统计窗口的起始时刻；`None` 表示还没开始
-    since: Option<Instant>,
+    since: Option<std::time::Instant>,
     /// 本窗口里渲染过的帧数
     frames: u32,
     /// 本窗口里各帧 render() 的累计耗时
@@ -47,7 +44,7 @@ impl FrameStats {
         Self {
             since: None,
             frames: 0,
-            spent: Duration::ZERO,
+            spent: std::time::Duration::ZERO,
             blocks: (0, 0, 0),
             height: None,
         }

@@ -45,7 +45,7 @@ use crate::{
         EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_NOTIFY, command_arg, util::notify_text,
     },
     modes::tui::handlers::register_host_command,
-    utils::time::format_duration,
+    utils::{process::HideConsole, time::format_duration},
 };
 use serde_json::Value;
 use std::{
@@ -415,7 +415,8 @@ fn spawn(cmd: &str, message: &str) {
         .args(rest)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stderr(Stdio::null())
+        .hide_console();
 
     match command.spawn() {
         Ok(mut child) => {

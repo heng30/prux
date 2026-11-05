@@ -12,7 +12,7 @@
 //! - `$ENV_VAR` / `${ENV_VAR}`：环境变量插值；`$$` 转义字面 `$`，`$!` 转义字面 `!`
 //! - 字面量
 
-use crate::core::settings_manager::agent_dir;
+use crate::{core::settings_manager::agent_dir, utils::process::HideConsole};
 use serde_json::Value;
 use std::{
     collections::HashMap,
@@ -264,6 +264,7 @@ fn run_command(command: &str) -> Option<String> {
     let mut child = cmd
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
+        .hide_console()
         .spawn()
         .ok()?;
 

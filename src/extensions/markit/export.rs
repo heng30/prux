@@ -19,6 +19,7 @@ use crate::{
     extensions::util::{heading_level, truncate_chars},
     utils::{
         paths::resolve_path,
+        process::HideConsole,
         text::{code_fence, escape_special, has_cjk, pick_font_family, related_font_families},
     },
 };
@@ -479,6 +480,7 @@ async fn compile_typst(input: &Path, output: &Path) -> Result<String, ToolError>
         .arg(input)
         .arg(output)
         .stdin(Stdio::null())
+        .hide_console()
         .kill_on_drop(true);
 
     let out = match tokio::time::timeout(COMPILE_TIMEOUT, cmd.output()).await {
@@ -509,7 +511,10 @@ async fn compile_typst(input: &Path, output: &Path) -> Result<String, ToolError>
 /// 跑一次 typst 并取回 stdout；起不来或非成功退出都返回 `Err`（优先 stderr 文本）。
 async fn run_typst(args: &[&str], timeout: Duration) -> Result<String, String> {
     let mut cmd = tokio::process::Command::new("typst");
-    cmd.args(args).stdin(Stdio::null()).kill_on_drop(true);
+    cmd.args(args)
+        .stdin(Stdio::null())
+        .hide_console()
+        .kill_on_drop(true);
 
     let out = match tokio::time::timeout(timeout, cmd.output()).await {
         Ok(Ok(out)) => out,

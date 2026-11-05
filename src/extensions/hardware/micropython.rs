@@ -19,7 +19,7 @@ use crate::{
         extensions::{ExtensionTool, ToolAnnotations, ToolExposure},
         tools::{ToolError, ToolResult},
     },
-    utils::truncate::truncate_chars_within,
+    utils::{process::HideConsole, truncate::truncate_chars_within},
 };
 use serde_json::{Value, json};
 use std::time::Duration;
@@ -131,6 +131,7 @@ async fn run_mpremote(args: &[&str], timeout: Duration) -> std::result::Result<S
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
+        .hide_console()
         .kill_on_drop(true);
 
     let child = command.spawn().map_err(|e| {
