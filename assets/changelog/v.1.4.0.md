@@ -663,7 +663,8 @@
   always draw one) and the Window frame row in the settings panel applies it immediately; on
   Windows and macOS the system title bar can only be hidden at window creation, so a toggle there
   writes the setting and waits for a restart (macOS keeps its own traffic lights and draws no
-  buttons of its own).
+  buttons of its own). While the window is maximized the maximize button switches to a restore
+  icon, so clicking it again reads as "put it back".
 
 ### Changed
 
@@ -1673,6 +1674,7 @@
   最大化，右侧是最小化 / 最大化 / 关闭按钮，不再交给窗口管理器。Linux 默认开启（窗口管理器
   不保证画标题栏），设置面板的 Window frame 一行切换后立即生效；Windows / macOS 的系统标题栏
   只能在建窗时隐掉，因此在那边切换只落盘并提示重启（macOS 保留系统的红绿灯，不再画按钮）。
+  窗口最大化后这颗按钮换成还原图标，不再一直画最大化那一颗。
 
 ### 变更
 

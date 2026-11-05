@@ -110,7 +110,7 @@ impl Render for GuiApp {
         let main = self.render_main(transcript, composer);
         let body = self.render_body(main, cx);
         let sidebar = self.render_sidebar(cx);
-        let root = self.render_root(sidebar, body, cx);
+        let root = self.render_root(sidebar, body, window.is_maximized(), cx);
         let root = self.render_overlays(root, window, cx);
 
         #[cfg(debug_assertions)]
@@ -1124,6 +1124,7 @@ impl GuiApp {
         &mut self,
         sidebar: AnyElement,
         body: AnyElement,
+        maximized: bool,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let theme = self.theme.clone();
@@ -1145,7 +1146,7 @@ impl GuiApp {
             );
 
         if self.frame_gui {
-            root = root.child(frame::titlebar(&theme));
+            root = root.child(frame::titlebar(&theme, maximized));
         }
 
         root.child(

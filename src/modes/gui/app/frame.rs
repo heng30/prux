@@ -34,7 +34,9 @@ pub(super) fn apply_decoration(window: &mut Window, applied: &mut Option<bool>, 
 /// 自绘标题栏：左侧窗口名，中间拖动区，右侧三个窗口按钮。
 ///
 /// macOS 的红绿灯由系统画在左上角：左边留白让开，不再画自己的按钮。
-pub(super) fn titlebar(theme: &Theme) -> AnyElement {
+/// `maximized` 为真时最大化按钮显示「还原」图标；放大/还原都会改窗口尺寸，
+/// gpui 缓存命中不了就重跑渲染，所以这里读到的状态每帧都是新的。
+pub(super) fn titlebar(theme: &Theme, maximized: bool) -> AnyElement {
     let ink = theme.text_secondary;
     let mut bar = div()
         .id("frame-titlebar")
@@ -79,9 +81,27 @@ pub(super) fn titlebar(theme: &Theme) -> AnyElement {
 
     if !cfg!(target_os = "macos") {
         bar = bar
-            .child(frame_button("frame-min", WindowControlArea::Min, ink))
-            .child(frame_button("frame-max", WindowControlArea::Max, ink))
-            .child(frame_button("frame-close", WindowControlArea::Close, ink));
+            .child(frame_button(
+                "frame-min",
+                WindowControlArea::Min,
+                ink,
+                theme.sidebar,
+                maximized,
+            ))
+            .child(frame_button(
+                "frame-max",
+                WindowControlArea::Max,
+                ink,
+                theme.sidebar,
+                maximized,
+            ))
+            .child(frame_button(
+                "frame-close",
+                WindowControlArea::Close,
+                ink,
+                theme.sidebar,
+                maximized,
+            ));
     }
 
     bar.into_any_element()
@@ -91,9 +111,43 @@ pub(super) fn titlebar(theme: &Theme) -> AnyElement {
 ///
 /// `area` 让 Windows 把命中区交回系统的 HTMINBUTTON / HTMAXBUTTON / HTCLOSE，
 /// 其它平台在按下时直接调对应的窗口方法。图标是代码画的细线，不依赖字体里的符号。
-fn frame_button(id: &'static str, area: WindowControlArea, ink: Hsla) -> AnyElement {
+/// `bg` 是标题栏底色，只用来遮住「还原」图标里两个方框的重叠处。
+/// `maximized` 为真时最大化按钮画成两个错开的方框（还原）。
+fn frame_button(
+    id: &'static str,
+    area: WindowControlArea,
+    ink: Hsla,
+    bg: Hsla,
+    maximized: bool,
+) -> AnyElement {
     let icon = match area {
         WindowControlArea::Min => div().w(px(9.)).h(px(1.)).bg(ink).into_any_element(),
+        WindowControlArea::Max if maximized => div()
+            .relative()
+            .w(px(9.))
+            .h(px(9.))
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .right_0()
+                    .w(px(6.5))
+                    .h(px(6.5))
+                    .border_1()
+                    .border_color(ink),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .bottom_0()
+                    .left_0()
+                    .w(px(6.5))
+                    .h(px(6.5))
+                    .bg(bg)
+                    .border_1()
+                    .border_color(ink),
+            )
+            .into_any_element(),
         WindowControlArea::Max => div()
             .w(px(8.))
             .h(px(8.))
