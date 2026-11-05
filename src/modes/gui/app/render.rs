@@ -13,7 +13,10 @@ use super::{
     *,
 };
 use crate::core::extensions::cancel_background_work;
-use std::rc::Rc;
+use std::{
+    rc::Rc,
+    time::{Duration, Instant},
+};
 
 #[cfg(debug_assertions)]
 thread_local! {
@@ -26,7 +29,7 @@ thread_local! {
 #[cfg(debug_assertions)]
 struct FrameStats {
     /// 统计窗口的起始时刻；`None` 表示还没开始
-    since: Option<std::time::Instant>,
+    since: Option<Instant>,
     /// 本窗口里渲染过的帧数
     frames: u32,
     /// 本窗口里各帧 render() 的累计耗时
@@ -44,7 +47,7 @@ impl FrameStats {
         Self {
             since: None,
             frames: 0,
-            spent: std::time::Duration::ZERO,
+            spent: Duration::ZERO,
             blocks: (0, 0, 0),
             height: None,
         }
@@ -416,10 +419,15 @@ impl GuiApp {
                 && (*bottom + shift < visible_top || *top + shift > visible_bottom)
             {
                 // 占位高度取到下一块上沿的距离（减掉流的 gap）：块自带的外边距也被算进去，
-                // 否则每块漏几千分之一像素，几百块累起来就是几十像素的高度漂移
+                // 否则每块漏几千分之一像素，几百块累起来就是几十像素的高度漂移。
+                // 减掉的 gap 必须与布局实际用的是同一个值：px(SPACE_MD) 在非整数倍缩放
+                // （设备缩放和界面缩放相乘）下会被吸附到设备像素，1.25× 时 18 → 17.6。
+                // 拿未吸附的 18 去减，每个被跳过的块每帧丢 0.4px，几百块累加后内容高度
+                // 每秒缩水几十像素，钉底一路往下追、帧帧重绘：列表自己滚到底还一直抖。
+                let gap = window.pixel_snap(px(SPACE_MD));
                 let height = spans
                     .get(rendered_blocks + 1)
-                    .map_or(*bottom - *top, |next| next.0 - *top - px(SPACE_MD));
+                    .map_or(*bottom - *top, |next| next.0 - *top - gap);
                 flow = flow.child(div().flex_none().h(height));
                 // 行登记照样回放：选区/复制仍按行号工作，只是这些行不在屏幕上
                 flow_ctx.lines.rows.borrow_mut().extend(
@@ -491,8 +499,9 @@ impl GuiApp {
                     // 区间与产生它的滚动偏移必须成对记录：这一帧的 clamp 已经改过 offset 了
                     let offset = scrolled.offset().y;
                     if offset_cell.replace(offset) != offset {
-                        // 这一帧滚动位置变了（滚轮、Ctrl+End、钉底被 clamp），可见区域换了一批块：
-                        // 再画一帧，让新进入视口的块真正渲染出来，否则会看到一片占位空白
+                        // 这一帧滚动位置变了（Ctrl+Home/End、滚轮、钉底被 clamp），可见区域换了
+                        // 一批块：再画一帧，让新进入视口的块真正渲染出来。少了这一帧，从顶部
+                        // 直接跳到底部时整屏都是按旧区间占位的空块，看上去一片空白。
                         window.request_animation_frame();
                     }
                 }
@@ -504,16 +513,15 @@ impl GuiApp {
                 let needed =
                     last.bottom() - first.top() + px(FLOW_PADDING_TOP + FLOW_PADDING_BOTTOM);
 
-                // 差得不足半像素就别再请求下一帧：布局的小数误差会让长内容永远「差一点」，
-                // 精确比较则每帧都重绘一次，整窗就一直在闪
-                if !within_half_pixel(measured_height.get(), needed) {
+                // 内容高度变了就重算一次；等于记录值时不动，否则就成了每帧重绘的循环
+                if measured_height.get() != Some(needed) {
                     measured_height.set(Some(needed));
                     window.request_animation_frame();
                 }
             });
 
         // 钉底：事件里那次 `scroll_to_bottom` 会停在旧的底（内容高度还会被二次测量改掉），
-        // 这里在布局结束后按实际内容底边对一次；只在意内容变高变矮，用户自己滚开就不管了。
+        // 这里在布局结束后按滚动上限再对一次；只在意内容变高变矮，用户自己滚开就不管了。
         let scroll = self.scroll.clone();
         let pinned = self.pinned_bottom.clone();
         let pane_width = self.pane_width.clone();
@@ -524,13 +532,11 @@ impl GuiApp {
                 window.request_animation_frame();
             }
 
-            let (Some(content), viewport) = (scroll.bounds_for_item(0), scroll.bounds()) else {
-                return;
-            };
-
-            // 内容不足一屏时底边在视口下方，差值才是正的：夹到 0 才算「已经在底部」，
-            // 否则空会话里永远判定为已滚开，新内容来了不跟随。
-            let target = (viewport.bottom() - content.bottom()).min(px(0.));
+            // 目标偏移取滚动容器自己的上限：它已被 gpui 按设备像素夹过，写回去下一帧就
+            // 原样读回。拿子元素实测底边相减则带小数残差（奇数倍缩放下内容高不是整像素），
+            // 残差超过半像素后每帧都判「还没到底」，于是帧帧请求重绘，画面持续抖动。
+            // 内容不足一屏时上限是 0，正好等于「已在底部」。
+            let target = -scroll.max_offset().y;
             let offset = scroll.offset().y;
 
             // 「上次钉底的偏移」还在原位 = 这仍是我们的地盘；否则是用户滚轮/拖滚动条动过了
@@ -1698,9 +1704,4 @@ pub(super) fn same_bounds(a: Bounds<Pixels>, b: Bounds<Pixels>) -> bool {
         && (a.origin.y - b.origin.y).abs() <= px(0.5)
         && (a.size.width - b.size.width).abs() <= px(0.5)
         && (a.size.height - b.size.height).abs() <= px(0.5)
-}
-
-/// `measured` 已记录且与 `needed` 相差不超过半像素时返回 `true`（不必重绘）。
-pub(super) fn within_half_pixel(measured: Option<Pixels>, needed: Pixels) -> bool {
-    measured.is_some_and(|last| (last - needed).abs() <= px(0.5))
 }

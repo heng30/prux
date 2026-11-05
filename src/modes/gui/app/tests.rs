@@ -412,13 +412,6 @@ fn layout_jitter_within_half_pixel_is_ignored() {
     assert!(render::same_bounds(base, base));
     assert!(render::same_bounds(base, shifted), "亚像素抖动应视为同一处");
     assert!(!render::same_bounds(base, moved));
-
-    assert!(render::within_half_pixel(Some(px(400.)), px(400.4)));
-    assert!(!render::within_half_pixel(Some(px(400.)), px(402.)));
-    assert!(
-        !render::within_half_pixel(None, px(400.)),
-        "还没测过就要测一次"
-    );
 }
 
 /// 模型 / 思考级别行的状态后缀：默认（且在用）> 默认 > 在用 > 空。

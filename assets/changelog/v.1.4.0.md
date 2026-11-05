@@ -658,6 +658,16 @@
 
 ### Fixed
 
+- **The desktop GUI's message list stops scrolling itself down and jittering at a fractional zoom
+  level**: off-screen messages are replaced by a spacer as tall as the message was, and that height
+  is recomputed as "distance to the next message's top minus the flow gap". The gap was subtracted
+  unsnapped while layout snaps it to the device pixel grid, so at 1.25× it is 17.6 and not 18 — every
+  skipped message lost up to 0.8 px per frame, a few hundred of them shaved ~80 px off the content
+  height per frame, and the pin-to-bottom correction chased it down forever while each frame asked
+  for another one. The spacer now subtracts the same snapped gap layout uses, so a skipped message
+  keeps its height and the list stands still: an idle session went from 162 frames per second to
+  none.
+
 - **The desktop GUI no longer eats typed text while a Windows input method is composing**: the
   input box treated an IME-claimed keystroke as a real key, so pressing Backspace with the candidate
   window open deleted a character already sitting in the box instead of one inside the composition.
@@ -1611,6 +1621,12 @@
   更慢的全量拷贝。复制过来的都是被忽略的文件，因此不会混进隔离运行留下的那个分支。
 
 ## 修复
+
+- **桌面 GUI 在非整数倍缩放下对话流不再自己往下滚、也不再抖**：屏幕外的消息会被换成一块与其高度
+  相同的空占位，高度按「到下一块上沿的距离减去流的 gap」现算。gap 减的是未吸附的 18，而布局把
+  它吸附到了设备像素——1.25× 下是 17.6——于是每个被跳过的消息每帧丢 0.4~0.8px，几百个加起来
+  内容高度每帧缩水八十来像素，钉底的修正就一路往下追，同时帧帧请求重绘。现在减的是布局实际用的
+  那个吸附值，被跳过的消息高度不再漂移，列表也就停住了：静置会话从每秒 162 帧降到 0 帧。
 
 - **桌面 GUI 在 Windows 输入法组字时不再删掉已输入的字**：以前输入框把输入法认领的按键当成真实
   按键，候选窗打开时按退格删的是输入框里已有的字，而不是组字中的那一个。现在构建用的 gpui 不再
