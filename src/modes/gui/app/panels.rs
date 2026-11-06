@@ -1,7 +1,7 @@
 //! 右侧面板与列表选择器：设置 / 扩展 / 技能 / 模型 / 会话选择页的构建与提交。
 
 use super::*;
-use crate::{core, extensions::skills, utils::paths};
+use crate::{cli::args::thinking_level_description, core, extensions::skills, utils::paths};
 use std::collections::{HashMap, HashSet};
 
 /// 扫描全部技能并算出给定过滤规则下的启用集合（`/skills` 面板用）。
@@ -665,7 +665,7 @@ impl GuiApp {
         let mut entries: Vec<Entry> = levels
             .into_iter()
             .map(|level| {
-                let mut detail = crate::cli::args::thinking_level_description(&level).to_string();
+                let mut detail = thinking_level_description(&level);
                 let badge = model_badge(
                     current.as_deref() == Some(level.as_str()),
                     default.as_deref() == Some(level.as_str()),

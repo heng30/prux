@@ -16,24 +16,37 @@ use std::collections::HashSet;
 pub const VALID_THINKING_LEVELS: [&str; 7] =
     ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
-/// 思考级别的一句话描述（`/thinking` 面板的副文案），键为 [`VALID_THINKING_LEVELS`] 中的取值。
-const THINKING_LEVEL_DESCRIPTIONS: [(&str, &str); 7] = [
-    ("off", "No reasoning"),
-    ("minimal", "Very brief reasoning (~1k tokens)"),
-    ("low", "Light reasoning (~2k tokens)"),
-    ("medium", "Moderate reasoning (~8k tokens)"),
-    ("high", "Deep reasoning (~16k tokens)"),
-    ("xhigh", "Extra-high reasoning (~32k tokens)"),
-    ("max", "Maximum reasoning"),
+/// 思考级别的文案：一句话描述 + 估算思考量（`/thinking` 面板的副文案与右侧提示），
+/// 键为 [`VALID_THINKING_LEVELS`] 中的取值；估算为空串表示该级别没有估算值。
+const THINKING_LEVEL_TEXTS: [(&str, &str, &str); 7] = [
+    ("off", "No reasoning", ""),
+    ("minimal", "Very brief reasoning", "~1k tokens"),
+    ("low", "Light reasoning", "~2k tokens"),
+    ("medium", "Moderate reasoning", "~8k tokens"),
+    ("high", "Deep reasoning", "~16k tokens"),
+    ("xhigh", "Extra-high reasoning", "~32k tokens"),
+    ("max", "Maximum reasoning", ""),
 ];
 
-/// [`VALID_THINKING_LEVELS`] 中某级别的描述；未登记的级别返回空串。
-pub fn thinking_level_description(level: &str) -> &'static str {
-    THINKING_LEVEL_DESCRIPTIONS
+/// [`VALID_THINKING_LEVELS`] 中某级别的（一句话描述, 估算思考量）；
+/// 估算为空串表示该级别没有估算值，未登记的级别返回两个空串。
+pub fn thinking_level_text(level: &str) -> (&'static str, &'static str) {
+    THINKING_LEVEL_TEXTS
         .iter()
-        .find(|(name, _)| *name == level)
-        .map(|(_, desc)| *desc)
+        .find(|(name, _, _)| *name == level)
+        .map(|(_, desc, tokens)| (*desc, *tokens))
         .unwrap_or_default()
+}
+
+/// [`VALID_THINKING_LEVELS`] 中某级别的完整描述（估算思考量以括号附在后面，
+/// 如 `Light reasoning (~2k tokens)`）；未登记的级别返回空串。
+pub fn thinking_level_description(level: &str) -> String {
+    let (desc, tokens) = thinking_level_text(level);
+    if tokens.is_empty() {
+        desc.to_string()
+    } else {
+        format!("{desc} ({tokens})")
+    }
 }
 
 /// 内置（非扩展注入）的子命令。

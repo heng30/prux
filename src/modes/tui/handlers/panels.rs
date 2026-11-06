@@ -71,7 +71,7 @@ impl App {
             .map(|l| PanelItem {
                 label: l.clone(),
                 value: l.clone(),
-                desc: thinking_level_description(l).to_string(),
+                desc: thinking_level_description(l),
                 name: String::new(),
                 ..Default::default()
             })

@@ -1,7 +1,7 @@
 //! 下拉菜单、侧栏会话菜单与拖拽：标题栏/输入区的浮层与宽度调整。
 
 use super::*;
-use crate::{core, modes::cwd_store, utils::paths};
+use crate::{cli::args::thinking_level_text, core, modes::cwd_store, utils::paths};
 use std::path::Path;
 
 impl GuiApp {
@@ -45,24 +45,41 @@ impl GuiApp {
     }
 
     /// 思考级别下拉菜单：同样只影响当前会话。
+    ///
+    /// 主文案是级别的一句话描述，右侧贴边显示估算思考量与 `default` 标记。
     pub(super) fn open_thinking_menu(
         &mut self,
         anchor: gpui::Point<Pixels>,
         cx: &mut Context<Self>,
     ) {
+        let current = self.snapshot.as_ref().and_then(|s| s.thinking.clone());
+        let default = core::settings_manager::read_settings().default_thinking_level;
+
         let items: Vec<MenuItem> = self
             .snapshot
             .as_ref()
             .map(|s| s.thinking_levels.clone())
             .unwrap_or_default()
             .into_iter()
-            .map(|level| MenuItem {
-                label: level.clone(),
-                detail: String::new(),
-                action: Action::Command(Box::new(AgentCommand::SetThinking {
-                    level,
-                    persist: false,
-                })),
+            .map(|level| {
+                let (desc, tokens) = thinking_level_text(&level);
+                let badge = panels::model_badge(
+                    current.as_deref() == Some(level.as_str()),
+                    default.as_deref() == Some(level.as_str()),
+                );
+                MenuItem {
+                    label: desc.to_string(),
+                    detail: [tokens, badge.as_str()]
+                        .iter()
+                        .filter(|part| !part.is_empty())
+                        .copied()
+                        .collect::<Vec<_>>()
+                        .join(" · "),
+                    action: Action::Command(Box::new(AgentCommand::SetThinking {
+                        level,
+                        persist: false,
+                    })),
+                }
             })
             .collect();
 
@@ -79,7 +96,7 @@ impl GuiApp {
         self.dropdown = Some(Dropdown {
             items,
             anchor,
-            width: 180.,
+            width: 300.,
             scroll: false,
             handle: ScrollHandle::new(),
             selected: 0,
