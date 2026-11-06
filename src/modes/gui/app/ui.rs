@@ -14,7 +14,7 @@ use crate::{
         },
         project_trust, settings_manager,
     },
-    modes::gui::transcript::Block,
+    modes::{gui::transcript::Block, tui::session_selector},
     utils::truncate::truncate_chars,
 };
 use std::{
@@ -190,6 +190,23 @@ impl GuiApp {
             handled = true;
         }
 
+        // 会话选择器的渐进加载：每轮补一批行（同 TUI 的事件循环）
+        if self.session_selector.active
+            && self
+                .session_selector
+                .drain_pending(session_selector::DRAIN_BATCH)
+        {
+            self.rebuild_session_picker(cx);
+            handled = true;
+        }
+
+        // settings.json 损坏：core 把写入推迟并暂存后弹覆写确认（同 TUI）。
+        // 已有面板/对话框时延后到它们关闭。
+        if self.overlay.is_none() && self.dialog.is_none() && self.maybe_ask_settings_overwrite(cx)
+        {
+            handled = true;
+        }
+
         // 扩展覆盖层可能正在等后台结果（`/btw` 的答案、`/doctor` 的探针）：每轮重拉一帧，
         // 与 TUI 每帧重绘同一个效果；扩展不再认领时 `refresh` 会把它收起来。
         // 内容没变就不重绘：面板开着不动时也整窗刷 10 次/秒，只会白白让界面闪。
@@ -202,6 +219,31 @@ impl GuiApp {
             cx.notify();
         }
         handled
+    }
+
+    /// settings.json 损坏时的覆写确认面板（Overwrite / Cancel，无输入框）。
+    ///
+    /// 没有待确认的写入时返回 false。已经弹过一次（同一份暂存内容）也不会重复弹：
+    /// 暂存槽只有确认/取消才清空，所以这里用「面板已开」防重入。
+    fn maybe_ask_settings_overwrite(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some((path, detail)) = settings_manager::pending_settings_overwrite() else {
+            return false;
+        };
+        let key = format!("{path}: {detail}");
+        if self.settings_overwrite_asked.as_deref() == Some(key.as_str()) {
+            return false;
+        }
+        self.settings_overwrite_asked = Some(key);
+
+        self.ask_choice(
+            format!("settings.json is invalid — {path}: {detail}"),
+            vec![
+                ("Overwrite".to_string(), Action::SettingsOverwrite(true)),
+                ("Cancel".to_string(), Action::SettingsOverwrite(false)),
+            ],
+            cx,
+        );
+        true
     }
 
     /// 处理一条扩展 UI 请求。
@@ -673,6 +715,10 @@ impl GuiApp {
 
     /// 收起覆盖层：选择面板按「取消」回传，扩展覆盖层收到 `Closed`。
     pub(super) fn dismiss_overlay(&mut self) {
+        // 会话选择器与覆盖层同生共死：关掉时停掉渐进加载
+        if self.session_selector.active {
+            self.session_selector.close();
+        }
         match self.overlay.take() {
             Some(Overlay::List(list)) => {
                 if let Some(id) = list.choice

@@ -47,6 +47,10 @@ pub struct Editor {
     history_index: Option<usize>,
     /// 进入历史浏览前的草稿（首次 ↑ 时保存，回到草稿时恢复）
     history_draft: Option<Snapshot>,
+    /// kill-ring：被删掉但还能 Ctrl-Y 取回的文本（最新的在末尾）
+    kill_ring: Vec<String>,
+    /// 下次 yankPop 取第几条（`len()` = 下次从最新开始）
+    yank_index: usize,
 }
 
 impl Default for Editor {
@@ -67,6 +71,8 @@ impl Editor {
             history: Vec::new(),
             history_index: None,
             history_draft: None,
+            kill_ring: Vec::new(),
+            yank_index: 0,
         }
     }
 
@@ -492,9 +498,11 @@ impl Editor {
     /// 向前删一个词（`ctrl+w` / `alt+backspace`）：先折叠选区，再按 [`Self::word_left`] 删除。
     pub fn delete_word_backward(&mut self) {
         if self.has_selection() {
+            let killed = self.selected_text();
             self.push_undo();
             self.delete_selection();
             self.anchor = None;
+            self.push_kill(killed);
             return;
         }
 
@@ -502,15 +510,18 @@ impl Editor {
         self.word_left(false);
         let start = self.cursor;
         self.cursor = before;
-        self.delete_range(start, before);
+        let killed = self.delete_range(start, before);
+        self.push_kill(killed);
     }
 
     /// 向后删一个词（`alt+d`）。
     pub fn delete_word_forward(&mut self) {
         if self.has_selection() {
+            let killed = self.selected_text();
             self.push_undo();
             self.delete_selection();
             self.anchor = None;
+            self.push_kill(killed);
             return;
         }
 
@@ -518,7 +529,8 @@ impl Editor {
         self.word_right(false);
         let end = self.cursor;
         self.cursor = start;
-        self.delete_range(start, end);
+        let killed = self.delete_range(start, end);
+        self.push_kill(killed);
     }
 
     /// 删到行首（`ctrl+u`）；已在行首时删掉本行的换行。
@@ -535,7 +547,8 @@ impl Editor {
             }
             return;
         }
-        self.delete_range(start, self.cursor);
+        let killed = self.delete_range(start, self.cursor);
+        self.push_kill(killed);
     }
 
     /// 删到行尾（`ctrl+shift+k`）。
@@ -551,13 +564,14 @@ impl Editor {
             return;
         }
 
-        self.delete_range(self.cursor, end);
+        let killed = self.delete_range(self.cursor, end);
+        self.push_kill(killed);
     }
 
-    /// 删除 `start..end` 之间的内容（保证 `start <= end`），光标停在 `start`。
-    fn delete_range(&mut self, start: Pos, end: Pos) {
+    /// 删除 `start..end` 之间的内容（保证 `start <= end`），光标停在 `start`；返回删掉的文本。
+    fn delete_range(&mut self, start: Pos, end: Pos) -> String {
         if start == end {
-            return;
+            return String::new();
         }
 
         let (start, end) = if ordered(start, end) == (start, end) {
@@ -568,11 +582,67 @@ impl Editor {
 
         self.leave_history();
         self.push_undo();
+        let killed = self.slice(start, end);
         let head: String = self.lines[start.row].chars().take(start.col).collect();
         let tail: String = self.lines[end.row].chars().skip(end.col).collect();
         self.lines.splice(start.row..=end.row, [head + &tail]);
         self.cursor = start;
         self.anchor = None;
+        killed
+    }
+
+    /// `start..end` 之间的文本（按行补 `\n`），用于 kill-ring。
+    fn slice(&self, start: Pos, end: Pos) -> String {
+        let (start, end) = ordered(start, end);
+        if start.row == end.row {
+            return self.lines[start.row]
+                .chars()
+                .skip(start.col)
+                .take(end.col - start.col)
+                .collect();
+        }
+
+        let mut out: String = self.lines[start.row].chars().skip(start.col).collect();
+        for line in &self.lines[start.row + 1..end.row] {
+            out.push('\n');
+            out.push_str(line);
+        }
+        out.push('\n');
+        out.extend(self.lines[end.row].chars().take(end.col));
+        out
+    }
+
+    /// 把删掉的文本记进 kill-ring（空文本不记）。
+    fn push_kill(&mut self, killed: String) {
+        if killed.is_empty() {
+            return;
+        }
+        self.kill_ring.push(killed);
+        self.yank_index = self.kill_ring.len();
+    }
+
+    /// `ctrl+y`：粘贴最近删掉的文本（对齐 TUI 的 `tui.editor.yank`）；没有可粘贴的返回 false。
+    pub fn yank(&mut self) -> bool {
+        let Some(text) = self.kill_ring.last().cloned() else {
+            return false;
+        };
+        self.yank_index = self.kill_ring.len();
+        self.insert(&text);
+        true
+    }
+
+    /// `alt+y`：在 kill-ring 里往回循环（对齐 TUI 的 `tui.editor.yankPop`）。
+    pub fn yank_pop(&mut self) -> bool {
+        if self.kill_ring.is_empty() {
+            return false;
+        }
+        if self.yank_index == 0 {
+            self.yank_index = self.kill_ring.len();
+        }
+        self.yank_index -= 1;
+        let text = self.kill_ring[self.yank_index].clone();
+        self.insert(&text);
+        true
     }
 
     /// 鼠标点选：把光标放到 `row` 行第 `col` 个字符（越界自动夹到行尾）。
@@ -973,6 +1043,29 @@ mod tests {
         }
         assert_eq!(editor.selection_row(0), Some((2, 4)));
         assert_eq!(editor.selected_text(), "ab");
+    }
+
+    /// kill-ring：Ctrl-Y 取回刚删的文本，Alt-Y 往回循环更旧的条目。
+    #[test]
+    fn kill_ring_yanks_deleted_text() {
+        let mut editor = Editor::new();
+        editor.insert("one two");
+        editor.delete_word_backward();
+        assert_eq!(editor.text(), "one ");
+        editor.delete_to_line_start();
+        assert_eq!(editor.text(), "");
+
+        // 最新条目是刚删的 "one "
+        assert!(editor.yank());
+        assert_eq!(editor.text(), "one ");
+
+        // Alt-Y 从最新往回循环（同 TUI：第一次仍是最新那条，再按一次才到更旧的）
+        editor.clear();
+        assert!(editor.yank_pop());
+        assert_eq!(editor.text(), "one ");
+        editor.clear();
+        assert!(editor.yank_pop());
+        assert_eq!(editor.text(), "two");
     }
 
     /// 上下移动保持列号并夹到行尾；左右可跨行。

@@ -17,6 +17,7 @@ use crate::{
     core::{
         mermaid,
         provider::{AgentMessage, ContentBlock},
+        settings_manager,
     },
     utils::{
         color::Rgb,
@@ -1846,13 +1847,16 @@ fn overlay_rows(text: &str, theme: &Theme, cols: usize) -> Rc<Vec<Row>> {
 /// `cols` 是等宽内容的排版列数：mermaid 图按它限制宽度。
 fn parse_rows(text: &str, theme: &Theme, cols: usize) -> Vec<Row> {
     let syntect_theme = theme.syntect();
+    // Mermaid 开关：关闭时 mermaid 代码块按普通代码块展示（同 TUI 的 `mermaid` 设置）
+    let render_mermaid = settings_manager::read_settings_mermaid();
     markdown::parse(text)
         .into_iter()
         .map(|block| match block {
             markdown::Block::Line(line) => Row::Line(line),
             markdown::Block::Code { lang, code } => {
                 // mermaid 图渲染成等宽盒图；超宽/解析失败时回退为源码高亮
-                if lang.as_deref() == Some("mermaid")
+                if render_mermaid
+                    && lang.as_deref() == Some("mermaid")
                     && let Some(figure) = mermaid::render_mermaid(&code, Some(cols))
                 {
                     return Row::Mono {

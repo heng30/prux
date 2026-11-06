@@ -77,9 +77,6 @@ pub struct Snapshot {
     pub session_name: Option<String>,
     /// 会话中的消息条数。
     pub messages: usize,
-    /// 当前会话树的叶子条目 id（`/label` 等按 id 操作时用）；
-    /// 内存会话或空树为 None。
-    pub leaf_entry_id: Option<String>,
     /// 当前激活的工具名。
     pub tools: Vec<String>,
     /// 工作目录。

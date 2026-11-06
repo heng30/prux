@@ -50,8 +50,8 @@ use super::{
         FLOW_PADDING_TOP, MENU_EDGE_MARGIN, PANEL_DEFAULT_WIDTH, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH,
         SCROLLBAR_HIT_WIDTH, SCROLLBAR_WIDTH, SIDEBAR_DEFAULT_WIDTH, SIDEBAR_HANDLE_WIDTH,
         SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, SUGGEST_CHROME_HEIGHT, SUGGEST_GAP,
-        SUGGEST_ROW_HEIGHT, SUGGEST_ROWS, TOAST_DURATION, TOAST_MAX, TRANSCRIPT_LINE_HEIGHT, Theme,
-        min_thumb, px,
+        SUGGEST_ROW_HEIGHT, TOAST_DURATION, TOAST_MAX, TRANSCRIPT_LINE_HEIGHT, Theme, min_thumb,
+        px,
     },
     transcript::{self, Note, Transcript},
 };
@@ -62,7 +62,7 @@ use crate::{
         extensions::{self, ExtensionMode, OverlayKey, dispatch_agent_event, git_branch},
         model_scope::ScopedModel,
         prompt_templates::PromptTemplate,
-        provider::AgentMessage,
+        provider::{AgentMessage, ContentBlock},
         session_manager::{OpenSessionResult, Session, SessionRepairPlan},
         settings_manager,
         skills::Skill,
@@ -72,12 +72,9 @@ use crate::{
         self,
         agent_actor::{AgentCommand, CommandTx},
         handlers::tools::run_shell_command,
+        session_selector::SessionSelector,
     },
-    utils::{
-        geometry,
-        paths::cwd,
-        wheel::{WheelScrollAccelerator, WheelScrollLines},
-    },
+    utils::{geometry, image::ImageResizeLimits, paths::cwd, wheel::WheelScrollAccelerator},
 };
 use gpui::{
     AnyElement, App, Bounds, Context, ElementInputHandler, EntityInputHandler, FocusHandle,
@@ -204,16 +201,6 @@ enum SessionDialog {
     /// `/bug` 的复现描述：编辑器里是描述文本
     BugHint {
         /// 描述输入框
-        editor: Editor,
-    },
-    /// 给当前会话树叶子打标签：编辑器里是标签文本（空 = 清除）
-    Label {
-        /// 标签输入框
-        editor: Editor,
-    },
-    /// 导入会话：编辑器里是 jsonl 路径
-    Import {
-        /// 路径输入框
         editor: Editor,
     },
     /// 填 API key：编辑器里是 key 原文
@@ -451,6 +438,11 @@ pub struct GuiApp {
     session_menu: Option<SessionMenu>,
     /// 会话对话框（重命名 / 删除确认）
     dialog: Option<SessionDialog>,
+    /// 会话选择器的数据与检索（与 TUI 共用同一份实现：树形/排序/范围/正则搜索）
+    session_selector: SessionSelector,
+    /// 已经弹过确认的 settings.json 损坏内容（路径 + 原因）：同一份暂存内容不重复弹，
+    /// 用户 Esc 关掉后不会每轮轮询又弹回来
+    settings_overwrite_asked: Option<String>,
     /// 进行中的 `/login` OAuth 流程
     oauth: Option<OauthFlow>,
     /// 进行中的会话操作（导入确认 / cwd 不一致 / 损坏修复）
@@ -522,7 +514,10 @@ impl GuiApp {
             ticking: false,
             blink: false,
             scroll: ScrollHandle::new(),
-            wheel_accel: WheelScrollAccelerator::new(WheelScrollLines::Auto, true),
+            wheel_accel: WheelScrollAccelerator::new(
+                settings_manager::read_settings_fullscreen_wheel_scroll_lines(),
+                true,
+            ),
             wheel_epoch: Instant::now(),
             sessions_scroll: ScrollHandle::new(),
             sessions: Vec::new(),
@@ -581,6 +576,8 @@ impl GuiApp {
             sidebar_hovered: false,
             session_menu: None,
             dialog: None,
+            session_selector: SessionSelector::new(),
+            settings_overwrite_asked: None,
             oauth: None,
             pending_session: None,
             skills: Vec::new(),
@@ -1024,6 +1021,18 @@ impl GuiApp {
     }
 }
 
+/// 把文本与 `@图片` 展开出的图片附件拼成一条 user 消息。
+fn message_with_images(text: &str, images: &[(String, String)]) -> AgentMessage {
+    let mut message = AgentMessage::user_text(text);
+    for (data, mime_type) in images {
+        message.content.push(ContentBlock::Image {
+            data: data.clone(),
+            mime_type: mime_type.clone(),
+        });
+    }
+    message
+}
+
 /// 待发送消息数（steer 注入箱 + follow-up 队列）。
 fn pending_count(inbox: &Mutex<VecDeque<AgentMessage>>, follow_ups: &VecDeque<String>) -> usize {
     let steers = inbox.lock().map(|inbox| inbox.len()).unwrap_or(0);
@@ -1123,22 +1132,28 @@ fn keeps_overlay(action: &Action) -> bool {
             | Action::ToggleExtension(_)
             | Action::ToggleSetting(_)
             | Action::ToggleScopedModel(_)
+            | Action::ToggleBuiltinTool(_)
             | Action::CycleExtensionSetting { .. }
     )
 }
 
 /// GUI 能配置的扩展：底栏与横幅扩展只影响终端界面渲染，桌面端不列出来（也没法生效）；
 /// `extra-themes` 是纯资源同步（把内嵌主题写进 `agent_dir/themes`），也没有可配置项。
+/// 与 TUI 的扩展面板一致：只列当前扩展模式可用的（`All` 模式为兜底，全部保留）。
 fn configurable_extensions() -> Vec<(String, bool, Vec<ExtensionMode>)> {
     let hidden: Vec<String> = extensions::footer_names()
         .into_iter()
         .chain(extensions::banner_names())
         .chain([extra_themes::EXT.to_string()])
         .collect();
+    let mode = extensions::current_extension_mode();
 
     extensions::panel_entries()
         .into_iter()
         .filter(|(name, _, _)| !hidden.contains(name))
+        .filter(|(_, _, plugin_modes)| {
+            mode == ExtensionMode::All || plugin_modes.iter().any(|d| d.usable_in(mode))
+        })
         .collect()
 }
 

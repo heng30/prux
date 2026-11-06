@@ -123,15 +123,7 @@ impl GuiApp {
 
             if let Some(path) = picked {
                 _ = this.update(cx, |app, cx| {
-                    let cwd = PathBuf::from(app.cwd());
-                    let path = paths::relative_posix(&cwd, &path);
-                    // 带空白的路径要加引号，`@路径` 的解析按空白分词
-                    let insert = if path.contains(char::is_whitespace) {
-                        format!("@\"{path}\" ")
-                    } else {
-                        format!("@{path} ")
-                    };
-                    app.editor.insert(&insert);
+                    app.insert_attachment(&path);
                     app.refresh_suggest(cx);
                     cx.notify();
                 });
@@ -483,13 +475,6 @@ impl GuiApp {
         cx.notify();
     }
 
-    /// `/import`：弹路径输入框，确认后作为会话载入。
-    pub(super) fn open_import_dialog(&mut self, cx: &mut Context<Self>) {
-        let editor = Editor::new();
-        self.dialog = Some(SessionDialog::Import { editor });
-        cx.notify();
-    }
-
     /// `/import <path.jsonl>`：校验路径 → 确认替换 → 复制进当前会话目录 → cwd 确认 → 切会话。
     ///
     /// 校验顺序与文案同 TUI：参数可带 `@` 前缀（输入框的引用前缀），相对路径按当前目录解析。
@@ -684,32 +669,6 @@ impl GuiApp {
         });
     }
 
-    /// `/name`：给当前会话改名（预填现有会话名）。
-    pub(super) fn rename_current_session(&mut self, cx: &mut Context<Self>) {
-        let Some(path) = self
-            .snapshot
-            .as_ref()
-            .and_then(|snapshot| snapshot.session_path.clone())
-        else {
-            self.transcript
-                .push_note(Note::Info("In-memory session cannot be renamed".into()));
-            cx.notify();
-            return;
-        };
-
-        let title = self
-            .sessions
-            .iter()
-            .find(|row| row.path == path)
-            .map(|row| row.title.clone())
-            .unwrap_or_default();
-        let mut editor = Editor::new();
-        editor.insert(&title);
-        editor.select_all();
-        self.dialog = Some(SessionDialog::Rename { path, editor });
-        cx.notify();
-    }
-
     /// 目录菜单：最近用过的目录 + 「Browse…」；确认后发 `SwitchCwd`（会顺带在新目录下开会话）。
     pub(super) fn open_cwd_menu(&mut self, _cx: &mut Context<Self>) {
         let current = self.cwd();
@@ -815,8 +774,6 @@ impl GuiApp {
         let reload = match dialog {
             SessionDialog::Rename { path, editor } => self.confirm_rename(path, editor),
             SessionDialog::BugHint { editor } => self.confirm_bug_hint(editor, cx),
-            SessionDialog::Label { editor } => self.confirm_label(editor, cx),
-            SessionDialog::Import { editor } => self.confirm_import(editor, cx),
             SessionDialog::Oauth { .. } => self.confirm_oauth_dialog(),
             SessionDialog::Number { key, editor } => self.confirm_number(key, editor, cx),
             SessionDialog::Delete { paths, .. } => self.confirm_delete(paths),
@@ -865,36 +822,6 @@ impl GuiApp {
             ],
             cx,
         );
-        false
-    }
-
-    /// 给当前会话树叶子打标签（空文本 = 清除）。没有叶子时只提示。
-    fn confirm_label(&mut self, editor: Editor, cx: &mut Context<Self>) -> bool {
-        let text = editor.text().trim().to_string();
-        match self
-            .snapshot
-            .as_ref()
-            .and_then(|snapshot| snapshot.leaf_entry_id.clone())
-        {
-            Some(entry_id) => {
-                _ = self.cmd_tx.send(AgentCommand::Label {
-                    entry_id,
-                    label: (!text.is_empty()).then_some(text),
-                });
-            }
-            None => self
-                .transcript
-                .push_note(Note::Info("This branch has no entry to label".into())),
-        }
-        self.cx_notify(cx);
-        false
-    }
-
-    /// 导入会话文件：真正的校验与确认都在 [`Self::start_import`] 里。
-    fn confirm_import(&mut self, editor: Editor, cx: &mut Context<Self>) -> bool {
-        // 真正的校验/确认都在 start_import 里（与 `/import <path>` 同一条路）
-        let raw = editor.text().trim().to_string();
-        self.start_import(&raw, cx);
         false
     }
 

@@ -59,7 +59,8 @@ const BUILTIN_SUBCOMMANDS: &[(&str, &str, &str)] = &[
 ];
 
 /// GUI 支持的斜杠命令：名字（不含 `/`）+ 说明。
-/// 与 TUI 的命令集对齐（`dock` 没有桌面等价物，除了它全部列出）。
+/// 与 TUI 的命令集对齐（`dock` 没有桌面等价物，除了它全部列出）；
+/// `usage` / `debug` 这类扩展命令由扩展注册，启用后才出现在候选里。
 pub const COMMANDS: &[(&str, &str)] = &[
     ("new", "New session"),
     ("resume", "Switch session"),
@@ -84,7 +85,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("cwd", "Change the working directory (<path>)"),
     ("trust", "Trust the current project"),
     ("reload", "Reload skills, extensions and context"),
-    ("theme", "Show/switch theme"),
+    ("theme", "Show/switch theme (<dark|light>)"),
     ("settings", "Open settings"),
     ("extension", "Enable/disable extensions"),
     ("skills", "Enable/disable skills"),
@@ -94,9 +95,8 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("changelog", "Show changelog entries"),
     ("hotkeys", "Show keybindings"),
     ("bug", "Report a bug (collects diagnostics, exports a zip)"),
-    ("usage", "Usage & cost"),
-    ("debug", "Debug info"),
     ("dock", "Toggle the dock panel"),
+    ("panel", "Toggle the right panel"),
     ("sidebar", "Toggle session list"),
     ("quit", "Quit"),
 ];

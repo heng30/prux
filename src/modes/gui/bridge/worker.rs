@@ -726,7 +726,6 @@ fn snapshot(agent: &Agent) -> Snapshot {
             .map(|p| p.to_string_lossy().to_string()),
         session_name: agent.session.as_ref().and_then(|s| s.name.clone()),
         messages: agent.messages.len(),
-        leaf_entry_id: agent.session.as_ref().and_then(|s| s.clone_target_id()),
         tools: agent.get_active_tools(),
         cwd: agent.cwd.clone(),
         usage,

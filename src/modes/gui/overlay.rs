@@ -79,12 +79,30 @@ pub enum Action {
     ZombieCancel,
     /// 导入确认 / cwd 确认 / 修复选择共用的取消
     SessionCancel,
-    /// `/bug`：带着复现描述打包；`include_session` 决定是否附带会话记录
+    /// `/bug` 第一步：「是否附带会话记录」的答案，按它决定接下来问摘要还是直接到导出方式
     BugReport {
         /// 用户写的复现描述（可为空）
         hint: String,
         /// true = 连同会话记录一起打包
         include_session: bool,
+    },
+    /// `/bug` 第三步：打开导出方式选择（zip / 取消），带上已经答完的两题
+    BugReportDelivery {
+        /// 复现描述
+        hint: String,
+        /// 是否附带会话记录
+        include_session: bool,
+        /// 是否让当前模型生成摘要
+        include_summary: bool,
+    },
+    /// `/bug` 最后一步：真的打包导出
+    BugReportExport {
+        /// 复现描述
+        hint: String,
+        /// 是否附带会话记录
+        include_session: bool,
+        /// 是否让当前模型生成摘要
+        include_summary: bool,
     },
     /// 切到某个工作目录（最近目录列表）
     SwitchCwdTo(String),
@@ -127,6 +145,8 @@ pub enum Action {
     },
     /// `/trust` 面板里的一个信任决策（取值同 TUI：trust / trust_parent / distrust / clear）。
     TrustDecision(String),
+    /// settings.json 损坏的覆写确认：`true` = 强制写入暂存内容，`false` = 保留原文件
+    SettingsOverwrite(bool),
     /// 扩展设置面板：把某一项设置循环到下一个候选值
     CycleExtensionSetting {
         /// 扩展名（`/extension` 面板里显示的名字）
@@ -134,6 +154,8 @@ pub enum Action {
         /// 设置项的稳定键（`ExtensionSetting::key`）
         key: String,
     },
+    /// 内置工具面板：切换某个内置工具的启用状态（写入 `+name` / `-name` 增量）
+    ToggleBuiltinTool(String),
     /// 显示/收起左侧会话列表（同 `/sidebar`）
     ToggleSidebar,
 }
@@ -177,6 +199,22 @@ pub enum SettingKey {
     GuiTheme,
     /// 桌面窗口是否自绘边框与标题栏（切换时写回 `gui.frame`）
     GuiFrame,
+    /// Mermaid 代码块→Unicode 图（重开会话生效）
+    Mermaid,
+    /// LaTeX 公式→Unicode 公式（重开会话生效）
+    LaTeX,
+    /// 补全面板可见行数：循环 3 / 5 / 7 / 10 / 15 / 20
+    AutocompleteMaxVisible,
+    /// 提示历史落盘条数：循环档位（0 = 不落盘）
+    HistoryMaxEntries,
+    /// 滚轮每次事件的滚动行数：循环 auto / 1 / 2 / 3 / 5 / 10
+    WheelScrollLines,
+    /// `/share` 的分享目标：循环 auto / gist / radius
+    ShareDestination,
+    /// 无显式信任决策时的默认策略：循环 Ask / Always trust / Never trust
+    DefaultProjectTrust,
+    /// 内置工具子面板（勾选列表，Space 切换）
+    BuiltinTools,
 }
 
 impl SettingKey {

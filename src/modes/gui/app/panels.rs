@@ -1,7 +1,12 @@
 //! 右侧面板与列表选择器：设置 / 扩展 / 技能 / 模型 / 会话选择页的构建与提交。
 
 use super::*;
-use crate::{cli::args::thinking_level_description, core, extensions::skills, utils::paths};
+use crate::{
+    cli::args::thinking_level_description,
+    core::{self, tools},
+    extensions::skills,
+    utils::paths,
+};
 use std::collections::{HashMap, HashSet};
 
 /// 扫描全部技能并算出给定过滤规则下的启用集合（`/skills` 面板用）。
@@ -193,6 +198,46 @@ impl GuiApp {
             Column::flex("Notes"),
         ];
         self.overlay = Some(Overlay::List(list));
+    }
+
+    /// 内置工具面板：勾选列表，Space 切换并立即写盘（`+name` / `-name` 增量，手写的纯列表不被覆盖）。
+    pub(super) fn open_builtin_tools_panel(&mut self, cx: &mut Context<Self>) {
+        let enabled = builtin_tools_enabled();
+        let mut entries: Vec<Entry> = tools::all_tool_names()
+            .into_iter()
+            .map(|name| Entry {
+                label: name.clone(),
+                detail: String::new(),
+                action: Action::ToggleBuiltinTool(name.clone()),
+                checked: Some(enabled.contains(&name)),
+                cells: vec![tools::index::tool_description(&name).to_string()],
+            })
+            .collect();
+
+        if entries.is_empty() {
+            entries.push(Entry {
+                label: "No built-in tools".into(),
+                ..Entry::default()
+            });
+        }
+
+        self.replace_list(
+            "Built-in tools",
+            entries,
+            DetailSource::None,
+            vec![
+                Column::fixed("Tool", TABLE_NAME_W),
+                Column::flex("Description"),
+            ],
+        );
+        self.mark_space_activates();
+        if let Some(Overlay::List(list)) = self.overlay.as_mut() {
+            list.hint = Some(
+                "↑↓ select · Space toggle · Esc close (takes effect on /reload or restart)"
+                    .to_string(),
+            );
+        }
+        cx.notify();
     }
 
     /// 扩展管理面板：`[x] 名称` 勾选态，Space/点击切换草稿，Ctrl-S 才落盘，Enter 看详情。
@@ -831,54 +876,97 @@ impl GuiApp {
         });
     }
 
-    /// 会话选择器。
+    /// 会话选择器：数据与检索完全复用 TUI 的 [`SessionSelector`]（树形/排序/范围/过滤），
+    /// 这里只把它的显示行搬进覆盖层列表。
     pub(super) fn open_session_picker(&mut self, cx: &mut Context<Self>) {
-        if self.sessions.is_empty() && !self.sessions_loading {
-            self.reload_sessions(cx);
-        }
+        let current = self.snapshot.as_ref().and_then(|s| s.session_path.clone());
+        self.session_selector
+            .open(&self.cwd(), &settings_manager::agent_dir(), current);
+        self.rebuild_session_picker(cx);
+    }
 
-        let entries: Vec<Entry> = self
-            .sessions
+    /// 用选择器的当前显示列表重画会话选择器（查询/排序/范围变化后调用）。
+    pub(super) fn rebuild_session_picker(&mut self, cx: &mut Context<Self>) {
+        let selector = &self.session_selector;
+        let mut entries: Vec<Entry> = selector
+            .display
             .iter()
-            .map(|row| Entry {
-                label: row.title.clone(),
-                cells: vec![row.age.clone(), row.messages.to_string()],
-                action: Action::LoadSession(row.path.clone()),
-                ..Entry::default()
+            .filter_map(|node| {
+                let row = selector.rows.get(node.idx)?;
+                let mut label = String::new();
+                for _ in 0..node.depth {
+                    label.push_str("  ");
+                }
+                if node.depth > 0 {
+                    label.push_str(if node.is_last { "└ " } else { "├ " });
+                }
+                label.push_str(row.name.as_deref().unwrap_or(&row.text));
+                if row.is_current {
+                    label.push_str(" ✓");
+                }
+
+                let mut cells = vec![row.age.clone(), row.msg_count.to_string()];
+                if selector.show_path {
+                    cells.push(row.cwd.clone());
+                }
+
+                Some(Entry {
+                    label,
+                    cells,
+                    action: Action::LoadSession(row.path.to_string_lossy().to_string()),
+                    ..Entry::default()
+                })
             })
             .collect();
 
-        let mut entries = entries;
         if entries.is_empty() {
             entries.push(Entry {
-                label: if self.sessions_loading {
+                label: if selector.is_loading() {
                     "Loading sessions…".into()
                 } else {
-                    "No sessions yet".to_string()
+                    "No sessions match".to_string()
                 },
                 action: Action::None,
                 ..Entry::default()
             });
         }
-        let mut list = List::new("Sessions", entries);
-        list.columns = vec![
+
+        let (loaded, total) = selector.loading_progress();
+        let title = format!(
+            "Sessions — {} · {} · {}{}",
+            selector.scope_label(),
+            selector.sort_label(),
+            selector.name_filter_label(),
+            if selector.is_loading() {
+                format!(" · loading {loaded}/{total}")
+            } else {
+                String::new()
+            },
+        );
+
+        let mut columns = vec![
             Column::flex("Title"),
             Column::fixed("Updated", TABLE_AGE_W),
             Column::fixed("Messages", TABLE_COUNT_W),
         ];
+        if selector.show_path {
+            columns.push(Column::flex("Path"));
+        }
 
-        // 列表里真的有会话时才提示这三个键（空列表上它们什么也不做）
-        if list
-            .entries
-            .iter()
-            .any(|entry| matches!(entry.action, Action::LoadSession(_)))
-        {
+        self.replace_list(title, entries, DetailSource::None, columns);
+        if let Some(Overlay::List(list)) = self.overlay.as_mut() {
             list.hint = Some(
-                "↑↓ select · Enter resume · Ctrl+R rename · Ctrl+D delete · Ctrl+G next · Esc close"
+                "↑↓ select · Enter resume · Tab scope · Ctrl-S sort · Ctrl-N named · Ctrl-P path · Ctrl-R rename · Ctrl-D delete · Ctrl-G next · Esc close"
                     .to_string(),
             );
+            // 搜索框与选择器共用一个查询：重建后把已输入的文本放回去
+            let query = self.session_selector.filter.value.clone();
+            if list.query.text() != query {
+                list.query.clear();
+                list.query.insert(&query);
+            }
         }
-        self.overlay = Some(Overlay::List(list));
+        cx.notify();
     }
 
     /// 外观选择器（明/暗）。
@@ -954,44 +1042,82 @@ impl GuiApp {
 }
 
 /// `/hotkeys` 表格的行：左列键位（多个组合用 `/` 并列）、右列动作。
+///
+/// 与 TUI 共用同一张键位表：有对应动作 id 的行按**当前生效绑定**渲染（`keybindings.json`
+/// 改过就显示新键），桌面独有的面板键没有 id，保持固定文案。
 fn hotkey_rows() -> Vec<InfoRow> {
+    // (动作 id, 说明)：与 TUI 的 `core::keybindings` 同一批 id，改键后这里跟着变
+    const BOUND: &[(&str, &str)] = &[
+        ("tui.input.submit", "Send message"),
+        ("tui.input.newLine", "New line"),
+        ("app.interrupt", "Abort turn"),
+        ("app.clear", "Clear input"),
+        ("tui.editor.cursorLeft", "Move by character"),
+        ("tui.editor.cursorRight", "Move by character"),
+        ("tui.editor.cursorWordLeft", "Move by word"),
+        ("tui.editor.cursorWordRight", "Move by word"),
+        ("tui.editor.cursorLineStart", "Line start"),
+        ("tui.editor.cursorLineEnd", "Line end"),
+        ("tui.editor.deleteCharBackward", "Delete char back"),
+        ("tui.editor.deleteCharForward", "Delete char forward"),
+        ("tui.editor.deleteWordBackward", "Delete word back"),
+        ("tui.editor.deleteWordForward", "Delete word forward"),
+        ("tui.editor.deleteToLineStart", "Delete to line start"),
+        ("tui.editor.deleteToLineEnd", "Delete to line end"),
+        ("tui.editor.yank", "Yank deleted text"),
+        ("tui.editor.yankPop", "Yank older entry"),
+        ("tui.input.copy", "Copy selection"),
+        ("app.editor.copy", "Copy input"),
+        ("app.message.copy", "Copy last reply"),
+        ("app.clipboard.pasteImage", "Paste (image-aware)"),
+        ("app.message.followUp", "Queue follow-up"),
+        ("app.message.dequeue", "Restore queued"),
+        ("app.message.scrollToTop", "Scroll to top"),
+        ("app.message.scrollToBottom", "Scroll to bottom"),
+        ("app.message.pageUp", "Page transcript up"),
+        ("app.message.pageDown", "Page transcript down"),
+        ("app.thinking.cycle", "Cycle thinking level"),
+        ("app.thinking.toggle", "Show/hide thinking"),
+        ("app.tools.expand", "Expand tools"),
+        ("app.model.cycleForward", "Cycle model"),
+        ("app.model.cycleBackward", "Cycle model backwards"),
+        ("app.model.select", "Model picker"),
+        ("app.theme.cycle", "Toggle light / dark"),
+        ("app.session.toggleSort", "Session list: sort"),
+        ("app.session.toggleNamedFilter", "Session list: named only"),
+        ("app.session.togglePath", "Session list: show path"),
+        ("app.session.rename", "Session list: rename"),
+        ("app.session.delete", "Session list: delete"),
+        ("app.session.next", "Session list: next"),
+    ];
+
+    let mut rows: Vec<InfoRow> = BOUND
+        .iter()
+        .filter_map(|(id, label)| {
+            let keys = core::keybindings::key_display(id)?;
+            Some(InfoRow {
+                key: keys,
+                value: (*label).to_string(),
+                copy: false,
+            })
+        })
+        .collect();
+
+    // 桌面独有（TUI 键位表里没有对应动作 id）：固定键位
     let pairs = [
-        ("Enter", "Send message"),
-        ("Shift+Enter / Ctrl-J", "New line"),
-        ("Esc", "Abort turn"),
-        ("Ctrl-C", "Clear input"),
-        ("Ctrl-D", "Quit when input is empty"),
-        ("Arrows", "Move cursor"),
-        ("Ctrl-B / Ctrl-F", "Move by character"),
-        ("Alt-← → / Alt-B F", "Move by word"),
-        ("Home / Ctrl-A", "Line start"),
-        ("End / Ctrl-E", "Line end"),
-        ("Ctrl-W / Alt-Backspace", "Delete word back"),
-        ("Alt-D", "Delete word forward"),
-        ("Ctrl-U", "Delete to line start"),
-        ("Ctrl-K", "Delete to line end"),
-        ("Ctrl-Z / Ctrl-Y", "Undo / redo"),
-        ("Ctrl-Shift-C", "Copy selection"),
-        ("Alt-C", "Copy input"),
-        ("Ctrl-V", "Paste"),
-        ("Ctrl-X", "Copy last reply"),
+        ("Ctrl-Z / Ctrl-Shift-Z", "Undo / redo"),
         ("Ctrl-M", "Command palette"),
-        ("Ctrl-L", "Model picker"),
-        ("Ctrl-P / Ctrl-Shift-P", "Cycle model"),
-        ("Ctrl-T", "Show/hide thinking"),
-        ("Shift-Tab", "Cycle thinking level"),
-        ("Ctrl-O", "Expand tools"),
-        ("Ctrl-Shift-T", "Toggle light / dark"),
-        ("Ctrl-Shift-G", "Appearance"),
         ("Ctrl-Shift-O", "Session list"),
         ("Ctrl-Shift-B", "Toggle sidebar"),
         ("Ctrl-Shift-W", "Working directory"),
         ("Ctrl-Shift-E", "Toggle right panel"),
+        ("Ctrl-Shift-F", "Files panel"),
+        ("Ctrl-Shift-G", "Appearance"),
         ("Ctrl-Shift-U", "Usage"),
+        ("Ctrl-Shift-H", "Session search"),
         ("Ctrl-I", "Skills"),
         ("Ctrl-,", "Settings"),
         ("Ctrl-Shift-A", "Select all"),
-        ("Ctrl-G", "Next session"),
         ("Ctrl-= / Ctrl-0", "Zoom in / reset to 100%"),
         ("Ctrl-Shift--", "Zoom out"),
         ("Ctrl-Q", "Quit"),
@@ -999,17 +1125,14 @@ fn hotkey_rows() -> Vec<InfoRow> {
         ("Home / End", "First / last item"),
         ("PgUp / PgDn", "Page in lists"),
         ("Ctrl-C (in list)", "Close list"),
-        ("Ctrl-R (session list)", "Rename session"),
-        ("Ctrl-D (session list)", "Delete session"),
     ];
-    pairs
-        .into_iter()
-        .map(|(key, value)| InfoRow {
-            key: key.to_string(),
-            value: value.to_string(),
-            copy: false,
-        })
-        .collect()
+
+    rows.extend(pairs.into_iter().map(|(key, value)| InfoRow {
+        key: key.to_string(),
+        value: value.to_string(),
+        copy: false,
+    }));
+    rows
 }
 
 /// 扫描技能并返回快照（`rules` 是未落盘的草稿规则，启用态按它实算）。
@@ -1132,6 +1255,58 @@ pub(super) fn settings_entries(theme_dark: bool) -> Vec<Entry> {
             Action::ToggleSetting(SettingKey::ShowCacheMissNotices),
         ),
         row(
+            "Mermaid",
+            on_off(settings_manager::read_settings_mermaid()).into(),
+            "Render mermaid blocks as diagrams (restart to apply)",
+            Action::ToggleSetting(SettingKey::Mermaid),
+        ),
+        row(
+            "LaTeX",
+            on_off(settings_manager::read_settings_latex()).into(),
+            "Render $...$ math as unicode (restart to apply)",
+            Action::ToggleSetting(SettingKey::LaTeX),
+        ),
+        row(
+            "Autocomplete max items",
+            settings_manager::read_settings_autocomplete_max_visible().to_string(),
+            "Space to cycle (3-20)",
+            Action::ToggleSetting(SettingKey::AutocompleteMaxVisible),
+        ),
+        row(
+            "History max entries",
+            settings_manager::read_settings_history_max_entries().to_string(),
+            "Prompt history kept on disk (0 = do not persist)",
+            Action::ToggleSetting(SettingKey::HistoryMaxEntries),
+        ),
+        row(
+            "Wheel scroll lines",
+            settings_manager::read_settings_fullscreen_wheel_scroll_lines()
+                .as_str()
+                .to_string(),
+            "Lines per wheel event ('auto' accelerates fast spins)",
+            Action::ToggleSetting(SettingKey::WheelScrollLines),
+        ),
+        row(
+            "Session share destination",
+            settings_manager::read_settings_session_share_destination()
+                .as_str()
+                .to_string(),
+            "Where /share uploads ('radius' is not available in this build)",
+            Action::ToggleSetting(SettingKey::ShareDestination),
+        ),
+        row(
+            "Default project trust",
+            default_project_trust_label(),
+            "Fallback when no saved trust decision decides",
+            Action::ToggleSetting(SettingKey::DefaultProjectTrust),
+        ),
+        row(
+            "Built-in tools",
+            builtin_tools_label(),
+            "Space to open the checklist",
+            Action::ToggleSetting(SettingKey::BuiltinTools),
+        ),
+        row(
             "Steering mode",
             settings_manager::read_settings_steering_mode(),
             "Space to cycle",
@@ -1203,8 +1378,7 @@ pub(super) fn settings_entries(theme_dark: bool) -> Vec<Entry> {
     ]
 }
 
-/// 扩展详情行 → 表格行：首行是整句描述（[`extension_detail_lines`] 的约定），
-/// 不拆；其余行才走 [`info_rows`] 拆键值。
+/// 扩展详情行 → 表格行：首行是整句描述（[`extension_detail_lines`] 的约定），/// 不拆；其余行才走 [`info_rows`] 拆键值。
 /// 描述里的 `": "` 若跟着拆，整句会被塞进定宽左列折成好几行。
 pub(super) fn extension_rows(lines: Vec<String>) -> Vec<InfoRow> {
     let mut iter = lines.into_iter();
@@ -1245,6 +1419,37 @@ pub(super) fn info_rows(lines: Vec<String>) -> Vec<InfoRow> {
         }
     }
     rows
+}
+
+/// 当前生效的内置工具集（`defaultTools` 未给出纯工具名时用基线）。
+pub(super) fn builtin_tools_enabled() -> Vec<String> {
+    settings_manager::read_settings_default_tools().unwrap_or_else(|| {
+        settings_manager::DEFAULT_TOOL_NAMES
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
+    })
+}
+
+/// 设置面板里「内置工具」一行显示的值。
+fn builtin_tools_label() -> String {
+    let enabled = builtin_tools_enabled();
+    if enabled.is_empty() {
+        "none".to_string()
+    } else {
+        enabled.join(", ")
+    }
+}
+
+/// 设置面板里「默认项目信任」一行显示的值（取值同 TUI）。
+fn default_project_trust_label() -> String {
+    use crate::core::project_trust::{self, ProjectTrust};
+    match project_trust::default_project_trust(&settings_manager::agent_dir()) {
+        ProjectTrust::Ask => "Ask",
+        ProjectTrust::Always => "Always trust",
+        ProjectTrust::Never => "Never trust",
+    }
+    .to_string()
 }
 
 /// 切换一项启用态：草稿里有就删，没有就追加到末尾（顺序即 Ctrl-P 循环顺序）。

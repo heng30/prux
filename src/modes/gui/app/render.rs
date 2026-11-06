@@ -180,7 +180,7 @@ impl GuiApp {
         let mut rows = overlay::rows_container(
             "suggest-rows",
             &self.suggest_scroll,
-            SUGGEST_ROW_HEIGHT * SUGGEST_ROWS as f32,
+            SUGGEST_ROW_HEIGHT * suggest_rows() as f32,
         );
 
         for (index, item) in suggest.items.iter().enumerate() {
@@ -1374,7 +1374,7 @@ impl GuiApp {
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         if let (Some(suggest), Some(card)) = (self.suggest.clone(), self.composer_bounds.get()) {
-            let rows = suggest.items.len().clamp(1, SUGGEST_ROWS) as f32;
+            let rows = suggest.items.len().clamp(1, suggest_rows()) as f32;
             // 面板高度 = 输入框 + 行区（行数超上限时只按上限算，其余靠滚动）
             let height = px(SUGGEST_ROW_HEIGHT * rows) + px(SUGGEST_CHROME_HEIGHT);
             let top = (card.origin.y - height - px(SUGGEST_GAP)).max(px(0.));
@@ -1546,16 +1546,6 @@ impl GuiApp {
                 Some(SessionDialog::BugHint { editor }) => (
                     "Report a bug",
                     "Describe what happened (bundled with redacted metadata)".to_string(),
-                    Some(composer::render(editor, theme)),
-                ),
-                Some(SessionDialog::Label { editor }) => (
-                    "Set label",
-                    "Leave empty to clear the label on this branch".to_string(),
-                    Some(composer::render(editor, theme)),
-                ),
-                Some(SessionDialog::Import { editor }) => (
-                    "Import session",
-                    "Path to a jsonl session (~ and relative paths work)".to_string(),
                     Some(composer::render(editor, theme)),
                 ),
                 Some(SessionDialog::ApiKey { provider, editor }) => (
@@ -1833,4 +1823,10 @@ pub(super) fn same_bounds(a: Bounds<Pixels>, b: Bounds<Pixels>) -> bool {
         && (a.origin.y - b.origin.y).abs() <= px(0.5)
         && (a.size.width - b.size.width).abs() <= px(0.5)
         && (a.size.height - b.size.height).abs() <= px(0.5)
+}
+
+/// 补全面板可见行数：跟 `settings.autocompleteMaxVisible` 走（同 TUI），
+/// 面板本身仍是滚动容器，超出部分靠滚轮翻。
+fn suggest_rows() -> usize {
+    settings_manager::read_settings_autocomplete_max_visible().max(1)
 }

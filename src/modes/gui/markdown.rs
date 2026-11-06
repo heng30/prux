@@ -4,7 +4,7 @@
 //! 解析用现成的 `pulldown-cmark`，不做自己的语法分析；公式与 mermaid 的文本化复用 `core` 里的
 //! [`crate::core::latex`] / [`crate::core::mermaid`]。
 
-use crate::core::latex;
+use crate::core::{latex, settings_manager};
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 
 /// 行内片段的样式开关。
@@ -93,6 +93,8 @@ pub enum Block {
 
 /// Markdown 源码 → 渲染单元序列。
 pub fn parse(text: &str) -> Vec<Block> {
+    // LaTeX 开关：关闭时公式保留源码文本（同 TUI 的 `latex` 设置）
+    let render_latex = settings_manager::read_settings_latex();
     let mut options = Options::empty();
     options.insert(Options::ENABLE_STRIKETHROUGH);
     options.insert(Options::ENABLE_TABLES);
@@ -243,7 +245,13 @@ pub fn parse(text: &str) -> Vec<Block> {
                 link_url = None;
             }
             Event::InlineMath(src) => {
-                let text = latex::render_latex(&src, false).unwrap_or_else(|| format!("${src}$"));
+                let text = match render_latex
+                    .then(|| latex::render_latex(&src, false))
+                    .flatten()
+                {
+                    Some(rendered) => rendered,
+                    None => format!("${src}$"),
+                };
                 let mut math_style = style;
                 math_style.math = true;
                 spans.push(Span {
@@ -255,11 +263,16 @@ pub fn parse(text: &str) -> Vec<Block> {
             Event::DisplayMath(src) => {
                 flush(&mut out, &mut spans, kind);
                 let src = src.trim();
-                let lines = latex::render_latex(src, true)
-                    .unwrap_or_else(|| format!("$${src}$$"))
-                    .lines()
-                    .map(str::to_string)
-                    .collect();
+                let lines = match render_latex
+                    .then(|| latex::render_latex(src, true))
+                    .flatten()
+                {
+                    Some(rendered) => rendered,
+                    None => format!("$${src}$$"),
+                }
+                .lines()
+                .map(str::to_string)
+                .collect();
                 out.push(Block::Math { lines });
             }
             Event::SoftBreak | Event::HardBreak => {

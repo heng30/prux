@@ -3,7 +3,53 @@
 //! 拆自 [`super::app`]：只搬按键分派，动作执行见 [`super::actions`]。
 
 use super::*;
-use crate::core::extensions::cancel_background_work;
+use crate::core::{extensions::cancel_background_work, keybindings};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+/// gpui 的按键事件 → crossterm 的 `KeyEvent`（键位表按 crossterm 的表示匹配）。
+///
+/// gpui 的 Cmd（`platform`）按 Ctrl 处理：键位表里没有 super 的默认绑定，
+/// 这样用户在 macOS 上按 Cmd-X 也能命中 `ctrl+x`。
+fn key_event(keystroke: &gpui::Keystroke) -> crossterm::event::KeyEvent {
+    let code = match keystroke.key.as_str() {
+        "enter" => KeyCode::Enter,
+        "tab" => KeyCode::Tab,
+        "escape" => KeyCode::Esc,
+        "space" => KeyCode::Char(' '),
+        "backspace" => KeyCode::Backspace,
+        "delete" => KeyCode::Delete,
+        "insert" => KeyCode::Insert,
+        "home" => KeyCode::Home,
+        "end" => KeyCode::End,
+        "pageup" => KeyCode::PageUp,
+        "pagedown" => KeyCode::PageDown,
+        "up" => KeyCode::Up,
+        "down" => KeyCode::Down,
+        "left" => KeyCode::Left,
+        "right" => KeyCode::Right,
+        other => match other.strip_prefix('f').and_then(|n| n.parse::<u8>().ok()) {
+            Some(n) if (1..=12).contains(&n) => KeyCode::F(n),
+            _ => KeyCode::Char(other.chars().next().unwrap_or(' ')),
+        },
+    };
+
+    let mut mods = KeyModifiers::NONE;
+    if keystroke.modifiers.control || keystroke.modifiers.platform {
+        mods |= KeyModifiers::CONTROL;
+    }
+    if keystroke.modifiers.alt {
+        mods |= KeyModifiers::ALT;
+    }
+    if keystroke.modifiers.shift {
+        mods |= KeyModifiers::SHIFT;
+    }
+    KeyEvent::new(code, mods)
+}
+
+/// 命中键位表里的某个动作 id（用户 `keybindings.json` 覆盖后按新绑定判定）。
+fn matches(keystroke: &gpui::Keystroke, id: &str) -> bool {
+    keybindings::get_global().matches(&key_event(keystroke), id)
+}
 
 impl GuiApp {
     /// 键盘入口：分发完统一重绘一次。
@@ -23,6 +69,11 @@ impl GuiApp {
         // 只有输入内容真的变了才重算补全：左右移动光标不该把面板弹出来
         if self.editor.text() != before {
             self.refresh_suggest(cx);
+        }
+
+        // 会话选择器的搜索框就是选择器的 filter：改动后重算列表并重画
+        if self.sync_picker_query(cx) {
+            cx.notify();
         }
 
         cx.notify();
@@ -84,7 +135,7 @@ impl GuiApp {
 
         // Shift+Tab：循环 thinking 级别（同 TUI 的 `app.thinking.cycle`）；
         // 放在补全面板之前，面板开着时也能切
-        if shift && keystroke.key == "tab" {
+        if matches(&keystroke, "app.thinking.cycle") {
             self.cycle_thinking(cx);
             cx.notify();
             return;
@@ -116,10 +167,17 @@ impl GuiApp {
         if self.overlay.is_some() {
             if primary
                 && !shift
-                && matches!(keystroke.key.as_str(), "r" | "d" | "g")
+                && matches!(keystroke.key.as_str(), "r" | "d" | "g" | "s" | "n" | "p")
                 && self.dispatch_session_list_key(&keystroke.key, cx)
             {
                 cx.notify();
+                return;
+            }
+
+            // Tab：当前目录 ↔ 全部项目（同 TUI 的会话选择器）
+            if keystroke.key == "tab" && self.session_picker_open() {
+                self.session_selector.toggle_scope();
+                self.rebuild_session_picker(cx);
                 return;
             }
 
@@ -146,7 +204,7 @@ impl GuiApp {
         // 忙碌态 Esc 中断回合——但要排在覆盖层、菜单、补全与搜索框之后：
         // 那些界面开着时 Esc 是「关它」，先中断就等于按一下取消了正在跑的回合
         // （同 TUI：覆盖层/面板优先于 busy 快捷键）
-        if self.busy && keystroke.key == "escape" {
+        if self.busy && matches(&keystroke, "app.interrupt") {
             self.abort_turn(cx);
             cancel_background_work();
             self.restore_queued();
@@ -154,7 +212,7 @@ impl GuiApp {
             return;
         }
 
-        if self.dispatch_editor_key(&keystroke, primary, shift, cx) {
+        if self.dispatch_editor_key(&keystroke, shift, cx) {
             cx.notify();
             return;
         }
@@ -305,74 +363,82 @@ impl GuiApp {
     pub(super) fn dispatch_editor_key(
         &mut self,
         keystroke: &gpui::Keystroke,
-        primary: bool,
         shift: bool,
         cx: &mut Context<Self>,
     ) -> bool {
-        let alt = keystroke.modifiers.alt;
-        let key = keystroke.key.as_str();
-
         // Alt+Up：把排队的 steer / follow-up 全部取回编辑器（同 TUI 的 app.message.dequeue）
-        if alt && key == "up" {
+        if matches(keystroke, "app.message.dequeue") {
             self.dequeue_queued(cx);
             cx.notify();
             return true;
         }
-        if (alt && (key == "left" || key == "b")) || (primary && key == "left") {
+        if matches(keystroke, "tui.editor.cursorWordLeft") {
             self.editor.word_left(shift);
             cx.notify();
             return true;
         }
-        if (alt && (key == "right" || key == "f")) || (primary && key == "right") {
+        if matches(keystroke, "tui.editor.cursorWordRight") {
             self.editor.word_right(shift);
             cx.notify();
             return true;
         }
-        if primary && !shift && key == "b" {
+        if matches(keystroke, "tui.editor.cursorLeft") {
             self.editor.move_cursor(-1, 0, false);
             cx.notify();
             return true;
         }
-        if primary && !shift && key == "a" {
+        if matches(keystroke, "tui.editor.cursorRight") {
+            self.editor.move_cursor(1, 0, false);
+            cx.notify();
+            return true;
+        }
+        if matches(keystroke, "tui.editor.cursorLineStart") {
             self.editor.home(false);
             cx.notify();
             return true;
         }
-        if primary && !shift && key == "e" {
+        if matches(keystroke, "tui.editor.cursorLineEnd") {
             self.editor.end(false);
             cx.notify();
             return true;
         }
-        if primary && !shift && key == "u" {
+        if matches(keystroke, "tui.editor.deleteToLineStart") {
             self.editor.delete_to_line_start();
             cx.notify();
             return true;
         }
-        if primary && !shift && key == "k" {
+        if matches(keystroke, "tui.editor.deleteToLineEnd") {
             self.editor.delete_to_line_end();
             cx.notify();
             return true;
         }
-        if (primary && !shift && key == "w")
-            || (primary && key == "backspace")
-            || (alt && key == "backspace")
-        {
+        if matches(keystroke, "tui.editor.deleteWordBackward") {
             self.editor.delete_word_backward();
             cx.notify();
             return true;
         }
-        if alt && key == "d" {
+        if matches(keystroke, "tui.editor.deleteWordForward") {
             self.editor.delete_word_forward();
             cx.notify();
             return true;
         }
-        if primary && key == "j" {
+        if matches(keystroke, "tui.editor.yankPop") {
+            _ = self.editor.yank_pop();
+            cx.notify();
+            return true;
+        }
+        if matches(keystroke, "tui.editor.yank") {
+            _ = self.editor.yank();
+            cx.notify();
+            return true;
+        }
+        if matches(keystroke, "tui.input.newLine") {
             self.editor.insert("\n");
             cx.notify();
             return true;
         }
-        if primary && shift && key == "c" {
-            // 对话流里有选区就先复制它，否则复制输入框里的选中文字
+        // 复制选区（`tui.input.copy`）先于 app.clear：Ctrl-Shift-C 不该被当成中断/清空
+        if matches(keystroke, "tui.input.copy") {
             let picked = self
                 .text_sel
                 .map(|selection| transcript::selected_text(selection, &self.line_rows.borrow()))
@@ -384,7 +450,7 @@ impl GuiApp {
             }
             return true;
         }
-        if primary && !shift && key == "c" {
+        if matches(keystroke, "app.clear") {
             // 对话流里有选区时 Ctrl-C 复制它，否则沿用「清空输入框」
             if let Some(text) = self
                 .text_sel
@@ -409,8 +475,8 @@ impl GuiApp {
             cx.notify();
             return true;
         }
-        if alt && key == "c" {
-            // TUI 的 app.editor.copy：复制输入框全文
+        if matches(keystroke, "app.editor.copy") {
+            // 复制输入框全文
             let text = self.editor.text();
             if !text.is_empty() {
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
@@ -418,29 +484,29 @@ impl GuiApp {
             }
             return true;
         }
-        if primary && !shift && key == "x" {
-            // TUI 的 app.message.copy：复制最后一条助手回复
+        if matches(keystroke, "app.message.copy") {
             self.copy_last_reply(cx);
             return true;
         }
-        if primary && key == "home" {
+        if matches(keystroke, "app.message.scrollToTop") {
             self.scroll.set_offset(gpui::point(px(0.), px(0.)));
             self.pinned_bottom.set(None);
             cx.notify();
             return true;
         }
-        if primary && key == "end" {
+        if matches(keystroke, "app.message.scrollToBottom") {
             self.scroll_to_bottom();
             cx.notify();
             return true;
         }
-        if shift && (key == "pageup" || key == "pagedown") {
-            self.page_transcript(if key == "pageup" { -1. } else { 1. });
+        if matches(keystroke, "app.message.pageUp") {
+            self.page_transcript(-1.);
             cx.notify();
             return true;
         }
-        if primary && !shift && key == "d" && self.editor.is_empty() {
-            cx.quit();
+        if matches(keystroke, "app.message.pageDown") {
+            self.page_transcript(1.);
+            cx.notify();
             return true;
         }
         false
@@ -448,15 +514,53 @@ impl GuiApp {
 
     /// Ctrl 组合键：打开面板 / 切换窗口部件。`true` 表示已消费。
     ///
-    /// TUI 已有含义的键一律跟随 TUI（`app.model.select` = Ctrl-L、`app.tools.expand` = Ctrl-O、
-    /// `app.thinking.toggle` = Ctrl-T、`app.theme.cycle` = Ctrl-Shift-T）；GUI 独有的面板挤在
-    /// TUI 没绑定的键上，Shift 组合是它们的后缀。
+    /// TUI 有对应动作的一律走键位表（`keybindings.json` 可改）：`app.model.select`、
+    /// `app.tools.expand`、`app.thinking.toggle`、`app.theme.cycle`、`app.clipboard.pasteImage`、
+    /// `app.model.cycle*`。GUI 独有的面板挤在 TUI 没绑定的键上，Shift 组合是它们的后缀。
+    /// 唯一例外是撤销：TUI 的 `ctrl+-` 在桌面被缩放占用，撤销留在 Ctrl-Z（桌面惯例）。
     pub(super) fn dispatch_panel_shortcut(
         &mut self,
         keystroke: &gpui::Keystroke,
         shift: bool,
         cx: &mut Context<Self>,
     ) -> bool {
+        // TUI 键位表驱动的动作：用户 `keybindings.json` 覆盖后按新绑定生效
+        if matches(keystroke, "app.model.cycleForward") {
+            self.cycle_model(1, cx);
+            return true;
+        }
+        if matches(keystroke, "app.model.cycleBackward") {
+            self.cycle_model(-1, cx);
+            return true;
+        }
+        if matches(keystroke, "app.model.select") {
+            self.open_model_picker(cx);
+            return true;
+        }
+        if matches(keystroke, "app.tools.expand") {
+            self.expand_tools = !self.expand_tools;
+            self.resized_bottom();
+            cx.notify();
+            return true;
+        }
+        if matches(keystroke, "app.thinking.toggle") {
+            self.show_thinking = !self.show_thinking;
+            cx.notify();
+            return true;
+        }
+        if matches(keystroke, "app.theme.cycle") {
+            // GUI 只有明/暗两套，切一次就是换主题
+            let is_dark = !self.theme.is_dark;
+            self.set_dark(is_dark);
+            cx.notify();
+            return true;
+        }
+        if matches(keystroke, "app.clipboard.pasteImage") {
+            self.paste_clipboard(cx);
+            return true;
+        }
+
+        // 以下只有桌面有对应动作（TUI 键位表里没有 id），保持固定键位
         match keystroke.key.as_str() {
             // 右侧 Files 面板（搜索 + 文件列表 + 预览）：再按一次收起
             "f" if shift => {
@@ -468,43 +572,13 @@ impl GuiApp {
                 self.open_command_palette(cx);
                 return true;
             }
-            // Ctrl+P / Ctrl+Shift+P 直接切上一个/下一个模型（同 TUI 的模型循环）
-            "p" => {
-                self.cycle_model(if shift { -1 } else { 1 }, cx);
-                return true;
-            }
-            // TUI 的 app.model.select
-            "l" => {
-                self.open_model_picker(cx);
-                return true;
-            }
             // GUI 旧键位，TUI 未绑定，留作别名
             "/" => {
                 self.open_model_picker(cx);
                 return true;
             }
-            // TUI 的 app.tools.expand
-            "o" if !shift => {
-                self.expand_tools = !self.expand_tools;
-                self.resized_bottom();
-                cx.notify();
-                return true;
-            }
             "o" if shift => {
                 self.open_session_picker(cx);
-                return true;
-            }
-            // TUI 的 app.thinking.toggle
-            "t" if !shift => {
-                self.show_thinking = !self.show_thinking;
-                cx.notify();
-                return true;
-            }
-            // TUI 的 app.theme.cycle：GUI 只有明/暗两套，切一次就是换主题
-            "t" if shift => {
-                let is_dark = !self.theme.is_dark;
-                self.set_dark(is_dark);
-                cx.notify();
                 return true;
             }
             "g" if shift => {
@@ -566,16 +640,15 @@ impl GuiApp {
                 cx.notify();
                 return true;
             }
+            // TUI 的 tui.editor.yank：Ctrl-Y 粘贴刚删掉的文本
             "y" => {
-                self.editor.redo();
+                _ = self.editor.yank();
                 cx.notify();
                 return true;
             }
             "v" => {
-                if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-                    self.editor.insert(&text);
-                }
-                cx.notify();
+                // 文件 / 图片优先（落成 `@路径`），否则贴文本（同 TUI 的 app.clipboard.pasteImage）
+                self.paste_clipboard(cx);
                 return true;
             }
             _ => {}
@@ -651,71 +724,66 @@ impl GuiApp {
         shift: bool,
         cx: &mut Context<Self>,
     ) {
-        match keystroke.key.as_str() {
-            // Alt+Enter：排 follow-up（回合 settle 后才发送，同 TUI 的 app.message.followUp）
-            "enter" if keystroke.modifiers.alt => {
-                self.submit(true, cx);
-                cx.notify();
-            }
-            "enter" if shift => {
-                self.editor.insert("\n");
-                cx.notify();
-            }
-            "enter" => {
-                self.submit(false, cx);
-                cx.notify();
-            }
-            "escape" => {
-                if self.panel.visible {
-                    // 空闲时 Esc 先收右侧面板（giff 等）——之前面板没有关闭途径
-                    self.panel.visible = false;
-                    self.panel.search_focus = false;
-                } else if cancel_background_work() > 0 {
-                    // 没有面板时 Esc 先取消可取消的后台工作（如 MCP OAuth 登录），同 TUI
-                    self.toast("Cancelled background work", ToastKind::Info, cx);
-                }
-                cx.notify();
-            }
-            "backspace" => {
-                self.editor.backspace();
-                cx.notify();
-            }
-            "delete" => {
-                self.editor.delete_forward();
-                cx.notify();
-            }
-            "left" => {
-                self.editor.move_cursor(-1, 0, shift);
-                cx.notify();
-            }
-            "right" => {
-                self.editor.move_cursor(1, 0, shift);
-                cx.notify();
-            }
-            "up" => {
-                self.editor.move_up_or_history(shift);
-                cx.notify();
-            }
-            "down" => {
-                self.editor.move_down_or_history(shift);
-                cx.notify();
-            }
-            "home" => {
-                self.editor.home(shift);
-                cx.notify();
-            }
-            "end" => {
-                self.editor.end(shift);
-                cx.notify();
-            }
-            "tab" => {
-                self.editor.insert("  ");
-                cx.notify();
-            }
-            // 可打印字符由平台经 IME 句柄（`replace_text_in_range`）送进来，
-            // 这里再插一次就会变成「敲一个 a 出现 aa」。
-            _ => {}
+        // 键位表驱动的编辑/提交键（`keybindings.json` 可改）
+        if matches(keystroke, "app.message.followUp") {
+            // Alt+Enter：排 follow-up（回合 settle 后才发送）
+            self.submit(true, cx);
+            cx.notify();
+            return;
         }
+        if matches(keystroke, "tui.input.newLine") {
+            self.editor.insert("\n");
+            cx.notify();
+            return;
+        }
+        if matches(keystroke, "tui.input.submit") {
+            self.submit(false, cx);
+            cx.notify();
+            return;
+        }
+        if matches(keystroke, "tui.editor.deleteCharBackward") {
+            self.editor.backspace();
+            cx.notify();
+            return;
+        }
+        if matches(keystroke, "tui.editor.deleteCharForward") {
+            self.editor.delete_forward();
+            cx.notify();
+            return;
+        }
+        if matches(keystroke, "tui.editor.cursorUp") {
+            self.editor.move_up_or_history(shift);
+            cx.notify();
+            return;
+        }
+        if matches(keystroke, "tui.editor.cursorDown") {
+            self.editor.move_down_or_history(shift);
+            cx.notify();
+            return;
+        }
+        if matches(keystroke, "tui.input.tab") {
+            self.editor.insert("  ");
+            cx.notify();
+            return;
+        }
+
+        // 其余编辑键都在上面按键位表分发了：动作被用户清空绑定（`[]`）时
+        // 对应的键就真的不生效，不能再在这里兜回一份硬编码。
+        // 可打印字符由平台经 IME 句柄（`replace_text_in_range`）送进来，
+        // 这里再插一次就会变成「敲一个 a 出现 aa」。
+        if keystroke.key != "escape" {
+            return;
+        }
+
+        if self.panel.visible {
+            // 空闲时 Esc 先收右侧面板（giff 等）——之前面板没有关闭途径
+            self.panel.visible = false;
+            self.panel.search_focus = false;
+        } else if cancel_background_work() > 0 {
+            // 没有面板时 Esc 先取消可取消的后台工作（如 MCP OAuth 登录），同 TUI
+            self.toast("Cancelled background work", ToastKind::Info, cx);
+        }
+        cx.notify();
     }
 
     /// 对话框按键：重命名时打字进输入框，Enter 确认、Esc 取消。
@@ -731,8 +799,6 @@ impl GuiApp {
         let editor = match dialog {
             SessionDialog::Rename { editor, .. }
             | SessionDialog::ApiKey { editor, .. }
-            | SessionDialog::Import { editor }
-            | SessionDialog::Label { editor }
             | SessionDialog::BugHint { editor }
             | SessionDialog::Number { editor, .. }
             | SessionDialog::Oauth { editor, .. } => editor,
@@ -763,8 +829,6 @@ impl GuiApp {
         if let Some(
             SessionDialog::Rename { editor, .. }
             | SessionDialog::ApiKey { editor, .. }
-            | SessionDialog::Import { editor }
-            | SessionDialog::Label { editor }
             | SessionDialog::BugHint { editor }
             | SessionDialog::Number { editor, .. }
             | SessionDialog::Oauth { editor, .. },
@@ -1029,8 +1093,8 @@ impl GuiApp {
         cx.notify();
     }
 
-    /// 会话列表面板里的 TUI 专用键（`app.session.rename` / `delete` / `next`）：
-    /// 只有选中项是会话时才吃键，`true` 表示已消费。
+    /// 会话列表面板里的 TUI 专用键（`app.session.*`）：只有选中项是会话时才吃键，
+    /// `true` 表示已消费。数据来自 [`SessionSelector`]，与 TUI 同一套语义。
     pub(super) fn dispatch_session_list_key(&mut self, key: &str, cx: &mut Context<Self>) -> bool {
         let path = match self.overlay.as_ref() {
             Some(Overlay::List(list)) => match list.take_action() {
@@ -1048,20 +1112,62 @@ impl GuiApp {
                 self.overlay = None;
                 self.ask_delete(&path, cx);
             }
-            // app.session.next：按列表顺序跳到当前会话的下一个
+            // app.session.toggleSort：threaded → recent → relevance
+            "s" => {
+                self.session_selector.cycle_sort();
+                self.rebuild_session_picker(cx);
+            }
+            // app.session.toggleNamedFilter：全部 ↔ 仅命名
+            "n" => {
+                self.session_selector.toggle_name_filter();
+                self.rebuild_session_picker(cx);
+            }
+            // app.session.togglePath：行内是否带 cwd
+            "p" => {
+                self.session_selector.toggle_path();
+                self.rebuild_session_picker(cx);
+            }
+            // app.session.next：选中当前会话的下一条（不直接切会话，同 TUI）
             _ => {
-                if self.sessions.is_empty() {
-                    return true;
-                }
-                let current = self.sessions.iter().position(|row| row.path == path);
-                let next = self.sessions[cycle_index(current, self.sessions.len(), 1)]
-                    .path
-                    .clone();
-                self.overlay = None;
-                _ = self.cmd_tx.send(AgentCommand::ResumeSession { path: next });
+                self.session_selector.select_next_after_current();
+                self.sync_picker_selection();
+                cx.notify();
             }
         }
         true
+    }
+
+    /// 把覆盖层搜索框的文本同步进会话选择器并重算（返回是否变化）。
+    ///
+    /// 选择器与列表共用同一个查询：列表负责编辑，选择器负责 `re:` / 短语 / 树形过滤。
+    pub(super) fn sync_picker_query(&mut self, cx: &mut Context<Self>) -> bool {
+        if !self.session_picker_open() {
+            return false;
+        }
+        let Some(Overlay::List(list)) = self.overlay.as_ref() else {
+            return false;
+        };
+        let text = list.query.text();
+        if text == self.session_selector.filter.value {
+            return false;
+        }
+        self.session_selector.filter.set_value(&text);
+        self.session_selector.recompute();
+        self.rebuild_session_picker(cx);
+        true
+    }
+
+    /// 覆盖层里是不是会话选择器（选中项是会话行）。
+    pub(super) fn session_picker_open(&self) -> bool {
+        matches!(self.overlay, Some(Overlay::List(_))) && self.session_selector.active
+    }
+
+    /// 把选择器的选中行同步到覆盖层列表（Ctrl-G 改了选中项后要跟着高亮）。
+    pub(super) fn sync_picker_selection(&mut self) {
+        let selected = self.session_selector.selected;
+        if let Some(Overlay::List(list)) = self.overlay.as_mut() {
+            list.selected = selected.min(list.filtered().len().saturating_sub(1));
+        }
     }
 
     /// 下拉菜单按键：`true` 表示已消费（未消费时调用方会收起菜单）。

@@ -4,7 +4,7 @@
 
 use super::super::{
     app::App,
-    session_selector::{DisplayNode, MAX_VISIBLE, NameFilter, Scope, SessionSelector, SortMode},
+    session_selector::{DisplayNode, MAX_VISIBLE, NameFilter, Scope, SessionSelector},
 };
 use crate::utils::{
     self,
@@ -131,23 +131,10 @@ fn render_header_row(
     }
     right_spans.push(Span::raw("  "));
     right_spans.push(Span::styled("Name: ", *muted));
-    right_spans.push(Span::styled(
-        match s.name_filter {
-            NameFilter::All => "All",
-            NameFilter::Named => "Named",
-        },
-        *accent,
-    ));
+    right_spans.push(Span::styled(s.name_filter_label(), *accent));
     right_spans.push(Span::raw("  "));
     right_spans.push(Span::styled("Sort: ", *muted));
-    right_spans.push(Span::styled(
-        match s.sort_mode {
-            SortMode::Threaded => "Threaded",
-            SortMode::Recent => "Recent",
-            SortMode::Relevance => "Fuzzy",
-        },
-        *accent,
-    ));
+    right_spans.push(Span::styled(s.sort_label(), *accent));
 
     // 渐进加载进度（结果按 mtime 顺序逐帧补齐）
     if s.is_loading() {

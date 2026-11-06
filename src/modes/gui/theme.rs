@@ -99,8 +99,6 @@ pub const SCROLLBAR_MIN_THUMB: f32 = 24.0;
 
 /// 补全面板里除候选行以外的固定高度（输入框 + 内边距，逻辑像素）
 pub const SUGGEST_CHROME_HEIGHT: f32 = 46.0;
-/// 补全面板最多显示几行。
-pub const SUGGEST_ROWS: usize = 8;
 /// 补全面板单行高度（逻辑像素）。
 pub const SUGGEST_ROW_HEIGHT: f32 = 24.0;
 /// 补全面板与输入卡片之间的间隙。

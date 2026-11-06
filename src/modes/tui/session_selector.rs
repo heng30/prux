@@ -451,6 +451,31 @@ impl SessionSelector {
         }
     }
 
+    /// 范围档位名（标题/提示行用；GUI 与 TUI 共用同一份文案）。
+    pub fn scope_label(&self) -> &'static str {
+        match self.scope {
+            Scope::Current => "Current Folder",
+            Scope::All => "All",
+        }
+    }
+
+    /// 排序档位名。
+    pub fn sort_label(&self) -> &'static str {
+        match self.sort_mode {
+            SortMode::Threaded => "Threaded",
+            SortMode::Recent => "Recent",
+            SortMode::Relevance => "Fuzzy",
+        }
+    }
+
+    /// 名称过滤档位名。
+    pub fn name_filter_label(&self) -> &'static str {
+        match self.name_filter {
+            NameFilter::All => "All",
+            NameFilter::Named => "Named",
+        }
+    }
+
     /// 切换 scope（current ↔ all；all 首次访问时扫描）
     pub fn toggle_scope(&mut self) {
         self.scope = match self.scope {

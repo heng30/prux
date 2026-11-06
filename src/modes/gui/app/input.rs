@@ -3,6 +3,8 @@
 //! 拆自 [`super::app`]：只搬输入相关代码，状态仍在父模块。
 
 use super::*;
+use crate::utils::{ime::now_ms, paths};
+use std::path::{Path, PathBuf};
 
 impl GuiApp {
     /// 鼠标点选输入框：光标落到 (行, 列)，`extend` 为真时扩展选区（拖选/Shift）。
@@ -15,6 +17,60 @@ impl GuiApp {
     ) {
         // 行尾后的点击（占位方块之后）夹到行尾
         self.editor.set_cursor(row, col, extend);
+        cx.notify();
+    }
+
+    /// 把文件按 `@路径` 引用插到光标处（带空白的路径加引号，`@路径` 按空白分词）。
+    pub(super) fn insert_attachment(&mut self, path: &Path) {
+        let cwd = PathBuf::from(self.cwd());
+        let path = paths::relative_posix(&cwd, path);
+        let insert = if path.contains(char::is_whitespace) {
+            format!("@\"{path}\" ")
+        } else {
+            format!("@{path} ")
+        };
+        self.editor.insert(&insert);
+    }
+
+    /// Ctrl+V：粘贴。顺序与 TUI 的 `App::paste_clipboard` 一致：
+    /// 剪贴板里的文件路径 → 图片（落成临时文件）→ 文本，前两者都插 `@路径`。
+    pub(super) fn paste_clipboard(&mut self, cx: &mut Context<Self>) {
+        let Some(item) = cx.read_from_clipboard() else {
+            return;
+        };
+
+        let mut files: Vec<PathBuf> = Vec::new();
+        let mut image: Option<(gpui::ImageFormat, Vec<u8>)> = None;
+        for entry in &item.entries {
+            match entry {
+                gpui::ClipboardEntry::ExternalPaths(paths) => {
+                    files.extend(paths.paths().iter().cloned());
+                }
+                gpui::ClipboardEntry::Image(image_entry) => {
+                    image = Some((image_entry.format, image_entry.bytes.clone()));
+                }
+                gpui::ClipboardEntry::String(_) => {}
+            }
+        }
+
+        if !files.is_empty() {
+            for path in files {
+                self.insert_attachment(&path);
+            }
+            cx.notify();
+            return;
+        }
+
+        if let Some(path) = image.and_then(|(format, bytes)| write_clipboard_image(format, &bytes))
+        {
+            self.insert_attachment(&path);
+            cx.notify();
+            return;
+        }
+
+        if let Some(text) = item.text() {
+            self.editor.insert(&text);
+        }
         cx.notify();
     }
 
@@ -191,8 +247,6 @@ impl GuiApp {
         if let Some(
             SessionDialog::Rename { editor, .. }
             | SessionDialog::ApiKey { editor, .. }
-            | SessionDialog::Import { editor }
-            | SessionDialog::Label { editor }
             | SessionDialog::BugHint { editor }
             | SessionDialog::Number { editor, .. }
             | SessionDialog::Oauth { editor, .. },
@@ -234,8 +288,6 @@ impl GuiApp {
         if let Some(
             SessionDialog::Rename { editor, .. }
             | SessionDialog::ApiKey { editor, .. }
-            | SessionDialog::Import { editor }
-            | SessionDialog::Label { editor }
             | SessionDialog::BugHint { editor }
             | SessionDialog::Number { editor, .. }
             | SessionDialog::Oauth { editor, .. },
@@ -393,4 +445,11 @@ impl EntityInputHandler for GuiApp {
     ) -> Option<usize> {
         None
     }
+}
+
+/// 把剪贴板里的图片写成临时文件（`@路径` 引用与发送时的图片附件都从磁盘读）。
+fn write_clipboard_image(format: gpui::ImageFormat, bytes: &[u8]) -> Option<PathBuf> {
+    let path = std::env::temp_dir().join(format!("clipboard-{}.{}", now_ms(), format.extension()));
+    std::fs::write(&path, bytes).ok()?;
+    Some(path)
 }

@@ -1,7 +1,12 @@
 //! 动作与斜杠命令：把面板/菜单的 [`Action`] 与 `/` 命令落到 agent 命令或状态变更上。
 
 use super::*;
-use crate::{cli, core, modes::gui::bridge::GuiEvent, modes::slash, utils::paths};
+use crate::{
+    cli,
+    core::{self, keybindings},
+    modes::{gui::bridge::GuiEvent, slash},
+    utils::paths,
+};
 
 impl GuiApp {
     /// 斜杠命令：与命令面板共用同一批动作。
@@ -132,7 +137,7 @@ impl GuiApp {
             "model" if !arg.is_empty() => self.slash_switch_model(arg),
             "session" if !arg.is_empty() => self.slash_session(arg, cx),
             "new" => self.slash_new(cx),
-            "resume" | "sessions" => self.slash_open_sessions(cx),
+            "resume" => self.slash_open_sessions(cx),
             "model" => self.slash_open_models(cx),
             "thinking" => self.slash_open_thinking(cx),
             "login" => self.slash_login(cx),
@@ -141,10 +146,8 @@ impl GuiApp {
             "giff" => self.slash_giff(cx),
             "tree" => self.slash_tree(),
             "bug" => self.slash_bug(arg, cx),
-            "reload" => self.slash_reload(),
+            "reload" => self.slash_reload(cx),
             "label" if !arg.is_empty() => self.slash_set_label(arg),
-            "label" => self.slash_label_dialog(cx),
-            "import" => self.slash_import_dialog(cx),
             "clone" => self.slash_clone(),
             "fork" => self.slash_fork(),
             "share" => self.slash_share(),
@@ -152,11 +155,10 @@ impl GuiApp {
             "trust" => self.slash_trust(cx),
             "cwd" if !arg.is_empty() => self.slash_switch_cwd(arg, cx),
             "cwd" => self.slash_cwd_menu(cx),
-            "name" => self.slash_rename(cx),
             "copy" => self.slash_copy(cx),
-            "debug" if arg.is_empty() => self.slash_debug(),
             "compact" => self.slash_compact(arg),
-            "appearance" | "theme" => self.slash_appearance(cx),
+            "theme" if !arg.is_empty() => self.slash_theme_named(arg, cx),
+            "theme" => self.slash_appearance(cx),
             "panel" => self.slash_panel(cx),
             "dock" => self.slash_dock(cx),
             "sidebar" => self.slash_sidebar(cx),
@@ -166,7 +168,7 @@ impl GuiApp {
             "settings" if !arg.is_empty() => self.slash_extension_settings(arg, cx),
             "settings" => self.slash_settings(cx),
             "session" => self.slash_session_info(cx),
-            "help" | "hotkeys" => self.slash_help(cx),
+            "hotkeys" => self.slash_help(cx),
             "quit" => self.slash_quit(cx),
 
             // 与 UI 无关的扩展命令（proxy / notify 等）：扩展自己处理并回通知
@@ -215,7 +217,7 @@ impl GuiApp {
         // 路径参数与 TUI 同一套解析（引号包裹的含空格路径 / 只取第一个片段）
         _ = self.cmd_tx.send(AgentCommand::Export {
             out: paths::parse_path_arg(arg),
-            theme: None,
+            theme: self.export_theme(),
         });
     }
 
@@ -320,13 +322,27 @@ impl GuiApp {
     }
 
     /// `/reload`：重读上下文文件、技能与系统提示词。
-    fn slash_reload(&mut self) {
+    fn slash_reload(&mut self, cx: &mut Context<Self>) {
+        // 键位表也重读（同 TUI 的 /reload）：改完 keybindings.json 不用重启
+        let kb = keybindings::set_global(keybindings::KeybindingsManager::load(
+            &settings_manager::agent_dir(),
+        ));
+
+        for conflict in kb.conflicts() {
+            self.transcript.push_note(Note::Error(format!(
+                "keybindings.json conflict: {} is bound to {} ",
+                conflict.key,
+                conflict.keybindings.join(", ")
+            )));
+        }
+
         _ = self.cmd_tx.send(AgentCommand::Reload {
             context_files: Vec::new(),
             skills: Vec::new(),
             system_prompt: None,
             append_system_prompt: None,
         });
+        cx.notify();
     }
 
     /// `/label <entryId> [标签]`：与 TUI 一样吃显式 id（标签为空 = 清除该节点标签）。
@@ -337,18 +353,6 @@ impl GuiApp {
             entry_id: entry_id.to_string(),
             label: (!label.is_empty()).then(|| label.to_string()),
         });
-    }
-
-    /// `/label`：打开标签输入框。
-    fn slash_label_dialog(&mut self, cx: &mut Context<Self>) {
-        let editor = Editor::new();
-        self.dialog = Some(SessionDialog::Label { editor });
-        cx.notify();
-    }
-
-    /// `/import`（无参数）：打开路径输入框。
-    fn slash_import_dialog(&mut self, cx: &mut Context<Self>) {
-        self.open_import_dialog(cx);
     }
 
     /// `/clone`：克隆当前会话。
@@ -372,14 +376,21 @@ impl GuiApp {
 
     /// `/share`：生成分享链接。
     fn slash_share(&mut self) {
-        _ = self.cmd_tx.send(AgentCommand::Share { theme: None });
+        _ = self.cmd_tx.send(AgentCommand::Share {
+            theme: self.export_theme(),
+        });
+    }
+
+    /// 导出 / 分享用的主题名：取当前窗口明暗（桌面只有 dark / light 两套主题）。
+    fn export_theme(&self) -> Option<String> {
+        Some(if self.theme.is_dark { "dark" } else { "light" }.to_string())
     }
 
     /// `/export`（无参数）：导出到默认文件。
     fn slash_export_default(&mut self) {
         _ = self.cmd_tx.send(AgentCommand::Export {
             out: None,
-            theme: None,
+            theme: self.export_theme(),
         });
     }
 
@@ -398,19 +409,9 @@ impl GuiApp {
         self.open_cwd_menu(cx);
     }
 
-    /// `/name`（无参数）：打开改名输入框。
-    fn slash_rename(&mut self, cx: &mut Context<Self>) {
-        self.rename_current_session(cx);
-    }
-
     /// `/copy`：复制最后一条助手回复。
     fn slash_copy(&mut self, cx: &mut Context<Self>) {
         self.copy_last_reply(cx);
-    }
-
-    /// `/debug`：在对话流里输出调试信息。
-    fn slash_debug(&mut self) {
-        core::extensions::CommandHost::debug_info(self);
     }
 
     /// `/compact [指示]`：压缩上下文，指示可空。
@@ -423,6 +424,24 @@ impl GuiApp {
     /// `/appearance`、`/theme`：打开外观选择面板。
     fn slash_appearance(&mut self, cx: &mut Context<Self>) {
         self.open_appearance_picker(cx);
+    }
+
+    /// `/theme <名称>`：桌面只有 dark / light 两套主题，名称不认时列出可用值（同 TUI）。
+    fn slash_theme_named(&mut self, arg: &str, cx: &mut Context<Self>) {
+        let name = arg.trim().to_lowercase();
+        match name.as_str() {
+            "dark" => self.set_dark(true),
+            "light" => self.set_dark(false),
+            _ => {
+                self.transcript.push_note(Note::Error(format!(
+                    "unknown theme: {name} (available: dark, light)"
+                )));
+                cx.notify();
+                return;
+            }
+        }
+        self.toast(format!("switched theme: {name}"), ToastKind::Success, cx);
+        cx.notify();
     }
 
     /// `/panel`：开关右侧面板。
@@ -579,6 +598,8 @@ impl GuiApp {
             Action::Open(kind) => self.act_open(kind, cx),
             Action::UiChoice { id, text } => self.act_ui_choice(id, text),
             Action::TrustDecision(choice) => self.act_trust_decision(&choice, cx),
+            Action::SettingsOverwrite(overwrite) => self.act_settings_overwrite(overwrite, cx),
+            Action::ToggleBuiltinTool(name) => self.act_toggle_builtin_tool(name, cx),
             Action::CycleExtensionSetting { ext, key } => {
                 self.act_cycle_extension_setting(&ext, &key, cx)
             }
@@ -595,7 +616,17 @@ impl GuiApp {
             Action::BugReport {
                 hint,
                 include_session,
-            } => self.act_bug_report(hint, include_session),
+            } => self.act_bug_report(hint, include_session, cx),
+            Action::BugReportDelivery {
+                hint,
+                include_session,
+                include_summary,
+            } => self.act_bug_report_delivery(hint, include_session, include_summary, cx),
+            Action::BugReportExport {
+                hint,
+                include_session,
+                include_summary,
+            } => self.act_bug_report_export(hint, include_session, include_summary),
             Action::ResumeZombie { path, rewrite } => self.act_resume_zombie(path, rewrite),
             Action::ZombieCancel => self.act_zombie_cancel(),
             Action::SessionCancel => self.act_session_cancel(cx),
@@ -659,6 +690,42 @@ impl GuiApp {
     /// `Action::TrustDecision`：落实某个项目信任决策。
     fn act_trust_decision(&mut self, choice: &str, cx: &mut Context<Self>) {
         self.resolve_trust(choice, cx);
+    }
+
+    /// `Action::ToggleBuiltinTool`：切换某个内置工具的启用态并重开勾选面板。
+    fn act_toggle_builtin_tool(&mut self, name: String, cx: &mut Context<Self>) {
+        let enabled_now = panels::builtin_tools_enabled().contains(&name);
+        match settings_manager::toggle_settings_default_tool(&name, enabled_now) {
+            Ok(_) => self.open_builtin_tools_panel(cx),
+            Err(error) => {
+                self.transcript
+                    .push_note(Note::Error(format!("Cannot write settings: {error}")));
+                cx.notify();
+            }
+        }
+    }
+
+    /// `Action::SettingsOverwrite`：落实 settings.json 的覆写确认。
+    fn act_settings_overwrite(&mut self, overwrite: bool, cx: &mut Context<Self>) {
+        self.settings_overwrite_asked = None;
+        if overwrite {
+            match settings_manager::confirm_settings_overwrite() {
+                Ok(()) => self.toast("Overwrote invalid settings file", ToastKind::Success, cx),
+                Err(error) => self.toast(
+                    format!("failed to save settings: {error}"),
+                    ToastKind::Info,
+                    cx,
+                ),
+            }
+        } else {
+            settings_manager::cancel_settings_overwrite();
+            self.toast(
+                "Settings not saved: file is not valid JSON",
+                ToastKind::Info,
+                cx,
+            );
+        }
+        cx.notify();
     }
 
     /// `Action::CycleExtensionSetting`：把扩展的某个设置循环到下一个候选值（面板留着继续改）。
@@ -744,12 +811,89 @@ impl GuiApp {
         self.repair_session(salvage, cx);
     }
 
-    /// `Action::BugReport`：带着复现描述打包诊断信息。
-    fn act_bug_report(&mut self, hint: String, include_session: bool) {
+    /// `Action::BugReport`：答完「是否附带会话记录」后决定下一步。
+    ///
+    /// 与 TUI 一致：附带会话记录就直接问导出方式（摘要多余），否则再问一句要不要模型摘要。
+    fn act_bug_report(&mut self, hint: String, include_session: bool, cx: &mut Context<Self>) {
+        if include_session {
+            self.act_bug_report_delivery(hint, true, false, cx);
+            return;
+        }
+
+        self.ask_choice(
+            "Attach a summary written by the current model instead?",
+            vec![
+                (
+                    "Yes, generate a summary".to_string(),
+                    Action::BugReportDelivery {
+                        hint: hint.clone(),
+                        include_session: false,
+                        include_summary: true,
+                    },
+                ),
+                (
+                    "No".to_string(),
+                    Action::BugReportDelivery {
+                        hint,
+                        include_session: false,
+                        include_summary: false,
+                    },
+                ),
+                ("Cancel".to_string(), Action::None),
+            ],
+            cx,
+        );
+    }
+
+    /// `Action::BugReportDelivery`：最后一步——选导出方式（zip / 取消）。
+    fn act_bug_report_delivery(
+        &mut self,
+        hint: String,
+        include_session: bool,
+        include_summary: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let title = format!(
+            "Bug report — transcript: {}, summary: {}",
+            if include_session {
+                "included"
+            } else {
+                "not included"
+            },
+            if include_summary {
+                "written by the current model"
+            } else {
+                "none"
+            },
+        );
+        self.ask_choice(
+            title,
+            vec![
+                (
+                    "Export as Zip".to_string(),
+                    Action::BugReportExport {
+                        hint: hint.clone(),
+                        include_session,
+                        include_summary,
+                    },
+                ),
+                ("Cancel".to_string(), Action::None),
+            ],
+            cx,
+        );
+    }
+
+    /// `Action::BugReportExport`：真的打包诊断信息。
+    fn act_bug_report_export(
+        &mut self,
+        hint: String,
+        include_session: bool,
+        include_summary: bool,
+    ) {
         _ = self.cmd_tx.send(AgentCommand::BugReport {
             hint,
             include_session,
-            include_summary: false,
+            include_summary,
         });
     }
 
@@ -958,6 +1102,69 @@ impl GuiApp {
                 self.set_dark(!self.theme.is_dark);
                 Ok(())
             }
+            SettingKey::Mermaid => {
+                settings_manager::write_settings_mermaid(!settings_manager::read_settings_mermaid())
+            }
+            SettingKey::LaTeX => {
+                settings_manager::write_settings_latex(!settings_manager::read_settings_latex())
+            }
+            SettingKey::AutocompleteMaxVisible => {
+                const TIERS: [usize; 6] = [3, 5, 7, 10, 15, 20];
+                let current = settings_manager::read_settings_autocomplete_max_visible();
+                let next = TIERS
+                    .iter()
+                    .find(|tier| **tier > current)
+                    .copied()
+                    .unwrap_or(TIERS[0]);
+                settings_manager::write_settings_autocomplete_max_visible(next)
+            }
+            SettingKey::HistoryMaxEntries => {
+                let current = settings_manager::read_settings_history_max_entries();
+                let next = settings_manager::HISTORY_MAX_ENTRIES_TIERS
+                    .iter()
+                    .find(|tier| **tier > current)
+                    .copied()
+                    .unwrap_or(settings_manager::HISTORY_MAX_ENTRIES_TIERS[0]);
+                settings_manager::write_settings_history_max_entries(next)
+            }
+            SettingKey::WheelScrollLines => {
+                use crate::utils::wheel::WheelScrollLines;
+                let current = settings_manager::read_settings_fullscreen_wheel_scroll_lines();
+                let next = match current {
+                    WheelScrollLines::Auto => WheelScrollLines::Lines(1),
+                    WheelScrollLines::Lines(1) => WheelScrollLines::Lines(2),
+                    WheelScrollLines::Lines(2) => WheelScrollLines::Lines(3),
+                    WheelScrollLines::Lines(3) => WheelScrollLines::Lines(5),
+                    WheelScrollLines::Lines(5) => WheelScrollLines::Lines(10),
+                    WheelScrollLines::Lines(_) => WheelScrollLines::Auto,
+                };
+                self.wheel_accel.set_lines(next);
+                settings_manager::write_settings_fullscreen_wheel_scroll_lines(next)
+            }
+            SettingKey::ShareDestination => {
+                use crate::core::settings_manager::SessionShareDestination;
+                let next = match settings_manager::read_settings_session_share_destination() {
+                    SessionShareDestination::Auto => SessionShareDestination::Gist,
+                    SessionShareDestination::Gist => SessionShareDestination::Radius,
+                    SessionShareDestination::Radius => SessionShareDestination::Auto,
+                };
+                settings_manager::write_settings_session_share_destination(next)
+            }
+            SettingKey::DefaultProjectTrust => {
+                let next = match settings_manager::read_settings()
+                    .default_project_trust
+                    .as_deref()
+                {
+                    Some("always") => "never",
+                    Some("never") => "ask",
+                    _ => "always",
+                };
+                settings_manager::write_settings_default_project_trust(next)
+            }
+            SettingKey::BuiltinTools => {
+                self.open_builtin_tools_panel(cx);
+                return;
+            }
             SettingKey::GuiFrame => {
                 self.set_frame_gui(!settings_manager::read_settings_frame_gui(), cx);
                 Ok(())
@@ -1086,12 +1293,19 @@ impl GuiApp {
         );
         let text = slash::expand_user_text(&text, &self.skills, &self.prompt_templates);
 
+        // `@图片` 展开成图片附件（同 TUI 的提交路径）；follow-up 只带文本，与 TUI 的排队路径一致
+        let (text, images) = if follow_up {
+            (text, Vec::new())
+        } else {
+            cli::file_processor::expand_at_image_refs(&text, &self.cwd(), self.image_limits())
+        };
+
         if self.busy {
             // 忙碌：只排队，由 agent 在回合内注入 / 结算后取走，不在本地开新回合
             if follow_up {
                 self.follow_ups.push_back(text);
             } else if let Ok(mut inbox) = self.steer_inbox.lock() {
-                inbox.push_back(AgentMessage::user_text(&text));
+                inbox.push_back(message_with_images(&text, &images));
             }
 
             cx.notify();
@@ -1101,8 +1315,23 @@ impl GuiApp {
         self.busy = true;
         let cwd = self.cwd();
         self.transcript.push_user(text.clone(), &cwd);
-        _ = self.cmd_tx.send(AgentCommand::Prompt(text));
+        _ = self.cmd_tx.send(if images.is_empty() {
+            AgentCommand::Prompt(text)
+        } else {
+            AgentCommand::PromptMessage(message_with_images(&text, &images))
+        });
         self.scroll_to_bottom();
+    }
+
+    /// 当前模型的内联图片限制（与 TUI 同源：模型条目的 `inputLimits.images.resize`）。
+    fn image_limits(&self) -> ImageResizeLimits {
+        self.snapshot
+            .as_ref()
+            .and_then(|snapshot| {
+                core::model_resolver::find_model(&snapshot.provider, &snapshot.model).ok()
+            })
+            .map(|entry| entry.input_limits.images.resize)
+            .unwrap_or_default()
     }
 
     /// 待发送消息数（steer 注入箱 + follow-up 队列）：状态栏「N queued」用。
@@ -1606,6 +1835,7 @@ fn takes_argument(command: &str) -> bool {
             | "compact"
             | "bug"
             | "cwd"
+            | "theme"
     )
 }
 
