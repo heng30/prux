@@ -3,7 +3,7 @@
 //! 拆自 [`super::app`]：只搬输入相关代码，状态仍在父模块。
 
 use super::*;
-use crate::utils::{ime::now_ms, paths};
+use crate::utils::{paths, time::now_ms};
 use std::path::{Path, PathBuf};
 
 impl GuiApp {

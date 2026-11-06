@@ -149,8 +149,7 @@ prux-gui -c         # 接着最近一个会话
 
 - **命令面板**（`Ctrl-M`）：只列 `/` 面板里没有的东西，外加有独立面板的 `Skills` / `Settings` /
   `Extensions…`、切换外观、右侧面板等视图动作。
-- **会话选择器**（`Ctrl-Shift-O`）：切会话；`Ctrl-R` 重命名、`Ctrl-D` 删除、`Ctrl-G` 跳到当前会话的
-  下一个会话。
+- **会话选择器**（`Ctrl-Shift-O`）：切会话；`Ctrl-R` 重命名、`Ctrl-D` 删除。
 - **模型 / 思考 / 外观**：`Ctrl-L`、`Shift-Tab`（循环级别）、`Ctrl-Shift-G`；`Ctrl-P` / `Ctrl-Shift-P`
   直接切上一个/下一个模型（只在「模型循环名单」里挑）。
 - **设置面板**（`Ctrl-,`）：与终端界面同一份 `settings.json` 的开关与数值，`Space` 改值，数字项弹输入框
@@ -281,8 +280,9 @@ prux-gui -c         # 接着最近一个会话
   逐档调整，`Ctrl-0` 回到 100%；外观面板里也能选。
 - 左侧会话栏的显隐存 `settings.json` 的 `gui.sidebar`（默认展开），下次启动照原样恢复。
 - 窗口边框存 `settings.json` 的 `gui.frame`（Linux 默认自绘，macOS 默认用系统标题栏）：开启后标题栏由应用绘制，可拖动、双击放大/还原，右侧是最小化/最大化/关闭按钮（macOS 用系统的红绿灯，不再画这一组）。Linux 在设置面板的 Window frame 一行切换后立即生效，macOS 需要重启。Windows 上没有系统标题栏可以沿用，因此窗口恒定自绘，该设置在那里的值不起作用。
-- 其余设置（自动压缩、重试、thinking 显示、语法高亮、图片处理、steering / follow-up 模式等）与终端
-  界面共用同一份 `settings.json`，改哪边都生效，含义见[设置](settings.md)。
+- 其余设置（自动压缩、重试、thinking 显示、图片缩放与拦截、steering / follow-up 模式等）与终端
+  界面共用同一份 `settings.json`，改哪边都生效，含义见[设置](settings.md)。语法高亮与内联图片显示
+  例外：桌面版恒为开启，`syntaxHighlight` / `showImages` 只对终端界面生效。
 
 ## 与终端界面的差异
 
@@ -293,6 +293,8 @@ prux-gui -c         # 接着最近一个会话
   Wheel scroll lines）只作用于终端界面。
 - **鼠标**：桌面版支持拖选、中键复制粘贴、拖动滚动条、拖动侧栏/面板边界、右键菜单、点卡片展开、点 chip 开面板。
 - **主题**：桌面版两套，终端界面多套自定义主题（见[主题](themes.md)）。
+- **外部编辑器与启动输出**：终端界面的 `Ctrl+G` 外部编辑器（`externalEditor`）在桌面版没有对应入口，
+  `quietStartup` 也只作用于终端界面（桌面版没有启动横幅与资源清单输出）。
 - **扩展**：扩展注册的工具、命令、快捷键、覆盖层与停靠段两边共用；扩展请求的列表选择与输入行在
   桌面版里同样会弹出对应面板。
 

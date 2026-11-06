@@ -26,7 +26,7 @@ use crate::{
         tui::{
             agent_actor::{AgentCommand, CommandRx},
             app::ReloadCtx,
-            worker::{debug_info_text, session_tree_text, share_via_gist},
+            worker::{debug_info_text, drain_cache_warm, session_tree_text, share_via_gist},
         },
     },
     utils::paths::home_dir,
@@ -35,8 +35,13 @@ use std::{
     collections::{HashSet, VecDeque},
     path::{Path, PathBuf},
     sync::Arc,
+    time::Duration,
 };
 use tokio::sync::{Mutex, mpsc::UnboundedSender};
+
+/// 空闲时多久去取一次提示缓存保温回执：保温在后台 task 里跑，
+/// 完成时不会唤醒这个循环（idle 模式可能长时间没有任何命令）。
+const CACHE_WARM_POLL: Duration = Duration::from_millis(1000);
 
 /// 回合 future：持锁跑完一轮，drop 即取消。
 type RoundFuture = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
@@ -99,16 +104,25 @@ pub async fn run(
                     None => break,
                     Some(cmd) => queue.push_back(cmd),
                 },
-                _ = fut => on_round = None,
+                _ = fut => {
+                    on_round = None;
+                    // 回合结束后保温任务可能已经跑完：先把回执落成会话记录并通知视图
+                    drain_cache_warm(&agent).await;
+                }
             }
             continue;
         }
 
         let cmd = match queue.pop_front() {
             Some(cmd) => cmd,
-            None => match cmd_rx.recv().await {
-                Some(cmd) => cmd,
-                None => break,
+            None => match tokio::time::timeout(CACHE_WARM_POLL, cmd_rx.recv()).await {
+                Ok(Some(cmd)) => cmd,
+                Ok(None) => break,
+                // 空闲轮询：保温刚在后台完成，取回执后继续等命令
+                Err(_) => {
+                    drain_cache_warm(&agent).await;
+                    continue;
+                }
             },
         };
 

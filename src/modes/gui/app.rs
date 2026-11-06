@@ -532,7 +532,7 @@ impl GuiApp {
             overlay: None,
             panel: RightPanel::default(),
             expand_tools: false,
-            show_thinking: true,
+            show_thinking: !settings_manager::read_settings_hide_thinking(),
             marked_range: None,
             pane_width: Rc::new(Cell::new(px(0.))),
             // 初始就当「正在跟随」：空会话的第一批内容出现时也要滚到底，
@@ -624,133 +624,185 @@ impl GuiApp {
         self.focus.clone()
     }
 
-    /// 上行事件 → 状态。
+    /// 上行事件 → 状态：按事件种类分派到各自的处理方法。
     fn apply_event(&mut self, event: GuiEvent, cx: &mut Context<Self>) {
         match event {
-            GuiEvent::Agent(event) => {
-                let kind = event.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                // 扩展也要看到 agent 事件（TUI 在事件循环里逐条转发）。不转发的话，
-                // 靠事件驱动的扩展——plan-mode 抽计划步骤、goal 结算、loop/hang 检测、
-                // notify、subagent 状态——在桌面端等于不存在。
-                if kind == "agent_settled" {
-                    // notify 用这个字段区分「真正空闲」与「还有排队输入」
-                    let mut enriched = event.clone();
-                    if let Some(obj) = enriched.as_object_mut() {
-                        obj.insert(
-                            "hasQueuedMessages".to_string(),
-                            serde_json::Value::Bool(
-                                !self.follow_ups.is_empty()
-                                    || !self.steer_inbox.lock().unwrap().is_empty(),
-                            ),
-                        );
-                    }
-                    dispatch_agent_event(&enriched);
-                } else {
-                    dispatch_agent_event(&event);
-                }
-
-                match kind {
-                    "agent_start" => {
-                        self.busy = true;
-                        self.start_status_tick(cx);
-                    }
-                    "agent_settled" => {
-                        self.busy = false;
-                        // 回合结束：取下一批排队消息（steer 先于 follow-up，
-                        // 同类按 settings 的 mode 取整批或一条）继续跑，与 TUI 一致
-                        if let Some(batch) = self.drain_next_batch() {
-                            _ = self.cmd_tx.send(AgentCommand::PromptBatch(batch));
-                            self.busy = true;
-                        }
-                    }
-                    _ => {}
-                }
-                let model = self.snapshot.as_ref().map(|s| s.model.clone());
-                self.meter.observe(&event, model.as_deref());
-                self.observe_usage(&event);
-                self.sample_token_rate();
-                self.transcript.apply(&event, &self.cwd());
-                self.follow_bottom();
-            }
-            GuiEvent::History(messages) => self.replace_history(messages),
+            GuiEvent::Agent(event) => self.on_agent_event(event, cx),
+            GuiEvent::History(messages) => self.on_history(messages),
             GuiEvent::PromptAssets { skills, templates } => {
-                // 启动与 `/reload` 各来一份：补全候选与提交展开都按最新这份走
-                self.skills = skills;
-                self.prompt_templates = templates;
+                self.on_prompt_assets(skills, templates)
             }
-            GuiEvent::SessionZombie { path, count } => {
-                // 崩溃残留：先选恢复方式，确认后才装配会话
-                self.stage_zombie_operations(path, count, cx);
-            }
-            GuiEvent::SessionRepair { path, plan } => {
-                // 打开损坏会话：先弹修复面板，确认后写回文件再重开
-                self.stage_session_repair(path, plan, RepairIntent::Resume, cx);
-            }
+            GuiEvent::SessionZombie { path, count } => self.on_session_zombie(path, count, cx),
+            GuiEvent::SessionRepair { path, plan } => self.on_session_repair(path, plan, cx),
             GuiEvent::Rewound {
                 messages,
                 removed_input,
-            } => {
-                self.replace_history(messages);
-                if std::mem::take(&mut self.pending_rewind_restore) {
-                    self.editor.clear();
-                    self.editor.insert(&removed_input);
-                }
-                self.transcript.push_note(Note::Info(
-                    "Rewound last user input: it and all later output were removed from the context (history remains in the session tree)."
-                        .into(),
-                ));
-                self.follow_bottom();
+            } => self.on_rewound(messages, removed_input),
+            GuiEvent::Notice(message) => self.on_notice(message),
+            GuiEvent::Error(message) => self.on_error(message, cx),
+            GuiEvent::Snapshot(snapshot) => self.on_snapshot(snapshot, cx),
+        }
+    }
+
+    /// agent 内核 JSON 事件：先转发给扩展，再按 `type` 更新忙碌态与用量。
+    fn on_agent_event(&mut self, event: serde_json::Value, cx: &mut Context<Self>) {
+        let kind = event.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        // 扩展也要看到 agent 事件（TUI 在事件循环里逐条转发）。不转发的话，
+        // 靠事件驱动的扩展——plan-mode 抽计划步骤、goal 结算、loop/hang 检测、
+        // notify、subagent 状态——在桌面端等于不存在。
+        if kind == "agent_settled" {
+            // notify 用这个字段区分「真正空闲」与「还有排队输入」
+            let mut enriched = event.clone();
+            if let Some(obj) = enriched.as_object_mut() {
+                obj.insert(
+                    "hasQueuedMessages".to_string(),
+                    serde_json::Value::Bool(
+                        !self.follow_ups.is_empty() || !self.steer_inbox.lock().unwrap().is_empty(),
+                    ),
+                );
             }
-            GuiEvent::Notice(message) => {
-                // 命令/压缩/重载的结果常驻对话区（与 TUI 一致），而不是一闪而过的 toast
-                self.transcript.push_note(Note::Info(message));
-                self.follow_bottom();
+            dispatch_agent_event(&enriched);
+        } else {
+            dispatch_agent_event(&event);
+        }
+
+        match kind {
+            "agent_start" => {
+                self.busy = true;
+                self.start_status_tick(cx);
             }
-            GuiEvent::Error(message) => {
+            "agent_settled" => {
                 self.busy = false;
-                self.toast(message.clone(), ToastKind::Error, cx);
-                self.transcript.push_note(Note::Error(message));
-                self.follow_bottom();
-            }
-            GuiEvent::Snapshot(snapshot) => {
-                let previous = self.cwd();
-                let previous_name = self
-                    .snapshot
-                    .as_ref()
-                    .and_then(|snapshot| snapshot.session_name.clone());
-                let previous_path = self
-                    .snapshot
-                    .as_ref()
-                    .and_then(|snapshot| snapshot.session_path.clone());
-
-                // 快照是回合边界的权威用量（含压缩、嵌套调用等事件看不到的部分）
-                let mut snapshot = snapshot;
-                self.usage = std::mem::take(&mut snapshot.usage);
-                self.snapshot = Some(snapshot);
-
-                // `/name` 改的标题只写在会话文件里：不重读会话列表，侧栏还是旧标题
-                let renamed = self
-                    .snapshot
-                    .as_ref()
-                    .and_then(|snapshot| snapshot.session_name.clone())
-                    != previous_name;
-
-                // 新会话延迟落盘：首条消息写出文件后才知道路径，不重读就永远没有对应行，也就高亮不到
-                let appeared = self
-                    .snapshot
-                    .as_ref()
-                    .and_then(|snapshot| snapshot.session_path.clone())
-                    != previous_path;
-
-                let cwd = self.cwd();
-                if cwd != previous {
-                    self.reload_sessions(cx);
-                    self.refresh_branch();
-                    cwd_store::remember_cwd(&cwd);
-                } else if renamed || appeared {
-                    self.reload_sessions(cx);
+                // 回合结束：取下一批排队消息（steer 先于 follow-up，
+                // 同类按 settings 的 mode 取整批或一条）继续跑，与 TUI 一致
+                if let Some(batch) = self.drain_next_batch() {
+                    _ = self.cmd_tx.send(AgentCommand::PromptBatch(batch));
+                    self.busy = true;
                 }
             }
+            // 缓存保温回执（`showCacheMissNotices` 关闭时不打扰）：
+            // 保温在后台跑，worker 排空回执后发这条事件
+            "cache_warm" => {
+                if settings_manager::read_settings_show_cache_miss_notices() {
+                    let cost = event.get("cost").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    let note = if event
+                        .get("extensionOverride")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false)
+                    {
+                        " (extension override)"
+                    } else {
+                        ""
+                    };
+                    self.transcript.push_note(Note::Info(format!(
+                        "Cache warmed{note}: ${}",
+                        crate::utils::display::format_cost(cost)
+                    )));
+                }
+            }
+            _ => {}
+        }
+        let model = self.snapshot.as_ref().map(|s| s.model.clone());
+        self.meter.observe(&event, model.as_deref());
+        self.observe_usage(&event);
+        self.sample_token_rate();
+        self.transcript.apply(&event, &self.cwd());
+        self.follow_bottom();
+    }
+
+    /// 完整会话历史：重建对话流（切换/新建会话与 `/rewind` 共用）。
+    fn on_history(&mut self, messages: Vec<AgentMessage>) {
+        self.replace_history(messages);
+    }
+
+    /// 本会话可用的技能与提示词模板：启动与 `/reload` 各来一份。
+    fn on_prompt_assets(&mut self, skills: Vec<Skill>, templates: Vec<PromptTemplate>) {
+        // 补全候选与提交展开都按最新这份走
+        self.skills = skills;
+        self.prompt_templates = templates;
+    }
+
+    /// 崩溃残留的未关闭 operation：先选恢复方式，确认后才装配会话。
+    fn on_session_zombie(&mut self, path: PathBuf, count: usize, cx: &mut Context<Self>) {
+        self.stage_zombie_operations(path, count, cx);
+    }
+
+    /// 打开损坏会话时推来的修复方案：先弹修复面板，确认后写回文件再重开。
+    fn on_session_repair(
+        &mut self,
+        path: PathBuf,
+        plan: SessionRepairPlan,
+        cx: &mut Context<Self>,
+    ) {
+        self.stage_session_repair(path, plan, RepairIntent::Resume, cx);
+    }
+
+    /// `/rewind` 成功：重建历史，按 GUI 记录的选择回填输入框并留一条说明。
+    fn on_rewound(&mut self, messages: Vec<AgentMessage>, removed_input: String) {
+        self.replace_history(messages);
+        if std::mem::take(&mut self.pending_rewind_restore) {
+            self.editor.clear();
+            self.editor.insert(&removed_input);
+        }
+        self.transcript.push_note(Note::Info(
+            "Rewound last user input: it and all later output were removed from the context (history remains in the session tree)."
+                .into(),
+        ));
+        self.follow_bottom();
+    }
+
+    /// 一次性提示：命令/压缩/重载的结果常驻对话区（与 TUI 一致），而不是一闪而过的 toast。
+    fn on_notice(&mut self, message: String) {
+        self.transcript.push_note(Note::Info(message));
+        self.follow_bottom();
+    }
+
+    /// 回合以错误结束：解除忙碌态，错误同时进 toast 与对话区。
+    fn on_error(&mut self, message: String, cx: &mut Context<Self>) {
+        self.busy = false;
+        self.toast(message.clone(), ToastKind::Error, cx);
+        self.transcript.push_note(Note::Error(message));
+        self.follow_bottom();
+    }
+
+    /// 会话状态快照：更新用量与快照，必要时重读会话列表。
+    fn on_snapshot(&mut self, snapshot: Box<Snapshot>, cx: &mut Context<Self>) {
+        let previous = self.cwd();
+        let previous_name = self
+            .snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.session_name.clone());
+        let previous_path = self
+            .snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.session_path.clone());
+
+        // 快照是回合边界的权威用量（含压缩、嵌套调用等事件看不到的部分）
+        let mut snapshot = snapshot;
+        self.usage = std::mem::take(&mut snapshot.usage);
+        self.snapshot = Some(snapshot);
+
+        // `/name` 改的标题只写在会话文件里：不重读会话列表，侧栏还是旧标题
+        let renamed = self
+            .snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.session_name.clone())
+            != previous_name;
+
+        // 新会话延迟落盘：首条消息写出文件后才知道路径，不重读就永远没有对应行，也就高亮不到
+        let appeared = self
+            .snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.session_path.clone())
+            != previous_path;
+
+        let cwd = self.cwd();
+        if cwd != previous {
+            self.reload_sessions(cx);
+            self.refresh_branch();
+            cwd_store::remember_cwd(&cwd);
+        } else if renamed || appeared {
+            self.reload_sessions(cx);
         }
     }
 

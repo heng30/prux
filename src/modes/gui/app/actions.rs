@@ -1044,12 +1044,11 @@ impl GuiApp {
             SettingKey::Retry => settings_manager::write_settings_retry_enabled(
                 !settings_manager::read_settings_retry_enabled(),
             ),
-            SettingKey::HideThinking => settings_manager::write_settings_hide_thinking(
-                !settings_manager::read_settings_hide_thinking(),
-            ),
-            SettingKey::SyntaxHighlight => settings_manager::write_settings_syntax_highlight(
-                !settings_manager::read_settings_syntax_highlight(),
-            ),
+            SettingKey::HideThinking => {
+                let hide = !settings_manager::read_settings_hide_thinking();
+                self.show_thinking = !hide;
+                settings_manager::write_settings_hide_thinking(hide)
+            }
             SettingKey::ImagesAutoResize => settings_manager::write_settings_images_auto_resize(
                 !settings_manager::read_settings_images_auto_resize(),
             ),
@@ -1089,23 +1088,16 @@ impl GuiApp {
                 };
                 settings_manager::write_settings_cache_warming(next).map(|_| ())
             }
-            SettingKey::QuietStartup => {
-                use crate::core::settings_manager::QuietStartup;
-                let next = match settings_manager::read_settings_quiet_startup() {
-                    QuietStartup::Full => QuietStartup::Header,
-                    QuietStartup::Header => QuietStartup::Silent,
-                    QuietStartup::Silent => QuietStartup::Full,
-                };
-                settings_manager::write_settings_quiet_startup(next)
-            }
             SettingKey::GuiTheme => {
                 self.set_dark(!self.theme.is_dark);
                 Ok(())
             }
             SettingKey::Mermaid => {
+                self.transcript.invalidate_rendering();
                 settings_manager::write_settings_mermaid(!settings_manager::read_settings_mermaid())
             }
             SettingKey::LaTeX => {
+                self.transcript.invalidate_rendering();
                 settings_manager::write_settings_latex(!settings_manager::read_settings_latex())
             }
             SettingKey::AutocompleteMaxVisible => {

@@ -39,15 +39,15 @@ prux 只有全局一个配置入口，项目级 `.prux/settings.json` 用于覆�
 |------|------|------|------|
 | `theme` | string | `"system"` | 主题名：内置 `"system"`（默认，按终端上报的配色推导）、`"dark"`/`"light"`、`"auto"`（按终端背景在 dark/light 间选择）或自定义主题。主题来源见 [themes.md](themes.md) |
 | `hideThinkingBlock` | boolean | `false` | 隐藏输出中的思考块（`/settings` → Hide thinking） |
-| `syntaxHighlight` | boolean | `true` | 代码块语法高亮（syntect）开关（`/settings` → Syntax highlight） |
+| `syntaxHighlight` | boolean | `true` | 代码块语法高亮（syntect）开关（`/settings` → Syntax highlight）。桌面 GUI 恒为开启，该键只对终端界面生效 |
 | `mermaid` | boolean | `true` | Mermaid 代码块渲染为 Unicode 流程图；关闭时按普通代码块展示（`/settings` → Mermaid） |
 | `latex` | boolean | `true` | `$...$` / `$$...$$` 公式渲染为 Unicode；关闭时保留原始文本（`/settings` → LaTeX） |
 | `autocompleteMaxVisible` | number | `5` | 补全下拉最多可见项（3-20；`/settings` → Autocomplete max items）。条目描述过长时自动折行（单条至多 2 行，续行与描述列对齐，仍超出以 `…` 收尾），折行后总行数可超过该值 |
 | `historyMaxEntries` | number | `500` | 当前项目 prompt 历史在磁盘上保留的条数（`0` = 不落盘；`/settings` → History max entries，档位 0/100/250/500/1000）。调小后**立即截断**内存历史 |
 | `fullscreenWheelScrollLines` | number \| `"auto"` | `"auto"` | 鼠标滚轮每格移动的行数（1-100）；`"auto"` 按滚动速度加速（单格一行，快速连续滚动最多十行）（`/settings` → Wheel scroll lines） |
-| `quietStartup` | boolean \| `"header"` | `"header"` | 启动横幅与资源清单怎么显示（`/settings` → Quiet startup）：`false` 两者都显示，`"header"` 只显示横幅（版本与按键提示）、不输出资源清单，`true` 两者都不显示。`--verbose` 强制两者都显示 |
-| `externalEditor` | string | `$VISUAL` → `$EDITOR` → `vi` | `Ctrl+G` 外部编辑器命令，优先于环境变量。需要带参数时写整条命令，如 `"code --wait"` |
-| `showImages` | boolean | `false` | 在支持图形协议的终端里内联显示图片（消息附件与工具结果），默认关闭时图片块**整块不渲染**（`/settings` → Show images）。见下方「内联图片」小节 |
+| `quietStartup` | boolean \| `"header"` | `"header"` | 启动横幅与资源清单怎么显示（`/settings` → Quiet startup）：`false` 两者都显示，`"header"` 只显示横幅（版本与按键提示）、不输出资源清单，`true` 两者都不显示。`--verbose` 强制两者都显示。桌面 GUI 没有启动输出，该键只对终端界面生效 |
+| `externalEditor` | string | `$VISUAL` → `$EDITOR` → `vi` | `Ctrl+G` 外部编辑器命令，优先于环境变量。需要带参数时写整条命令，如 `"code --wait"`。桌面 GUI 没有对应入口，该键只对终端界面生效 |
+| `showImages` | boolean | `false` | 在支持图形协议的终端里内联显示图片（消息附件与工具结果），默认关闭时图片块**整块不渲染**（`/settings` → Show images）。桌面 GUI 恒定显示缩略图，该键只对终端界面生效。见下方「内联图片」小节 |
 | `showCacheMissNotices` | boolean | `false` | 显示缓存相关提示（保温、未命中）与 provider 恢复诊断（`/settings` → Cache miss notices） |
 
 ### 提示缓存

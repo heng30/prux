@@ -169,8 +169,6 @@ pub enum SettingKey {
     Retry,
     /// 隐藏模型的思考内容
     HideThinking,
-    /// 代码块语法高亮
-    SyntaxHighlight,
     /// 图片超限自动缩放
     ImagesAutoResize,
     /// 拦截图片输入
@@ -185,8 +183,6 @@ pub enum SettingKey {
     FollowUpMode,
     /// 缓存预热模式：循环 auto / always / never
     CacheWarming,
-    /// 启动安静级别：循环 off / notice / info / debug
-    QuietStartup,
     /// 失败重试次数（数字输入）
     RetryMaxRetries,
     /// temperature 覆盖（数字输入，空 = 清除）
@@ -199,9 +195,9 @@ pub enum SettingKey {
     GuiTheme,
     /// 桌面窗口是否自绘边框与标题栏（切换时写回 `gui.frame`）
     GuiFrame,
-    /// Mermaid 代码块→Unicode 图（重开会话生效）
+    /// Mermaid 代码块→Unicode 图（切换后立即重解析已渲染的正文）
     Mermaid,
-    /// LaTeX 公式→Unicode 公式（重开会话生效）
+    /// LaTeX 公式→Unicode 公式（切换后立即重解析已渲染的正文）
     LaTeX,
     /// 补全面板可见行数：循环 3 / 5 / 7 / 10 / 15 / 20
     AutocompleteMaxVisible,

@@ -376,6 +376,16 @@ impl Transcript {
         &mut self.blocks
     }
 
+    /// 丢弃所有助手正文的预解析结果，下一帧按当前渲染开关重新解析
+    /// （Mermaid / LaTeX 开关改了要重算码块与公式）。
+    pub fn invalidate_rendering(&mut self) {
+        for block in &mut self.blocks {
+            if let Block::Assistant(assistant) = block {
+                assistant.body = Body::default();
+            }
+        }
+    }
+
     /// 追加一条用户消息（本地回显，agent 自己也会发 user 消息但不重复渲染）。
     ///
     /// `@图片` 引用在这里按内容拍快照：同一路径的图后来被改写，已发出的这条仍显示当时那张。

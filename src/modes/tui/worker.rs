@@ -187,8 +187,10 @@ async fn finish_all_open_operations(agent: &Arc<Mutex<Agent>>) {
     }
 }
 
-/// 应用提示缓存保温回执：落成 `cache_warm` usage 记录 + 发 `cache_warm` 事件（TUI 通知）。
-async fn drain_cache_warm(agent: &Arc<Mutex<Agent>>) {
+/// 应用提示缓存保温回执：落成 `cache_warm` usage 记录 + 发 `cache_warm` 事件（宿主通知）。
+///
+/// TUI 与 GUI 的 worker 共用：两边都把结果写进会话，并各自解释事件。
+pub(crate) async fn drain_cache_warm(agent: &Arc<Mutex<Agent>>) {
     let outcomes = agent.lock().await.cache_warmer.drain_outcomes();
     if outcomes.is_empty() {
         return;

@@ -1225,12 +1225,6 @@ pub(super) fn settings_entries(theme_dark: bool) -> Vec<Entry> {
             Action::ToggleSetting(SettingKey::HideThinking),
         ),
         row(
-            "Syntax highlighting",
-            on_off(settings_manager::read_settings_syntax_highlight()).into(),
-            "Highlight code blocks",
-            Action::ToggleSetting(SettingKey::SyntaxHighlight),
-        ),
-        row(
             "Auto-resize images",
             on_off(settings_manager::read_settings_images_auto_resize()).into(),
             "Downscale oversized images",
@@ -1323,12 +1317,6 @@ pub(super) fn settings_entries(theme_dark: bool) -> Vec<Entry> {
             settings_manager::read_settings_cache_warming(),
             "Space to cycle",
             Action::ToggleSetting(SettingKey::CacheWarming),
-        ),
-        row(
-            "Quiet startup",
-            format!("{:?}", settings_manager::read_settings_quiet_startup()),
-            "Space to cycle",
-            Action::ToggleSetting(SettingKey::QuietStartup),
         ),
         row(
             "Max retries",
