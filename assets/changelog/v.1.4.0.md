@@ -2,23 +2,23 @@
 
 ### Added
 
-- **ACP sessions can ask the user a question**: with `clientCapabilities.elicitation.form`
-  advertised during `initialize`, `prux acp` sends `ask_user_question`'s questionnaire as an
-  `elicitation/create` form the client renders; clients without it (Zed 1.3.6 sends no
-  `elicitation` capability) fall back to one `session/request_permission` per single-select
-  question, reporting multi-select questions as unanswered. Other blocking choice panels (such as
-  the permission gate) always go through `session/request_permission`. stdin is read by its own
-  task now, so the client's replies to agent-initiated requests are dispatched without stalling a
-  running prompt turn.
-
-- **The desktop window can sign in with an account, not just an API key**: `/login` now asks for the
-  authentication method first, then lists either the account (OAuth) providers or the API-key ones,
-  each with its status (`✓ stored`, `✓ env (VAR)`, `• not configured`). Picking an account provider
-  runs the same login flows as the terminal — browser callback, copy-code (the code#state shown on the
-  page is pasted back) and device-code (user code + verification URL) — in a background task, so the
-  window keeps repainting while it waits. The authorization URL or verification URI is copied to the
-  clipboard by itself, credentials land in the same `auth.json`, and the running agent picks up the new
-  token immediately. Closing the panel releases the local callback port.
+- **New desktop GUI: `prux-gui`**: the same agent in a window. It shares `agent_dir()`,
+  `settings.json`, the session files and the extensions with the terminal UI, so the model chain,
+  the tools and the conversation are identical and one session can be opened in either one. Three
+  columns: the session sidebar on the left (search, grouped by activity, rename / delete,
+  collapsible and resizable, branch and working directory at the bottom), the conversation in the
+  middle (Markdown, tables, formulas, mermaid diagrams, images, diffs with line numbers, tool cards
+  with elapsed time, queued messages, the dock panel, a multi-line input card and a one-line status
+  bar), and the Files / Changes panel on the right (collapsible, diffs with line numbers, both
+  scroll axes). Slash commands, `@` path completion, model and thinking level, skills / extensions
+  / settings, `/login` and project trust, `/rewind`, and the questions, overlays and
+  per-extension settings panels that extensions raise all work in the window; extension commands
+  are written once and share one registry between the two hosts. The keymap is fixed and matches
+  the terminal's meaning (it does not read `keybindings.json`), every list and overlay is
+  keyboard-reachable, and the mouse selects and copies, pastes on middle click and drags panel
+  widths; theme, scale, sidebar state and the self-drawn title bar (`gui.frame`) live under `gui`
+  in `settings.json`. `prux-gui --tui` starts the terminal interface from the same binary, and
+  `docs/gui.md` covers the rest.
 
 - **Panels name the keys they answer to**: the session picker now says `Ctrl+R rename · Ctrl+D delete ·
   Ctrl+G next` (previously only "Enter confirm"), and the logout list says what Enter does before it
@@ -29,10 +29,15 @@
   so the editor gets the same model chain, tool set, session file and extension hooks as the TUI,
   not a second agent loop. Over NDJSON + JSON-RPC 2.0 on stdin/stdout it answers `initialize`,
   `authenticate`, `session/new`, `session/prompt` and `session/cancel`, streaming text, thinking
-  and tool-call updates as `session/update` notifications. A prompt keeps listening on stdin while
-  it runs, so a cancel lands immediately instead of queueing behind a slow turn. Single session
+  and tool-call updates as `session/update` notifications, and a prompt keeps listening on stdin
+  while it runs, so a cancel lands immediately instead of queueing behind a slow turn. When the
+  client advertises `clientCapabilities.elicitation.form`, `ask_user_question`'s questionnaire goes
+  out as an `elicitation/create` form the client renders; clients without it (Zed 1.3.6 sends no
+  `elicitation` capability) fall back to one `session/request_permission` per single-select
+  question and report multi-select questions as unanswered, while other blocking choice panels
+  (such as the permission gate) always use `session/request_permission`. Single session
   (`session/new` returns the session `bootstrap()` already opened), no `session/load`, text
-  prompts only. The extension registers no tools and no hooks — without `prux acp` it does
+  prompts only; the extension registers no tools and no hooks — without `prux acp` it does
   nothing. It is on by default but only in the `Dev` / `Creator` / `All` extension modes: in
   `Minimal` the subcommand does not exist.
 
@@ -50,10 +55,6 @@
   (`just check`, `cargo test && pnpm test`) always run — skipping them would be a fake pass — and
   a non-git directory falls back to the full set. `/vet run` still runs everything.
 
-
-- **Every code block in the desktop GUI has a copy button**: the block's header row shows a
-  copy icon on the right; one click puts the block's source on the clipboard and raises a
-  `Copied to clipboard` toast.
 
 - **A `hooks` extension runs your own commands at lifecycle points**: four events —
   `PreToolUse`, `PostToolUse`, `UserPromptSubmit` and `Stop` — are driven from
@@ -163,26 +164,26 @@
   `hardware_search` tool scores every chunk with the same lexical term splitting the rest of the
   harness uses, returning `file:line` plus the excerpt. A hit in the path weighs that chip up, so
   searching `usart` prefers `stm32f4/…` over an unrelated file; `path` narrows to prefixes and
-  `limit` caps the result. Pin aliases need no second mechanism — one CSVs line
-  (`PA9,USART1_TX,TIM1_CH2`) is a chunk, searchable by either name. The directory is rescanned per
-  call (no index cache).
-- **The `hardware` extension also drives boards over a probe, serial and GPIO**: `probe-rs` gives
-  `hardware_board_info` (chip and architecture), `hardware_memory_map` (RAM / Flash ranges) and
-  `hardware_memory_read` (a hex dump of any address range); without a probe the first two fall
-  back to a built-in board table (`nucleo-f401re`, `nucleo-f411re`, `arduino-uno`, `arduino-mega`,
-  `arduino-uno-q`, `esp32`, `rpi-gpio`), so "what chip is this board" needs no hardware. Pins go
-  through `gpio_read` / `gpio_write` / `hardware_capabilities`: either a line-delimited JSON
-  bridge on the serial port, or the Uno Q Bridge on `127.0.0.1:9999`; `gpio_rpi_*` and
-  `rpi_system_info` hit a Raspberry Pi's BCM pins directly (`rppal`, Linux only). `hardware_flash`
-  writes `.elf` / `.hex` / `.uf2` / `.bin` over the probe and `pico_flash` copies a UF2 onto a
-  Pico's bootloader volume — both destructive, therefore gated by `permissions` when it is
-  enabled. `arduino_upload` shells out to `arduino-cli`, and `device_read_code` /
-  `device_write_code` / `device_exec` go through `mpremote` for MicroPython boards. Serial paths
-  are whitelisted (`/dev/ttyACM*`, `/dev/ttyUSB*`, `/dev/tty.usbmodem*`, `COM*`) and every call
-  reopens the port. Config lives in `agent_dir()/extensions/hardware/config.json` (`boards`,
-  `chip`, `devices`, `baud`). All tools are deferred behind `tool-search`; `/hardware` prints the
-  directory, board config and tool list. Off by default, `Dev` mode only.
+  `limit` caps the result, and the directory is rescanned per call (no index cache). Pin aliases
+  need no second mechanism — one CSV line (`PA9,USART1_TX,TIM1_CH2`) is a chunk, searchable by
+  either name.
 
+  The same extension drives boards. `probe-rs` gives `hardware_board_info` (chip and
+  architecture), `hardware_memory_map` (RAM / Flash ranges) and `hardware_memory_read` (a hex dump
+  of any address range); without a probe the first two fall back to a built-in board table
+  (`nucleo-f401re`, `nucleo-f411re`, `arduino-uno`, `arduino-mega`, `arduino-uno-q`, `esp32`,
+  `rpi-gpio`), so "what chip is this board" needs no hardware. Pins go through `gpio_read` /
+  `gpio_write` / `hardware_capabilities`: either a line-delimited JSON bridge on the serial port,
+  or the Uno Q Bridge on `127.0.0.1:9999`; `gpio_rpi_*` and `rpi_system_info` hit a Raspberry Pi's
+  BCM pins directly (`rppal`, Linux only). `hardware_flash` writes `.elf` / `.hex` / `.uf2` /
+  `.bin` over the probe and `pico_flash` copies a UF2 onto a Pico's bootloader volume — both
+  destructive, therefore gated by `permissions` when it is enabled. `arduino_upload` shells out to
+  `arduino-cli`, and `device_read_code` / `device_write_code` / `device_exec` go through
+  `mpremote` for MicroPython boards. Serial paths are whitelisted (`/dev/ttyACM*`, `/dev/ttyUSB*`,
+  `/dev/tty.usbmodem*`, `COM*`) and every call reopens the port. Config lives in
+  `agent_dir()/extensions/hardware/config.json` (`boards`, `chip`, `devices`, `baud`). All tools
+  are deferred behind `tool-search`; `/hardware` prints the directory, board config and tool list.
+  Off by default, `Dev` mode only.
 
 - **A `leak-guard` extension flags credentials before they leave**: the `permissions` extension
   gates *which* tools may run, not *what* leaves — a `curl -H "Authorization: Bearer …"` or a
@@ -191,10 +192,16 @@
   OpenAI / Anthropic / GitHub / GitLab / AWS / Slack / Google / Stripe keys, JWT-shaped tokens,
   private key blocks, and any run of 32+ characters that mixes case and digits with Shannon
   entropy of at least 4 bits/char (pure hex is skipped, so commits and content hashes stay
-  quiet). Mode `warn` (the default) only notifies; `block` replaces prompt hits with
-  `[REDACTED:<category>]` in that one request and refuses a tool call that carries one, telling
-  the model which category tripped it. Thinking blocks are scanned but never rewritten — their
-  text is signature-bound. A repeated `(category, snippet)` pair notifies once. Mode lives in
+  quiet). Paths do not join into one candidate and machine-generated identifiers (UUIDs, hashes,
+  `2026-11-02T10-25-54-666Z_<uuid>` session names) are skipped, and the warning memory drops its
+  oldest entry instead of wiping itself — a history full of such names used to reset it every
+  request and repeat the same warning every turn. Each warning names the snippet that tripped it
+  (a head/tail preview such as `high-entropy: q8Zr2NvT…Zx4Q`); a refused tool call still reports
+  only the category, because that reason goes back into the model context. Mode `warn` (the
+  default) only notifies; `block` replaces prompt hits with `[REDACTED:<category>]` in that one
+  request and refuses a tool call that carries one, telling the model which category tripped it.
+  Thinking blocks are scanned but never rewritten — their text is signature-bound. A repeated
+  `(category, snippet)` pair notifies once. Mode lives in
   `agent_dir()/extensions/leak-guard.json`: `/leak-guard warn|block|off` sets it, a bare
   `/leak-guard` opens the extension's settings panel. Off by default (`Dev` / `Creator`).
 
@@ -209,14 +216,6 @@
   drops finished ones. The dock section lists only running jobs (freshly finished ones are removed
   on the next frame, and the section hides itself once none are left). A job keeps running after
   the turn ends, and disabling the extension stops every running job. Off by default (`Dev` mode).
-
-- **The desktop GUI's session sidebar shows how many sessions each group holds**: the `Today` /
-  `This week` / `Older` heading now carries its entry count, right-aligned in the caption colour.
-  The count follows the search filter, so a filtered list reports what it actually lists.
-
-- **The desktop GUI's `/session` panel can copy the session file path**: the `Session file` value is
-  clickable (link colour, underline on hover) and writes the path to the system clipboard with a
-  toast confirmation; an in-memory session has no path and stays plain text.
 
 - **A bouncing-ball startup banner**: a new `bouncyballs-banner` extension drops the logo art in
   as bouncing balls — every non-blank art cell falls from above on an ease-out-bounce curve,
@@ -235,10 +234,11 @@
   model can tell "not decided yet" from "settled" instead of re-asking. Reservations and
   limits are enforced before anything is shown: 1-4 questions, 2-4 options, `header` up to
   16 characters, `label` up to 60, and `Other` / `Type something.` / `Next` rejected as
-  labels. Without a UI (non-interactive runs) the tool answers `no_ui` right away instead of
-  waiting forever, and one questionnaire at a time is the rule — a second call is refused.
-  Off by default and available in the `Dev` / `Creator` extension modes; turn it on in
-  `/extension`.
+  labels. The submit button says `Submit` — `Submit answers` squeezed the description in a
+  narrow panel — and is as wide as `Cancel`. Without a UI (non-interactive runs) the tool
+  answers `no_ui` right away instead of waiting forever, and one questionnaire at a time is the
+  rule — a second call is refused. Off by default and available in the `Dev` / `Creator`
+  extension modes; turn it on in `/extension`.
 
 - **The `ponytail` extension writes the smallest change that works**: enabling it appends a
   "lazy senior developer" ruleset to the system prompt before every request — nothing is written
@@ -260,17 +260,14 @@
   The session level lives in a session entry (`ponytail-mode`), so resuming or switching a
   session replays it.
 
-- **Four checklists ship as `/ponytail` subcommands, a fifth prints locally**: `/ponytail review [scope]` (quality
-  review of a change: bugs, security, load, missing tests, speed, what to cut — each finding
-  says what the code does, what goes wrong, how to fix it and what happens if we skip it),
-  `/ponytail audit [scope]` (the same review across the whole repo, ranked),
-  `/ponytail debt [marker]` (harvest `shortcut:` comments into a debt ledger),
-  and `/ponytail gain` (the published benchmark scoreboard). Their text is embedded in the
-  binary and delivered as a `<skill>` block when invoked, so nothing is written to disk and no
-  skill description leaks into the system prompt while the extension is off; a checklist sent
-  while a turn is running steers into that turn. `/ponytail help` is different: its reference
-  card is rendered in the terminal itself, so it costs no turn and never lands in the history.
-
+  Five checklists ship as subcommands: `/ponytail review [scope]` (quality review of a change:
+  bugs, security, load, missing tests, speed, what to cut — each finding says what the code does,
+  what goes wrong, how to fix it and what happens if we skip it), `/ponytail audit [scope]` (the
+  same review across the whole repo, ranked), `/ponytail debt [marker]` (harvest `shortcut:`
+  comments into a debt ledger) and `/ponytail gain` (the published benchmark scoreboard) are
+  delivered to the model as a `<skill>` block, embedded in the binary, never written to disk, and
+  a checklist sent while a turn is running steers into that turn; `/ponytail help` renders its
+  reference card in the terminal instead, so it costs no turn and never lands in the history.
   Off by default and available in `Dev` mode only: it rewrites how the model writes in every
   turn, so it has to be switched on explicitly.
 
@@ -323,270 +320,28 @@
   (instead of halfblocks) and the palette is treated as truecolor, so hyperlinks and pictures
   render instead of degrading to `text (url)`.
 
-- **The desktop GUI switches models and thinking levels from the keyboard**: `Ctrl+P` /
-  `Ctrl+Shift+P` step through the model scope (`--models` / `settings.enabledModels`, falling back
-  to every configured model only when the scope is empty, keeping the scope's order and skipping
-  entries the catalog no longer has); a scoped entry that carries a thinking level sets that level
-  before switching. `Shift+Tab` cycles the current model's thinking levels. Both follow the TUI
-  bindings.
+- **`/changelog` renders as Markdown, and information overlays scroll by dragging**: the update
+  log is laid out like an assistant reply — headings, lists, inline code and code blocks instead of
+  one flat block of text — and the thin bar in it, in `/hotkeys` and in the detail page of list
+  overlays is draggable, with a wider hit area than the 4 px it draws and a drag that keeps
+  working when the pointer leaves the track. `↑` / `↓` / `PgUp` / `PgDn` / `Home` / `End` move the
+  same panels.
 
-- **The desktop GUI queues what you send while a turn runs**: `Enter` puts the text into the
-  steering queue, so the model reads it inside the same run (before its next step) instead of a
-  fresh turn after the fact, and `Alt+Enter` queues a follow-up that is sent once the turn settles.
-  Both queues drain by `steeringMode` / `followUpMode` as they do in the terminal, and the waiting
-  messages are listed above the input box as `Steering:` / `Follow-up:` — they enter the
-  transcript only when actually sent. `Alt+Up` pulls them all back into the input box (steers
-  first, then follow-ups, separated by blank lines and kept ahead of the current draft) and empties
-  both queues.
-
-- **The desktop GUI's session search answers to a shortcut**: `Ctrl+Shift+H` focuses the search box
-  above the left session list (expanding the sidebar if it was collapsed, and taking focus from the
-  right panel's search), while `Esc` / `Enter` leave focus and keep the query.
-
-- **The desktop GUI now shares the TUI's keymap**: the command palette moved to `Ctrl+M`, so `Ctrl+K`
-  is free to delete to the end of the line the way it does in the terminal. Every key the two
-  interfaces have in common now means the same thing: `Ctrl+O` expands tool output, `Ctrl+L` opens
-  the model picker, `Ctrl+T` shows or hides thinking blocks, `Ctrl+Shift+T` toggles light/dark, and
-  desktop-only panels moved to `Shift` combinations (`Ctrl+Shift+O` sessions, `Ctrl+Shift+G`
-  appearance). `Ctrl+X` copies the last reply, `Alt+C` copies the input, `Ctrl+Home` / `Ctrl+End`
-  jump the transcript to either end and `Shift+PageUp` / `Shift+PageDown` page it.
-
-- **Every list in the desktop GUI answers to the keyboard**: overlays, the model / thinking /
-  attachment dropdowns, `@` completions and the session right-click menu all move with
-  `Ctrl+K` / `Ctrl+J` (or the arrows), jump with `Home` / `End`, page with `PageUp` / `PageDown`
-  and close with `Ctrl+C`. The list scrolls to keep the selected row in view, so a tall panel never
-  leaves the highlight off screen. The session list also answers `Ctrl+R` (rename), `Ctrl+D`
-  (delete) and `Ctrl+G` (next session) as it does in the terminal.
-
-- **The desktop GUI toggles its session list and browses history from the input box**: `/sidebar`
-  shows or hides the left session list (the same state `Ctrl+Shift-B` flips). In the input box
-  `Up` / `Down` now walk a multi-line draft line by line and only switch prompt history once the
-  cursor sits on the first line at column 0 (or the last line at its end) — landing on a line
-  boundary first when it is not there yet — and the draft comes back untouched when you cycle off
-  the oldest entry. Browsing history never opens the completion panel, so recalling `/model`
-  leaves `Up` / `Down` under your control. The command palette lists the toggle as `Sidebar`.
-
-- **Desktop GUI spacing follows one scale**: paddings, gaps, corner radii, font sizes and control
-  heights now come from named steps in the GUI theme (multiples of 4, with a 2 px step reserved for
-  gaps between adjacent rows) instead of per-call pixel literals, so a button, its neighbours and
-  the panel it sits in no longer each pick their own 6, 7, 13 or 15.
-
-- **The desktop GUI's session list spans the whole window**: the sidebar now starts at the top
-  edge instead of below a title bar, which is gone entirely. The model and thinking switches moved
-  to the composer's hint row, next to `+ Attach`, and the command palette still opens on `Ctrl+M`
-  — only its chip is gone.
-
-- **The desktop GUI's right panel numbers its diffs**: the diff view skips the `diff --git` /
-  `index` / `---` / `+++` file header and starts at the first hunk, and every line now carries a
-  gutter with its old or new line number (`+428` added, `-428` removed, ` 429` context), so a
-  hunk's position is readable without counting down from its `@@` marker. Both tabs also report
-  the full counts: the file list and the change list are computed whichever tab is open, so the
-  tab labels no longer disagree with what the other tab shows.
-
-- **The desktop GUI's right panel scrolls both ways**: the diff and the file body each keep their
-  own scroll position, with a bar on the right edge and one along the bottom; dragging anywhere on
-  a bar's track moves the content, and the pointer may leave the track mid-drag. Long lines no
-  longer wrap, so the horizontal bar has something to scroll, and opening another file or change
-  starts that area at the top instead of inheriting the previous offsets.
-
-- **The desktop GUI's status bar reports the run, not just the message count**: the left side shows
-  messages, the share of the context window in use and the cache hit rate; the right side shows
-  input / output tokens, cost, output rate in tokens per second, and whether a goal or plan is
-  active, how many turns have been sent and how long the round has taken. While the agent works,
-  a blinking dot and `Working… (Esc to abort, N queued)` lead the row, and a half-second redraw
-  keeps the elapsed time and the blink moving even when a long tool call sends no events. The send
-  button turns into a stop square during a run. Context usage comes from the estimated history
-  instead of the last request, so it shows up in a freshly loaded session too.
-
-- **The desktop GUI's tool cards show how long the call took**: a running call shows `Elapsed X.Xs`
-  to the left of its status label and keeps counting while the turn runs, and a finished one shows
-  `Took X.Xs` from the event's `durationMs`, which sessions reloaded from disk recover from the
-  stored result. The format matches the terminal UI: seconds under a minute, then `Xm Ys`, then
-  `Xh Ym Zs`.
-
-- **The desktop GUI sizes a message bubble to its text**: a short message no longer stretches to the
-  full bubble width and leaves the right side empty; the bubble wraps its content, still capped at
-  the old maximum so long messages wrap where they used to. The collapse hint and image thumbnails
-  count towards that width, so they are never clipped.
-
-- **The desktop GUI remembers whether the session sidebar is open**: `Ctrl-Shift-B`, `/sidebar` and
-  the sidebar search box write the choice to `gui.sidebar` in `settings.json` and restore it on the
-  next launch; with no key set the sidebar starts open.
-
-- **The desktop GUI remembers its own light or dark theme**: `Shift+T` and the appearance panel in
-  `/settings` write the choice to `gui.theme` in `settings.json` and restore it on the next
-  launch, so the window theme no longer follows `--theme` once you have picked one. The terminal's
-  `theme` is a separate key and is left alone.
-
-- **The desktop GUI's skill, extension and scoped-model panels are tables**: a header row names the
-  columns, and name, source / modes / provider and description each get a fixed-width cell instead
-  of one run-together `description · source · [model-off]` string, so rows line up and long text is
-  clipped per cell (the `Tab` detail page still shows the full path). The scoped-model panel also
-  matches the other two: `Enter` toggles a checkbox in a draft and only `Ctrl-S` writes
-  `enabledModels`, with the count of enabled models in the title, and `Esc` throws the draft away.
-  The `Tab` detail page is a `Property / Value` table too, and a `fork url` value that is an
-  `http(s)://` link opens in the system browser on click. Its values wrap instead of being clipped,
-  and the table scrolls inside the card (wheel, arrow keys, `PgUp` / `PgDn`, `Home` / `End`) once it
-  is longer than fits. The `Ctrl-,` settings panel is the same kind of table now: `Setting / Value /
-  Notes`, with the current value in its own column.
-
-- **The desktop GUI's model and thinking pickers say what is what**: the model list gained an
-  `Input` column (`text,image`, straight from the model catalog), and every row carries a state
-  badge on the right — `default ✓` when the entry is both the saved default and the one in use,
-  `default` / `✓` alone otherwise. `Enter` now switches only for this session and `Ctrl-S` writes
-  the choice to the settings file (the same split the scoped-model panel already had), so a quick
-  switch no longer silently replaces the startup default. The thinking list gains the same badge
-  on top of its level descriptions. The TUI's `/model` and `/scoped-models` panels read the input
-  types through the same helper, so the two surfaces cannot drift.
-
-- **The desktop GUI answers extension questions**: extension UI requests used to be queued and
-  never read, so `ask_user_question` reported "no UI" and the `permissions` / `ssh-remote` prompts
-  silently failed closed. The window now polls that queue and handles every request: a `Select`
-  request opens a list whose highlighted option is the answer (closing the list answers "cancel",
-  so the waiting extension is never left hanging), `ShowOverlay` opens the extension's own panel
-  just above the input card — title, fixed header, selectable rows (the highlighted row is kept in
-  view when the keyboard moves it), key hints and its inline input row, with keys relayed back as
-  overlay events — and `HideOverlay` / window close send `Closed`.
-  Notifications land in the transcript (rich spans flattened, custom message cards through their
-  extension renderer), `Continuation` / `RestartRun` / `AbortRun` / `RebuildTools` /
-  `RewindLastUserInput` map onto the matching agent commands, and `PersistSessionEntry` appends the
-  custom entry and acknowledges it.
-
-- **The desktop GUI shows one extension's settings**: `ShowSettings` used to open the global settings
-  table, which has nothing to do with the extension that asked. It now opens a panel for that
-  extension alone — one row per declared setting with the current value in a `◂ value ▸` cell, `Enter`
-  cycling to the next choice and writing it back through the extension (each extension decides
-  whether that persists). `/settings <extension>` opens the same panel by hand, which is the only way
-  to reach settings whose extension command still needs the terminal.
-
-- **Extension commands are written once and run in both the terminal and the desktop GUI**: a
-  command handler now receives a small host surface instead of the terminal's `App` — append a
-  message, show the dock panel, read the working directory, ask whether a turn is running — so the
-  desktop window executes the same body the terminal does. `/proxy` (toggle the gateway stats dock,
-  `listen` / `provider` / `api-key`), `/notify` (`show`, `settled`, `reset`), `/computer`,
-  `/shake`, `/agents`, `/doctor`, `/mcp`, `/memory`, `/ponytail`, `/jet`, `/cache-usage`,
-  `/hang-detect`, `/codemode`, `/permissions`, `/vet`, `/update`, `/tasks`, `/goal`, `/ssh`,
-  `/tunnel`, `/autoresearch`, `/help`, `/plan`, `/todos`, `/usage`, `/debug`, `/rewind`, `/btw` and
-  `/recap` all work in the window now, with each host deciding how a message looks (terminal
-  system-message stream, window transcript note) and which panel renders a request (`/tasks` opens
-  the task menu, `/codemode` opens that extension's settings, `/doctor` shows its report in an
-  overlay, `/usage` its quota table). The window keeps native panels for exactly three commands —
-  `/skills`, `/extension` and `/settings`, whose browser-style UI exists only there — every other
-  command goes through the one registry both hosts share. No command can be written twice.
-
-- **Extensions receive the agent event stream in the desktop GUI**: only the terminal UI used to feed
-  every `agent_*` / `turn_end` event to the extension registry, so anything event-driven was dead in
-  the desktop window — plan mode never extracted the steps of a plan or asked what to do next, goals
-  never settled, the loop / hang detectors never saw a turn, `notify` never announced anything. The
-  window now forwards the same stream (with the `hasQueuedMessages` flag the notifier needs on
-  `agent_settled`), so those extensions behave as they do in the terminal.
-
-- **Extension one-shot requests run in the desktop GUI**: `/btw`, `/recap`, `/doctor` and `/usage`
-  used to answer "no async runtime" there, because extension hooks run on the window's view thread,
-  which has no tokio runtime. The window now registers its runtime, so those requests (a side
-  question, a recap, provider probes, quota lookups) start and stream their result back into the
-  same overlay or message the terminal shows. Extension overlays also repaint while open, so an
-  answer that arrives later appears on its own instead of waiting for a key press.
-
-- **The desktop GUI shows the conversation when it opens a session**: history is now handed to the
-  view both on startup and after `/resume`, so a reopened session is not an empty window, and
-  commands that read context (`/btw`, `/recap`) see the same excerpt the terminal does.
-
-- **The desktop GUI has the dock panel**: extensions that report running work — subagents, task
-  streams, downloads, a live ssh-remote or browser session — now show in a strip above the input
-  card instead of being invisible. `ShowDock` (what those extensions send when they start) turns it
-  on, `/dock` toggles it, sections are separated by a blank line and scroll inside the strip once it
-  is taller than a few lines. It disappears on its own when no extension has anything to say, and it
-  keeps repainting while something is running, so the subagent elapsed time and counters move. The
-  plan-mode todo list uses it too: `/todos` now opens that section instead of pointing at the
-  terminal UI.
-
-- **The desktop GUI asks about project trust instead of assuming it**: a project with resources that
-  need trust and no saved decision now opens the trust panel at startup (unless `-a` / `--no-approve`
-  was given), and `/trust` shows the same dialog with the saved decision marked as current. Options
-  are `Trust`, `Trust parent folder (…)`, `Trust (this session only)`, `Do not trust`,
-  `Do not trust (this session only)` and `Remove all saved trust decisions` — the last one asks
-  for confirmation. The saved options write `trust.json` and apply on the next launch, the two
-  "this session only" options reload skills, context files and tools right away.
-
-- **The desktop GUI changes values with `Space`, and `Enter` shows details**: the `/settings` table,
-  an extension's own `Settings · <name>` panel, `/extension` and `/skills` all cycle or toggle a row
-  with `Space` now instead of `Enter`; the skill and extension panels open their detail page on
-  `Enter` (the `Tab` shortcut is gone). Cycling a value inside an extension's settings keeps the
-  filter text and the highlighted row, so a search no longer snaps back to the full list. In the
-  `/` completion panel a space now completes the command and opens that extension command's declared
-  subcommands (`Tab` completes, `Enter` completes and runs), giving `/goal pause`-style second-level
-  candidates in the window as well as in the terminal; the panel's description now sits right after
-  the command name instead of being pushed to the far edge, so there is room to read it.
-
-- **The desktop GUI accelerates wheel scrolling in the conversation**: the wheel uses the same
-  velocity mapping as the terminal UI — an isolated notch scrolls at the system's own step, a fast
-  spin multiplies it (up to 10×), and holding `Alt` multiplies it by 5 for jumping through a long
-  reply. Only the conversation is affected; menus, panels and the sidebar keep their own scrolling.
-
-- **`/changelog` opens as rendered Markdown**: the update log is laid out like an assistant reply
-  — headings, lists, inline code and code blocks instead of one flat block of text — and the panel
-  carries a scrollbar, so you can see how far in you are and jump around with `↑` / `↓` / `PgUp` /
-  `PgDn` / `Home` / `End`.
-
-- **Images in the desktop GUI are twice as large**: `@image` references and pictures returned by a
-  tool render at up to 360 px instead of 180, so a screenshot is readable without opening it.
-
-- **The desktop GUI ships its own documentation**: `docs/gui.md` covers launching it, the layout,
-  the sidebar and the conversation area, the right-hand Files / Changes panel, the dock, every
-  overlay and dialog, the full key table, the slash commands that work in the window, appearance and
-  zoom, and the differences from the terminal interface.
-
-- **`prux-gui --tui` starts in the terminal instead**: the same binary runs the interactive terminal
-  interface, reusing the same argument parsing, session and model setup as the GUI. It needs a real
-  terminal on both stdin and stdout — piping it out prints an error and exits instead of rendering
-  nonsense.
-
-- **The desktop GUI switches its working directory from the keyboard**: clicking the working-directory
-  row under the session list always opened the picker; `Ctrl-Shift-W` and a `Working directory…` entry
-  in the command palette now do the same, and the row still works.
-
-- **The desktop GUI's keybinding page is a two-column table**: `/hotkeys` puts each key in a left
-  column and what it does on the right instead of one sentence per line, with the columns named
-  `Keys` / `Action` rather than the generic property / value, and the table scrolls when it outgrows
-  the card.
-
-- **Information overlays scroll by dragging their scrollbar**: the thin bar in `/changelog`,
-  `/hotkeys` and the detail page of list overlays is now draggable, with a wider hit area than the
-  4 px it draws, and the drag keeps working when the pointer leaves the track.
-
-- **The desktop GUI's sidebar filters sessions by title**: a search box sits above the session list and
-  narrows it case-insensitively as you type. Click it to start typing (the Files panel's search box
-  gives up focus), `Esc` / `Enter` leaves it with the query still applied, and zero matches reads
-  `No matching sessions`.
-
-- **The desktop GUI's sidebar is narrower and names its directory**: the default width drops from 252
-  to 200 px and the minimum from 180 to 150, so the session list hugs its titles instead of leaving a
-  gutter. The working-directory row at the bottom now shows only the last path segment (the full path
-  is still what the picker switches to), and the directory menu marks the one you are in with
-  `✓ current`.
-
-- **The desktop GUI's pickers are tables instead of one-line entries**: `/models` splits into
-  `Model` / `Provider` / `Name` columns, the login panel into `Provider` / `Status` with the
-  `configured` mark, and the session picker into `Title` / `Updated` / `Messages`, so the values line
-  up down the panel instead of being glued into one label and its grey detail line. `/usage` and
-  `/session` read their `key: value` lines into the same two-column table.
-
-- **The `browser` extension gained tabs, history, hovering and page state reads**: `back`,
-  `forward` and `reload` walk the tab's own navigation history instead of re-navigating by hand, and
-  `close_tab` closes a tab by index or target id. `hover` moves the pointer without clicking
-  (drop-downs and tooltips need it), `dblclick` sends two click rounds, and `inspect` reads one piece
-  of element state — `value`, `text`, `html`, `attr`, `count`, `visible`, `enabled`, `checked` — so
-  the model no longer has to parse the snapshot text for it. `snapshot` takes a `scope` selector and
-  a `depth` cap, `wait` accepts a URL fragment or an arbitrary JS expression, and `press`
-  understands chords such as `Control+a` and `Meta+v`.
-
-- **The `browser` extension reads the console and answers JavaScript dialogs**: attaching a tab now
-  also turns on `Runtime` / `Log` / `Page` event reporting, buffered per tab (200 lines). The new
-  `console` action drains that buffer — `console.*` output, uncaught exceptions, failed resource
-  loads — and the new `dialog` action reports an open `alert` / `confirm` / `prompt` and accepts or
-  dismisses it. A command that times out while a dialog is open now says so instead of looking like
-  a dead connection.
+- **The `browser` extension gained tabs, history, hovering, page state, console output and
+  dialogs**: `back`, `forward` and `reload` walk the tab's own navigation history instead of
+  re-navigating by hand, and `close_tab` closes a tab by index or target id. `hover` moves the
+  pointer without clicking (drop-downs and tooltips need it), `dblclick` sends two click rounds,
+  and `inspect` reads one piece of element state — `value`, `text`, `html`, `attr`, `count`,
+  `visible`, `enabled`, `checked` — so the model no longer has to parse the snapshot text for it.
+  `snapshot` takes a `scope` selector and a `depth` cap, `wait` accepts a URL fragment or an
+  arbitrary JS expression, and `press` understands chords such as `Control+a` and `Meta+v`.
+  Attaching a tab also turns on `Runtime` / `Log` / `Page` event reporting, buffered per tab (200
+  lines): the `console` action drains that buffer — `console.*` output, uncaught exceptions,
+  failed resource loads — and the `dialog` action reports an open `alert` / `confirm` / `prompt`
+  and accepts or dismisses it, so a command that times out while a dialog is open says so instead
+  of looking like a dead connection. `click` and `dblclick` check the element's center point first
+  and refuse when another element covers it (naming it, e.g. `covered by <div#banner>`), when the
+  element is disabled, or when it has no clickable area.
 
 - **`/session` takes subcommands, including three that delete sessions**: `/session statistics` is
   the session summary that bare `/session` already printed, and `/session rm-current`,
@@ -594,19 +349,11 @@
   current project, or every session of every project. Each one asks for a Yes/No confirmation that
   names the number of session files and the directory they live in, and each reports how many
   deletions succeeded. `rm-current` starts a new session afterwards, because the file it just
-  deleted would otherwise be recreated by the next write. `/session <n>` still switches to the
-  n-th session, so existing habits keep working, and the subcommand names complete in the input box
-  in the terminal UI.
-
-- **The desktop GUI copies and pastes on middle click, as the terminal UI does**: with a selection
-  (transcript or input box) it goes to the system clipboard and is pasted at the cursor; with no
-  selection the clipboard is pasted. Panels have no writable input row, so with one open the click
-  only copies.
-
-- **The desktop GUI's input box no longer clips half a character at the end of a wrapped line**: the
-  wrap width was the composer card's width minus its horizontal padding, but the card also has a
-  1px border on each side, so every visual line was laid out 2px wider than it could be and the last
-  glyph was squeezed by the flex row before wrapping to the next line. The border is subtracted now.
+  deleted would otherwise be recreated by the next write. A deleted session goes to the trash
+  rather than being unlinked outright, and the per-project folder goes away with the last session
+  in it (`/new` and the desktop sidebar's `+` also stopped pre-creating it), so the directory
+  listing matches what is actually on disk. `/session <n>` still switches to the n-th session, so
+  existing habits keep working, and the subcommand names complete in the input box.
 
 - **A `sandbox` extension puts shell commands inside an OS boundary**: `permissions` decides before
   execution and has to guess at dynamic command construction; this one hands the filesystem rule to
@@ -620,38 +367,55 @@
   instead of silent; turning the extension off is the explicit way back. `/sandbox` prints the
   backend, the writable paths and the network posture. Off by default.
 
-- **`/debug receipts` answers "what did this session actually do?"**: it reads the records the
-  session already keeps, line by line — `tool_started` records for every call, `toolResult` messages
-  for exit codes and the `edit` patch that gives exact added/removed line counts, and
+- **`/debug` explains the session and names the settings keys prux does not recognize**:
+  `/debug receipts` answers "what did this session actually do?" by reading the records the
+  session already keeps, line by line — `tool_started` records for every call, `toolResult`
+  messages for exit codes and the `edit` patch that gives exact added/removed line counts, and
   `operation_finished` for turn-level failures — plus the `permissions` review log for the calls
   that **never ran** (`deny` / `ask`), which leave no trace in the session. The receipt leads with
   totals (files changed, commands run, MCP calls, agents, failures, approvals) and then lists the
-  turn in order; `/debug receipts <n>` raises the detail cap. Parsing is per line because the
+  turn in order; `/debug receipts <n>` raises the detail cap, and parsing is per line because the
   command is busy-safe: a half-written tail from the running turn is skipped, not fatal.
+  `/debug settings-key` names the settings keys prux does not recognize — a `settings.json` that
+  parses fine but carries a typo (`"compactReserveToken"`) used to be ignored silently, so the
+  value never took effect. It lists every unknown top-level key with its `file:line` and, when a
+  known key is within two edits, a `did you mean "…"?` hint; nothing to report prints a single
+  confirmation line. Keys that only exist in the global file (`theme`, `skills`, …) are flagged
+  when they appear in `.prux/settings.json`, which only honours `defaultTools` /
+  `disabledExtensions` / `enabledExtensions`. Grammar errors stay with the startup warning; each
+  run re-reads both files.
 
-- **`/debug settings-key` names the settings keys prux does not recognize**: a `settings.json` that
-  parses fine but carries a typo (`"compactReserveToken"`, `"theme_gui"`) used to be ignored
-  silently — the value simply never took effect. The new subcommand lists every unknown top-level
-  key with its `file:line` and, when a known key is within two edits, a `did you mean "…"?` hint;
-  nothing to report prints a single confirmation line. Keys that only exist in the global file
-  (`theme`, `skills`, …) are flagged when they appear in `.prux/settings.json`, which only honours
-  `defaultTools` / `disabledExtensions` / `enabledExtensions`. Grammar errors stay with the startup
-  warning; each run re-reads both files.
+- **The `delivery` extension is now `pr`, and `/pr run` / `/pr new` hand a change off**: where
+  `vet` only proves the local checks pass, `pr` does the rest of the mechanical work — branch,
+  commit, push, open a pull request, then report the CI and review result. There is no
+  settle-boundary hook and no feedback loop: nothing is committed or pushed behind your back, so a
+  broken turn never becomes a pull request on its own. Failing checks (`name — conclusion`) and
+  `CHANGES_REQUESTED` reviews are listed with the PR link; fix, then `/pr run` again — the change
+  lands on the same branch and the same PR is updated. It stops on green, on blocked, or when
+  nothing settles within `timeoutSecs` (a pending check is not fed back), and it never merges.
 
-- **The `delivery` extension is now `pr`, and only `/pr run` hands a change off**: where `vet`
-  only proves the local checks pass, `pr` does the rest of the mechanical work when you ask for it —
-  branch, commit, push, open a pull request, then report the CI and review result. There is no
-  settle-boundary hook and no feedback loop any more: nothing is committed or pushed behind your
-  back, so a broken turn never becomes a pull request on its own. Failing checks (`name —
-  conclusion`) and `CHANGES_REQUESTED` reviews are listed with the PR link; fix, then `/pr run`
-  again — the change lands on the same branch and the same PR is updated. It stops on green, on
-  blocked, or when nothing settles within `timeoutSecs` (a pending check is not fed back), and it
-  never merges. A `prux/<date>-<time>` branch is created instead of committing onto the base
-  branch; a clean tree outside a `prux/` branch does nothing. It will not guess a remote (no
-  `origin`, no `gh` login, no detectable default branch all stop with a reason). Config lives in
-  `agent_dir()/extensions/pr.json` with no project-level override — a file committed into a
-  repository should not be able to change where your work is pushed. `/pr status|run`. Off by
-  default, `Dev` mode only: it writes git history and pushes.
+  `/pr run` also picks up commits that exist locally but were never pushed (a direct commit on
+  the base branch still stays put — that is a push onto `main`), and it no longer writes a
+  `prux: <session title>` commit: the staged summary goes to the current model, which writes a
+  subject plus an optional body, falling back to the session title only when no model is selected,
+  the request fails or the answer is empty. That request carries the session id
+  (`x-opencode-session`; opencode providers answer `400 MissingSessionID` without it) and reuses
+  the session's own system prompt, so commit conventions written there still apply. PR titles and
+  bodies are written the same way, from the branch diff against its base, except that the PR
+  request keeps its **own** system prompt — the session one carries the tool protocol, and a
+  one-shot request has no `tools` — and asks for JSON (`{"title", "body"}`), because splitting
+  lines turns any stray preamble into half a title. `/pr new` walks the same path but never looks
+  for an existing pull request and never reuses the delivery branch: it always creates a fresh
+  `prux/<date>-<time>` branch, so the result is a brand-new PR (GitHub does not allow two open PRs
+  on one head branch anyway); with a clean tree and nothing unpushed it does nothing.
+
+  Only an open pull request is reused: a closed or merged one is announced and a new PR is opened,
+  and the CI poll addresses that PR by number instead of by branch, so the old one cannot shadow
+  it. It will not guess a remote (no `origin`, no `gh` login, no detectable default branch all
+  stop with a reason). Config lives in `agent_dir()/extensions/pr.json` with no project-level
+  override — a file committed into a repository should not be able to change where your work is
+  pushed. Commands `/pr status|run|new`. Off by default, `Dev` mode only: it writes git history
+  and pushes.
 
 - **Memory entries now need evidence, and a maintenance pass reconciles them**: extraction asks for
   the concrete thing that supports each item — the failing command and its error, the file and
@@ -665,29 +429,6 @@
   whole batch and writes nothing — half-applied decisions leave the store in a state nobody can
   reason about. `/memory maintain` runs a pass on demand; older stores without the `evidence` field
   still load.
-
-- **The desktop `/scoped-models` panel answers to the same keys as the terminal one**: Space toggles
-  the highlighted model just like Enter, `Ctrl+A` enables every model, `Ctrl+X` clears them, and
-  `Ctrl+P` flips the whole provider group of the highlighted row (all on → all off, otherwise all
-  on), so filling the Ctrl-P cycle no longer means clicking each row. While the search box has a
-  term, `Ctrl+A` / `Ctrl+X` only touch the rows it matches. `Ctrl+S` still saves the draft and Esc
-  still throws it away.
-
-- **Selecting or clearing every skill or extension no longer takes a click per row**: `Ctrl+A` and
-  `Ctrl+X` now enable / disable every row in the desktop `/extension` and `/skills` panels, and in
-  the terminal `/skills` panel — the terminal `/extension` panel already had them. As with Space,
-  this only edits the unsaved draft: `Ctrl+S` still applies and writes `settings.json`, and a search
-  term narrows the target to the rows it matches.
-
-- **The desktop window can draw its own title bar**: with `gui.frame` on, `prux-gui` paints a
-  custom frame — draggable, double-click to maximize, minimize / maximize / close on the right —
-  instead of leaving it to the window manager. On Linux it defaults on (window managers do not
-  always draw one) and the Window frame row in the settings panel applies it immediately; on macOS
-  the system title bar can only be hidden at window creation, so a toggle there writes the setting
-  and waits for a restart (macOS keeps its own traffic lights and draws no buttons of its own).
-  Windows has no system title bar to fall back to, so the frame is always drawn there. While the
-  window is maximized the maximize button switches to a restore icon, so clicking it again reads as
-  "put it back".
 
 ### Changed
 
@@ -710,274 +451,40 @@
   stays in its old directory). Entries whose directory no longer exists are pruned from the list at
   startup, and both UIs read and write the same file.
 
-- **The desktop GUI's four settings moved into one `gui` object**: `uiScale`, `theme-gui`,
-  `sidebar-gui` and `frame-gui` are now `gui.scale`, `gui.theme`, `gui.sidebar` and `gui.frame`, so
-  everything the window owns sits under one key instead of four hyphenated top-level names. The old
-  keys are gone: they are no longer read, and startup reports them as unknown settings — move the
-  values by hand if you had set them.
-
-- **The desktop GUI's search boxes are one notch shorter**: the session search in the sidebar and the
-  file search at the top of the right-hand panel are now 0.8× the height of the dialog text field
-  they share a style with. Background, border and horizontal padding stay the same — only the height
-  shrinks, and the text (or the placeholder) is vertically centred inside it.
+- **Config panels take bulk and in-place edits**: `Ctrl+A` and `Ctrl+X` enable / disable every
+  matching row in the `/skills` and `/extension` panels (terminal and desktop; the terminal
+  `/extension` panel already had them), and changing a setting with `Enter` now keeps the list,
+  the filter and the highlighted row instead of closing the panel, so several settings can be
+  flipped in a row. As with Space, a bulk toggle only edits the unsaved draft: `Ctrl+S` applies and
+  writes `settings.json`, and a search term narrows the target to the rows it matches. The stop
+  square on the send button is drawn in the accent colour rather than inverted.
 
 ### Fixed
-
-- **The desktop title bar drags, restores and double-clicks on Windows**: the custom frame consumed
-  the mouse down in its own handlers and then called platform calls Windows does not implement —
-  `start_window_move()` is a no-op there and `zoom_window()` only ever maximizes — so the window
-  could not be dragged by its title bar, and the restore button maximized again instead of
-  restoring. Windows handles both through the non-client hit test (`HTCAPTION` / `HTMAXBUTTON` /
-  `HTMINBUTTON` / `HTCLOSE`), which only works while the app leaves the press alone: the drag area
-  and the three buttons now let it through there and keep their own handlers on macOS / Linux.
-  Double-clicking the title bar toggles maximize / restore too — the platform's
-  `titlebar_double_click` is empty on Windows, so the window handle is used to send `SW_RESTORE`.
-
-- **Windows always draws its own window frame**: the Windows backend never puts a caption on the
-  window, so `gui.frame = false` there left it with no title bar at all — nothing to drag, nothing
-  to close. `gui.frame` now reads as `true` on Windows (the stored value is kept as-is), the window
-  is always created without system decorations, and the settings row says the frame is not
-  switchable on that platform.
-
-- **The desktop GUI's block cursor covers the character, not a whole line box**: the cursor and
-  selection block was 1.15em tall and nudged down to follow the glyph's descent, so its top lined up
-  with the top of the character while its bottom stuck out below the text. It is now one em tall —
-  the ideograph ink box — and shifted so both edges line up with the character.
-
-- **The desktop `/btw` input line accepts a paste**: `Ctrl+V` / `Cmd+V` in the panel's `btw>` row now
-  inserts the clipboard text — multi-line clipboard content is flattened to one line, the same way
-  the terminal overlay does it. Previously the key did nothing there, so long quotes had to be typed
-  by hand.
-
-- **`--tui` no longer exists on Windows**: `prux-gui` declares the Windows GUI subsystem, so it
-  has no console to hand over to the interactive TUI and the flag could only fail there. Both the
-  `--tui` argument and `Startup::tui` now exist only when the `gui` feature is on and the target is
-  not Windows, and `prux-gui` skips the TUI branch on Windows; run `prux` for the interactive TUI.
-
-- **A debug build of `prux-gui` keeps its console window**: the binary declared the Windows GUI
-  subsystem unconditionally, so even a debug build — the one you run to read logs or to try
-  `prux-gui --tui` — started without a console. The attribute is now gated on
-  `not(debug_assertions)`: release builds still hide the console, debug builds show it.
-
-- **The desktop GUI's message list stops scrolling itself down and jittering at a fractional zoom
-  level**: off-screen messages are replaced by a spacer as tall as the message was, and that height
-  is recomputed as "distance to the next message's top minus the flow gap". The gap was subtracted
-  unsnapped while layout snaps it to the device pixel grid, so at 1.25× it is 17.6 and not 18 — every
-  skipped message lost up to 0.8 px per frame, a few hundred of them shaved ~80 px off the content
-  height per frame, and the pin-to-bottom correction chased it down forever while each frame asked
-  for another one. The spacer now subtracts the same snapped gap layout uses, so a skipped message
-  keeps its height and the list stands still: an idle session went from 162 frames per second to
-  none.
-
-- **The desktop GUI no longer eats typed text while a Windows input method is composing**: the
-  input box treated an IME-claimed keystroke as a real key, so pressing Backspace with the candidate
-  window open deleted a character already sitting in the box instead of one inside the composition.
-  The GUI now builds against a gpui that keeps IME-claimed keys (`VK_PROCESSKEY`) from being
-  dispatched to the app and associates an IME context explicitly every frame.
-
-- **`/pr run` opens a new pull request when the branch's pull request is already closed**: `gh pr
-  view <branch>` returns a closed or merged pull request too, so a second `/pr run` on the same
-  branch reused it — the pushed commits went nowhere and the run reported the old pull request as
-  green. Only an open pull request is reused now; a closed or merged one is announced in the chat
-  area and a new pull request is opened. The CI poll addresses that pull request by number instead
-  of by branch, so the old one cannot shadow it.
-
-- **The `@` completion panel appears only when it has matches**: the file scan runs in the
-  background, so typing `@` (or another character that matches nothing) opened a panel with no
-  rows, showed its empty search box, and only collapsed once the scan came back empty — the
-  composer jumped every keystroke. The panel is now created from the scan result instead: no
-  entries, no panel, same as `/`. A late scan also no longer reopens a panel closed with Esc.
-
-- **Extension panels in the desktop GUI redraw only when their content changes**: an open `/btw`,
-  `/doctor` or other extension overlay re-fetched its view ten times a second and asked the window
-  for a new frame every time, even with nothing moving. A frame now counts as a redraw only when a
-  field the GUI actually renders (title, header, lines, footer, selection, input focus or the input
-  buffer) differs from the previous one, so an idle panel no longer flickers.
-
-- **The desktop GUI window is opaque on Wayland**: it asked for client-side decorations, which the
-  windowing layer treats as a transparent window — the surface was handed to the compositor with
-  premultiplied alpha and without an opaque region, so a full-window repaint flickered. Decorations
-  now come from the server, so the surface is declared opaque and carries an opaque region.
-
-- **The desktop GUI's session right-click menu highlights one row at a time**: the keyboard
-  selection and the mouse hover were drawn from separate states, so hovering `Delete` left `Rename`
-  lit as well and the menu showed two highlights at once. Hovering now moves the single selection,
-  as the arrow keys do, and the colour follows it.
-
-- **Deleting the last session of a project no longer leaves an empty folder behind**: every project
-  keeps its sessions in a per-project folder under `sessions/`, and `/session rm-current`,
-  `rm-project`, `rm-all` and the GUI sidebar's Delete removed the files but kept the folders. The
-  folder now goes with the last session in it (`/new` and the GUI's `+` also stopped pre-creating
-  it), so the directory listing matches what is actually there.
-
-- **The cursor at the end of a full line in the desktop GUI's input box no longer pushes a glyph
-  out of the card**: the block was appended to the line that was already filled edge to edge, so it
-  hung over the card's border. It now gets its own visual line when the current one has no room
-  left, and each glyph's width is rounded up to whole physical pixels — the layout engine places
-  per-character elements at integer pixels, so the fractional remainder used to let every visual
-  line hold one glyph too many. The card is also handed to the measuring layer wrapped, so the
-  measured width is the card's own and not its inner input row's.
-
-- **`/session` subcommands complete in the desktop GUI's input box**: only extension commands could
-  declare subcommands, so `/session` offered nothing. The built-in `statistics`, `rm-current`,
-  `rm-project` and `rm-all` are listed now, and they win over an extension command of the same name,
-  matching how the command itself is dispatched.
-
-- **The desktop GUI's `/history` panel uses the full row width**: prompt rows have no right-hand
-  detail, but they were still laid out as "label capped at the detail column width + detail", so
-  every prompt was truncated at roughly a quarter of the panel with the rest of the row left blank.
-  A row with an empty detail now lets the label take the whole width; `/command` and `@path` rows,
-  which do carry a description, keep the description right after the name.
-
-- **The desktop GUI only renders the part of a conversation you can see**: a long session used to
-  rebuild every transcript block on each redraw, which cost tens of milliseconds per frame and made
-  the window flicker while anything was moving. Blocks more than a screen away from the viewport are
-  now replaced by a placeholder of their measured height, so a redraw only pays for what is on
-  screen; their line entries are replayed from the previous frame, so selection and copy still see
-  the whole text. A block that changes while off screen keeps its old height until it scrolls back in.
-
-- **The desktop GUI no longer repaints itself every frame**: the transcript's measure-and-pin
-  callbacks compared layout results with exact floats and asked for a new frame whenever they
-  differed — on a long conversation the accumulated subpixel error never matched, so the whole
-  window redrew continuously and flickered even when nothing moved. The comparisons now allow
-  half a pixel, and each rendered line builds its text and highlights once instead of twice.
-  `PRUX_GUI_FRAMES=1` makes the GUI report its frame interval to stderr, which shows whether
-  anything is still asking for a redraw while idle.
-
-- **The desktop GUI no longer re-parses an overlay's Markdown on every frame**: `/changelog` and
-  the other Markdown panels ran the whole document through the parser and the syntax highlighter on
-  every redraw, so scrolling a long changelog stuttered. The parsed rows are cached and reused until
-  the text, the light/dark theme or the layout width changes — assistant bodies already worked this way.
 
 - **A new session's file path reaches the UI once it lands on disk**: `/new` starts a deferred
   session, so the switch reply has no path — and nothing ever sent one later. Until the next switch
   `/fork` answered `no current session`, `/resume` did not mark the running session as current, and
   extensions keyed the session as `default`. The worker now reports the path the moment the first
   message writes the file, and the switch is re-dispatched to extensions with it.
-- **The desktop GUI renders tables, formulas and Mermaid diagrams**: assistant markdown used to
-  run a table's cells together into one paragraph, leave `$...$` / `$$...$$` as literal source and
-  print `mermaid` fences as plain code. Tables now render as a real grid (column widths follow each
-  column's longest cell, cells wrap), inline and display math go through the same LaTeX-to-Unicode
-  renderer the terminal UI uses, and `mermaid` blocks become the same box-drawing diagrams. The
-  LaTeX and Mermaid renderers moved into the core layer so both UIs share one implementation.
-
-- **The desktop GUI's status dots sit on the text's optical center**: the brand dot next to `prux`
-  (and the tool card's status dot) was centered on the line box, which left it about 2 px above the
-  middle of the letters. It is nudged back down so the dot and the lowercase text share one horizontal
-  center line.
-
-- **Desktop GUI slash commands keep their arguments**: `/compact <instructions>` and `/bug <hint>`
-  used to be swallowed as an unknown command, `/history` parked its text back in the input box
-  instead of reopening the search panel, and `/name <name>` renamed the session while the sidebar
-  kept showing the old title.
-
-- **`/rewind` works in the desktop GUI**: the command went straight to the agent, so the branch
-  moved back but the transcript kept showing the input and everything after it. It now runs the same
-  confirmation panel as the terminal UI (rewind & restore the input to the box / rewind & discard /
-  cancel) and rebuilds the transcript from the trimmed history.
-
-- **Images in the desktop GUI keep their aspect ratio**: `@image` references and pictures returned by
-  a tool used to sit in a fixed square, so a wide screenshot left empty bars above and below. The
-  thumbnail is now sized from the image itself — small pictures render at their own size, large ones
-  scale down to the 360 px cap without distortion — and formats the decoder cannot measure fall back
-  to the old square.
-
-- **An image in the desktop GUI stays the picture it was when sent**: `@image` references used to be
-  re-read from their path on every frame, so rewriting that file (saving a screenshot under the same
-  name) swapped the thumbnail in messages that had already gone out. Each user message now keeps a
-  content-addressed snapshot taken when it was sent, thumbnails are built from the file bytes so the
-  image cache keys on the content instead of the path, and temporary files are named by a hash of the
-  whole content — the old "length + first byte" name collided between different pictures and kept
-  showing the stale one.
-
-- **The desktop GUI's status bar keeps moving while a turn runs**: usage used to arrive only with the
-  end-of-turn snapshot, so context window, cache hit rate, in/out and cost stood still through the
-  whole turn — a fresh session read `0% · CH 0%` until the turn finished. They are now advanced from
-  agent events as each message lands: the assistant's usage anchors the context size, later messages
-  and tool results are estimated on top, and a compaction resets the anchor to the size it reports.
-  The message count still steps aside while a turn runs because `Working…` already leads the row.
-
-- **`Ctrl-W` no longer swallows `Ctrl-Shift-W`**: the delete-word-back shortcut matched any
-  `Ctrl-W`, so the new working-directory panel key was eaten by the input box; it now requires the
-  shift key to be up.
-
-- **File edits in the desktop GUI render as diffs**: the `edit` card shows the file path in its
-  header and the change itself as a diff — a right-aligned line-number gutter, added lines in the
-  success colour and removed lines in the danger colour, `@@` hunks and context lines muted, and a
-  single-line replacement highlighted word by word. The diff comes from the tool result
-  (`details.diff`) and falls back to a preview computed while the call is still running, so the card
-  fills in before the edit finishes. `write` cards keep the path in the header (instead of dumping
-  the whole file body into the collapsed summary) and preview the content being written in the
-  body — the first few lines plus a "click to expand" hint, the same shape the terminal UI uses.
-
-- **A fresh desktop GUI session follows new output again**: scrolling was only pinned after the
-  view had been seen at the bottom once, and content shorter than the viewport counted as "scrolled
-  away" because the target offset was positive. New output in a brand-new session therefore grew
-  below the fold until you scrolled down once by hand. The pin now starts engaged and clamps the
-  target to the real scroll range, so the first turn follows to the bottom and only a real scroll up
-  stops it.
-
-- **The desktop GUI's `/` panel lists every command it can run**: `hotkeys`, `session`, `changelog`,
-  `trust`, `bug`, `theme`, `reload`, `settings`, `extension`, `skills`, `scoped-models`, `login`,
-  `logout`, `usage` and `debug` were executable but unlisted. `/name <text>`, `/thinking <level>`,
-  `/model <id>`, `/session <n>`, `/export <path>` and `/import <path>` now take their argument
-  instead of being read as an unknown command (`/model` matches inside the scoped model list when one
-  is set, `/session` indexes the session directory in the same most-recent-first order the sidebar
-  uses and reports the valid range otherwise), and `/theme` and `/hotkeys` are aliases for the
-  appearance picker and the keybinding page. Enter in the `/` panel with no candidates completes
-  what was typed instead of doing nothing, which is what made an argument command look stuck on
-  "No matches".
-  The `Ctrl-M` command palette keeps only what the `/` panel does not cover, plus `skills`,
-  `extension` and `settings` — the three with their own panels — so the same action no longer has
-  two entries competing for the same keystrokes.
-
-- **Enter in the settings panel changes the setting instead of closing the panel**: every row now
-  keeps the list open (and keeps your filter and highlighted row), so you can flip several settings
-  in a row. The stop square on the send button is drawn in the accent colour rather than inverted.
-
-- **`Tab` in the desktop GUI's `/` panel completes instead of running**: it writes the highlighted
-  command into the input (with a trailing space) and leaves running to `Enter`, so a completion can
-  be edited first. `@` file candidates still only complete on `Enter` and never send, matching the
-  terminal UI.
-
-- **`gui.scale` lands in `settings.json` as one decimal**: writing the float straight through turned
-  `2.1` into `2.0999999046325684`; it is now quantised to one decimal before saving.
-
-- **`!` and `!!` no longer open a completion panel in the desktop GUI**: shell lines run on
-  `Enter`, so the panel only appeared to announce itself and then stole `Up` / `Down` from the
-  shell command; the trigger and its empty-panel hint are gone.
-
-- **Desktop GUI `/` and `@` matching now follows the terminal UI**: `/` ranks commands by
-  order-of-characters matching instead of prefix (skills match by their bare name, so `/idea` no
-  longer hits `skill:deep-research`), and `@` scores paths — file name exact, then file name
-  prefix, then file name substring, then path substring — sorting ties by depth, length and name.
-  Both use the same shared scoring code as the terminal UI.
-
-- **Command palette entries run the command they name**: cloning a list entry mapped any command
-  outside a hard-coded handful to `/session` stats, so "Share session (gist)…" only printed the
-  statistics. Entries now carry their command through unchanged.
-
-- **Dragging a sidebar edge no longer overshoots**: sidebar and right-panel widths were stored in
-  scaled design pixels but mouse movement arrives in physical pixels, so at any zoom other than
-  100% the panel grew faster than the pointer. The delta is now converted before it is applied.
-
 - **Left/Right now reach the panel**: the TUI key translation never mapped `←`/`→`, so every
   overlay saw them as "some other key" — the `ask-user-question` tabs only moved on `Tab`, and
   no extension could bind horizontal navigation. Both arrows are mapped now.
-- **Transient gateway, proxy and OAuth failures now retry**: `upstream_stream_read_error`,
-  `stream was interrupted`, `Upstream HTTP/2 stream failed`, `stream disconnected before
-  completion` and a failed Google Vertex OAuth token refresh (`request to … failed, reason:`)
-  all fall through to the retry policy instead of failing the turn on the first attempt.
-- **HTTP status codes must stand alone**: `429`/`5xx` used to match anywhere in the error text,
-  so a request id such as `req_011CU503xyz` or a byte count such as `5242880 bytes` triggered
-  pointless backoff retries. A code now only counts when it is not part of a longer word or number.
-- **ChatGPT Business workspace limits are not retried**: the workspace admin has to raise that
-  limit, so backing off on it only wasted turns.
-- **Compaction and branch summaries use the model's output limit**: they no longer derive a cap
-  from `compaction.reserveTokens` (which only decides *when* to compact), so a thinking model
-  can no longer exhaust the summary budget and fail with "generation hit the token cap".
-- **Any HTTP 413 counts as context overflow**: an oversized request body (for example a session
-  full of large images on GitHub Copilot) now compacts and retries instead of failing.
+- **Transient failures retry, and the retry matcher is no longer fooled by unrelated numbers**:
+  `upstream_stream_read_error`, `stream was interrupted`, `Upstream HTTP/2 stream failed`,
+  `stream disconnected before completion` and a failed Google Vertex OAuth token refresh
+  (`request to … failed, reason:`) all fall through to the retry policy instead of failing the
+  turn on the first attempt. A `429` / `5xx` only counts when it stands alone: `req_011CU503xyz`
+  and `5242880 bytes` used to match anywhere in the error text and cost a pointless backoff. A
+  ChatGPT Business workspace limit is never retried — only an admin can raise it, so backing off
+  just wasted turns.
+
+- **Compaction uses the model's output limit, and any HTTP 413 counts as context overflow**:
+  compaction and branch summaries no longer derive a cap from `compaction.reserveTokens` (which
+  only decides *when* to compact), so a thinking model can no longer exhaust the summary budget
+  and fail with "generation hit the token cap". An oversized request body — for example a session
+  full of large images on GitHub Copilot — answers 413, which now compacts and retries instead of
+  failing.
+
 - **Whitespace-only tool output uses the empty placeholder**: a bare `\r\n` from `bash` used to
   be sent verbatim to the OpenAI Completions, OpenAI Responses and Google APIs, which reject it
   with a 400. Google now also has a placeholder for genuinely empty output.
@@ -999,258 +506,26 @@
   now active.
 - **HTML export renders CJK emphasis**: bold and italic next to CJK punctuation no longer show
   up as literal asterisks.
-- **The desktop GUI's transcript and menus behave**: right-clicking a session row and picking
-  `Rename` / `Delete` now opens the dialog instead of just closing the menu, the transcript can
-  be scrolled to its real end (the last lines are no longer hidden under the composer), text
-  selection lands on the character under the pointer, `Esc` during a turn drops the busy state
-  and leaves an `Operation aborted` line behind, and command results appear in the transcript
-  as system messages rather than a transient toast. UI scale can be raised to 500%.
 - **A second overlay no longer replaces the first**: when two extensions ask for input at the
   same time, the second one used to take over and the first was simply gone. The covered overlay
   is now kept on a stack and comes back as soon as the one above it closes; switching sessions
   still closes all of them.
 
-- **The desktop GUI's input box wraps to the width it really has**: wrapping measures real glyph
-  widths through the text system instead of assuming 0.6em per character — the estimate overflowed
-  the card once the interface was zoomed, and scaling it back wrapped a fifth too early; the
-  available width is now the card's inner width. A draft longer than eight rows scrolls with the
-  wheel, the cursor scrolls itself back into view when it moves without fighting a manual scroll,
-  and collapsed tool output ends with the same `⋯ N more line(s) · click to expand` hint the user
-  bubbles use instead of a bare `…`.
-- **Streaming no longer drags the transcript back to the bottom**: every agent event used to call
-  `scroll_to_bottom`, so scrolling up to read history was undone event by event. Only a view that is
-  still following the bottom auto-scrolls now; reloading a session re-arms it.
-
-- **The desktop GUI's `/extension` and `/skills` panels behave like the TUI ones**: a toggle only
-  edits an unsaved draft — `Ctrl+S` writes it, `Esc` throws it away — and the panel keeps the row you
-  clicked selected along with the filter box instead of jumping back to the first row after the list
-  is rebuilt. `Tab` opens a read-only detail page for the selected entry (`Tab` / `Enter` / `Esc` go
-  back, the draft survives) — the extension description, mode, tools and fork URL, or the skill's
-  `SKILL.md` header, source and path. Footer and banner extensions are no longer listed, since only
-  the terminal UI renders them.
-
-- **Selecting text keeps the inline styles underneath it**: a transcript highlight has to be split
-  where it meets inline code or a link, so the selection background no longer swallows those words
-  and paint over only part of the selection.
-
-- **`/cache-usage all` no longer freezes the desktop GUI**: the scan ran on the view thread
-  whenever no async runtime was in scope, so with many saved sessions the whole window stopped and
-  the panel appeared only after the scan had finished. The scan now runs in the background and the
-  panel opens right away with `scanning sessions…`.
-
-- **Arrow keys scroll the desktop GUI's info panels**: the scroll offset was clamped against a
-  range with the wrong sign, so `↑` / `↓` / `PgUp` / `PgDn` on `/usage`, `/help`, `/session`,
-  `/changelog` and the extension detail pages snapped back to the top instead of moving. `End` goes
-  to the bottom now.
-
-- **`/rewind` works in the desktop GUI**: it was listed in the `/` panel but had no handler, so the
-  command text simply went back into the composer. It now rolls back the last user input.
-
-- **`/debug` answers in the desktop GUI**: it was listed in the `/` panel but did nothing. A bare
-  `/debug` now prints the agent diagnostics into the conversation (provider, model, message count,
-  auto-compaction and retry, working directory, session); the `/debug info` / `provider` /
-  `system-prompt` subcommands stay with the `debug` extension.
-
-- **The desktop GUI forgets working directories that no longer exist**: the recently-used list in
-  the working-directory picker only ever grew, so moved or deleted projects stayed in the menu as
-  entries that could not be opened. Startup now drops the paths that are gone and writes the list
-  back, and a directory change is detected against the incoming snapshot's `cwd` before that
-  snapshot replaces the old one.
-
-- **Commands in the desktop GUI's `bash` cards wrap instead of being cut**: the command sat in the
-  header as a one-line summary with a `command=` prefix, truncated and squeezed against the status
-  label. It now takes the second line of the card, wraps, and uses the code colour; the lines it
-  occupies come out of the output line budget.
-
-- **Blank assistant turns leave no gap**: a turn that made a tool call but produced neither text nor
-  thinking rendered as an empty block, and the flow's `gap` still counted it, so neighbouring blocks
-  floated apart. Empty turns are skipped when rendering.
-
-- **`Enter` on an empty composer jumps back to the newest output**: pressing `Enter` with nothing
-  typed used to do nothing while the view was scrolled up; it now re-pins the transcript to the
-  bottom.
-
-- **A tool card shows one "N more lines" hint, not one per section**: a `bash` card could stack a
-  hint under the command, another under the diff or written body, and a third under the output,
-  each counting only its own overflow. The hidden lines are now summed and the card ends with a
-  single hint.
-
-- **The desktop GUI's `@` panel finds files the way the terminal UI does**: it used to filter a
-  one-shot list of files (depth-limited, files only) by substring, so directories, deeper files and
-  hidden files never came up and the order did not match. The panel now runs the same background
-  directory walk with the same path scoring: directories are candidates (completing to `dir/` so you
-  can keep typing into them), `.gitignore` / `.ignore` / `.fdignore` are honoured, hidden files are
-  listed, results rank by score then by depth, length and name, and a path that contains spaces or
-  CJK punctuation is completed as a quoted path. Typing a directory prefix scopes the walk to it
-  (`@src/mo` only walks `src`), a `@` that starts a word after `(`, `` ` `` or CJK punctuation
-  triggers the panel while the one in `user@example.com` does not, and continuing to type cancels the
-  previous walk.
-
-- **The desktop GUI's `/history` lists prompts as you type**: typing `/history` (or `/history bug`)
-  now opens the completion panel above the input box with this project's prompts, most recent
-  first — no Enter needed to see anything. The query is split on whitespace into case-insensitive
-  substrings that must all appear anywhere in the full prompt, in any order, so a prompt whose text
-  sits on later lines is still found. Enter / Tab writes the selected prompt back into the input box
-  (multi-line prompts come back as multiple lines) without sending it, and an empty result keeps the
-  panel open instead of sending `/history …` as a prompt. `@clear` / `@clear-all` (visible only while
-  the query starts with `@`) delete this project's history or every project's, behind a Yes/Cancel
-  confirmation that shows how many entries are at stake.
-
-- **The desktop GUI's completion panel closes when nothing matches**: `/command` and `@path` used
-  to leave an empty `No matches` box on screen, unlike the terminal UI, which hides the panel. It now
-  closes as soon as the command, subcommand or file scan has no candidate, and the characters typed
-  into the panel come back into the input box instead of vanishing with it — `Esc`, backspacing past
-  the prefix and an empty result all leave the box holding what was actually typed. The `/history`
-  panel is the one exception: a query that matches nothing keeps it open as a search box and says
-  `No matching history`. Leading indentation before a `/` now triggers the panel too, as it does in
-  the terminal UI.
-
-- **Expanding a card in the desktop GUI no longer flickers**: the toggle changed the height, the
-  pointer was still over the card when the button came up, and the second hit flipped it straight
-  back. One entry now accepts a single toggle per 250 ms, and a toggle clears the previous frame's
-  measured height so the layout is not pinned to the old one.
-
-- **The desktop GUI's completion panel no longer pops up on cursor movement**: `/command` and
-  `@path` were recomputed after every key, so pressing the arrow keys in the middle of a prompt
-  reopened the panel over text that had not changed. Suggestions are now refreshed only when the
-  editor's text actually changed.
-
-- **An aborted turn in the desktop GUI really stops everything**: `Esc`, the stop button and an
-  extension's abort now report `agent_end` (as the terminal UI does), so event-driven extensions
-  such as the idle-timeout watchdog stop believing the turn is still running and no longer restart
-  an already idle session. They also drop cancellable background work (an MCP OAuth login, say)
-  and take the queued steer / follow-up messages back into the input box; `Esc` does that before
-  menu and overlay handling while a turn is running.
-
-- **Restarting a turn in the desktop GUI no longer drops queued input**: steer messages that piled
-  up while an extension rebuilt the prompt are now sent with the new prompt instead of being lost.
-
-- **The desktop GUI's turn timer stops when a turn is aborted**: the elapsed time in the status bar
-  kept counting after `Esc`, the stop button or an extension aborted a turn, and every later turn
-  inherited that baseline, so `⌛` grew across the whole session. The synthesized `agent_end` now goes
-  through the same handler as real agent events, freezing the timer and clearing the in-flight
-  streaming count.
-
-- **The `browser` extension no longer clicks through a banner**: `click` and `dblclick` check the
-  element's center point first and refuse when another element covers it (naming it, e.g.
-  `covered by <div#banner>`), when the element is disabled, or when it has no clickable area. The old
-  behaviour dispatched the click anyway and reported success.
-
-- **`Ctrl-N` no longer starts a new session in the desktop GUI**: it collides with the terminal UI's
-  named-session filter, so the shortcut is gone; use `/new` or the `+` button in the sidebar.
-
-- **Long overlay and dock lines wrap instead of running off the card in the desktop GUI**: each line
-  was a flex row of per-span elements, and a text element's automatic minimum width is its whole
-  unwrapped line — so the row never shrank and long text (a subagent's task, a dock status line)
-  painted straight past the panel's border. The spans now let themselves shrink, and such lines
-  break inside the card.
-
-- **Deleting a session in the desktop GUI goes to the trash, as in the terminal UI**: the sidebar's
-  Delete action unlinked the file outright, so one misclick was unrecoverable. It now runs the
-  `trash` CLI first and falls back to unlinking only when that fails, and it refuses to delete the
-  session that is currently open — that file is still being appended to, as the terminal UI already
-  enforced. The confirmation no longer claims the deletion cannot be undone.
-
-- **`Esc` in the desktop GUI closes an open panel before it aborts the turn**: while a turn was
-  running, `Esc` was checked against the busy state first, so hiding an overlay or menu cancelled
-  the running turn instead. The busy-state abort now runs after the overlay, dropdown, completion
-  panel and search boxes, matching what the terminal UI already did.
-
-- **`leak-guard` no longer flags paths and session file names, and stops repeating itself**: the
-  high-entropy scan treated `/` as part of a candidate string, so any file path became one long
-  'random' blob, and UUID / hash / `2026-11-02T10-25-54-666Z_<uuid>` session names went through as
-  well. Paths no longer join into a candidate, machine-generated identifiers are skipped, and the
-  warning memory now drops its oldest entry instead of wiping itself — a history full of such
-  names used to reset the memory every request, so the same warning came back every turn.
-
-- **`leak-guard` now names the snippet that triggered it**: the warning only said "looks like
-  credentials (high-entropy)", so a path, a base64 blob and a hash were indistinguishable. The
-  prompt and tool-argument warnings now carry a short head/tail preview of the hit (for example
-  `high-entropy: q8Zr2NvT…Zx4Q`). Blocked tool calls still report the category only, because
-  that reason goes back into the model context.
-
-- **A brand-new session in the desktop GUI now shows up in the sidebar and gets highlighted**: the
-  file is only written on the first message, and the sidebar was only re-read when the working
-  directory changed or a session was renamed, so the new row stayed missing and nothing was
-  highlighted. A session path appearing or changing now re-reads the list.
-
-- **Text in the desktop GUI's list rows, chips and buttons sits on the optical middle again**: the
-  Source Han Sans ascent (1.16em) is far larger than its descent (0.29em), so a lower-case run
-  centred by its line box lands about 2px below the row's middle, and the effect grows as rows get
-  shorter; fixed-height rows were also being compressed by the flex layout down to the text height,
-  which shrank the highlight bar with them. Fixed-height rows no longer shrink and row text is
-  raised by 0.12em of its font size (`text_raise_margin`), covering the command palette, the model /
-  session / extension / skill / settings panels, the `/` and `@` completion panels, dropdowns, the
-  right panel's file and change lists, and the composer's `+ Attach`, model / thinking chips and
-  `Send`.
-
-- **`Browse…` in the desktop GUI no longer does nothing on Windows**: the native file dialog used to
-  be opened on a background thread, but the Windows dialog needs the main thread's OLE STA (macOS
-  requires the main thread as well) and the failure was swallowed by `ok()`, so a click produced
-  nothing at all. The dialog now opens on the foreground executor for both the working-directory
-  picker and the attach picker.
-
-- **The desktop GUI's window icon now comes from the icon shipped in the binary**: on Windows the
-  title bar / task bar icon is loaded by gpui from the executable's icon resource (fixed resource id
-  1), but the resource script declared the icon under a name, so nothing was found and the system
-  default icon was used. The icon resource now uses the numeric id 1; it is the same artwork as
-  `icon.png`.
-
-- **Windows no longer flashes a console window for every external command**: `prux-gui` is built as
-  a windows-subsystem binary and has no console of its own, so every console-subsystem child it
-  started — `bash`, `powershell`, `rg`, `fd`, `git`, `taskkill`, MCP and LSP servers — was handed a
-  freshly allocated console whose window the system then showed. A shared `HideConsole` trait now
-  sets `CREATE_NO_WINDOW` on every child process prux spawns. Besides the `bash` / `powershell` /
-  `find` / `grep` tools, the git helpers, the workflow gate, the timed runner and process-tree
-  kills, that now includes the clipboard tools (`wl-copy` / `wl-paste` / `xclip` /
-  `termux-clipboard-*`), the tmux capability probes, `gh` gist shares, `/giff`'s `git diff`, the
-  `!cmd` shell runs, the worktree copy and the screenshot / window-activation helpers. Their
-  stdout/stderr were already piped, so nothing else changes; off Windows the call is a no-op.
-
-- **The desktop GUI sidebar's branch row uses `⎇`**: it drew a Nerd Font icon, which rendered as a
-  tofu box under the bundled font.
-
-- **The desktop GUI's settings panel keeps the highlighted row when a value changes**: toggling a
-  row rebuilt the panel from scratch, so the filter text and the highlighted row were dropped and the
-  list jumped back to the first entry. The panel now re-fills its rows in place, and the highlight
-  follows the entry it was on rather than its index — a filter that stops matching the row you just
-  changed (searching `on`, switching a value to `off`) no longer slides the highlight onto a
-  neighbour.
-
-- **The copy button on a later code block in the desktop GUI copies again**: interactive elements are
-  told apart by their element id, and gpui keeps exactly one state per id — so the row counter behind
-  the copy button and the inline markdown links restarted at zero in every message, and a block in a
-  newer message shared its id with a block from an earlier one. The element rendered first cleared the
-  shared mouse-down record when the button was released, so the click on the later block never fired;
-  the earlier block's button kept working, which is why only some cards looked broken. Ids now carry
-  the block index as a namespace, and the overlay panel's markdown gets a namespace of its own.
-
-- **The desktop GUI's login panel looks like the terminal's**: signing in used to open a bare text
-  box, so whenever the panel also needed a code input line the authorization URL was not shown at
-  all, and the per-provider instruction was one generic sentence. The panel now lays out what the
-  terminal panel lays out — the device user code, the authorization URL (click it to open it in the
-  browser), the "click to open · copied to clipboard" line, the provider's instruction and the label
-  over the code field — and both front ends read those strings from one place. The URL is still
-  copied to the clipboard as it arrives, and the waiting step no longer offers a button that does
-  nothing.
-
 ## 中文
 
 ### 新增
 
-- **ACP 会话可以问用户问题了**：客户端在 `initialize` 里广告 `clientCapabilities.elicitation.form`
-  时，`prux acp` 把 `ask_user_question` 的问卷送成 `elicitation/create` 表单由客户端渲染；
-  没广告的客户端（Zed 1.3.6 根本不发 `elicitation` 能力）退化为每道单选题发一次
-  `session/request_permission`，多选题按未作答报告。其余会阻塞等作答的选择面板（如权限门控）
-  一律走 `session/request_permission`。stdin 改由独立任务读取，客户端对 agent 发起请求的答复
-  不会因回合正在跑而被卡住。
-
-- **桌面窗口支持账号登录，不再只有 API key**：`/login` 先问认证方式，再按方式列出账号（OAuth）
-  或 API key 的 provider，并显示各自的状态（`✓ stored`、`✓ env (VAR)`、`• not configured`）。
-  选账号 provider 后走与终端相同的登录流程——浏览器本地回调、复制授权码（把页面上的
-  `code#state` 粘回来）、device-code（用户码 + 验证地址）——整段流程跑在后台任务里，等待期间窗口
-  照常重绘。授权地址 / 验证 URI 自动复制到剪贴板，凭据写进同一个 `auth.json`，当前 agent 立刻
-  用上新 token；关掉面板会释放本地回调端口。
+- **新增桌面 GUI：`prux-gui`**：把同一个 agent 搬进窗口——共用 `agent_dir()`、`settings.json`、
+  会话文件与扩展，模型链、工具与会话内容与终端完全一致，同一个会话能在两边轮流打开。窗口分三栏：
+  左侧会话列表（搜索、按时间分组、改名 / 删除、可收起可拖宽，底部是分支与工作目录），中间对话流
+  （Markdown、表格、公式、mermaid、图片、带行号的 diff、工具卡片与耗时、排队区、停靠面板、
+  多行输入卡片与一行状态行），右侧 Files / Changes 面板（可收起，diff 带行号、可横竖滚动）。
+  斜杠命令、`@` 路径补全、模型与思考级别、技能 / 扩展 / 设置、登录与项目信任、`/rewind`，
+  以及扩展发出的提问、覆盖层与独立设置面板都在窗口里可用；扩展命令只写一份，两个宿主共用
+  同一张注册表。键位固定成一套（含义与终端一致，不读 `keybindings.json`），列表与覆盖层全键盘
+  可达，鼠标可选中复制、中键粘贴、拖动面板改宽；主题、缩放、会话栏开关与自绘标题栏（`gui.frame`）
+  收在 `gui` 段下写回 `settings.json`。`prux-gui --tui` 用同一个二进制启动终端界面，
+  用法见 `docs/gui.md`。
 
 - **面板补上键位提示**：会话选择器现在写明 `Ctrl+R rename · Ctrl+D delete · Ctrl+G next`
   （此前只有「Enter confirm」），登出列表也在清 key 前说明 Enter 的作用。
@@ -1259,9 +534,13 @@
   把**已装配好的** Agent 交给它，因此编辑器拿到的是与 TUI 完全相同的模型链、工具表、会话文件与
   扩展钩子，而不是第二套 agent loop。它在 stdin/stdout 上讲 NDJSON + JSON-RPC 2.0，应答
   `initialize` / `authenticate` / `session/new` / `session/prompt` / `session/cancel`，把文本、
-  思考、工具调用起止以 `session/update` 通知流式推给客户端。回合执行期间同时监听 stdin，取消
-  即时生效，不会排在一个慢回合后面。单会话（`session/new` 返回 `bootstrap()` 已打开的会话），
-  不支持 `session/load`，prompt 只取文本块。该扩展不注册工具、不订阅钩子——不开 `prux acp`
+  思考、工具调用起止以 `session/update` 通知流式推给客户端；回合执行期间同时监听 stdin，取消
+  即时生效，不会排在一个慢回合后面。客户端在 `initialize` 里广告
+  `clientCapabilities.elicitation.form` 时，`ask_user_question` 的问卷送成 `elicitation/create`
+  表单由客户端渲染；没广告的客户端（Zed 1.3.6 根本不发 `elicitation` 能力）退化为每道单选题发一次
+  `session/request_permission`，多选题按未作答报告，其余会阻塞等作答的选择面板（如权限门控）
+  一律走 `session/request_permission`。单会话（`session/new` 返回 `bootstrap()` 已打开的会话），
+  不支持 `session/load`，prompt 只取文本块；该扩展不注册工具、不订阅钩子——不开 `prux acp`
   时它什么都不做。默认不启用，且只在 `Dev` / `Creator` / `All` 模式下可用：在 `/extension`
   面板（或 `settings.json`）开启后才有 `prux acp`，`Minimal` 模式下子命令完全不存在。
 
@@ -1275,9 +554,6 @@
   都不跑，改到依赖清单或 lock 文件则全跑。认不出语言的命令（`just check`、`cargo test && pnpm
   test`）永远跑——跳过它们等于假的通过；不是 git 仓库时退回全量。`/vet run` 手动路径仍然跑全部。
 
-
-- **桌面 GUI 的每个代码块右上角都有复制按钮**：点击代码块首行右侧的复制图标，整块源码进剪贴板，
-  并弹出 `Copied to clipboard` 提示。
 
 - **新增 `hooks` 扩展：在生命周期时机跑你自己配的命令**：四个事件——`PreToolUse`、
   `PostToolUse`、`UserPromptSubmit`、`Stop`——由 agent 目录下的 `extensions/hooks.json` 驱动，
@@ -1355,13 +631,14 @@
   聊天区提示一次（不落库、不进模型上下文）。结果本身**绝不改写**——打码会破坏 diff 与代码块，
   而且模型要看原文才能自己判断。同一条结果只提示一次。默认不启用（`Dev` / `Creator`）。
 
-- **新增 `hardware` 扩展：本地芯片手册与引脚表检索**：把转成 Markdown 的手册（和引脚 CSV）放进
-  `agent_dir()/extensions/hardware/datasheets/`，可以按芯片建子目录；`hardware_search` 用与其它
-  检索同一套词法切词给每个块打分，返回 `file:line` + 片段正文。命中在路径里的块额外加权，所以搜
-  `usart` 会优先出 `stm32f4/…` 而不是无关文件；`path` 收窄前缀、`limit` 限条数。引脚别名不需要
-  第二套机制——引脚表的一行（`PA9,USART1_TX,TIM1_CH2`）就是一块，引脚名和复用功能名都能搜到。
-  资料目录每次调用重扫（不建索引缓存）。
-- **`hardware` 扩展同时直连板子**：探针通道走 `probe-rs`——`hardware_board_info` 读芯片名与架构、
+- **新增 `hardware` 扩展：本地芯片手册、引脚表与真板子**：把转成 Markdown 的手册（和引脚 CSV）
+  放进 `agent_dir()/extensions/hardware/datasheets/`，可以按芯片建子目录；`hardware_search` 用与
+  其它检索同一套词法切词给每个块打分，返回 `file:line` + 片段正文。命中在路径里的块额外加权，
+  所以搜 `usart` 会优先出 `stm32f4/…` 而不是无关文件；`path` 收窄前缀、`limit` 限条数，资料目录
+  每次调用重扫（不建索引缓存）。引脚别名不需要第二套机制——引脚表的一行
+  （`PA9,USART1_TX,TIM1_CH2`）就是一块，引脚名和复用功能名都能搜到。
+
+  同一扩展也直连板子。探针通道走 `probe-rs`——`hardware_board_info` 读芯片名与架构、
   `hardware_memory_map` 列 RAM / Flash 区间、`hardware_memory_read` 把任意地址段渲染成 hex dump；
   没有探针时前两个回落到内置板卡表（`nucleo-f401re` / `nucleo-f411re` / `arduino-uno` /
   `arduino-mega` / `arduino-uno-q` / `esp32` / `rpi-gpio`），所以「这块板是什么芯片」不插板也能答。
@@ -1376,16 +653,20 @@
   延迟工具（需 `tool-search`）；`/hardware` 打印资料目录、板卡配置与工具列表。默认不启用
   （仅 `Dev` 模式可用）。
 
-
 - **新增 `leak-guard` 扩展：凭据外发前先拦一道**：`permissions` 管的是「哪个工具能跑」，不管
   「什么内容出去」——`curl -H "Authorization: Bearer …"`、或者把 `.env` 贴进 prompt，以前都是
   原样发走的。`leak-guard` 两头都扫：每次请求前扫每条消息的文本块，每次工具调用前扫入参。规则表
   覆盖 OpenAI / Anthropic / GitHub / GitLab / AWS / Slack / Google / Stripe 的 key、JWT 形状的
   token、私钥块，以及任何「长度 ≥32、大小写与数字齐全、Shannon 熵 ≥4 bits/字符」的串（纯 hex
-  跳过，所以 commit 与内容哈希不会误报）。档位 `warn`（默认）只提示；`block` 只把**本次请求**
-  的命中替换成 `[REDACTED:<类别>]`，并拒绝携带凭据的工具调用、把命中的类别回给模型。思考块只扫
-  不改——它的文本带签名，改了签名就失效。同一 `(类别, 片段)` 只提示一次。档位存在
-  `agent_dir()/extensions/leak-guard.json`——`/leak-guard warn|block|off` 设档，裸 `/leak-guard` 打开扩展设置面板。默认不启用（`Dev` / `Creator`）。
+  跳过，所以 commit 与内容哈希不会误报）。路径不会连成一个候选串，机器生成的标识（UUID、哈希、
+  `2026-11-02T10-25-54-666Z_<uuid>` 这类会话名）直接跳过，告警记录满了改为挤掉最早一条而不是
+  整体清空——历史里这类名字一多，记录每轮都被清空，同一个提示就会每回合重弹一次。每条提示附上
+  命中片段的首尾预览（如 `high-entropy: q8Zr2NvT…Zx4Q`）；被拒绝的工具调用只报类别，因为那条
+  原因会回到模型上下文。档位 `warn`（默认）只提示；`block` 只把**本次请求**的命中替换成
+  `[REDACTED:<类别>]`，并拒绝携带凭据的工具调用、把命中的类别回给模型。思考块只扫不改——它的
+  文本带签名，改了签名就失效。同一 `(类别, 片段)` 只提示一次。档位存在
+  `agent_dir()/extensions/leak-guard.json`——`/leak-guard warn|block|off` 设档，裸 `/leak-guard`
+  打开扩展设置面板。默认不启用（`Dev` / `Creator`）。
 
 - **新增 `processes` 扩展：后台进程监督**：内置 `bash` 工具只有「前台执行 + 超时杀进程」，
   dev server、watcher 这类长命命令会把一整轮卡到超时。`background_bash` 把命令丢到后台，立刻
@@ -1395,12 +676,6 @@
   （同 `/todos`），`/ps list` 打印清单，`/ps stop <id>` 停止、`/ps clear` 丢掉已完成记录。停靠段只列
   运行中的 job——刚结束的行在下一帧被刷掉，全部结束时段落与面板自动收起。job 不随回合结束消失，
   禁用本扩展会停掉全部运行中的 job。默认不启用（`Dev` 模式）。
-
-- **桌面 GUI 的侧栏分组标题显示该组条目数**：`Today` / `This week` / `Older` 右侧按说明色右对齐
-  显示条数，随搜索过滤结果变化，数的是列表里真实呈现的会话。
-
-- **桌面 GUI 的 `/session` 面板支持复制会话文件路径**：`Session file` 一行可点击（链接色、悬停
-  下划线），点击把路径写进系统剪贴板并弹 toast 确认；内存会话没有路径，保持普通文本。
 
 - **新增小球落位式启动横幅**：新的 `bouncyballs-banner` 扩展把左侧 logo 拆成一颗颗球——art 的
   每个非空白字符都从上方按 out-bounce 缓动落下、落位时显形为该格原本的字符，最后定格成与静态版
@@ -1415,7 +690,8 @@
   `notes` / `preview`），另带 `globalNote` 与 `unanswered`，因此「还没定」和「已经定了」能被
   分开，模型不必重问。保留标签与上限在弹面板之前就校验：1–4 题、每题 2–4 个选项、`header`
   最长 16 字符、`label` 最长 60 字符，`Other` / `Type something.` / `Next` 作为标签一律拒绝。
-  没有 UI（非交互运行）时工具立刻返回 `no_ui` 而不是干等；同一时刻只允许一份问卷，第二份
+  提交按钮写 `Submit`（原先的 `Submit answers` 在窄面板里会跟说明文字抢宽度），与 `Cancel`
+  等长。没有 UI（非交互运行）时工具立刻返回 `no_ui` 而不是干等；同一时刻只允许一份问卷，第二份
   会被拒绝。默认不启用（仅 `Dev` / `Creator` 扩展模式可用），在 `/extension` 面板开启。
 
 - **新增 `ponytail` 扩展：只写「最小的完整改动」**：启用后每次请求前把一套「懒资深开发者」
@@ -1432,15 +708,14 @@
   `/ponytail default <档位>` 把 `defaultMode` 写进 `agent_dir()/extensions/ponytail.json`。
   本会话档位记在会话自定义条目（`ponytail-mode`）里，恢复或切换会话时重放。
 
-- **扩展自带五个检查清单，都是 `/ponytail` 的子命令（前四个投递给模型，`help` 在本机打印）**：`/ponytail review [目标]`（改动
-  审查：bug、安全、真实负载、缺测试、性能、可删的代码——每条都说明这段代码在做什么、
-  哪里会出错、怎么修、不修会怎样）、`/ponytail audit [目标]`（同一套审查跑全仓，按严重度
-  排序）、`/ponytail debt [标记词]`（把 `shortcut:` 注释收成债务账本）、`/ponytail gain`
-  （已发布的 benchmark 记分牌）。这些正文随二进制内嵌，执行时作为 `<skill>` 块投递给模型，
-  不落盘；扩展关闭时也不会有技能描述漏进系统提示。回合运行中投递清单会作为 steer 插进当前回合。
-  而 `/ponytail help` 的速查卡直接在终端里渲染：不花一个回合，也不进会话历史。
-
-  默认不启用，仅在 `Dev` 模式下可用：它改写的是模型每一轮的写作风格，必须由用户显式开启。
+  另有五个子命令形式的检查清单：`/ponytail review [目标]`（改动审查：bug、安全、真实负载、
+  缺测试、性能、可删的代码——每条都说明这段代码在做什么、哪里会出错、怎么修、不修会怎样）、
+  `/ponytail audit [目标]`（同一套审查跑全仓，按严重度排序）、`/ponytail debt [标记词]`
+  （把 `shortcut:` 注释收成债务账本）、`/ponytail gain`（已发布的 benchmark 记分牌）——这些正文
+  随二进制内嵌、作为 `<skill>` 块投递给模型，不落盘，扩展关闭时也不会有技能描述漏进系统提示，
+  回合运行中投递会作为 steer 插进当前回合。而 `/ponytail help` 的速查卡直接在终端里渲染：不花
+  一个回合，也不进会话历史。默认不启用，仅在 `Dev` 模式下可用：它改写的是模型每一轮的写作风格，
+  必须由用户显式开启。
 
 - **新增 `remote_default`：省略 `host` 时到底连哪台机器**：ssh-remote 工具族补上第七个（延迟）
   工具，报出默认目标的 `user@host:port`、记住的 `cwd`、备注、跳板机与私钥、已记住的目标列表、
@@ -1478,210 +753,30 @@
 - **Rex 终端被认出来了**：`TERM_PROGRAM=rex` 下内联图片走 kitty 协议（不再退化成半块字符），
   配色按 truecolor 处理，超链接与图片都能正常显示，而不是退成 `text (url)`。
 
-- **桌面 GUI 也能只用键盘切模型与思考级别**：`Ctrl+P` / `Ctrl+Shift+P` 在模型 scope 里前后循环
-  （scope 来自 `--models` / `settings.enabledModels`，为空时才退回全部已配置模型；顺序跟 scope、
-  跳过目录里已经没有的条目，条目带 thinking 时先设思考级别再换模型）；`Shift+Tab` 循环当前模型
-  支持的思考级别。两个键都与 TUI 的默认绑定一致。
+- **`/changelog` 按 Markdown 渲染，信息覆盖层的滚动条可以拖动**：更新日志现在像助手回复一样
+  排版——标题、列表、行内代码与代码块都有样式，不再是一整块纯文本；`/changelog`、`/hotkeys`
+  以及列表覆盖层的详情页右侧那根细条能抓来拖，命中区比画出来的 4px 宽，指针离开轨道也继续
+  跟着走。`↑` / `↓` / `PgUp` / `PgDn` / `Home` / `End` 同样能翻这些面板。
 
-- **桌面 GUI 的会话搜索框有了快捷键**：`Ctrl+Shift+H` 聚焦左侧会话列表上方的搜索框（侧栏收起时
-  一并展开，右侧面板的搜索框让出焦点），`Esc` / `Enter` 退出聚焦并保留查询。
-
-- **桌面 GUI 的键位与 TUI 统一了**：命令面板改到 `Ctrl+M`，`Ctrl+K` 因此回到「删到行尾」。两边共有的
-  键含义一律对齐：`Ctrl+O` 展开工具输出、`Ctrl+L` 打开模型选择、`Ctrl+T` 显隐思考块、`Ctrl+Shift+T`
-  切明暗；桌面独有面板挪到 `Shift` 组合（`Ctrl+Shift+O` 会话、`Ctrl+Shift+G` 外观）。新增 `Ctrl+X`
-  复制最后一条回复、`Alt+C` 复制输入框、`Ctrl+Home` / `Ctrl+End` 跳到对话流首尾、
-  `Shift+PageUp` / `Shift+PageDown` 翻页。
-
-- **桌面 GUI 的每个列表都认键盘**：覆盖层、模型/思考级别/附件下拉菜单、`@` 补全候选、会话右键菜单
-  都能用 `Ctrl+K` / `Ctrl+J`（或方向键）上下移动、`Home` / `End` 跳首尾、`PageUp` / `PageDown` 翻页、
-  `Ctrl+C` 关闭；选中行超出视口时列表会跟着滚，高面板里高亮不会跑到屏幕外。会话列表还原了
-  终端里的 `Ctrl+R`（改名）、`Ctrl+D`（删除）、`Ctrl+G`（下一个会话）。
-
-- **桌面 GUI 能开关会话列表，输入框也能翻历史**：`/sidebar` 显示或收起左侧会话列表（与
-  `Ctrl+Shift-B` 同一状态）。输入框的 `↑` / `↓` 会先逐行走过多行草稿，只有光标在第一行行首
-  （或最后一行行尾，未到位时先归位）才切到提示历史；从最早一条再往上绕回草稿，草稿原样恢复。
-  浏览历史时不弹补全面板，翻出 `/model` 这类历史也不会把 `↑` / `↓` 抢走。命令面板里这一项
-  叫 `Sidebar`。
-
-- **桌面 GUI 的间距统一成一套刻度**：padding、gap、圆角、字号与控件高度改用 GUI 主题里命名的
-  阶梯值（4 的倍数，只给相邻行之间的细缝留了 2px 一档），不再各处自己写像素字面量——按钮、
-  它旁边的元素和所在面板不会再各自取 6、7、13、15。
-
-- **桌面 GUI 的会话列表占满整列**：侧栏从窗口顶端开始，不再有压在它右侧的标题栏——标题栏
-  整个去掉了。模型与思考级别切换挪到输入卡片的提示行、`+ Attach` 旁边；命令面板照旧用 `Ctrl+M`
-  打开，只是那个芯片没了。
-
-- **桌面 GUI 的右侧面板给 diff 标上行号**：diff 视图跳过 `diff --git` / `index` / `---` / `+++`
-  这些文件头，直接从第一个 hunk 开始渲染，每行左侧带旧/新行号（新增 `+428`、删除 `-428`、
-  上下文 ` 429`），不必从 `@@` 标记往下数。两个页签的计数也都齐了：无论停在哪个页签，文件
-  列表与变更列表都会算一遍，标签页上的数字不再和另一个页签对不上。
-
-- **桌面 GUI 的右侧面板能横竖滚动**：diff 与文件正文各自记住自己的滚动位置，右缘一根纵向条、
-  底缘一根横向条；在轨道任意位置按住拖动都能滚，指针中途跑出轨道也不断。长行不再折行，横向条
-  才有的可滚；换文件或换变更时该片内容回到顶部，不再沿用上一个文件的偏移（否则新内容一上来就
-  被顶到面板外）。
-
-- **桌面 GUI 的状态栏汇报这一轮，而不只是消息数**：左侧是消息数、上下文窗口占用率与缓存命中率，
-  右侧是 in/out token、费用、每秒输出速率，以及当前是否有目标或计划、已发交互数与本轮耗时。
-  忙碌时行首先亮一个闪烁圆点与 `Working… (Esc to abort, N queued)`，并每半秒重绘一次，长工具
-  调用期间没有事件时耗时也照样走；发送按钮在忙碌时变成停止方块。上下文占用改用历史估算而不取
-  最后一次请求，刚载入的会话也能看到占用率。
-
-- **桌面 GUI 的工具卡片显示这次调用花了多久**：跑着的调用在状态标签左侧显示 `Elapsed X.Xs`，
-  回合期间一直往上走；结束后定格成事件里的 `durationMs`（`Took X.Xs`），从磁盘重载的会话也能
-  从存档结果里恢复。格式与终端 UI 一致：不到一分钟按秒，再往上 `Xm Ys`、`Xh Ym Zs`。
-
-- **桌面 GUI 的消息气泡按文字长度收缩**：短消息不再撑满整个气泡宽度、右侧留一大片空白；气泡宽度
-  由内容决定，上限不变，长消息照旧在那里折行。折叠提示与图片缩略图也是气泡的子项，不会被裁。
-
-- **桌面 GUI 记住会话栏是否展开**：`Ctrl-Shift-B`、`/sidebar` 与侧栏搜索框把选择写进 `settings.json`
-  的 `gui.sidebar`，下次启动照原样恢复；没写过时默认展开。
-
-- **桌面 GUI 记住自己选的明暗主题**：`Shift+T` 与 `/settings` 的外观面板把选择写进 `settings.json`
-  的 `gui.theme`，下次启动照样恢复，选过一次之后窗口主题就不再跟着 `--theme` 走；终端里的 `theme`
-  是另一个键，互不影响。
-
-- **桌面 GUI 的技能、扩展与模型名单面板改成表格**：有表头行，名称、来源（扩展是可用模式、模型是
-  provider）与描述各占一列定宽，不再把 `描述 · 来源 · [model-off]` 拼成一串挤在行尾，行与行对得齐，
-  长文本按单元格截断（`Tab` 详情页仍显示完整路径）。模型名单面板也跟另外两个对齐：`Enter` 只切换
-  草稿里的勾选框、只有 `Ctrl-S` 才写回 `enabledModels`，标题里带启用数量，`Esc` 丢弃草稿。`Tab` 详情页
-  同样是 `Property / Value` 两列表格，`fork url` 这类 `http(s)://` 链接点一下就交给系统浏览器打开。
-  详情页的值按列宽折行、不再截断，内容长过卡片时在卡片内部滚动（滚轮、方向键、`PgUp` / `PgDn`、
-  `Home` / `End`）。`Ctrl-,` 设置面板也改成同样的表格：`Setting / Value / Notes` 三列，当前值单独
-  占一列。
-
-- **桌面 GUI 的模型与思考级别选择器标清了默认值和当前值**：模型列表多一列 `Input`
-  （`text,image`，直接取自模型元数据），每行右侧带状态标记——既是保存的默认又在用是 `default ✓`，
-  只有其一是 `default` / `✓`。`Enter` 改成只在本次会话切换，`Ctrl-S` 才写进设置文件（与模型名单
-  面板同一套分工），随手换模型不再悄悄改掉启动默认值。思考级别列表在原有的级别描述之外也带上
-  同样的标记。TUI 的 `/model` 与 `/scoped-models` 面板经同一个函数取输入类型，两处展示不会漂移。
-
-- **桌面 GUI 能回答扩展的提问了**：扩展发出的 UI 请求以前只入队没人取，`ask_user_question`
-  直接报「没有 UI」，`permissions` / `ssh-remote` 的确认也一律按拒绝处理。窗口现在定时轮询这个
-  队列并处理每一类请求：`Select` 打开一个列表，高亮项就是答案（关掉列表等于取消，发起方不会
-  一直挂着）；`ShowOverlay` 在输入卡片上方弹出扩展自己的面板——标题、固定区、可选行、键位提示与
-  内联输入行（键盘移动选中行时会把它滚进视口；输入行里 `Enter` 保存、`Esc` 只丢弃这次编辑而不是
-  关掉面板，`i` 聚焦输入行、方向键滚动内容等默认语义与终端 UI 一致），按键按覆盖层事件回传；`HideOverlay` 与关窗回传 `Closed`。通知落进对话流（富文本
-  摊平成文本，自定义消息卡走扩展自己的渲染器），`Continuation` / `RestartRun` / `AbortRun` /
-  `RebuildTools` / `RewindLastUserInput` 分别对应到 agent 命令，`PersistSessionEntry` 追加自定义
-  条目并回执。
-
-- **桌面 GUI 能单独显示某个扩展的设置**：`ShowSettings` 以前打开的是全局设置表，跟发起它的扩展
-  毫无关系。现在只为该扩展开一个面板——每个设置项一行，当前值放在 `◂ 值 ▸` 里，`Enter` 循环到
-  下一个候选并回写给扩展（是否落盘由扩展自己决定）。`/settings <扩展名>` 可以手动打开同一个面板，
-  这也是那些「命令仍需终端」的扩展唯一能改设置的地方。
-
-- **扩展命令只写一份，终端与桌面 GUI 都能跑**：命令处理函数现在收到的是一个小小的宿主能力面
-  （追加一条消息、显示停靠面板、读工作目录、问是否正在输出），而不是终端的 `App`，于是窗口执行
-  的就是终端那一份正文。`/proxy`（开关网关状态面板，以及 `listen` / `provider` / `api-key`）、
-  `/notify`（`show` / `settled` / `reset`）、`/computer`、`/shake`、`/agents`、`/doctor`、`/mcp`、
-  `/memory`、`/ponytail`、`/jet`、`/cache-usage`、`/hang-detect`、`/codemode`、`/permissions`、
-  `/vet`、`/update`、`/tasks`、`/goal`、`/ssh`、`/tunnel`、`/autoresearch`、`/help`、`/plan`、
-  `/todos`、`/usage`、`/debug`、`/rewind`、`/btw`、`/recap` 现在在窗口里都能用，消息长什么样由宿主决定
-  （终端是系统消息流，窗口是对话流里的一条提示），要面板时也由宿主渲染（`/tasks` 打开任务菜单、
-  `/codemode` 打开该扩展的设置、`/doctor` 把报告放进覆盖层、`/usage` 显示额度表）。窗口只对三条命令
-  保留原生面板——`/skills`、`/extension`、`/settings`，那种浏览式界面只有窗口有；其余命令一律走两个
-  宿主共用的同一张注册表，任何命令都不必写两遍。
-
-- **桌面 GUI 把 agent 事件流转发给扩展**：以前只有终端 UI 会把每个 `agent_*` / `turn_end` 事件喂给
-  扩展注册表，于是所有「事件驱动」的扩展在桌面端都是死的——plan mode 不会抽取计划步骤、也不会问
-  下一步做什么，目标不会结算，loop / hang 检测看不到回合，`notify` 也不会发通知。现在窗口转发同一份
-  事件流（并在 `agent_settled` 上补 `hasQueuedMessages`，通知扩展要靠它区分「真空闲」与「还有排队
-  输入」），这些扩展的行为与终端一致。
-
-- **扩展的一次性请求在桌面 GUI 里能跑了**：`/btw`、`/recap`、`/doctor`、`/usage` 以前在窗口里只回
-  「no async runtime」——扩展钩子跑在窗口的视图线程上，那里没有 tokio 运行时。现在窗口会登记自己的
-  运行时，这些请求（旁问、回顾、provider 探针、额度查询）能起跑，并把结果送回终端里同一个覆盖层或
-  消息区。扩展覆盖层打开期间也会持续重绘，晚到的答案自己出现，不用等按键。
-
-- **桌面 GUI 打开会话时会显示对话内容**：历史在启动与 `/resume` 之后都会交给视图，重开的会话不再是
-  空窗口；读上下文的命令（`/btw`、`/recap`）拿到的摘录也与终端一致。
-
-- **桌面 GUI 有了停靠面板**：会报告运行中工作的扩展——子代理、任务流、下载、连着的 ssh-remote
-  或浏览器会话——现在显示在输入卡片上方的一条面板里，而不是完全看不见。扩展启动时发的 `ShowDock`
-  会把它打开，`/dock` 切换开关；各段之间空一行，内容超过几行时在面板内部滚动。没有扩展有话要说时
-  它自动消失，运行期间持续重绘，所以子代理的耗时与计数会动。计划模式的待办也走这里：`/todos` 现在
-  直接打开该段，不再提示「去终端 UI 看」。
-
-- **桌面 GUI 会先问项目信任，而不是当作已信任**：项目里有需要信任的资源、又没有存过决策时，
-  启动就弹信任面板（`-a` / `--no-approve` 显式给过决定时不弹），`/trust` 打开同一个对话框并把
-  已保存的决策标成 current。选项有 `Trust`、`Trust parent folder (…)`、`Trust (this session
-  only)`、`Do not trust`、`Do not trust (this session only)` 与 `Remove all saved trust
-  decisions`——最后一项会再确认一次。落盘的选项写进 `trust.json`、下次启动生效，两个「仅本次」
-  选项则立即重载技能、上下文文件与工具。
-
-- **桌面 GUI 改用 `Space` 改值、`Enter` 看详情**：`/settings` 表格、扩展自己的 `Settings · <名称>`
-  面板、`/extension` 与 `/skills` 现在都用 `Space` 切换一行的取值，不再用 `Enter`；技能与扩展面板的
-  详情页改由 `Enter` 打开，`Tab` 这条快捷方式不再保留。扩展设置面板里循环取值会保留过滤框内容与
-  高亮行，搜索之后不再跳回完整列表。`/` 补全面板里敲空格会先补全命令名并弹出该扩展命令声明的
-  子命令（`Tab` 只补全，`Enter` 补全并执行），桌面端也有了 `/goal pause` 这样的二级候选；
-  面板里的说明紧跟命令名而不是被推到最右边，描述才显示得下。
-
-- **桌面 GUI 的消息区支持滚轮加速**：滚轮沿用终端 UI 的那套速度换算——孤立一格按系统自己的步长
-  滚，快速连滚会按间隔放大（最多 10 倍），按住 `Alt` 再乘 5，用来快速跳过很长的回复。只有对话区
-  受影响：菜单、面板与侧栏还是各自的滚动。
-
-- **`/changelog` 按 Markdown 渲染并带滚动条**：更新日志现在像助手回复一样排版——标题、列表、行内
-  代码与代码块都有样式，不再是一整块纯文本；面板右侧显示滚动条，能看到自己在哪一段，也能用
-  `↑` / `↓` / `PgUp` / `PgDn` / `Home` / `End` 翻。
-
-- **桌面 GUI 的图片放大了一倍**：`@图片` 引用与工具返回的图片最大边长从 180 提到 360，截图不用
-  点开也看得清。
-
-- **桌面 GUI 有了自己的使用文档**：`docs/gui.md` 说明如何启动、布局、侧栏与消息区、右侧的
-  Files / Changes 面板、停靠面板、各类覆盖层与对话框、完整键位表、窗口里能用的斜杠命令、
-  外观与缩放，以及与终端界面的差异。
-
-- **`prux-gui --tui` 改为启动终端界面**：同一个二进制能跑交互 TUI，参数解析、会话与模型装配与
-  桌面端完全共用。它要求 stdin 与 stdout 都是真实终端，被管道接走时直接报错退出，不会画出乱八
-  糟的东西。
-
-- **桌面 GUI 用键盘切换工作目录**：会话列表底部那行工作目录一直点得开选择面板，现在 `Ctrl-Shift-W`
-  与命令面板里的 `Working directory…` 也能打开，那一行照旧可点。
-
-- **桌面 GUI 的键位页是两列表格**：`/hotkeys` 把键位放左列、动作放右列，不再一行一句，表头是
-  `Keys` / `Action` 而不是通用的属性 / 值；行数超过卡片高度时表格内部滚动。
-
-- **信息覆盖层的滚动条可以拖动**：`/changelog`、`/hotkeys` 以及列表覆盖层的详情页右侧那根细条
-  现在能抓来拖，命中区比画出来的 4px 宽，指针离开轨道也继续跟着走。
-
-- **桌面 GUI 的侧栏可以按标题筛会话**：会话列表上方多了一个搜索框，边敲边按标题大小写不敏感
-  过滤。点它开始输入（Files 面板的搜索框同时让出焦点），`Esc` / `Enter` 退出聚焦但查询仍然生效，
-  零匹配显示 `No matching sessions`。
-
-- **桌面 GUI 的侧栏更窄，底部目录只显示末级名**：默认宽度从 252 降到 200px，最窄从 180 降到
-  150px，会话列表不再留一条空白。底部那行工作目录只显示路径的最后一段（选择面板切换的仍是完整
-  路径），目录菜单给当前所在目录标上 `✓ current`。
-
-- **桌面 GUI 的选择面板改成分列表格**：`/models` 拆成 `Model` / `Provider` / `Name` 三列，登录面板是
-  `Provider` / `Status`（`configured` 标记），会话选择器是 `Title` / `Updated` / `Messages`——各项沿列对齐，
-  不再把值挤进一行标题加一行灰色详情。`/usage` 与 `/session` 的 `key: value` 行也归到同一套两列表格里。
-
-- **`browser` 扩展补上标签页、历史、悬停与页面状态读取**：`back` / `forward` / `reload` 走标签页自己的
-  导航历史，不必再手写一次导航；`close_tab` 按索引或目标 id 关标签页。`hover` 只移动指针不点击（下拉
-  菜单与 tooltip 需要），`dblclick` 发两轮点击，`inspect` 读元素的单项状态——`value` / `text` /
-  `html` / `attr` / `count` / `visible` / `enabled` / `checked`——不用再从快照文本里猜。`snapshot`
-  支持 `scope` 限定子树与 `depth` 限制层数，`wait` 支持 URL 片段与任意 JS 条件，`press` 支持
-  `Control+a` / `Meta+v` 这类组合键。
-
-- **`browser` 扩展能读控制台、能处理 JS 对话框**：attach 一个标签页时顺带打开 `Runtime` / `Log` /
-  `Page` 的事件上报，按标签页缓冲（200 条）。新的 `console` 动作取走并回放缓冲——`console.*` 输出、
-  未捕获异常、资源加载失败；新的 `dialog` 动作报出打开中的 `alert` / `confirm` / `prompt` 并接受或
-  拒掉它。对话框卡住页面时，命令超时的报错会点名这一点，不再看起来像连接已经死掉。
+- **`browser` 扩展补上标签页、历史、悬停、页面状态、控制台与 JS 对话框**：`back` / `forward` /
+  `reload` 走标签页自己的导航历史，不必再手写一次导航；`close_tab` 按索引或目标 id 关标签页。
+  `hover` 只移动指针不点击（下拉菜单与 tooltip 需要），`dblclick` 发两轮点击，`inspect` 读元素的
+  单项状态——`value` / `text` / `html` / `attr` / `count` / `visible` / `enabled` / `checked`——
+  不用再从快照文本里猜。`snapshot` 支持 `scope` 限定子树与 `depth` 限制层数，`wait` 支持 URL
+  片段与任意 JS 条件，`press` 支持 `Control+a` / `Meta+v` 这类组合键。attach 一个标签页时顺带打开
+  `Runtime` / `Log` / `Page` 的事件上报，按标签页缓冲（200 条）：新的 `console` 动作取走并回放
+  缓冲——`console.*` 输出、未捕获异常、资源加载失败；新的 `dialog` 动作报出打开中的 `alert` /
+  `confirm` / `prompt` 并接受或拒掉它，对话框卡住页面时命令超时的报错会点名这一点，不再看起来像
+  连接已经死掉。`click` / `dblclick` 先检查元素中心点，被别的元素盖住时直接报错并点名盖住它的
+  元素（如 `covered by <div#banner>`），元素 `disabled` 或没有可点面积时同样报错。
 
 - **`/session` 有了子命令，其中三个用于删除会话**：`/session statistics` 就是原来不带参数的
   `/session` 打印的会话概要；`/session rm-current`、`/session rm-project`、`/session rm-all`
   分别删除当前会话、当前项目目录下的所有会话、所有项目目录下的所有会话。三者都先弹 Yes/No 确认框，
   写明会删掉多少个会话文件、在哪个目录，删完回报成功条数。`rm-current` 删完自动开新会话——否则
-  下一次写入会把刚删掉的文件重新建出来。`/session <序号>` 的按序号切会话保持不变，子命令名在终端
-  UI 的输入框里可补全。
-
-- **桌面 GUI 中键复制并粘贴，与终端 UI 一致**：有选区（对话流或输入框）就复制进系统剪贴板并粘到
-  光标处，没有选区就粘贴剪贴板内容。面板里没有可写的输入行，所以面板打开时只复制不粘贴。
-
-- **桌面 GUI 输入框不再把折行行尾的那个字裁掉一半**：折行宽度取的是输入卡片宽度减去左右内边距，
-  而卡片左右还有 1px 边框，于是每个视觉行都多算了 2px 宽，行尾那个字被 flex 压掉一半才换行。现在
-  边框也一并扣掉。
+  下一次写入会把刚删掉的文件重新建出来。删掉的会话先进回收站而不是直接 unlink；每个工程的会话
+  目录也跟着最后一个会话一起走（`/new` 与侧栏的 `+` 不再预先建目录），目录列表因此与实际内容
+  一致。`/session <序号>` 的按序号切会话保持不变，子命令名在输入框里可补全。
 
 - **新增 `sandbox` 扩展，把 shell 命令关进 OS 级边界**：`permissions` 是执行前的判定，动态拼出来
   的命令只能靠猜；这个扩展把文件系统规则交给内核。启用时探测后端（Linux `bwrap`、macOS
@@ -1692,30 +787,44 @@
   附上原因，失败因此是看得见的；要恢复无沙箱执行，显式在 `/extension` 里关掉本扩展。`/sandbox`
   打印当前后端、可写路径与网络状态。默认不启用。
 
-- **`/debug receipts` 回答「这个会话到底做了什么」**：它逐行读会话里本就留下的记录——每次调用的
-  `tool_started`、给退出码与 `edit` 精确增删行数（来自 patch）的 `toolResult` 消息、回合级失败的
-  `operation_finished`——再读 `permissions` 的 review log 补上**根本没跑起来**的那些调用
-  （`deny` / `ask`），后者在会话里不留痕迹。回执先给汇总（改了哪些文件、跑了多少命令、MCP 调用、
-  子代理、失败、审批），再按时间序列出本轮经过；`/debug receipts <n>` 抬高明细行上限。解析是逐行的：
-  命令 busy-safe，正在跑的这一回合写了一半的尾行被跳过，而不是让整份回执失败。
+- **`/debug` 回答会话到底做了什么，也会点名 prux 不认识的设置键**：`/debug receipts` 逐行读会话
+  里本就留下的记录——每次调用的 `tool_started`、给退出码与 `edit` 精确增删行数（来自 patch）的
+  `toolResult` 消息、回合级失败的 `operation_finished`——再读 `permissions` 的 review log 补上
+  **根本没跑起来**的那些调用（`deny` / `ask`），后者在会话里不留痕迹。回执先给汇总（改了哪些
+  文件、跑了多少命令、MCP 调用、子代理、失败、审批），再按时间序列出本轮经过；
+  `/debug receipts <n>` 抬高明细行上限。解析是逐行的：命令 busy-safe，正在跑的这一回合写了一半的
+  尾行被跳过，而不是让整份回执失败。`/debug settings-key` 列出每个未知的顶层设置键与它的
+  `文件:行号`——能解析、但键名打错的 `settings.json`（`"compactReserveToken"`）原本被静默忽略，
+  那个值从来没生效过——有已知键的编辑距离在 2 以内时给出 `did you mean "…"?`，没有问题时只回一行
+  确认。只存在于全局文件的键（`theme`、`skills` 等）写在 `.prux/settings.json` 里同样会被点名
+  ——项目层只认 `defaultTools` / `disabledExtensions` / `enabledExtensions`。语法错误仍归启动警告；
+  每次执行都重读这两个文件。
 
-- **`/debug settings-key` 会点名 prux 不认识的设置键**：能解析、但键名打错的 `settings.json`
-  （`"compactReserveToken"`、`"theme_gui"`）原本被静默忽略——那个值从来没生效过。新增的子命令
-  会列出每个未知的顶层键与它的 `文件:行号`，有已知键的编辑距离在 2 以内时给出 `did you mean "…"?`；
-  没有问题时只回一行确认。只存在于全局文件的键（`theme`、`skills` 等）写在 `.prux/settings.json`
-  里同样会被点名——项目层只认 `defaultTools` / `disabledExtensions` / `enabledExtensions`。
-  语法错误仍归启动警告；每次执行都重读这两个文件。
-
-- **新增 `pr` 扩展：`/pr run` 时把改动交付成一个 PR**：`vet` 只证明本机检查过了，`pr` 补齐
-  交付那一串机械动作——建分支、提交、推、开 PR、等 CI 与评审，然后把结论贴回聊天区。**没有
-  结算边界钩子，也不把失败喂回模型**：没人替你决定要不要推，坏掉的一轮不会自己变成 PR。失败的
-  检查（`名称 — 结论`）与 `CHANGES_REQUESTED` 的评审意见连同 PR 链接一起列出，修完再跑一次
+- **新增 `pr` 扩展：`/pr run` 与 `/pr new` 把改动交付成一个 PR**：`vet` 只证明本机检查过了，
+  `pr` 补齐交付那一串机械动作——建分支、提交、推、开 PR、等 CI 与评审，然后把结论贴回聊天区。
+  **没有结算边界钩子，也不把失败喂回模型**：没人替你决定要不要推，坏掉的一轮不会自己变成 PR。
+  失败的检查（`名称 — 结论`）与 `CHANGES_REQUESTED` 的评审意见连同 PR 链接一起列出，修完再跑一次
   `/pr run`——改动落在同一条分支上，同一个 PR 被更新。停止条件：全绿 / 有阻塞 / 等满
-  `timeoutSecs` 仍无结论（pending 不猜结果），且**永不 merge**。当前就在基线分支时先建
-  `prux/<日期>-<时分>` 分支再干活，已在 `prux/` 分支上则续在同一条；工作区干净且不在 `prux/`
-  分支上什么也不做。不猜远端（没 `origin`、`gh` 没登录、探测不出默认分支都停下报原因）。配置在
-  `agent_dir()/extensions/pr.json`，**没有项目级覆盖**——能提交进仓库的配置不该有权改你的推送
-  目标。命令 `/pr status|run`。默认不启用，仅 `Dev` 模式：它会写 git 历史并推远端。
+  `timeoutSecs` 仍无结论（pending 不猜结果），且**永不 merge**。
+
+  `/pr run` 也接手已提交但没推的提交（直接提交在基线分支上的仍不动，那等于往 `main` 上推），
+  并且不再往历史里塞一条 `prux: <会话标题>`（标题是用户的第一句话，常常和这批改动对不上），而是
+  把暂存的改动摘要交给当前模型写一条 subject + 可选 body；没选模型、请求失败、输出为空时才回落
+  会话标题——写不出信息不该让交付停在本地。这次请求带上当前会话 id（`x-opencode-session`：缺了它
+  opencode 系 provider 会直接回 `400 MissingSessionID`），系统提示词就用**当前会话那一份**，
+  用户写在里面的提交约定照生效。PR 的标题与正文同理，从整条分支相对基线的改动摘要写出，只是那份额外
+  用**自己的**系统提示词（会话那份带着工具协议，而一次性请求没有 `tools`，模型会把工具调用块当
+  普通文本吐出来）并要求 **JSON 输出**（`{"title", "body"}`：按行切分一旦多写一句前言就会把半句话
+  当成标题）。`/pr new` 走同一条交付路，但不查已有 PR、也不续用当前交付分支——总是新建一条
+  `prux/<日期>-<时分>` 分支再推，因此拿到的是全新的 PR（GitHub 也不允许同一个 head 分支挂两条
+  开着的 PR）；工作区干净且没有未推送提交时它什么也不做。
+
+  只复用开着的 PR：已关闭 / 已合并的那条在聊天区说一声后另开一个新的，等 CI 也按 PR 号读状态，
+  不会被旧的那条挡住。当前就在基线分支时先建 `prux/<日期>-<时分>` 分支再干活，已在 `prux/`
+  分支上则续在同一条；工作区干净且不在 `prux/` 分支上什么也不做。不猜远端（没 `origin`、
+  `gh` 没登录、探测不出默认分支都停下报原因）。配置在 `agent_dir()/extensions/pr.json`，
+  **没有项目级覆盖**——能提交进仓库的配置不该有权改你的推送目标。命令
+  `/pr status|run|new`。默认不启用，仅 `Dev` 模式：它会写 git 历史并推远端。
 
 - **记忆条目现在需要证据，并有维护轮做 reconcile**：抽取时要求每条附上支撑它的具体证据——失败的
   命令与报错、文件与符号，或用户自己的原话——答成空串的条目直接丢弃。证据随条目存档并供维护轮
@@ -1726,43 +835,7 @@
   记忆图处在谁也说不清的状态）。`/memory maintain` 可按需触发一轮；旧存储没有 `evidence` 字段
   照样能读。
 
-- **桌面 `/scoped-models` 面板支持与终端面板同一套快捷键**：空格与回车一样切换高亮行，`Ctrl+A`
-  全部启用、`Ctrl+X` 全部取消，`Ctrl+P` 翻转高亮行所属 provider 的整组模型（全开则全关，否则
-  全开），整理 Ctrl-P 循环名单不再需要一行行点。搜索框有词时 `Ctrl+A` / `Ctrl+X` 只作用于命中的
-  行。`Ctrl+S` 仍然保存草稿，Esc 仍然丢弃。
-
-- **技能与扩展不用再一行行点开关**：桌面 `/extension` 与 `/skills` 面板、以及终端 `/skills`
-  面板新增 `Ctrl+A` 全选 / `Ctrl+X` 取消全选（终端 `/extension` 面板本来就有）。与空格一样
-  只改未保存的草稿：`Ctrl+S` 才应用并写回 `settings.json`；搜索框有词时只作用于命中的行。
-
-- **桌面窗口可以自绘标题栏**：`gui.frame` 打开后 `prux-gui` 自己画边框与标题栏——可拖动、双击
-  最大化，右侧是最小化 / 最大化 / 关闭按钮，不再交给窗口管理器。Linux 默认开启（窗口管理器
-  不保证画标题栏），设置面板的 Window frame 一行切换后立即生效；macOS 的系统标题栏只能在建窗时
-  隐掉，因此在那边切换只落盘并提示重启（macOS 保留系统的红绿灯，不再画按钮）。Windows 没有
-  系统标题栏可以沿用，那里总是自绘。窗口最大化后这颗按钮换成还原图标，不再一直画最大化那一颗。
-
 ### 变更
-
-- **`/pr run` 接手已提交但没推的改动，提交信息改由模型写**：工作区干净、但本地有远端没有的提交
-  时，原本什么也不做——「已经 commit 了」并不等于交付完成，现在照样推上去开 PR（直接提交在基线
-  分支上的仍不动，那等于往 `main` 上推）。有未提交改动时不再往历史里塞一条 `prux: <会话标题>`
-  （标题是用户的第一句话，常常和这批改动对不上），而是把暂存的改动摘要交给当前模型写一条
-  subject + 可选 body；没选模型、请求失败、输出为空时才回落会话标题——写不出信息不该让交付停在
-  本地。请求带上当前会话 id（`x-opencode-session`）：缺了它 opencode 系 provider 会直接回
-  `400 MissingSessionID`。请求的系统提示词就用**当前会话那一份**（用户写在里面的提交约定照生效），
-  只在用户消息里补一句「只回提交信息，不要跑检查 / 测试 / 构建」。PR 的标题与正文同理：不再拿会话
-  标题当标题、也不再加固定的一行「Delivered by prux」，而是把整条分支相对基线的改动摘要交给模型
-  写一份标题 + Markdown 正文（同一次交付里两次请求，都带会话 id）。PR 那份用**自己的**系统
-  提示词，不拿会话的：会话提示词里写着工具协议与工具清单，而一次性请求没有 `tools` 参数，模型
-  会把工具调用块当普通文本吐出来，PR 标题就变成一堆 `<｜DSML｜ invoke …>`（这种输出现在直接当作失败
-  回落）。PR 这份是 **JSON 输出**（`{"title", "body"}`）：按行切分一旦模型多写一句前言就会
-  把半句话当成标题，而对象要么解析成功、要么回落到会话标题，没有中间地带。
-
-- **新增 `/pr new`：每次都开一条全新的 PR**：`/pr run` 会把同一批改动续在已有 PR 上，
-  想为另一次改动单独开一条 PR 时没有去处。`/pr new` 走同一条交付路，但不查已有 PR、也不续用
-  当前交付分支——总是新建一条 `prux/<日期>-<时分>` 分支再推，因此拿到的是全新的 PR（GitHub
-  也不允许同一个 head 分支挂两条开着的 PR）。工作区干净且没有未推送提交时它什么也不做，免得拿
-  同一批提交再开一条内容重复的 PR。
 
 - **隔离子代理不再从冷目录起步，而是直接复用仓库里已有的编译产物**：`Agent({ isolation: "worktree" })`
   建出的是一份干净的 worktree，于是第一次 `cargo build` 要把所有依赖重编一遍。现在会把主仓库里被
@@ -1777,191 +850,33 @@
   `recent-cwds.json` 再切过去并**新开一个会话**（原会话文件留在原目录）。清单里已经不存在的目录
   会在启动时清掉，两种界面共用同一份文件。
 
-- **桌面 GUI 的搜索框矮一档**：侧栏的会话搜索框、右侧文件面板顶部的文件搜索框，高度改为对话框
-  输入框的 0.8 倍。底色、描边、左右内边距都不动，只收高度，文字（或占位文案）在框内垂直居中。
+- **配置面板支持批量与就地修改**：`/skills` 与 `/extension` 面板（终端与桌面）新增
+  `Ctrl+A` 全选 / `Ctrl+X` 取消全选，终端 `/extension` 面板本来就有；设置面板按 `Enter` 改值后
+  不再关面板，过滤词与高亮行一起留着，可以连着改好几项。与空格一样只改未保存的草稿：`Ctrl+S`
+  才应用并写回 `settings.json`；搜索框有词时只作用于命中的行。发送按钮上的停止方块改用品牌
+  强调色，而不再取反色。
 
 ## 修复
 
-- **桌面 GUI 的块状光标只盖住字符本身**：光标（与选区）方块原本高 1.15em，又为了追字形的下伸部往下带了一
-  截，于是块顶与字顶齐平、块底却从字底伸出一块。现在块高就是一个字符的墨迹（1em，汉字的字身框），
-  整体再按墨迹重心下移，上下沿都与文字齐平。
-
-- **桌面 `/btw` 的输入行可以粘帖了**：面板里 `btw>` 那一行现在支持 `Ctrl+V` / `Cmd+V`，剪贴板里的
-  多行内容会像终端覆盖层那样压成一行。此前这个键在那里什么都不做，长段引用只能手打。
-
-- **Windows 上不再有 `--tui`**：`prux-gui` 声明了 Windows 图形子系统，没有控制台可以交给
-  交互 TUI，该参数在 Windows 上只能失败。现在 `--tui` 参数与 `Startup::tui` 字段都只在启用
-  `gui` feature 且非 Windows 时存在，`prux-gui` 在 Windows 上也不再走 TUI 分支；交互 TUI
-  请直接运行 `prux`。
-
-- **debug 版 `prux-gui` 保留控制台窗口**：此前无条件声明了 Windows 图形子系统，于是连用来查日志、
-  试 `prux-gui --tui` 的 debug 版启动后也没有控制台。现在该属性只在 `not(debug_assertions)` 时
-  生效：release 版照旧隐藏控制台，debug 版显示。
-
-- **桌面 GUI 在非整数倍缩放下对话流不再自己往下滚、也不再抖**：屏幕外的消息会被换成一块与其高度
-  相同的空占位，高度按「到下一块上沿的距离减去流的 gap」现算。gap 减的是未吸附的 18，而布局把
-  它吸附到了设备像素——1.25× 下是 17.6——于是每个被跳过的消息每帧丢 0.4~0.8px，几百个加起来
-  内容高度每帧缩水八十来像素，钉底的修正就一路往下追，同时帧帧请求重绘。现在减的是布局实际用的
-  那个吸附值，被跳过的消息高度不再漂移，列表也就停住了：静置会话从每秒 162 帧降到 0 帧。
-
-- **桌面 GUI 在 Windows 输入法组字时不再删掉已输入的字**：以前输入框把输入法认领的按键当成真实
-  按键，候选窗打开时按退格删的是输入框里已有的字，而不是组字中的那一个。现在构建用的 gpui 不再
-  把这类按键（`VK_PROCESSKEY`）投递给应用，并每帧显式关联 IME 上下文。
-
-- **桌面 GUI 较新消息里的代码块复制按钮能复制了**：可点元素靠元素 id 区分，而 gpui 每个 id 只留
-  一份状态——复制按钮与行内链接的序号在每条消息里都从 0 重数，于是较新消息里的代码块与前面某条
-  消息里的代码块共用了同一个 id。先渲染的那个在鼠标抬起时会把共用的按下记录清掉，后一个的点击
-  因此永远不触发；先渲染的那个照常能用，看上去就像只有部分卡片坏了。现在 id 里带上块下标作为
-  命名空间，覆盖层面板的 Markdown 另用一个命名空间。
-
-- **桌面 GUI 的对话框能粘贴了**：填 API key、重命名会话、导入路径这些对话框以前只能一个字一个字
-  敲——对话框开着时按键全部先交给它的输入框，而粘贴分支只在主输入框那条分发路上，于是按 `Ctrl-V`
-  什么也不会发生。现在 `Ctrl-V`（macOS 的 `Cmd-V`）把系统剪贴板里的文本贴进对话框输入框，长串 key
-  不用手抄；删除确认这类没有输入行的对话框忽略粘贴。
-
-- **分支上的 PR 已经关了时，`/pr run` 另开一个新的**：`gh pr view <分支>` 连已关闭 / 已合并
-  的 PR 也会返回，于是同一条分支上再跑一次 `/pr run` 会复用它——推上去的提交没有去处，还得
-  到一句“旧 PR 全绿”。现在只复用开着的 PR：关着的那条在聊天区说一声，然后另开一个新的，
-  等 CI 也改成按 PR 号读状态，不会读到旧的那条。
-
-- **`@` 补全面板只在真有候选时才出现**：文件候选由后台扫描得出，于是敲 `@`（或敲一个什么都
-  匹配不上的字符）会先弹出只有输入框、一行候选都没有的面板，等扫描回来是空才收起，输入卡
-  每敲一下都跳。现在面板由扫描结果创建：没有条目就没有面板，与 `/` 一致；过期结果也不会
-  把 Esc 关掉的面板重新弹回来。
-
-- **桌面 GUI 的扩展面板只在内容变化时重绘**：打开着的 `/btw`、`/doctor` 等扩展覆盖层原本每秒
-  重拉 10 次视图、每次都请求新帧，什么都没动也在刷。现在只有 GUI 实际渲染的字段（标题、抬头、
-  正文、脚注、选中项、输入焦点或输入缓冲）与上一帧不同才算变化，面板静止时不再重绘。
-
-- **桌面 GUI 窗口在 Wayland 下是不透明的**：它要求客户端绘制装饰，而窗口层把
-  `decorations == Client` 当作透明窗口——surface 带着预乘 alpha 交给合成器、也没有 opaque
-  region，整窗重绘时会闪。现在装饰交给服务端，surface 声明为不透明并带上 opaque region。
-
-- **桌面 GUI 会话行右键菜单同时只高亮一项**：键盘选中与鼠标悬停原本是两套独立高亮，悬停 `Delete`
-  时 `Rename` 还亮着，菜单里两行同时高亮。现在悬停移动的就是那一份选中项（与方向键一致），文字
-  颜色随之变化。
-
-- **删掉工程的最后一个会话不再留下空文件夹**：每个工程的会话都放在 `sessions/` 下的独立目录里，
-  `/session rm-current`、`rm-project`、`rm-all` 与桌面 GUI 侧栏的删除都只删文件、留着目录。现在
-  最后一个会话走的时候目录一起走（`/new` 与 GUI 的 `+` 也不再预先建目录），目录列表与实际内容一致。
-
-- **桌面 GUI 输入框排满一行时，行尾光标不再把字顶出卡片**：那个光标方块原本追加在已经排满的行
-  末尾，于是压到了卡片边框外面。现在当前行没空位时它自己占下一视觉行；每个字符的宽度也向上取整
-  到整数物理像素——布局引擎按整数像素摆放逐字符元素，亚像素余量会让每行多塞一个字。卡片改为包
-  一层再交给测量，量到的是卡片本身而不是卡片内的输入行。
-
-- **桌面 GUI 输入框能补全 `/session` 的子命令**：以前只有扩展命令能声明子命令，`/session` 什么
-  都不提示。现在列出内置的 `statistics`、`rm-current`、`rm-project`、`rm-all`，且与命令分发一致，
-  同名扩展命令抢不走它们。
-
-- **桌面 GUI 的 `/history` 面板用满整行宽度**：历史 prompt 没有行尾说明，却仍按「主文案截在说明
-  列宽 + 行尾说明」的版式排，于是每条都只占面板四分之一就被截断，右边留一大片空白。现在行尾说明
-  为空的行走「主文案独占整行」；带说明的 `/命令`、`@路径` 候选仍是说明紧跟主文案。
-
-- **桌面 GUI 只渲染看得见的那部分对话**：长会话以前每次重绘都重建全部对话块，单帧要几十毫秒，
-  只要有内容在动整窗就会闪。现在离视口一屏以外的块只放一个按实测高度定的占位块，重绘只为屏幕
-  上的内容付钱；这些块的行登记从上一帧回放，选区与复制仍能拿到全文。屏幕外发生变化了的块要等
-  它滚回视口才更新高度。
-- **桌面 GUI 不再每帧把自己重绘一遍**：对话流的测量与钉底回调拿布局结果做精确浮点比较，只要不
-  相等就请求下一帧——长会话里累加出的亚像素误差永远对不上，于是整窗持续重绘，静止不动也一直闪。
-  现在这些比较允许半像素误差，渲染每行时文本与高亮也只构造一次。设 `PRUX_GUI_FRAMES=1` 可以让
-  GUI 把帧间隔报到 stderr，静止时还在刷就说明还有东西在请求重绘。
-- **桌面 GUI 不再每帧重解析覆盖层面板的 Markdown**：`/changelog` 这类 Markdown 面板以前每次重绘
-  都把整份正文重新喂给解析器与语法高亮，滚动长 changelog 会卡顿。现在解析结果缓存复用，直到正文、
-  明暗主题或排版宽度变化才重做（助手正文早就是这套做法）。
 - **新会话落盘后会把文件路径补发给 UI**：`/new` 起的是延迟落盘会话，切换回执里没有路径，
   而之后也没有任何地方补发——于是在下一次切会话之前，`/fork` 一律回 `no current session`，
   `/resume` 不把当前会话标成当前，扩展也把会话记到 `default` 键上。现在首条消息写出会话文件时
   worker 就把路径报给 UI，并带着它重发一次会话切换给扩展。
-- **桌面 GUI 能渲染表格、公式与 mermaid 图了**：助手正文里的表格以前被挤成一段连排的文字，
-  `$...$` / `$$...$$` 原样显示成源码，`mermaid` 围栏只当普通代码块。现在表格按真网格渲染
-  （列宽按该列最长单元格分配、单元格自动折行），行内公式与块级公式都走与终端 UI 相同的
-  LaTeX → Unicode 渲染，`mermaid` 块也渲染成同样的盒图。LaTeX 与 mermaid 的渲染器随之搬到
-  core 层，两端共用一份实现。
-
-- **桌面 GUI 的状态圆点与文字视觉中心对齐**：品牌行里 `prux` 旁那个圆点（以及工具卡片的状态点）
-  以前居中于行盒，比字母的视觉中心高约 2px，看起来偏上；现在补上这段偏移，圆点与文字在同一条
-  水平中心线上。
-
-- **桌面 GUI 的斜杠命令不再吞掉参数**：`/compact <指令>` 与 `/bug <提示>` 以前被当成未知命令丢弃，
-  `/history` 把文本塞回输入框而不重新弹搜索面板，`/name <名称>` 改名后侧栏还显示旧标题。
-
-- **桌面 GUI 的 `/rewind` 生效**：以前命令直接发给 agent，会话分支确实回退了，但对话区还挂着那条
-  输入和它之后的全部输出。现在走与终端 UI 相同的确认面板（回退并把输入还回输入框 / 回退并丢弃 /
-  取消），回退后按裁剪过的历史重建对话区。
-
-- **桌面 GUI 的图片保持原始比例**：`@图片` 引用与工具返回的图片以前固定塞进一个方块，宽截图上
-  下会留两条空白。现在按图片自身尺寸算：小图用原尺寸，大图等比缩到 360px 上限、不拉伸，解码器
-  量不出尺寸的格式退回原来的方块。
-
-- **桌面 GUI 的图片定在发送那一刻**：`@图片` 原来每帧都去路径重读，同名文件一改（再存一次截图），
-  已经发出去的那条消息的缩略图就跟着换。现在每条用户消息在发送时按内容拍一份快照，缩略图改按文件
-  字节建图片源，缓存键跟着内容走而不是路径；临时文件也改成按整份内容的哈希命名——原来的「长度 +
-  首字节」会在不同图片之间撞名，撞上就一直显示旧图。
-
-- **桌面 GUI 的状态栏在回合中间也走字**：用量以前只随回合结束的快照更新，流式与长时间的工具调用
-  期间上下文占用、缓存命中率、in/out 与费用一直停着——新会话整轮读到的都是 `0% · CH 0%`。现在
-  按 agent 事件随每条消息落地推进：assistant 的 usage 作为上下文锚点，其后的消息与工具结果在锚点上
-  估算，压缩后按压缩事件给出的规模重置锚点。忙碌时消息数仍省掉，行首已经是 `Working…`。
-
-- **`Ctrl-W` 不再吞掉 `Ctrl-Shift-W`**：删除前一个词的快捷键以前匹配任何 `Ctrl-W`，于是输入框把
-  新的工作目录快捷键吃掉了；现在要求 shift 未按下。
-
-- **桌面 GUI 的文件修改按 diff 渲染**：`edit` 卡片头部显示文件路径，改动本身按 diff 画——右对齐的
-  行号列、新增行用成功色、删除行用错误色，`@@` 块头与上下文行用弱色，单行替换还会按词标出变动
-  片段。diff 取自工具结果（`details.diff`），还没有结果时用调用阶段算出的预览，所以编辑过程中卡片
-  就有内容。`write` 卡片同样只把路径放在头部，不再把整份文件内容塞进折叠的参数摘要，正文则按
-  终端 UI 的样子折叠预览前几行（可点开看全部）。
-
-- **桌面 GUI 从空白会话开始也跟随新内容了**：以前只有「贴过一次底」之后才会钉住滚动，而内容不足
-  一屏时目标偏移是正数、被判成「用户已滚开」；于是全新会话的第一轮输出一路长到视口下面，得手动
-  滚一次到底才开始跟。现在钉底一开始就是接管的，目标偏移按真实滚动范围夹取，第一轮就贴底，只有
-  真的往上滚才停止跟随。
-
-- **桌面 GUI 的 `/` 面板列全了能执行的命令**：`hotkeys`、`session`、`changelog`、`trust`、`bug`、
-  `theme`、`reload`、`settings`、`extension`、`skills`、`scoped-models`、`login`、`logout`、
-  `usage`、`debug` 以前能执行但不在候选里。`/name <名字>`、`/thinking <级别>`、`/model <id>`、
-  `/session <序号>`、`/export <路径>`、`/import <路径>` 现在会吃掉参数而不是被当成未知命令
-  （`/model` 有 scope 时只在 scope 内匹配，`/session` 按会话目录的序号切换——顺序与侧栏一致，
-  最近修改在前——越界时提示可用范围），`/theme` 与 `/hotkeys` 分别是外观选择器与快捷键页的别名。`/` 面板里没有候选时按 Enter
-  会把已输入的内容补全执行，而不是什么都不做——之前带参数的命令就卡在「No matches」上。`Ctrl-M` 命令面板只保留 `/` 面板没有的功能，外加有独立面板的 `skills`、
-  `extension`、`settings` 三个，同一个动作不再占两个入口。
-
-- **设置面板按 Enter 只改配置、不关面板**：每一行都保留列表（过滤串与高亮行一起留着），可以连着
-  改好几项。发送按钮上的停止方块改用品牌强调色，而不再取反色。
-
-- **桌面 GUI 的 `/` 面板里 Tab 只补全、Enter 才执行**：Tab 把选中的命令连同尾随空格写进输入框，
-  执行留给 Enter，因此补全完还能先改；`@` 文件候选仍然只在 Enter 时补全、不发送，与终端一致。
-
-- **`gui.scale` 在 `settings.json` 里只留一位小数**：直接把 f32 转过去会写成 `2.0999999046325684`，
-  现在存盘前量化到一位小数。
-
-- **桌面 GUI 里 `!` / `!!` 不再弹出补全面板**：shell 行按 `Enter` 就执行，面板只是自报一句说明，
-  却把 `↑` / `↓` 从 shell 命令手里抢走；触发词与那条空面板提示一并去掉。
-
-- **桌面 GUI 的 `/` 与 `@` 匹配规则跟终端对齐**：`/` 改成按字符顺序匹配并排序（技能按裸名参与，
-  `/idea` 不会再命中 `skill:deep-research`），`@` 按路径打分——文件名完全匹配、文件名开头、
-  文件名子串、仅路径子串——同分再按层级、长度、字典序。两边共用同一份打分代码。
-
-- **命令面板执行的就是它写着的那条命令**：拷贝列表项时，硬编码清单之外的命令会被换成 `/session`
-  统计，于是「Share session (gist)…」只打印了统计。现在命令原样带过去。
-
-- **拖侧栏边框不再跑偏**：侧栏与右侧面板的宽度按「设计像素 × 缩放」存，鼠标位移却是物理像素，
-  缩放不是 100% 时面板比指针长得快。现在位移先折回宽度单位再相加。
-
 - **`←` / `→` 现在能送到面板**：TUI 的按键翻译从来没映射左右方向键，所有覆盖层都把这两个键当成
   「其它键」——`ask-user-question` 的标签页只有 `Tab` 能翻，扩展也无法绑定横向导航。现在两个方向键
   都会映射过去。
-- **网关、代理与 OAuth 瞬时故障会重试了**：`upstream_stream_read_error`、`stream was interrupted`、
-  `Upstream HTTP/2 stream failed`、`stream disconnected before completion`，以及 Google Vertex
-  的 OAuth token 刷新失败（`request to … failed, reason:`）现在都走重试策略，不再第一下就判死。
-- **HTTP 状态码必须独立成 token**：`429` / `5xx` 原来在错误文案里任意位置都命中，`req_011CU503xyz`
-  这类请求 id、`5242880 bytes` 这类字节数都会触发无谓的退避重试；现在前后是字母或数字就不算状态码。
-- **ChatGPT Business 的工作区上限不再重试**：那种额度只有管理员能提，退避重试只是浪费回合。
-- **压缩与分支摘要改用模型的输出上限**：不再从 `compaction.reserveTokens` 推一个输出额度（那个值只决定
-  **何时**开始压缩），思考型模型不会再把摘要额度吃光后报 "generation hit the token cap"。
-- **任何 HTTP 413 都算上下文溢出**：请求体过大（例如 Copilot 上塞满大图的会话）会先压缩再重试，
-  而不是直接失败。
+- **瞬时故障会重试，重试匹配也不会再被无关数字骗到**：`upstream_stream_read_error`、
+  `stream was interrupted`、`Upstream HTTP/2 stream failed`、`stream disconnected before
+  completion`，以及 Google Vertex 的 OAuth token 刷新失败（`request to … failed, reason:`）现在都
+  走重试策略，不再第一下就判死。`429` / `5xx` 只有独立成 token 才算状态码：`req_011CU503xyz`
+  这类请求 id、`5242880 bytes` 这类字节数原来在错误文案里任意位置都命中，会触发无谓的退避重试。
+  ChatGPT Business 的工作区上限永不重试——那种额度只有管理员能提，退避只是浪费回合。
+
+- **压缩改用模型的输出上限，任何 HTTP 413 都算上下文溢出**：压缩与分支摘要不再从
+  `compaction.reserveTokens` 推一个输出额度（那个值只决定**何时**开始压缩），思考型模型不会再
+  把摘要额度吃光后报 "generation hit the token cap"。请求体过大（例如 Copilot 上塞满大图的会话）
+  返回的 413 现在先压缩再重试，而不是直接失败。
+
 - **只有空白的工具输出改用空输出占位文案**：`bash` 吐的一个裸 `\r\n` 原来原样发给 OpenAI Completions、
   OpenAI Responses 与 Google，被这三家以 400 拒掉。Google 侧此前连真空输出都没有占位文案，一并补上。
 - **`grep` 固定走 `rg --no-config`**：用户 shell 里的 `RIPGREP_CONFIG_PATH`（例如带 `--fixed-strings`）
@@ -1977,185 +892,5 @@
   永远是非激活态；分支既没加过也没删过的已注册工具现在默认激活（声明 `default_active: false` 的工具不在此列，
   仍要用户显式开启）。
 - **HTML 导出的 CJK 强调正常了**：CJK 标点紧邻 `**` / `*` 时不再显示字面星号。
-- **桌面 GUI 的对话流与菜单修好了一批问题**：会话行右键的 `Rename` / `Delete` 能打开对话框
-  （之前只把菜单关掉），对话流能滚到真正的底部（最后几行不再被输入卡片盖住），文本选区的落点
-  对准指针下的字符，回合中按 `Esc` 会退出忙碌状态并在对话流里留下 `Operation aborted`，
-  命令结果作为系统消息写进对话流而不是只弹 toast；界面缩放上限提到 500%。
 - **第二个覆盖层不再顶掉第一个**：两个扩展同时要输入时，第二个会把第一个挤掉、前者直接消失；
   现在被盖住的覆盖层挂在栈上，上面的关掉就露回来，切换会话仍然会一次关掉全部。
-- **桌面 GUI 的输入框按真实字宽折行，长草稿也能滚**：折行改成用排版器量每个字符的实际宽度，
-  不再按 0.6em 估算（估算在放大后会溢出卡片，缩放一次又会早折一截），可用宽度也改用卡片的真实
-  内宽；超过八行的草稿能用滚轮滚，光标移动时自己滚进视口、但不会跟手动滚动抢位置；折叠的工具
-  输出不再只留一个 `…`，改成和用户气泡一样的 `⋯ N more line(s) · click to expand`。
-- **流式输出不再把对话流拽回底部**：原来每来一条 agent 事件都调用 `scroll_to_bottom`，用户滚上去
-  看历史会被逐条拽回底部；现在只有仍跟随底部时才自动滚，重载会话会重新接管。
-- **桌面 GUI 的 `/extension` 与 `/skills` 面板跟 TUI 对齐**：勾选只改未落盘的草稿，`Ctrl+S` 才写盘、
-  `Esc` 丢弃；点过哪一行就是哪一行，列表重建后不再跳回第一条，过滤框也一起保留。`Tab` 打开当前条目
-  的只读详情页（`Tab` / `Enter` / `Esc` 返回，草稿还在）——扩展显示描述、模式、工具与 fork 来源，
-  技能显示 `SKILL.md` 头信息、来源与路径。底栏与横幅扩展不再列出，它们只在终端界面渲染。
-- **桌面 GUI 的 `/cache-usage all` 不再卡住窗口**：以前取不到异步运行时就在视图线程上同步扫描，
-  会话一多整个窗口就停住，面板要等扫完才出现。现在扫描放到后台，面板立刻弹出并显示
-  `scanning sessions…`。
-- **桌面 GUI 的信息面板能用方向键滚动了**：滚动偏移的夹取方向反了，`/usage`、`/help`、`/session`、
-  `/changelog` 与扩展详情页里的 `↑` / `↓` / `PgUp` / `PgDn` 只会跳回顶部，`End` 也到不了底部；
-  现在都按实际可滚范围移动。
-- **桌面 GUI 的 `/rewind` 能用了**：它在 `/` 面板里列着却没有实现，敲完只会把命令文本塞回输入框；
-  现在会撤销上一条用户输入。
-- **桌面 GUI 的 `/debug` 有输出了**：以前列在 `/` 面板里但什么都不做；现在裸 `/debug` 会把诊断信息
-  （provider、model、消息数、自动压缩与重试、工作目录、会话）写进对话流，`/debug info` / `provider` /
-  `system-prompt` 子命令仍由 `debug` 扩展提供。
-- **选中文字时行内样式不再盖掉选区底色**：选区底色与行内代码、链接的高亮在交界处切成互不重叠的
-  段落，重叠的那些词不会再把选区底色吞掉，也不会只画出半个选区。
-- **桌面 GUI 会忘掉已不存在的工作目录**：工作目录选择里的最近列表以前只进不出，删掉或挪走的项目
-  一直留在菜单里点不开。现在启动时剔除已经不存在的路径并写回清单；切换工作目录时先落地新快照，
-  再拿它的 `cwd` 和旧值比较，不会漏掉变化。
-- **桌面 GUI 的 `bash` 卡片不再截断命令**：命令以前挤在头部当一行摘要（带 `command=` 前缀、会被
-  截断、还和状态标签抢宽度），现在占卡片第二行、整行折行、用代码色，它占掉的行数从输出行数预算里扣除。
-- **空助手块不再撑出空白**：只发起工具调用、正文和思考都为空的回合以前渲染成空块，流的 `gap` 仍按
-  子节点数计算，相邻块之间凭空多出一段间距；现在渲染时跳过这类空块。
-- **输入框为空时按 `Enter` 回到最新输出**：以前什么都没输入时按 `Enter` 毫无反应，视图停在上面下
-  不来；现在会重新钉底。
-- **工具卡片的「还有 N 行」只提示一次**：`bash` 卡片以前在命令下面、diff 或写入正文下面、输出下面
-  各出一条提示，各自只算自己那段的溢出；现在把截掉的行数累加，卡片底部只出一条。
-- **桌面 GUI 展开卡片不再抖动**：展开改变高度后，鼠标抬起时指针仍落在卡片上，会再命中一次把它切
-  回去。同一条目现在 250ms 内只接受一次切换，切换时还会清掉上一帧的实测高度，布局不会压在旧高
-  度上。
-- **桌面 GUI 的 `@` 面板与终端 UI 用同一套文件搜索**：以前是对一份一次性列出（限深度、只列文件）
-  的路径表做子串过滤，目录、更深的文件、隐藏文件都搜不到，顺序也不一样。现在走同一个后台目录遍历
-  与同一套路径打分：目录也是候选（补全成 `dir/` 便于继续往下敲），`.gitignore` / `.ignore` /
-  `.fdignore` 生效，隐藏文件可见，排序按分数再到层级、长度、名字，含空白或 CJK 标点的路径补全时
-  会加引号。输入目录前缀就把遍历范围收到该目录（`@src/mo` 只扫 `src`），`(`、反引号或 CJK 标点
-  之后的 `@` 会触发面板而 `user@example.com` 里的不会，继续输入会作废上一轮遍历。
-- **桌面 GUI 的补全面板没条目就收起**：`/命令` 与 `@路径` 以前会在一个候选都不剩时留一个
-  `No matches` 的空框，终端 UI 是直接关面板。现在命令、子命令、路径扫描无候选就立刻收起面板；面板里
-  敲的字会先写回输入框再收起，所以 `Esc`、退格退到空、零匹配三种情况都不会让刚敲的字消失。唯一的例外
-  是 `/history`：零匹配时面板留在原地当搜索框，提示文案改成 `No matching history`。`/` 前的行首缩进
-  现在也会触发面板——与终端 UI 一致。
-
-- **桌面 GUI 的 `/history` 边输入边列出历史 prompt**：敲 `/history`（或 `/history bug`）就在输入框
-  上方弹出本项目的历史，最近优先，不必先按 Enter。查询按空白分词、大小写不敏感，每个词都要出现在
-  整段 prompt 里（词序无关），正文在第二行以后的 prompt 也搜得到。Enter / Tab 把选中的 prompt 写回
-  输入框（多行 prompt 就写回多行）但不发送；零匹配时面板留在原地，不会把 `/history …` 当 prompt 发
-  出去。`@clear` / `@clear-all`（仅查询以 `@` 开头时现身）删除本项目的历史或所有项目的历史，删前弹
-  Yes/Cancel 确认并给出待删条目数。
-
-- **桌面 GUI 的补全面板不再因移动光标弹出**：`/命令` 与 `@路径` 以前每按一个键就重算，在一段
-  没改动的文字中间按左右方向键也会把面板重新弹出来挡住内容。现在只有输入框文本真的变了才重算补全。
-
-- **桌面 GUI 中断回合后真的停下来**：`Esc`、停止按钮与扩展发起的中断现在都会补发 `agent_end`
-  （与终端 UI 一致），靠事件断电的扩展（如空闲超时看门狗）就不会以为回合还在跑、把已经停下的会话
-  又拉起来；同时取消可取消的后台工作（如 MCP OAuth 登录）、把排队的 steer / follow-up 取回输入框。
-  回合运行中 `Esc` 在菜单与覆盖层处理之前先走中断。
-
-- **桌面 GUI 重启回合不再丢掉已排队的输入**：扩展重建 prompt 期间积压的 steer 消息现在与新 prompt
-  一起发出，而不是被丢弃。
-
-- **桌面 GUI 中断回合后状态栏计时真的停下**：`Esc`、停止按钮或扩展中断回合后 `⌛` 仍继续走字，
-  后续每一轮都接着这个基线，整段会话的时间越积越大。补发的 `agent_end` 现在走与真实 agent 事件
-  相同的处理路径，计时定格、在途流式计数清零。
-
-- **`browser` 扩展不再点穿遮罩**：`click` / `dblclick` 先检查元素中心点，被别的元素盖住时直接报错并
-  点名盖住它的元素（如 `covered by <div#banner>`），元素 `disabled` 或没有可点面积时同样报错——以前
-  照旧派发点击并回「已点击」。
-
-- **桌面 GUI 的 mermaid 图与公式不再错位**：等宽内容以前交给系统 `monospace`，中文 fallback 的
-  字宽与西文 advance 凑不成 2:1，含中文的行每过一个汉字就往左缩 0.2em，盒图竖线跟着歪。现在内嵌
-  Source Code Pro 并把这类内容按终端网格排（半角一格 0.6em、汉字占两格居中），代码块与右侧文件
-  面板也统一用这个字体。
-
-- **桌面 GUI 表格不再把短列压成竖排**：列宽以前按字符数比，两个字的表头对上几十字的描述只剩一个字宽，
-  「项目」被逼成一行一个字。现在按显示宽度（汉字算两列）比并夹在 8~40 列之间，短列放得下内容、
-  超长列照旧折行。
-
-- **桌面 GUI 的 markdown 链接可以打开**：`[文字](url)` 以前只是变色，点不动。现在 Ctrl+点击用系统
-  默认浏览器打开（与终端 UI 同一手势、与右侧信息面板里的链接同一条路径），渲染区与覆盖层面板里的
-  markdown 都生效；普通点击仍留给选字。
-
-- **桌面 GUI 的 `Ctrl-N` 不再新建会话**：它与终端 UI 的命名会话过滤撞键，快捷键已移除，改用 `/new`
-  或侧栏的 `+` 按钮。
-
-- **桌面 GUI 的覆盖层与停靠面板长行会折行，不再戳出卡片**：每行原本是一排按样式片段切开的 flex
-  子元素，而文本的自动最小宽度就是它不折行时的整行宽度——于是这一行永远缩不到卡片宽度，长文本
-  （子代理的任务说明、停靠状态行）直接画到面板边框外面。现在片段允许收缩，这类长行在卡片内折行。
-
-- **桌面 GUI 删除会话与终端 UI 一致，先进回收站**：侧栏的删除动作原本直接 unlink，点错一次就
-  找不回来。现在先走 `trash` CLI，失败才回退 unlink；并且和终端 UI 一样不允许删除当前正开着的
-  会话——那个文件仍在被追加写入。确认框也不再写「无法撤销」。
-
-- **桌面 GUI 的 `Esc` 先关面板、再中止回合**：正在输出时 `Esc` 原本先命中忙碌态分支，于是想收起
-  覆盖层或菜单，却把正在跑的回合取消了。忙碌态的中止现在排在覆盖层、下拉菜单、补全面板与搜索框
-  之后，与终端 UI 的顺序一致。
-
-
-- **提权面板的按钮改成「Submit」**：窄面板里「Submit answers」把按钮撑到和说明文字抢宽度，
-  现在与「Cancel」等长（终端 UI 与桌面 GUI 共用同一份视图）。
-
-- **桌面 GUI 侧栏底部的目录块不再画圆角**：它贴着窗口底边，圆角只在下半截露出一道缺口，
-  与侧栏的直边不一致。
-
-- **`leak-guard` 不再对路径与会话文件名误报，也不会反复提示**：高熵扫描把 `/` 也算作候选串的
-  字符，于是任何路径都连成一整条「随机串」，UUID / 哈希 / `2026-11-02T10-25-54-666Z_<uuid>`
-  这类会话文件名也照报不误。现在路径不再连成一个候选，机器生成的标识直接跳过，告警记录满了
-  改为挤掉最早一条而不是整体清空——历史里这类名字一多，记录每轮都被清空，同一个提示就会
-  每回合重弹一次。
-
-- **`leak-guard` 的提示会指出到底哪一段触发了告警**：原先只说「像凭据（高熵）」，路径、base64
-  串和哈希在提示里长得一模一样。现在请求前与工具调用前的提示都附上命中片段的首尾预览（如
-  `high-entropy: q8Zr2NvT…Zx4Q`）；被拒绝的工具调用只报类别，因为那条原因会回到模型上下文。
-
-- **桌面 GUI 新建的会话会出现在侧栏并高亮**：会话文件要等首条消息才写出，而侧栏原先只在切换
-  工作目录或会话改名时才重读，于是新会话的行一直不出现，当前会话也就高亮不到。现在会话路径
-  出现或变化都会重读列表。
-
-- **桌面 GUI 的列表条目、chip 与按钮里的文字回到垂直中线**：思源黑体的 ascent（1.16em）远大于
-  descent（0.29em），按行盒居中的西文小写字形重心比行中心低 0.1–0.2em，行越矮越明显；同时固定
-  高度的行会被 flex 压缩到文字高度，高亮块跟着变窄。现在固定高度的行不再被压缩，行内文字按字号
-  抬高 0.12em（`text_raise_margin`），命令面板、模型 / 会话 / 扩展 / 技能面板、设置面板、`/`、`@`
-  补全面板、下拉菜单、右栏的文件与变更列表，以及输入框里的 `+ Attach`、模型 / 思考 chip 与 `Send`
-  一并生效。
-
-- **桌面 GUI 在 Windows 上点「Browse…」终于会弹对话框**：原生文件对话框原本丢在后台线程打开，而
-  Windows 的对话框需要主线程的 OLE STA（macOS 也要求主线程），失败又被 `ok()` 吞掉，于是点击后
-  什么也不会发生。现在对话框在前台执行器（主线程）打开，工作目录选择与附件选择都改用同一套做法。
-
-- **桌面 GUI 的窗口图标取自随二进制打包的图标**：Windows 的标题栏 / 任务栏图标由 gpui 从可执行
-  文件的图标资源里取（资源 id 固定为 1），而资源脚本里的图标是一个命名资源，取不到就退回系统默认
-  图标。现在图标资源改用数字 id 1，与 `icon.png` 是同一张图。
-
-- **Windows 上不再为每条外部命令闪一片黑窗口**：`prux-gui` 以 windows 子系统构建、自身没有控制台，
-  于是它拉起的每个控制台子系统子进程（`bash`、`powershell`、`rg`、`fd`、`git`、`taskkill`、MCP
-  与 LSP 服务器）都会被系统新分配一个控制台并把窗口显示出来。现在统一的 `HideConsole` 给每个子
-  进程加 `CREATE_NO_WINDOW`：除了 `bash` / `powershell` / `find` / `grep` 工具、git 辅助、workflow
-  的 gate、带超时的执行器与进程树清理，还覆盖剪贴板工具（`wl-copy` / `wl-paste` / `xclip` /
-  `termux-clipboard-*`）、tmux 能力探测、`gh` 的 gist 分享、`/giff` 的 `git diff`、`!cmd` 的
-  shell 执行、worktree 的产物拷贝以及截图 / 窗口激活的辅助命令；这些子进程的 stdout/stderr 本来
-  就接了管道，功能不受影响，非 Windows 平台是空操作。
-
-- **桌面 GUI 侧栏底部的分支图标改用 `⎇`**：原来画的是 Nerd Font 图标，在随包字体下渲染成一个方块。
-
-- **桌面 GUI 设置面板改一项配置后仍停在原来那行**：此前切换一行会整个重建面板，过滤词和选中行一起
-  丢掉，列表跳回第一条。现在面板就地换行，且高亮跟的是原来那个条目而不是下标——刚改的那行不再
-  匹配过滤词时（搜 `on`、把某项切成 `off`），高亮也不会滑到邻居身上。
-
-- **桌面 GUI 的四个设置并进 `gui` 段**：`uiScale`、`theme-gui`、`sidebar-gui`、`frame-gui` 现在分别是
-  `gui.scale`、`gui.theme`、`gui.sidebar`、`gui.frame`，窗口自己的一套配置收在一个键下，不再占用四个
-  带连字符的顶层键。旧键已作废：不再读取，启动时会作为未知设置报出来——写过的话需要手动搬过去。
-
-- **Windows 上自绘标题栏真的能拖动、能还原、能双击了**：自绘标题栏在自己的
-  `on_mouse_down` 里消费掉了按下事件，然后去调 Windows 后端没实现的接口——`start_window_move()`
-  在那儿是空操作，`zoom_window()` 也只会最大化——于是按住标题栏拖不动，最大化之后点「还原」
-  仍是最大化。Windows 的拖动与三颗按钮本来就由非客户区命中（`HTCAPTION` / `HTMAXBUTTON` /
-  `HTMINBUTTON` / `HTCLOSE`）交给系统处理，前提是应用别把按下事件吃掉：拖动区与三颗按钮现在在
-  Windows 上不再消费按下（macOS / Linux 维持由应用自己发起）。双击标题栏放大 / 还原也一并
-  可用——平台的 `titlebar_double_click` 在 Windows 上是空实现，改为用窗口句柄发 `SW_RESTORE`。
-
-- **Windows 上恒定自绘窗口边框**：Windows 后端建窗时从不给窗口画标题栏，因此
-  `gui.frame = false` 在那里的效果是窗口既没有标题栏也没有可拖可关的区域。现在 Windows 上
-  `gui.frame` 恒读作 `true`（写盘仍存用户的选择，读取侧按平台收回），建窗一律不带系统装饰，
-  设置面板那一行也会说明该平台不可切换。
-
-- **桌面 GUI 的登录面板与终端一致了**：以前登录只弹一个纯文本框，只要面板同时需要一行输入框
-  （授权码 / 重定向 URL），授权地址就完全不显示，说明也只有一句通用文案。现在面板按终端的面板
-  排版：设备用户码、授权地址（点一下即用浏览器打开）、「Click to open · copied to clipboard」
-  提示、该 provider 的说明句、输入框上方的标签，两边共用同一份文案。地址到手时仍自动复制到
-  剪贴板，等待授权的阶段也不再摆一个点不动的确认按钮。
