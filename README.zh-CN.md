@@ -72,6 +72,7 @@ make build    # 仅编译（debug）
 make debug    # cargo run
 make release-gui  # 构建 release 版 prux-gui
 make debug-gui    # cargo run 跑 prux-gui
+make deb-gui      # 把 prux-gui 打成 deb（产物在 target/）
 make check    # cargo check
 cargo test    # 全量测试
 cargo clippy  # 静态检查

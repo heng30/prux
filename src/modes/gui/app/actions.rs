@@ -124,203 +124,391 @@ impl GuiApp {
     /// 斜杠命令本体：`arg` 是命令名之后的原文（不吃参数的命令收到空串）。
     fn run_slash_with(&mut self, name: &str, arg: &str, cx: &mut Context<Self>) {
         match name {
-            "name" if !arg.is_empty() => {
-                _ = self.cmd_tx.send(AgentCommand::SetSessionName {
-                    name: arg.to_string(),
-                });
-            }
-            "thinking" if !arg.is_empty() => {
-                if cli::args::VALID_THINKING_LEVELS.contains(&arg) {
-                    _ = self.cmd_tx.send(AgentCommand::SetThinking {
-                        level: arg.to_string(),
-                        persist: true,
-                    });
-                } else {
-                    self.transcript.push_note(Note::Error(format!(
-                        "Unknown thinking level: {arg} (valid: {})",
-                        cli::args::VALID_THINKING_LEVELS.join(", ")
-                    )));
-                }
-            }
-            // `/history [关键词]`：控制词直接弹确认；其余把整行写回输入框，
-            // 让补全面板重新接管搜索（否则关键词会被当成未知命令丢掉）
-            "history" => match arg {
-                "@clear" => self.open_history_clear_confirm(false, cx),
-                "@clear-all" => self.open_history_clear_confirm(true, cx),
-                _ => {
-                    let line = format!("/history {arg}");
-                    self.editor.insert(line.trim_end());
-                    self.refresh_suggest(cx);
-                }
-            },
-            "export" if !arg.is_empty() => {
-                // 路径参数与 TUI 同一套解析（引号包裹的含空格路径 / 只取第一个片段）
-                _ = self.cmd_tx.send(AgentCommand::Export {
-                    out: paths::parse_path_arg(arg),
-                    theme: None,
-                });
-            }
-            "import" if !arg.is_empty() => self.start_import(arg, cx),
-            // `/model <id>`：有 scope 时只在 scope 里匹配，否则交给 worker 按当前 provider 校验
-            "model" if !arg.is_empty() => {
-                let scoped = self
-                    .snapshot
-                    .as_ref()
-                    .map(|snapshot| snapshot.model_cycle.clone())
-                    .unwrap_or_default();
-                let needle = arg.to_lowercase();
-
-                if scoped.is_empty() {
-                    let provider = self
-                        .snapshot
-                        .as_ref()
-                        .map(|snapshot| snapshot.provider.clone())
-                        .unwrap_or_default();
-                    _ = self.cmd_tx.send(AgentCommand::SwitchModel {
-                        provider,
-                        model_id: arg.to_string(),
-                        persist: false,
-                    });
-                } else if let Some(model) = scoped.iter().find(|model| {
-                    model.canonical().to_lowercase() == needle || model.id.to_lowercase() == needle
-                }) {
-                    _ = self.cmd_tx.send(AgentCommand::SwitchModel {
-                        provider: model.provider.clone(),
-                        model_id: model.id.clone(),
-                        persist: false,
-                    });
-                } else {
-                    self.transcript
-                        .push_note(Note::Error(format!("model not found in scope: {arg}")));
-                }
-            }
-            // `/session <子命令|序号>`：子命令见 `cmd_session_arg`，其余按序号切会话
-            "session" if !arg.is_empty() => self.cmd_session_arg(arg, cx),
-            "new" => {
-                _ = self.cmd_tx.send(AgentCommand::NewSession);
-                self.transcript.clear();
-                self.flow_height.set(None);
-                self.reload_sessions(cx);
-            }
-            "resume" | "sessions" => self.open_session_picker(cx),
-            "model" => self.open_model_picker(cx),
-            "thinking" => self.open_thinking_picker(cx),
-            "login" => self.open_login_panel(cx),
-            "logout" => self.open_logout_panel(cx),
-            "changelog" => self.open_changelog(cx),
-            "giff" => self.toggle_panel_tab(PanelTab::Changes, cx),
-            "tree" => _ = self.cmd_tx.send(AgentCommand::Tree),
-            "bug" => {
-                let mut editor = Editor::new();
-                editor.insert(arg);
-                self.dialog = Some(SessionDialog::BugHint { editor });
-                cx.notify();
-            }
-            "reload" => {
-                _ = self.cmd_tx.send(AgentCommand::Reload {
-                    context_files: Vec::new(),
-                    skills: Vec::new(),
-                    system_prompt: None,
-                    append_system_prompt: None,
-                });
-            }
-            // `/label <entryId> [标签]`：与 TUI 一样吃显式 id（标签为空 = 清除该节点标签）
-            "label" if !arg.is_empty() => {
-                let (entry_id, label) = arg.split_once(char::is_whitespace).unwrap_or((arg, ""));
-                let label = label.trim();
-                _ = self.cmd_tx.send(AgentCommand::Label {
-                    entry_id: entry_id.to_string(),
-                    label: (!label.is_empty()).then(|| label.to_string()),
-                });
-            }
-            "label" => {
-                let editor = Editor::new();
-                self.dialog = Some(SessionDialog::Label { editor });
-                cx.notify();
-            }
-            "import" => self.open_import_dialog(cx),
-            "clone" => _ = self.cmd_tx.send(AgentCommand::ForkClone),
-            "fork" => {
-                if let Some(path) = self
-                    .snapshot
-                    .as_ref()
-                    .and_then(|snapshot| snapshot.session_path.clone())
-                {
-                    _ = self.cmd_tx.send(AgentCommand::ForkFrom { path, dir: None });
-                } else {
-                    self.transcript
-                        .push_note(Note::Info("In-memory session cannot be forked".into()));
-                }
-            }
-            "share" => {
-                _ = self.cmd_tx.send(AgentCommand::Share { theme: None });
-            }
-            "export" => {
-                _ = self.cmd_tx.send(AgentCommand::Export {
-                    out: None,
-                    theme: None,
-                });
-            }
-            "trust" => self.open_trust_panel(cx),
-            "cwd" if !arg.is_empty() => self.cmd_cwd_arg(arg, cx),
-            "cwd" => self.open_cwd_menu(cx),
-            "name" => self.rename_current_session(cx),
-            "copy" => self.copy_last_reply(cx),
-            "debug" if arg.is_empty() => core::extensions::CommandHost::debug_info(self),
-            "compact" => {
-                _ = self.cmd_tx.send(AgentCommand::Compact {
-                    instructions: (!arg.is_empty()).then(|| arg.to_string()),
-                });
-            }
-            "appearance" | "theme" => self.open_appearance_picker(cx),
-            "panel" => self.toggle_panel(None, cx),
-            "dock" => {
-                self.dock_visible = !self.dock_visible;
-                cx.notify();
-            }
-            "sidebar" => {
-                self.set_sidebar_visible(!self.show_sidebar);
-                cx.notify();
-            }
-            "skills" => self.open_skills_panel(cx),
-            "extension" => self.open_extension_panel(cx),
-            "scoped-models" => self.open_scoped_models_panel(cx),
-            // `/settings <扩展名>`：只显示该扩展的设置项（与 TUI 的扩展设置面板同语义）
-            "settings" if !arg.is_empty() => self.open_extension_settings(arg, cx),
-            "settings" => self.open_settings_panel(cx),
-            "session" => self.open_info(InfoKind::Session, cx),
-            "help" | "hotkeys" => self.open_info(InfoKind::Help, cx),
-            "quit" => cx.quit(),
+            "name" if !arg.is_empty() => self.slash_set_name(arg),
+            "thinking" if !arg.is_empty() => self.slash_switch_thinking(arg),
+            "history" => self.slash_history(arg, cx),
+            "export" if !arg.is_empty() => self.slash_export(arg),
+            "import" if !arg.is_empty() => self.slash_import(arg, cx),
+            "model" if !arg.is_empty() => self.slash_switch_model(arg),
+            "session" if !arg.is_empty() => self.slash_session(arg, cx),
+            "new" => self.slash_new(cx),
+            "resume" | "sessions" => self.slash_open_sessions(cx),
+            "model" => self.slash_open_models(cx),
+            "thinking" => self.slash_open_thinking(cx),
+            "login" => self.slash_login(cx),
+            "logout" => self.slash_logout(cx),
+            "changelog" => self.slash_changelog(cx),
+            "giff" => self.slash_giff(cx),
+            "tree" => self.slash_tree(),
+            "bug" => self.slash_bug(arg, cx),
+            "reload" => self.slash_reload(),
+            "label" if !arg.is_empty() => self.slash_set_label(arg),
+            "label" => self.slash_label_dialog(cx),
+            "import" => self.slash_import_dialog(cx),
+            "clone" => self.slash_clone(),
+            "fork" => self.slash_fork(),
+            "share" => self.slash_share(),
+            "export" => self.slash_export_default(),
+            "trust" => self.slash_trust(cx),
+            "cwd" if !arg.is_empty() => self.slash_switch_cwd(arg, cx),
+            "cwd" => self.slash_cwd_menu(cx),
+            "name" => self.slash_rename(cx),
+            "copy" => self.slash_copy(cx),
+            "debug" if arg.is_empty() => self.slash_debug(),
+            "compact" => self.slash_compact(arg),
+            "appearance" | "theme" => self.slash_appearance(cx),
+            "panel" => self.slash_panel(cx),
+            "dock" => self.slash_dock(cx),
+            "sidebar" => self.slash_sidebar(cx),
+            "skills" => self.slash_skills(cx),
+            "extension" => self.slash_extensions(cx),
+            "scoped-models" => self.slash_scoped_models(cx),
+            "settings" if !arg.is_empty() => self.slash_extension_settings(arg, cx),
+            "settings" => self.slash_settings(cx),
+            "session" => self.slash_session_info(cx),
+            "help" | "hotkeys" => self.slash_help(cx),
+            "quit" => self.slash_quit(cx),
 
             // 与 UI 无关的扩展命令（proxy / notify 等）：扩展自己处理并回通知
-            other => {
-                // 扩展命令吃参数（`/proxy listen 1.2.3.4:80`）：命令名是首个 token
-                let (command, rest) = match other.split_once(char::is_whitespace) {
-                    Some((name, rest)) => (name, rest.trim()),
-                    None => (other, ""),
-                };
+            other => self.slash_extension_command(other, cx),
+        }
+    }
 
-                // 扩展命令：与 TUI 共用同一份 handler（参数是宿主能力面，不是 App）
-                let raw = format!("/{command} {rest}");
-                if let Some(handler) = core::extensions::command_handler(command) {
-                    handler(self, raw.trim_end());
-                    cx.notify();
-                    return;
-                }
+    /// `/name <名>`：直接下发改名。
+    fn slash_set_name(&mut self, arg: &str) {
+        _ = self.cmd_tx.send(AgentCommand::SetSessionName {
+            name: arg.to_string(),
+        });
+    }
 
-                if core::extensions::registered_commands()
-                    .iter()
-                    .any(|registered| registered.name == command)
-                {
-                    self.transcript.push_note(Note::Info(format!(
-                        "Extension command /{command} is terminal-only; use the terminal UI"
-                    )));
-                    return;
-                }
+    /// `/thinking <级别>`：级别合法就下发（并落盘），否则报可用取值。
+    fn slash_switch_thinking(&mut self, arg: &str) {
+        if cli::args::VALID_THINKING_LEVELS.contains(&arg) {
+            _ = self.cmd_tx.send(AgentCommand::SetThinking {
+                level: arg.to_string(),
+                persist: true,
+            });
+        } else {
+            self.transcript.push_note(Note::Error(format!(
+                "Unknown thinking level: {arg} (valid: {})",
+                cli::args::VALID_THINKING_LEVELS.join(", ")
+            )));
+        }
+    }
 
-                self.run_unknown_slash(other, cx);
+    /// `/history [关键词]`：控制词直接弹确认；其余把整行写回输入框，
+    /// 让补全面板重新接管搜索（否则关键词会被当成未知命令丢掉）。
+    fn slash_history(&mut self, arg: &str, cx: &mut Context<Self>) {
+        match arg {
+            "@clear" => self.open_history_clear_confirm(false, cx),
+            "@clear-all" => self.open_history_clear_confirm(true, cx),
+            _ => {
+                let line = format!("/history {arg}");
+                self.editor.insert(line.trim_end());
+                self.refresh_suggest(cx);
             }
         }
+    }
+
+    /// `/export <路径>`：导出到指定文件。
+    fn slash_export(&mut self, arg: &str) {
+        // 路径参数与 TUI 同一套解析（引号包裹的含空格路径 / 只取第一个片段）
+        _ = self.cmd_tx.send(AgentCommand::Export {
+            out: paths::parse_path_arg(arg),
+            theme: None,
+        });
+    }
+
+    /// `/import <路径>`：按路径导入会话文件。
+    fn slash_import(&mut self, arg: &str, cx: &mut Context<Self>) {
+        self.start_import(arg, cx);
+    }
+
+    /// `/model <id>`：有 scope 时只在 scope 里匹配，否则交给 worker 按当前 provider 校验。
+    fn slash_switch_model(&mut self, arg: &str) {
+        let scoped = self
+            .snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.model_cycle.clone())
+            .unwrap_or_default();
+        let needle = arg.to_lowercase();
+
+        if scoped.is_empty() {
+            let provider = self
+                .snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.provider.clone())
+                .unwrap_or_default();
+            _ = self.cmd_tx.send(AgentCommand::SwitchModel {
+                provider,
+                model_id: arg.to_string(),
+                persist: false,
+            });
+        } else if let Some(model) = scoped.iter().find(|model| {
+            model.canonical().to_lowercase() == needle || model.id.to_lowercase() == needle
+        }) {
+            _ = self.cmd_tx.send(AgentCommand::SwitchModel {
+                provider: model.provider.clone(),
+                model_id: model.id.clone(),
+                persist: false,
+            });
+        } else {
+            self.transcript
+                .push_note(Note::Error(format!("model not found in scope: {arg}")));
+        }
+    }
+
+    /// `/session <子命令|序号>`：见 [`Self::cmd_session_arg`]。
+    fn slash_session(&mut self, arg: &str, cx: &mut Context<Self>) {
+        self.cmd_session_arg(arg, cx);
+    }
+
+    /// `/new`：开新会话并清空当前展示。
+    fn slash_new(&mut self, cx: &mut Context<Self>) {
+        _ = self.cmd_tx.send(AgentCommand::NewSession);
+        self.transcript.clear();
+        self.flow_height.set(None);
+        self.reload_sessions(cx);
+    }
+
+    /// `/resume`、`/sessions`：打开会话选择面板。
+    fn slash_open_sessions(&mut self, cx: &mut Context<Self>) {
+        self.open_session_picker(cx);
+    }
+
+    /// `/model`：打开模型选择面板。
+    fn slash_open_models(&mut self, cx: &mut Context<Self>) {
+        self.open_model_picker(cx);
+    }
+
+    /// `/thinking`：打开思考级别选择面板。
+    fn slash_open_thinking(&mut self, cx: &mut Context<Self>) {
+        self.open_thinking_picker(cx);
+    }
+
+    /// `/login`：打开登录面板。
+    fn slash_login(&mut self, cx: &mut Context<Self>) {
+        self.open_login_panel(cx);
+    }
+
+    /// `/logout`：打开登出面板。
+    fn slash_logout(&mut self, cx: &mut Context<Self>) {
+        self.open_logout_panel(cx);
+    }
+
+    /// `/changelog`：打开当前版本的内嵌更新日志。
+    fn slash_changelog(&mut self, cx: &mut Context<Self>) {
+        self.open_changelog(cx);
+    }
+
+    /// `/giff`：打开右侧变更面板。
+    fn slash_giff(&mut self, cx: &mut Context<Self>) {
+        self.toggle_panel_tab(PanelTab::Changes, cx);
+    }
+
+    /// `/tree`：显示会话树。
+    fn slash_tree(&mut self) {
+        _ = self.cmd_tx.send(AgentCommand::Tree);
+    }
+
+    /// `/bug [描述]`：先记下复现描述，再让用户选是否附带会话记录。
+    fn slash_bug(&mut self, arg: &str, cx: &mut Context<Self>) {
+        let mut editor = Editor::new();
+        editor.insert(arg);
+        self.dialog = Some(SessionDialog::BugHint { editor });
+        cx.notify();
+    }
+
+    /// `/reload`：重读上下文文件、技能与系统提示词。
+    fn slash_reload(&mut self) {
+        _ = self.cmd_tx.send(AgentCommand::Reload {
+            context_files: Vec::new(),
+            skills: Vec::new(),
+            system_prompt: None,
+            append_system_prompt: None,
+        });
+    }
+
+    /// `/label <entryId> [标签]`：与 TUI 一样吃显式 id（标签为空 = 清除该节点标签）。
+    fn slash_set_label(&mut self, arg: &str) {
+        let (entry_id, label) = arg.split_once(char::is_whitespace).unwrap_or((arg, ""));
+        let label = label.trim();
+        _ = self.cmd_tx.send(AgentCommand::Label {
+            entry_id: entry_id.to_string(),
+            label: (!label.is_empty()).then(|| label.to_string()),
+        });
+    }
+
+    /// `/label`：打开标签输入框。
+    fn slash_label_dialog(&mut self, cx: &mut Context<Self>) {
+        let editor = Editor::new();
+        self.dialog = Some(SessionDialog::Label { editor });
+        cx.notify();
+    }
+
+    /// `/import`（无参数）：打开路径输入框。
+    fn slash_import_dialog(&mut self, cx: &mut Context<Self>) {
+        self.open_import_dialog(cx);
+    }
+
+    /// `/clone`：克隆当前会话。
+    fn slash_clone(&mut self) {
+        _ = self.cmd_tx.send(AgentCommand::ForkClone);
+    }
+
+    /// `/fork`：从当前会话文件分叉（内存会话没有文件可分叉，只提示）。
+    fn slash_fork(&mut self) {
+        if let Some(path) = self
+            .snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.session_path.clone())
+        {
+            _ = self.cmd_tx.send(AgentCommand::ForkFrom { path, dir: None });
+        } else {
+            self.transcript
+                .push_note(Note::Info("In-memory session cannot be forked".into()));
+        }
+    }
+
+    /// `/share`：生成分享链接。
+    fn slash_share(&mut self) {
+        _ = self.cmd_tx.send(AgentCommand::Share { theme: None });
+    }
+
+    /// `/export`（无参数）：导出到默认文件。
+    fn slash_export_default(&mut self) {
+        _ = self.cmd_tx.send(AgentCommand::Export {
+            out: None,
+            theme: None,
+        });
+    }
+
+    /// `/trust`：打开项目信任面板。
+    fn slash_trust(&mut self, cx: &mut Context<Self>) {
+        self.open_trust_panel(cx);
+    }
+
+    /// `/cwd <路径>`：见 [`Self::cmd_cwd_arg`]。
+    fn slash_switch_cwd(&mut self, arg: &str, cx: &mut Context<Self>) {
+        self.cmd_cwd_arg(arg, cx);
+    }
+
+    /// `/cwd`（无参数）：打开最近目录菜单。
+    fn slash_cwd_menu(&mut self, cx: &mut Context<Self>) {
+        self.open_cwd_menu(cx);
+    }
+
+    /// `/name`（无参数）：打开改名输入框。
+    fn slash_rename(&mut self, cx: &mut Context<Self>) {
+        self.rename_current_session(cx);
+    }
+
+    /// `/copy`：复制最后一条助手回复。
+    fn slash_copy(&mut self, cx: &mut Context<Self>) {
+        self.copy_last_reply(cx);
+    }
+
+    /// `/debug`：在对话流里输出调试信息。
+    fn slash_debug(&mut self) {
+        core::extensions::CommandHost::debug_info(self);
+    }
+
+    /// `/compact [指示]`：压缩上下文，指示可空。
+    fn slash_compact(&mut self, arg: &str) {
+        _ = self.cmd_tx.send(AgentCommand::Compact {
+            instructions: (!arg.is_empty()).then(|| arg.to_string()),
+        });
+    }
+
+    /// `/appearance`、`/theme`：打开外观选择面板。
+    fn slash_appearance(&mut self, cx: &mut Context<Self>) {
+        self.open_appearance_picker(cx);
+    }
+
+    /// `/panel`：开关右侧面板。
+    fn slash_panel(&mut self, cx: &mut Context<Self>) {
+        self.toggle_panel(None, cx);
+    }
+
+    /// `/dock`：开关停靠区。
+    fn slash_dock(&mut self, cx: &mut Context<Self>) {
+        self.dock_visible = !self.dock_visible;
+        cx.notify();
+    }
+
+    /// `/sidebar`：开关左侧会话列表。
+    fn slash_sidebar(&mut self, cx: &mut Context<Self>) {
+        self.set_sidebar_visible(!self.show_sidebar);
+        cx.notify();
+    }
+
+    /// `/skills`：打开技能面板。
+    fn slash_skills(&mut self, cx: &mut Context<Self>) {
+        self.open_skills_panel(cx);
+    }
+
+    /// `/extension`：打开扩展管理面板。
+    fn slash_extensions(&mut self, cx: &mut Context<Self>) {
+        self.open_extension_panel(cx);
+    }
+
+    /// `/scoped-models`：打开 Ctrl-P 循环名单面板。
+    fn slash_scoped_models(&mut self, cx: &mut Context<Self>) {
+        self.open_scoped_models_panel(cx);
+    }
+
+    /// `/settings <扩展名>`：只显示该扩展的设置项（与 TUI 的扩展设置面板同语义）。
+    fn slash_extension_settings(&mut self, arg: &str, cx: &mut Context<Self>) {
+        self.open_extension_settings(arg, cx);
+    }
+
+    /// `/settings`：打开设置面板。
+    fn slash_settings(&mut self, cx: &mut Context<Self>) {
+        self.open_settings_panel(cx);
+    }
+
+    /// `/session`（无参数）：显示当前会话信息。
+    fn slash_session_info(&mut self, cx: &mut Context<Self>) {
+        self.open_info(InfoKind::Session, cx);
+    }
+
+    /// `/help`、`/hotkeys`：显示快捷键表。
+    fn slash_help(&mut self, cx: &mut Context<Self>) {
+        self.open_info(InfoKind::Help, cx);
+    }
+
+    /// `/quit`：退出。
+    fn slash_quit(&mut self, cx: &mut Context<Self>) {
+        cx.quit();
+    }
+
+    /// 未知命令：先试扩展命令 handler，再试「仅终端可用」提示，最后当普通输入发出去。
+    fn slash_extension_command(&mut self, other: &str, cx: &mut Context<Self>) {
+        // 扩展命令吃参数（`/proxy listen 1.2.3.4:80`）：命令名是首个 token
+        let (command, rest) = match other.split_once(char::is_whitespace) {
+            Some((name, rest)) => (name, rest.trim()),
+            None => (other, ""),
+        };
+
+        // 扩展命令：与 TUI 共用同一份 handler（参数是宿主能力面，不是 App）
+        let raw = format!("/{command} {rest}");
+        if let Some(handler) = core::extensions::command_handler(command) {
+            handler(self, raw.trim_end());
+            cx.notify();
+            return;
+        }
+
+        if core::extensions::registered_commands()
+            .iter()
+            .any(|registered| registered.name == command)
+        {
+            self.transcript.push_note(Note::Info(format!(
+                "Extension command /{command} is terminal-only; use the terminal UI"
+            )));
+            return;
+        }
+
+        self.run_unknown_slash(other, cx);
     }
 
     /// 兜底：不认识的斜杠命令按普通输入发送，绝不当成 UI 命令吞掉。
@@ -384,286 +572,412 @@ impl GuiApp {
     /// 执行覆盖层动作。
     pub(super) fn run_action(&mut self, action: Action, cx: &mut Context<Self>) {
         match action {
-            Action::None => {}
-            Action::Command(command) => _ = self.cmd_tx.send(*command),
-            Action::LoadSession(path) => {
-                _ = self.cmd_tx.send(AgentCommand::ResumeSession { path });
-            }
-            Action::SetDark(is_dark) => self.set_dark(is_dark),
-            Action::Open(kind) => match kind {
-                ListKind::Model => self.open_model_picker(cx),
-                ListKind::Thinking => self.open_thinking_picker(cx),
-                ListKind::Appearance => self.open_appearance_picker(cx),
-                ListKind::PanelFiles => self.toggle_panel_tab(PanelTab::Files, cx),
-                ListKind::WorkingDirectory => self.open_cwd_menu(cx),
-            },
-            Action::UiChoice { id, text } => {
-                if let Some(prompt) = core::extensions::submit_ui_choice(id, text) {
-                    _ = self.cmd_tx.send(AgentCommand::Prompt(prompt));
-                }
-            }
-            Action::TrustDecision(choice) => self.resolve_trust(&choice, cx),
+            Action::None => self.act_none(),
+            Action::Command(command) => self.act_command(command),
+            Action::LoadSession(path) => self.act_load_session(path),
+            Action::SetDark(is_dark) => self.act_set_dark(is_dark),
+            Action::Open(kind) => self.act_open(kind, cx),
+            Action::UiChoice { id, text } => self.act_ui_choice(id, text),
+            Action::TrustDecision(choice) => self.act_trust_decision(&choice, cx),
             Action::CycleExtensionSetting { ext, key } => {
-                self.cycle_extension_setting(&ext, &key, cx);
-                // 面板要留着继续改：跳过下面的「收起覆盖层」
-                return;
+                self.act_cycle_extension_setting(&ext, &key, cx)
             }
-            Action::RefreshSessions => self.reload_sessions(cx),
-            Action::Scale(scale) => {
-                _ = settings_manager::write_settings_ui_scale(Some(theme::set_ui_scale(scale)));
-            }
-            Action::SwitchCwdTo(path) => {
-                if !self.cwd_switch_blocked(cx) {
-                    cwd_store::remember_cwd(&path);
-                    _ = self.cmd_tx.send(AgentCommand::SwitchCwd { path });
-                }
-            }
-            Action::BrowseCwd => {
-                if !self.cwd_switch_blocked(cx) {
-                    self.pick_working_directory(cx);
-                }
-            }
-            Action::Settings => self.open_settings_panel(cx),
-            Action::ToggleSkill { name, enable } => {
-                let now = std::time::Instant::now();
-                if ignore_repeat_toggle(
-                    self.last_toggle
-                        .as_ref()
-                        .map(|(last, at)| (last.as_str(), *at)),
-                    &name,
-                    now,
-                    TOGGLE_DEBOUNCE,
-                ) {
-                    // 长按鼠标：切换后面板重建，鼠标抬起又命中同一行，忽略这一次
-                    cx.notify();
-                    return;
-                }
-
-                self.last_toggle = Some((name.clone(), now));
-                // 草稿里把该技能切到目标态：开 → 去掉 -name、加 +name（压过 !glob），
-                // 关 → 去掉 +name、加 -name。Ctrl-S 才落盘。
-                let rules = self.skills_draft.clone().unwrap_or_default();
-                self.skills_draft = Some(skill_rules_with(&rules, &name, enable));
-                self.rebuild_skills_panel(cx);
-            }
-            Action::HistoryClear(all) => self.clear_history_files(all, cx),
-            Action::ImportConfirm => {
-                if let Some(PendingSession::Confirm { source }) = self.pending_session.take() {
-                    self.run_import(source, cx);
-                }
-            }
-            Action::ImportCwdContinue => {
-                if let Some(PendingSession::Cwd { destination }) = self.pending_session.take() {
-                    self.resume_session_file(destination);
-                }
-            }
-            Action::SessionRepair(salvage) => self.repair_session(salvage, cx),
+            Action::RefreshSessions => self.act_refresh_sessions(cx),
+            Action::Scale(scale) => self.act_scale(scale),
+            Action::SwitchCwdTo(path) => self.act_switch_cwd_to(path, cx),
+            Action::BrowseCwd => self.act_browse_cwd(cx),
+            Action::Settings => self.act_settings(cx),
+            Action::ToggleSkill { name, enable } => self.act_toggle_skill(name, enable, cx),
+            Action::HistoryClear(all) => self.act_history_clear(all, cx),
+            Action::ImportConfirm => self.act_import_confirm(cx),
+            Action::ImportCwdContinue => self.act_import_cwd_continue(),
+            Action::SessionRepair(salvage) => self.act_session_repair(salvage, cx),
             Action::BugReport {
                 hint,
                 include_session,
-            } => {
-                _ = self.cmd_tx.send(AgentCommand::BugReport {
-                    hint,
-                    include_session,
-                    include_summary: false,
-                });
-            }
-            Action::ResumeZombie { path, rewrite } => {
-                _ = self.cmd_tx.send(AgentCommand::ResumeZombie {
-                    path,
-                    action: if rewrite { "rewrite" } else { "continue" }.to_string(),
-                });
-            }
-            Action::ZombieCancel => {
-                self.transcript
-                    .push_note(Note::Info("Session left unopened".to_string()));
-            }
-            Action::SessionCancel => self.cancel_session_op(cx),
-            Action::LoginAuthType(kind) => self.open_login_provider_panel(kind == "oauth", cx),
-            Action::LoginProvider(provider) => {
-                let editor = Editor::new();
-                self.dialog = Some(SessionDialog::ApiKey { provider, editor });
-                cx.notify();
-            }
-            Action::LoginOauth(provider) => {
-                // 需要先选方式的 provider 先问一句，其余直接开流程
-                if core::oauth::supports_copy_code_login(&provider) {
-                    let name = core::login_registry::provider_name(&provider);
-                    self.ask_choice(
-                        format!("Login to {name}"),
-                        vec![
-                            (
-                                "Browser login · opens a local callback page".to_string(),
-                                Action::LoginMethod {
-                                    provider: provider.clone(),
-                                    copy_code: false,
-                                },
-                            ),
-                            (
-                                "Copy code login · paste the code shown on the page".to_string(),
-                                Action::LoginMethod {
-                                    provider,
-                                    copy_code: true,
-                                },
-                            ),
-                        ],
-                        cx,
-                    );
-                } else {
-                    self.start_oauth_login(provider, false, cx);
-                }
-            }
+            } => self.act_bug_report(hint, include_session),
+            Action::ResumeZombie { path, rewrite } => self.act_resume_zombie(path, rewrite),
+            Action::ZombieCancel => self.act_zombie_cancel(),
+            Action::SessionCancel => self.act_session_cancel(cx),
+            Action::LoginAuthType(kind) => self.act_login_auth_type(&kind, cx),
+            Action::LoginProvider(provider) => self.act_login_provider(provider, cx),
+            Action::LoginOauth(provider) => self.act_login_oauth(provider, cx),
             Action::LoginMethod {
                 provider,
                 copy_code,
-            } => self.start_oauth_login(provider, copy_code, cx),
-            Action::LogoutProvider(provider) => {
-                match core::auth::remove_auth(&provider) {
-                    Ok(()) => self
-                        .transcript
-                        .push_note(Note::Info(format!("Removed API key for {provider}"))),
-                    Err(error) => self
-                        .transcript
-                        .push_note(Note::Error(format!("Clear failed: {error}"))),
-                }
-                self.open_logout_panel(cx);
+            } => self.act_login_method(provider, copy_code, cx),
+            Action::LogoutProvider(provider) => self.act_logout_provider(provider, cx),
+            Action::Extensions => self.act_extensions(cx),
+            Action::Skills => self.act_skills(cx),
+            Action::ToggleExtension(name) => self.act_toggle_extension(name, cx),
+            Action::ToggleScopedModel(pattern) => self.act_toggle_scoped_model(pattern, cx),
+            Action::ToggleSetting(key) if key.is_number() => {
+                self.act_toggle_number_setting(key, cx)
             }
-            Action::Extensions => self.open_extension_panel(cx),
-            Action::Skills => self.open_skills_panel(cx),
-            Action::ToggleExtension(name) => {
-                let now = std::time::Instant::now();
-                if ignore_repeat_toggle(
-                    self.last_toggle
-                        .as_ref()
-                        .map(|(last, at)| (last.as_str(), *at)),
-                    &name,
-                    now,
-                    TOGGLE_DEBOUNCE,
-                ) {
-                    cx.notify();
-                    return;
-                }
-
-                self.last_toggle = Some((name.clone(), now));
-
-                // 与 TUI 面板一致：只改未保存的草稿，Ctrl-S 才应用并写盘
-                if let Some(draft) = self.extensions_draft.as_mut()
-                    && let Some(item) = draft.iter_mut().find(|(item, _)| item == &name)
-                {
-                    item.1 = !item.1;
-                }
-                self.rebuild_extension_panel(cx);
-            }
-            Action::ToggleScopedModel(pattern) => {
-                // 与扩展/技能面板一致：只改草稿，Ctrl-S 才落盘
-                if self.scoped_draft.is_none() {
-                    self.scoped_draft = Some(settings_manager::read_enabled_models());
-                }
-
-                if let Some(draft) = self.scoped_draft.as_mut() {
-                    match draft.iter().position(|item| item == &pattern) {
-                        Some(index) => {
-                            draft.remove(index);
-                        }
-                        None => draft.push(pattern),
-                    }
-                }
-                self.rebuild_scoped_models_panel(cx);
-            }
-            Action::ToggleSetting(key) if key.is_number() => self.start_number_setting(key, cx),
-            Action::ToggleSetting(key) => {
-                let result = match key {
-                    SettingKey::AutoCompact => settings_manager::write_settings_auto_compact(
-                        !settings_manager::read_settings_auto_compact(),
-                    ),
-                    SettingKey::Retry => settings_manager::write_settings_retry_enabled(
-                        !settings_manager::read_settings_retry_enabled(),
-                    ),
-                    SettingKey::HideThinking => settings_manager::write_settings_hide_thinking(
-                        !settings_manager::read_settings_hide_thinking(),
-                    ),
-                    SettingKey::SyntaxHighlight => {
-                        settings_manager::write_settings_syntax_highlight(
-                            !settings_manager::read_settings_syntax_highlight(),
-                        )
-                    }
-                    SettingKey::ImagesAutoResize => {
-                        settings_manager::write_settings_images_auto_resize(
-                            !settings_manager::read_settings_images_auto_resize(),
-                        )
-                    }
-                    SettingKey::ImagesBlockImages => {
-                        settings_manager::write_settings_images_block_images(
-                            !settings_manager::read_settings_images_block_images(),
-                        )
-                    }
-                    SettingKey::ExposeSessionEnvironment => {
-                        settings_manager::write_settings_expose_session_environment(
-                            !settings_manager::read_settings_expose_session_environment(),
-                        )
-                    }
-                    SettingKey::ShowCacheMissNotices => {
-                        settings_manager::write_settings_show_cache_miss_notices(
-                            !settings_manager::read_settings_show_cache_miss_notices(),
-                        )
-                    }
-                    SettingKey::SteeringMode => {
-                        let next = match settings_manager::read_settings_steering_mode().as_str() {
-                            "all" => "one-at-a-time",
-                            "one-at-a-time" => "immediateInterrupt",
-                            _ => "all",
-                        };
-                        settings_manager::write_settings_steering_mode(next)
-                    }
-                    SettingKey::FollowUpMode => {
-                        let next = match settings_manager::read_settings_follow_up_mode().as_str() {
-                            "all" => "one-at-a-time",
-                            _ => "all",
-                        };
-                        settings_manager::write_settings_follow_up_mode(next)
-                    }
-                    SettingKey::CacheWarming => {
-                        let next = match settings_manager::read_settings_cache_warming().as_str() {
-                            "off" => "streaming",
-                            "streaming" => "idle",
-                            _ => "off",
-                        };
-                        settings_manager::write_settings_cache_warming(next).map(|_| ())
-                    }
-                    SettingKey::QuietStartup => {
-                        use crate::core::settings_manager::QuietStartup;
-                        let next = match settings_manager::read_settings_quiet_startup() {
-                            QuietStartup::Full => QuietStartup::Header,
-                            QuietStartup::Header => QuietStartup::Silent,
-                            QuietStartup::Silent => QuietStartup::Full,
-                        };
-                        settings_manager::write_settings_quiet_startup(next)
-                    }
-                    SettingKey::GuiTheme => {
-                        self.set_dark(!self.theme.is_dark);
-                        Ok(())
-                    }
-                    SettingKey::GuiFrame => {
-                        self.set_frame_gui(!settings_manager::read_settings_frame_gui(), cx);
-                        Ok(())
-                    }
-                    // 数值项走输入框（上面带 guard 的分支），这里不会命中
-                    _ => Ok(()),
-                };
-
-                if let Err(error) = result {
-                    self.transcript
-                        .push_note(Note::Error(format!("Cannot write settings: {error}")));
-                }
-
-                // 重开面板，让标签显示新值
-                self.open_settings_panel(cx);
-            }
-            Action::ToggleSidebar => {
-                self.set_sidebar_visible(!self.show_sidebar);
-            }
+            Action::ToggleSetting(key) => self.act_toggle_setting(key, cx),
+            Action::ToggleSidebar => self.act_toggle_sidebar(),
         }
         cx.notify();
+    }
+
+    /// `Action::None`：纯展示行被回车，什么也不做。
+    fn act_none(&mut self) {}
+
+    /// `Action::Command`：把命令原样下发给 worker。
+    fn act_command(&mut self, command: Box<AgentCommand>) {
+        _ = self.cmd_tx.send(*command);
+    }
+
+    /// `Action::LoadSession`：切到某个会话文件。
+    fn act_load_session(&mut self, path: String) {
+        _ = self.cmd_tx.send(AgentCommand::ResumeSession { path });
+    }
+
+    /// `Action::SetDark`：切明暗主题。
+    fn act_set_dark(&mut self, is_dark: bool) {
+        self.set_dark(is_dark);
+    }
+
+    /// `Action::Open`：打开另一个列表面板。
+    fn act_open(&mut self, kind: ListKind, cx: &mut Context<Self>) {
+        match kind {
+            ListKind::Model => self.open_model_picker(cx),
+            ListKind::Thinking => self.open_thinking_picker(cx),
+            ListKind::Appearance => self.open_appearance_picker(cx),
+            ListKind::PanelFiles => self.toggle_panel_tab(PanelTab::Files, cx),
+            ListKind::WorkingDirectory => self.open_cwd_menu(cx),
+        }
+    }
+
+    /// `Action::UiChoice`：把扩展选择面板的结果回传给发起方。
+    fn act_ui_choice(&mut self, id: u64, text: Option<String>) {
+        if let Some(prompt) = core::extensions::submit_ui_choice(id, text) {
+            _ = self.cmd_tx.send(AgentCommand::Prompt(prompt));
+        }
+    }
+
+    /// `Action::TrustDecision`：落实某个项目信任决策。
+    fn act_trust_decision(&mut self, choice: &str, cx: &mut Context<Self>) {
+        self.resolve_trust(choice, cx);
+    }
+
+    /// `Action::CycleExtensionSetting`：把扩展的某个设置循环到下一个候选值（面板留着继续改）。
+    fn act_cycle_extension_setting(&mut self, ext: &str, key: &str, cx: &mut Context<Self>) {
+        self.cycle_extension_setting(ext, key, cx);
+    }
+
+    /// `Action::RefreshSessions`：重读会话列表。
+    fn act_refresh_sessions(&mut self, cx: &mut Context<Self>) {
+        self.reload_sessions(cx);
+    }
+
+    /// `Action::Scale`：改界面缩放系数并落盘。
+    fn act_scale(&mut self, scale: f32) {
+        _ = settings_manager::write_settings_ui_scale(Some(theme::set_ui_scale(scale)));
+    }
+
+    /// `Action::SwitchCwdTo`：切到最近目录清单里的某个目录。
+    fn act_switch_cwd_to(&mut self, path: String, cx: &mut Context<Self>) {
+        if !self.cwd_switch_blocked(cx) {
+            cwd_store::remember_cwd(&path);
+            _ = self.cmd_tx.send(AgentCommand::SwitchCwd { path });
+        }
+    }
+
+    /// `Action::BrowseCwd`：打开系统目录选择器。
+    fn act_browse_cwd(&mut self, cx: &mut Context<Self>) {
+        if !self.cwd_switch_blocked(cx) {
+            self.pick_working_directory(cx);
+        }
+    }
+
+    /// `Action::Settings`：打开设置面板。
+    fn act_settings(&mut self, cx: &mut Context<Self>) {
+        self.open_settings_panel(cx);
+    }
+
+    /// `Action::ToggleSkill`：在草稿里把某个技能切到目标启停态（Ctrl-S 才落盘）。
+    fn act_toggle_skill(&mut self, name: String, enable: bool, cx: &mut Context<Self>) {
+        let now = std::time::Instant::now();
+        if ignore_repeat_toggle(
+            self.last_toggle
+                .as_ref()
+                .map(|(last, at)| (last.as_str(), *at)),
+            &name,
+            now,
+            TOGGLE_DEBOUNCE,
+        ) {
+            // 长按鼠标：切换后面板重建，鼠标抬起又命中同一行，忽略这一次
+            cx.notify();
+            return;
+        }
+
+        self.last_toggle = Some((name.clone(), now));
+        // 草稿里把该技能切到目标态：开 → 去掉 -name、加 +name（压过 !glob），
+        // 关 → 去掉 +name、加 -name。Ctrl-S 才落盘。
+        let rules = self.skills_draft.clone().unwrap_or_default();
+        self.skills_draft = Some(skill_rules_with(&rules, &name, enable));
+        self.rebuild_skills_panel(cx);
+    }
+
+    /// `Action::HistoryClear`：确认后的历史清理（`all` = 连别的项目一起清）。
+    fn act_history_clear(&mut self, all: bool, cx: &mut Context<Self>) {
+        self.clear_history_files(all, cx);
+    }
+
+    /// `Action::ImportConfirm`：用户确认后真正开始导入。
+    fn act_import_confirm(&mut self, cx: &mut Context<Self>) {
+        if let Some(PendingSession::Confirm { source }) = self.pending_session.take() {
+            self.run_import(source, cx);
+        }
+    }
+
+    /// `Action::ImportCwdContinue`：会话记录的目录与当前不同，仍就在当前目录恢复。
+    fn act_import_cwd_continue(&mut self) {
+        if let Some(PendingSession::Cwd { destination }) = self.pending_session.take() {
+            self.resume_session_file(destination);
+        }
+    }
+
+    /// `Action::SessionRepair`：损坏会话的抢救（`true`）或截断（`false`）。
+    fn act_session_repair(&mut self, salvage: bool, cx: &mut Context<Self>) {
+        self.repair_session(salvage, cx);
+    }
+
+    /// `Action::BugReport`：带着复现描述打包诊断信息。
+    fn act_bug_report(&mut self, hint: String, include_session: bool) {
+        _ = self.cmd_tx.send(AgentCommand::BugReport {
+            hint,
+            include_session,
+            include_summary: false,
+        });
+    }
+
+    /// `Action::ResumeZombie`：打开未完成 operation 的会话（`rewrite` = 先把旧 run 标记结束）。
+    fn act_resume_zombie(&mut self, path: String, rewrite: bool) {
+        _ = self.cmd_tx.send(AgentCommand::ResumeZombie {
+            path,
+            action: if rewrite { "rewrite" } else { "continue" }.to_string(),
+        });
+    }
+
+    /// `Action::ZombieCancel`：不打开未完成 operation 的会话。
+    fn act_zombie_cancel(&mut self) {
+        self.transcript
+            .push_note(Note::Info("Session left unopened".to_string()));
+    }
+
+    /// `Action::SessionCancel`：取消当下的会话操作。
+    fn act_session_cancel(&mut self, cx: &mut Context<Self>) {
+        self.cancel_session_op(cx);
+    }
+
+    /// `Action::LoginAuthType`：按认证方式列出 provider。
+    fn act_login_auth_type(&mut self, kind: &str, cx: &mut Context<Self>) {
+        self.open_login_provider_panel(kind == "oauth", cx);
+    }
+
+    /// `Action::LoginProvider`：打开 API key 输入框。
+    fn act_login_provider(&mut self, provider: String, cx: &mut Context<Self>) {
+        let editor = Editor::new();
+        self.dialog = Some(SessionDialog::ApiKey { provider, editor });
+        cx.notify();
+    }
+
+    /// `Action::LoginOauth`：开始 OAuth 登录（能复制授权码的 provider 先问用哪种方式）。
+    fn act_login_oauth(&mut self, provider: String, cx: &mut Context<Self>) {
+        // 需要先选方式的 provider 先问一句，其余直接开流程
+        if core::oauth::supports_copy_code_login(&provider) {
+            let name = core::login_registry::provider_name(&provider);
+            self.ask_choice(
+                format!("Login to {name}"),
+                vec![
+                    (
+                        "Browser login · opens a local callback page".to_string(),
+                        Action::LoginMethod {
+                            provider: provider.clone(),
+                            copy_code: false,
+                        },
+                    ),
+                    (
+                        "Copy code login · paste the code shown on the page".to_string(),
+                        Action::LoginMethod {
+                            provider,
+                            copy_code: true,
+                        },
+                    ),
+                ],
+                cx,
+            );
+        } else {
+            self.start_oauth_login(provider, false, cx);
+        }
+    }
+
+    /// `Action::LoginMethod`：按选定的方式启动 OAuth 登录。
+    fn act_login_method(&mut self, provider: String, copy_code: bool, cx: &mut Context<Self>) {
+        self.start_oauth_login(provider, copy_code, cx);
+    }
+
+    /// `Action::LogoutProvider`：清掉某个 provider 的凭据后重开登出面板。
+    fn act_logout_provider(&mut self, provider: String, cx: &mut Context<Self>) {
+        match core::auth::remove_auth(&provider) {
+            Ok(()) => self
+                .transcript
+                .push_note(Note::Info(format!("Removed API key for {provider}"))),
+            Err(error) => self
+                .transcript
+                .push_note(Note::Error(format!("Clear failed: {error}"))),
+        }
+        self.open_logout_panel(cx);
+    }
+
+    /// `Action::Extensions`：打开扩展管理面板。
+    fn act_extensions(&mut self, cx: &mut Context<Self>) {
+        self.open_extension_panel(cx);
+    }
+
+    /// `Action::Skills`：打开技能面板。
+    fn act_skills(&mut self, cx: &mut Context<Self>) {
+        self.open_skills_panel(cx);
+    }
+
+    /// `Action::ToggleExtension`：在草稿里切换某个扩展的启用状态（Ctrl-S 才落盘）。
+    fn act_toggle_extension(&mut self, name: String, cx: &mut Context<Self>) {
+        let now = std::time::Instant::now();
+        if ignore_repeat_toggle(
+            self.last_toggle
+                .as_ref()
+                .map(|(last, at)| (last.as_str(), *at)),
+            &name,
+            now,
+            TOGGLE_DEBOUNCE,
+        ) {
+            cx.notify();
+            return;
+        }
+
+        self.last_toggle = Some((name.clone(), now));
+
+        // 与 TUI 面板一致：只改未保存的草稿，Ctrl-S 才应用并写盘
+        if let Some(draft) = self.extensions_draft.as_mut()
+            && let Some(item) = draft.iter_mut().find(|(item, _)| item == &name)
+        {
+            item.1 = !item.1;
+        }
+        self.rebuild_extension_panel(cx);
+    }
+
+    /// `Action::ToggleScopedModel`：在草稿里增删某个模型的 Ctrl-P 循环名单资格。
+    fn act_toggle_scoped_model(&mut self, pattern: String, cx: &mut Context<Self>) {
+        // 与扩展/技能面板一致：只改草稿，Ctrl-S 才落盘
+        if self.scoped_draft.is_none() {
+            self.scoped_draft = Some(settings_manager::read_enabled_models());
+        }
+
+        if let Some(draft) = self.scoped_draft.as_mut() {
+            match draft.iter().position(|item| item == &pattern) {
+                Some(index) => {
+                    draft.remove(index);
+                }
+                None => draft.push(pattern),
+            }
+        }
+        self.rebuild_scoped_models_panel(cx);
+    }
+
+    /// `Action::ToggleSetting`（数值项）：打开数字输入框。
+    fn act_toggle_number_setting(&mut self, key: SettingKey, cx: &mut Context<Self>) {
+        self.start_number_setting(key, cx);
+    }
+
+    /// `Action::ToggleSetting`（开关项）：取反落盘后重开面板，让标签显示新值。
+    fn act_toggle_setting(&mut self, key: SettingKey, cx: &mut Context<Self>) {
+        let result = match key {
+            SettingKey::AutoCompact => settings_manager::write_settings_auto_compact(
+                !settings_manager::read_settings_auto_compact(),
+            ),
+            SettingKey::Retry => settings_manager::write_settings_retry_enabled(
+                !settings_manager::read_settings_retry_enabled(),
+            ),
+            SettingKey::HideThinking => settings_manager::write_settings_hide_thinking(
+                !settings_manager::read_settings_hide_thinking(),
+            ),
+            SettingKey::SyntaxHighlight => settings_manager::write_settings_syntax_highlight(
+                !settings_manager::read_settings_syntax_highlight(),
+            ),
+            SettingKey::ImagesAutoResize => settings_manager::write_settings_images_auto_resize(
+                !settings_manager::read_settings_images_auto_resize(),
+            ),
+            SettingKey::ImagesBlockImages => settings_manager::write_settings_images_block_images(
+                !settings_manager::read_settings_images_block_images(),
+            ),
+            SettingKey::ExposeSessionEnvironment => {
+                settings_manager::write_settings_expose_session_environment(
+                    !settings_manager::read_settings_expose_session_environment(),
+                )
+            }
+            SettingKey::ShowCacheMissNotices => {
+                settings_manager::write_settings_show_cache_miss_notices(
+                    !settings_manager::read_settings_show_cache_miss_notices(),
+                )
+            }
+            SettingKey::SteeringMode => {
+                let next = match settings_manager::read_settings_steering_mode().as_str() {
+                    "all" => "one-at-a-time",
+                    "one-at-a-time" => "immediateInterrupt",
+                    _ => "all",
+                };
+                settings_manager::write_settings_steering_mode(next)
+            }
+            SettingKey::FollowUpMode => {
+                let next = match settings_manager::read_settings_follow_up_mode().as_str() {
+                    "all" => "one-at-a-time",
+                    _ => "all",
+                };
+                settings_manager::write_settings_follow_up_mode(next)
+            }
+            SettingKey::CacheWarming => {
+                let next = match settings_manager::read_settings_cache_warming().as_str() {
+                    "off" => "streaming",
+                    "streaming" => "idle",
+                    _ => "off",
+                };
+                settings_manager::write_settings_cache_warming(next).map(|_| ())
+            }
+            SettingKey::QuietStartup => {
+                use crate::core::settings_manager::QuietStartup;
+                let next = match settings_manager::read_settings_quiet_startup() {
+                    QuietStartup::Full => QuietStartup::Header,
+                    QuietStartup::Header => QuietStartup::Silent,
+                    QuietStartup::Silent => QuietStartup::Full,
+                };
+                settings_manager::write_settings_quiet_startup(next)
+            }
+            SettingKey::GuiTheme => {
+                self.set_dark(!self.theme.is_dark);
+                Ok(())
+            }
+            SettingKey::GuiFrame => {
+                self.set_frame_gui(!settings_manager::read_settings_frame_gui(), cx);
+                Ok(())
+            }
+            // 数值项走输入框（上面带 guard 的分支），这里不会命中
+            _ => Ok(()),
+        };
+
+        if let Err(error) = result {
+            self.transcript
+                .push_note(Note::Error(format!("Cannot write settings: {error}")));
+        }
+
+        // 重开面板，让标签显示新值
+        self.open_settings_panel(cx);
+    }
+
+    /// `Action::ToggleSidebar`：开关左侧会话列表。
+    fn act_toggle_sidebar(&mut self) {
+        self.set_sidebar_visible(!self.show_sidebar);
     }
 
     /// 回合进行中不允许切工作目录：worker 会把命令排到回合结束，届时新会话清空上下文，

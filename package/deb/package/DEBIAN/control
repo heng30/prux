@@ -1,0 +1,10 @@
+Package: prux-gui
+Version: 0.0.0
+Architecture: amd64
+Maintainer: heng30 <https://github.com/heng30>
+Depends:
+Section: devel
+Priority: optional
+Homepage: https://github.com/heng30/prux
+Description: Desktop GUI of prux, a minimal coding agent.
+ A terminal-first coding agent with an optional desktop GUI built on gpui.

@@ -36,6 +36,10 @@ install-linux-gui: release-gui
 check:
 	$(build-env) cargo check
 
+# 打包桌面 GUI 为 deb：产物 target/prux-gui-<version>-x86_64-linux.deb
+deb-gui: release-gui
+	bash -e package/deb/pkg-deb.sh
+
 # 从本地 pi 安装目录（@earendil-works/pi-ai）同步模型数据到 assets/models
 sync-models:
 	python3 scripts/sync-models.py

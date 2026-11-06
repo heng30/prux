@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=prux
+Exec=/usr/bin/prux-gui
+Icon=prux
+Terminal=false
+Type=Application
+Categories=Development;Utility;
+StartupNotify=true
+StartupWMClass=prux
+Comment=A minimal coding agent with a desktop GUI
+Comment[zh_CN]=极简的桌面编码助手

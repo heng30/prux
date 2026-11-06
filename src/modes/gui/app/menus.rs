@@ -790,7 +790,7 @@ impl GuiApp {
         true
     }
 
-    /// 对话框确认：重命名落盘 / 删除文件 / 切工作目录 / 登录。
+    /// 对话框确认：只做分派，每个对话框的确认行为见下面各个 `confirm_*` 方法。
     pub(super) fn confirm_dialog(&mut self, cx: &mut Context<Self>) {
         // 登录面板的 Enter 是「提交授权码」，不是取消对话框
         if self.submit_oauth_input(cx) {
@@ -800,120 +800,158 @@ impl GuiApp {
             return;
         };
 
-        match dialog {
-            SessionDialog::Rename { path, editor } => {
-                if let Some(name) = renamed_name(&editor.text()) {
-                    rename_session(&path, name);
-                }
-            }
-            SessionDialog::BugHint { editor } => {
-                // 与会话记录一起打包前先问一句（同 TUI 的第一个确认；默认不附带）
-                let hint = editor.text();
-                self.ask_choice(
-                    "Include the session transcript?",
-                    vec![
-                        (
-                            "Yes, include it (the zip is saved locally)".to_string(),
-                            Action::BugReport {
-                                hint: hint.clone(),
-                                include_session: true,
-                            },
-                        ),
-                        (
-                            "No, diagnostics only".to_string(),
-                            Action::BugReport {
-                                hint,
-                                include_session: false,
-                            },
-                        ),
-                        ("Cancel".to_string(), Action::None),
-                    ],
-                    cx,
-                );
-                return;
-            }
-            SessionDialog::Label { editor } => {
-                let text = editor.text().trim().to_string();
-                match self
-                    .snapshot
-                    .as_ref()
-                    .and_then(|snapshot| snapshot.leaf_entry_id.clone())
-                {
-                    Some(entry_id) => {
-                        _ = self.cmd_tx.send(AgentCommand::Label {
-                            entry_id,
-                            label: (!text.is_empty()).then_some(text),
-                        });
-                    }
-                    None => self
-                        .transcript
-                        .push_note(Note::Info("This branch has no entry to label".into())),
-                }
-                self.cx_notify(cx);
-                return;
-            }
-            SessionDialog::Import { editor } => {
-                // 真正的校验/确认都在 start_import 里（与 `/import <path>` 同一条路）
-                let raw = editor.text().trim().to_string();
-                self.start_import(&raw, cx);
-                return;
-            }
-            // 登录面板走 [`Self::submit_oauth_input`]，到不了这里
-            SessionDialog::Oauth { .. } => return,
+        let reload = match dialog {
+            SessionDialog::Rename { path, editor } => self.confirm_rename(path, editor),
+            SessionDialog::BugHint { editor } => self.confirm_bug_hint(editor, cx),
+            SessionDialog::Label { editor } => self.confirm_label(editor, cx),
+            SessionDialog::Import { editor } => self.confirm_import(editor, cx),
+            SessionDialog::Oauth { .. } => self.confirm_oauth_dialog(),
+            SessionDialog::Number { key, editor } => self.confirm_number(key, editor, cx),
+            SessionDialog::Delete { paths, .. } => self.confirm_delete(paths),
             SessionDialog::ApiKey { provider, editor } => {
-                let key = editor.text().trim().to_string();
-                if !key.is_empty() {
-                    match core::auth::write_auth_key(&provider, &key) {
-                        Ok(()) => {
-                            _ = self.cmd_tx.send(AgentCommand::ApplyKey {
-                                provider: provider.clone(),
-                                key,
-                            });
-                            self.transcript
-                                .push_note(Note::Info(format!("Saved API key for {provider}")));
-                        }
-                        Err(error) => self
-                            .transcript
-                            .push_note(Note::Error(format!("Save failed: {error}"))),
-                    }
-                }
-                self.cx_notify(cx);
-                return;
+                self.confirm_api_key(provider, editor, cx)
             }
-            SessionDialog::Number { key, editor } => {
-                let (key, text) = (key, editor.text());
-                self.confirm_number_setting(key, &text, cx);
-                return;
-            }
-            SessionDialog::Delete { paths, .. } => {
-                let current = self.snapshot.as_ref().and_then(|s| s.session_path.clone());
-                let deleting_current = current
-                    .as_ref()
-                    .is_some_and(|current| paths.iter().any(|p| p == current));
-                let files: Vec<PathBuf> = paths.iter().map(PathBuf::from).collect();
-                let (deleted, failed) = core::session_manager::delete_sessions(&files);
+        };
 
-                // 删的是当前会话：文件已经没了，接着往旧路径写会把它重建出来，必须换会话
-                if deleting_current {
-                    _ = self.cmd_tx.send(AgentCommand::NewSession);
-                    self.transcript.clear();
-                    self.flow_height.set(None);
-                }
-
-                match failed.first() {
-                    None => self
-                        .transcript
-                        .push_note(Note::Info(format!("Deleted {deleted} session(s)"))),
-                    Some((path, error)) => self.transcript.push_note(Note::Error(format!(
-                        "Deleted {deleted} session(s) · {} failed: {} ({error})",
-                        failed.len(),
-                        path.display()
-                    ))),
-                }
-            }
+        if !reload {
+            return;
         }
         self.reload_sessions(cx);
         cx.notify();
+    }
+
+    /// 重命名：编辑器里有合法名字就落盘。返回 true 表示要重读会话列表。
+    fn confirm_rename(&mut self, path: String, editor: Editor) -> bool {
+        if let Some(name) = renamed_name(&editor.text()) {
+            rename_session(&path, name);
+        }
+        true
+    }
+
+    /// `/bug` 的复现描述：先问一句是否连会话记录一起打包（默认不附带）。
+    fn confirm_bug_hint(&mut self, editor: Editor, cx: &mut Context<Self>) -> bool {
+        // 与会话记录一起打包前先问一句（同 TUI 的第一个确认；默认不附带）
+        let hint = editor.text();
+        self.ask_choice(
+            "Include the session transcript?",
+            vec![
+                (
+                    "Yes, include it (the zip is saved locally)".to_string(),
+                    Action::BugReport {
+                        hint: hint.clone(),
+                        include_session: true,
+                    },
+                ),
+                (
+                    "No, diagnostics only".to_string(),
+                    Action::BugReport {
+                        hint,
+                        include_session: false,
+                    },
+                ),
+                ("Cancel".to_string(), Action::None),
+            ],
+            cx,
+        );
+        false
+    }
+
+    /// 给当前会话树叶子打标签（空文本 = 清除）。没有叶子时只提示。
+    fn confirm_label(&mut self, editor: Editor, cx: &mut Context<Self>) -> bool {
+        let text = editor.text().trim().to_string();
+        match self
+            .snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.leaf_entry_id.clone())
+        {
+            Some(entry_id) => {
+                _ = self.cmd_tx.send(AgentCommand::Label {
+                    entry_id,
+                    label: (!text.is_empty()).then_some(text),
+                });
+            }
+            None => self
+                .transcript
+                .push_note(Note::Info("This branch has no entry to label".into())),
+        }
+        self.cx_notify(cx);
+        false
+    }
+
+    /// 导入会话文件：真正的校验与确认都在 [`Self::start_import`] 里。
+    fn confirm_import(&mut self, editor: Editor, cx: &mut Context<Self>) -> bool {
+        // 真正的校验/确认都在 start_import 里（与 `/import <path>` 同一条路）
+        let raw = editor.text().trim().to_string();
+        self.start_import(&raw, cx);
+        false
+    }
+
+    /// OAuth 登录面板：Enter 已被 [`Self::submit_oauth_input`] 吃掉，这里不会命中。
+    fn confirm_oauth_dialog(&mut self) -> bool {
+        false
+    }
+
+    /// 填 API key：非空就写盘并让 worker 即时用上，然后重开登录面板。
+    fn confirm_api_key(
+        &mut self,
+        provider: String,
+        editor: Editor,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let key = editor.text().trim().to_string();
+        if !key.is_empty() {
+            match core::auth::write_auth_key(&provider, &key) {
+                Ok(()) => {
+                    _ = self.cmd_tx.send(AgentCommand::ApplyKey {
+                        provider: provider.clone(),
+                        key,
+                    });
+                    self.transcript
+                        .push_note(Note::Info(format!("Saved API key for {provider}")));
+                }
+                Err(error) => self
+                    .transcript
+                    .push_note(Note::Error(format!("Save failed: {error}"))),
+            }
+        }
+        self.cx_notify(cx);
+        false
+    }
+
+    /// 改数值型设置：交给 [`Self::confirm_number_setting`] 校验并落盘。
+    fn confirm_number(&mut self, key: SettingKey, editor: Editor, cx: &mut Context<Self>) -> bool {
+        let text = editor.text();
+        self.confirm_number_setting(key, &text, cx);
+        false
+    }
+
+    /// 删除会话文件；删的是当前会话就换个新会话，避免旧路径被写回来。
+    fn confirm_delete(&mut self, paths: Vec<String>) -> bool {
+        let current = self.snapshot.as_ref().and_then(|s| s.session_path.clone());
+        let deleting_current = current
+            .as_ref()
+            .is_some_and(|current| paths.iter().any(|p| p == current));
+        let files: Vec<PathBuf> = paths.iter().map(PathBuf::from).collect();
+        let (deleted, failed) = core::session_manager::delete_sessions(&files);
+
+        // 删的是当前会话：文件已经没了，接着往旧路径写会把它重建出来，必须换会话
+        if deleting_current {
+            _ = self.cmd_tx.send(AgentCommand::NewSession);
+            self.transcript.clear();
+            self.flow_height.set(None);
+        }
+
+        match failed.first() {
+            None => self
+                .transcript
+                .push_note(Note::Info(format!("Deleted {deleted} session(s)"))),
+            Some((path, error)) => self.transcript.push_note(Note::Error(format!(
+                "Deleted {deleted} session(s) · {} failed: {} ({error})",
+                failed.len(),
+                path.display()
+            ))),
+        }
+        true
     }
 
     /// 重读会话列表：目录列举留在主线程（只看 mtime），

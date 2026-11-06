@@ -72,6 +72,7 @@ make build    # compile only (debug)
 make debug    # cargo run
 make release-gui  # release build of prux-gui
 make debug-gui    # cargo run prux-gui
+make deb-gui      # package prux-gui as a .deb (output in target/)
 make check    # cargo check
 cargo test    # full test suite
 cargo clippy  # static checks
