@@ -3,7 +3,7 @@
 //! 拆自 [`super::app`]：候选数据来自 [`super::suggest`]，这里只管交互状态。
 
 use super::*;
-use crate::{core, utils::path_suggest};
+use crate::{core, modes::slash, utils::path_suggest};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering as AtomicOrdering},
@@ -133,31 +133,27 @@ impl GuiApp {
 
         let items = match trigger {
             Trigger::Command => {
-                // 命令 + 本会话技能（`/skill:名称`，与 TUI 的技能命令同形）+ 已启用扩展声明的命令，
-                // 三类合在一起模糊匹配排序；技能按裸名参与匹配（`/idea` 不会因 `skill:` 前缀误命中）
-                let mut extra: Vec<(String, String)> = Vec::new();
-                for (name, description, _source) in self
-                    .snapshot
-                    .as_ref()
-                    .map(|snapshot| snapshot.skills.clone())
-                    .unwrap_or_default()
-                {
-                    extra.push((format!("skill:{name}"), description));
-                }
+                // 候选拼装（内置 → 扩展 → 技能 → 模板、重名谁优先）与 TUI 共用同一份实现；
+                // 技能按裸名参与匹配（`/idea` 不会因 `skill:` 前缀误命中）
+                // 技能与模板都取 worker 推来的那一份（与提交时的展开同源）
+                let skills: Vec<(String, String)> = self
+                    .skills
+                    .iter()
+                    .map(|skill| (skill.name.clone(), skill.description.clone()))
+                    .collect();
+                let templates: Vec<(String, String)> = self
+                    .prompt_templates
+                    .iter()
+                    .map(|template| (template.name.clone(), template.description.clone()))
+                    .collect();
+                let candidates = slash::candidates(
+                    suggest_engine::COMMANDS,
+                    suggest_engine::PANEL_COMMANDS,
+                    &skills,
+                    &templates,
+                );
 
-                // 执行入口还挂在 TUI 层，这里先按现状列出；有 GUI 面板入口的命令不重复列
-                for command in core::extensions::registered_commands() {
-                    if suggest_engine::PANEL_COMMANDS.contains(&command.name.as_str()) {
-                        continue;
-                    }
-
-                    extra.push((
-                        command.name.clone(),
-                        format!("{} (extension)", command.description),
-                    ));
-                }
-
-                suggest_engine::commands_with(&extra, &query)
+                suggest_engine::commands_with(&candidates, &query)
             }
             Trigger::File => {
                 // 与 TUI 同一套后台遍历（`utils::path_suggest`）：新结果回来前先留着上一批候选，

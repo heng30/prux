@@ -49,6 +49,11 @@ pub const FONT_BODY: f32 = 13.;
 /// 大号字：标题、横幅。
 pub const FONT_HERO: f32 = 22.;
 
+/// 阶梯必须逐级递增：间距极细档仍小于最小档。
+const _: () = assert!(SPACE_XXS < SPACE_XS);
+/// 阶梯必须逐级递增：字号从标注档到正文档单调变大。
+const _: () = assert!(FONT_CAPTION < FONT_SMALL && FONT_SMALL < FONT_BODY);
+
 /// 停靠面板的高度上限（逻辑像素）：内容超过就在面板内部滚动。
 pub const DOCK_MAX_H: f32 = 200.;
 
@@ -388,8 +393,6 @@ mod tests {
         ] {
             assert_eq!(value % 4.0, 0.0, "{value} 不是 4 的倍数");
         }
-        assert!(SPACE_XXS < SPACE_XS);
-        assert!(FONT_CAPTION < FONT_SMALL && FONT_SMALL < FONT_BODY);
     }
 
     /// syntect 主题能构建（作用域解析不 panic）。

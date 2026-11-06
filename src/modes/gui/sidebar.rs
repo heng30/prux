@@ -299,6 +299,8 @@ fn search_box(theme: &Theme, search: &Editor, focused: bool, focus: ClickHandler
 }
 
 /// 会话列表：按时间分组，点击切会话、右键弹行菜单。
+// 参数都是渲染期上下文，调用点只有一个，包结构体反而绕。
+#[allow(clippy::too_many_arguments)]
 fn session_list(
     theme: &Theme,
     rows: &[&SessionRow],

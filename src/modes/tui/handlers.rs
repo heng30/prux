@@ -66,10 +66,9 @@ use crate::{
         self,
         extensions::UserPromptAction,
         keybindings, model_resolver, prompt_history,
-        prompt_templates::expand_prompt_template,
         provider::{AgentMessage, ContentBlock},
-        skills::expand_skill_command,
     },
+    modes::slash,
     utils::image::ImageResizeLimits,
 };
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -591,8 +590,8 @@ fn submit_and_record(st: &mut App) -> Option<String> {
 /// 空闲提交、busy 时 steer、follow-up 排队共用同一条展开链——
 /// 忙碌时 skill 也必须按 skill 命令处理，而不是原样当普通文本发给模型。
 pub(crate) fn expand_user_text(st: &App, text: &str) -> String {
-    let expanded = expand_skill_command(text, &st.skills);
-    expand_prompt_template(&expanded, &st.prompt_templates)
+    // 展开规则（技能在前、模板在后）与 GUI 共用同一份实现
+    slash::expand_user_text(text, &st.skills, &st.prompt_templates)
 }
 
 /// 执行 `/history` 控制词候选（`@clear` / `@clear-all`）：弹出确认面板，

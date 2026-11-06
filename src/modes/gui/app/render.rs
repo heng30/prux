@@ -405,9 +405,9 @@ impl GuiApp {
         // 文字也不在背景里居中；正文统一用更紧的行高
         let mut flow = div().w_full().flex().flex_col().gap(px(SPACE_MD));
         for (index, block) in self.transcript.blocks_mut().iter_mut().enumerate() {
-            // 空助手块（只有 tool call、没正文也没思考）不渲染：它高度为 0，
-            // 但流的 gap 按 child 数加，它会在相邻块之间凭空多出一份间距。
-            if transcript::is_blank_assistant(block) {
+            // 空助手块（只有 tool call、没正文也没思考）与清空后的提示块不渲染：
+            // 它们高度为 0，但流的 gap 按 child 数加，会在相邻块之间凭空多出一份间距。
+            if transcript::is_blank_block(block) {
                 continue;
             }
 
@@ -1602,7 +1602,7 @@ impl GuiApp {
                 );
 
             if let Some(field) = field {
-                card = card.child(composer::field(&theme, false).child(field));
+                card = card.child(composer::field(theme, false).child(field));
             } else {
                 card = card.child(
                     div()

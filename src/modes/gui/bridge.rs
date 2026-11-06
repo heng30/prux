@@ -2,8 +2,12 @@
 
 pub mod worker;
 
-use crate::core::{model_scope::ScopedModel, provider::AgentMessage};
+use crate::core::{
+    model_scope::ScopedModel, prompt_templates::PromptTemplate, provider::AgentMessage,
+    session_manager::SessionRepairPlan, skills::Skill,
+};
 use serde_json::Value;
+use std::path::PathBuf;
 
 /// worker → GUI 的上行事件。
 pub enum GuiEvent {
@@ -16,6 +20,33 @@ pub enum GuiEvent {
     Notice(String),
     /// 会话历史（切换/新建会话后推一次，GUI 据此重建 transcript）
     History(Vec<AgentMessage>),
+    /// 本会话可用的技能与提示词模板：worker 启动与 `/reload` 后各推一次。
+    ///
+    /// 带正文（技能是 SKILL.md 路径、模板是模板正文），因为 `/` 补全要名字、
+    /// 提交时的展开要正文——忙碌排队（steer / follow-up）在界面侧排队，
+    /// 不先展开就会把 `/模板名` 原样塞给模型。
+    PromptAssets {
+        /// 已加载的技能（展开 `/skill:名` 时读 `path`）
+        skills: Vec<Skill>,
+        /// 已加载的提示词模板（展开 `/模板名 参数`）
+        templates: Vec<PromptTemplate>,
+    },
+    /// 要打开的会话有 ≥2 个崩溃残留的未关闭 operation：先弹
+    /// Continue / Rewrite / Cancel 面板，确认后再装配（同 TUI）。
+    SessionZombie {
+        /// 含未关闭 operation 的会话文件
+        path: PathBuf,
+        /// 未完成 operation 的条数（含当前 run）
+        count: usize,
+    },
+    /// 要打开的会话中间行损坏：弹修复面板（抢救 / 截断 / 取消），
+    /// 确认后写回文件再重新打开（同 TUI 的修复面板）。
+    SessionRepair {
+        /// 损坏的会话文件
+        path: PathBuf,
+        /// 修复方案（含两条写回路径的内容）
+        plan: SessionRepairPlan,
+    },
     /// `/rewind` 回退成功：重建 transcript，并按 GUI 记录的选择把输入回填输入框
     Rewound {
         /// 回退后的消息历史（回退第一条 user 消息时为空）
@@ -53,8 +84,6 @@ pub struct Snapshot {
     pub tools: Vec<String>,
     /// 工作目录。
     pub cwd: String,
-    /// 本会话可用的技能：`(名称, 描述, 来源)`。
-    pub skills: Vec<(String, String, String)>,
     /// 会话累计用量（输入/输出/缓存/费用）。
     pub usage: UsageTotals,
 }

@@ -15,14 +15,19 @@ use crate::{
         compaction::{CompactionReason, estimate_context_tokens},
         crash_log, export_html,
         extensions::dispatch_exec_ctx,
+        prompt_templates::{self, PromptTemplate},
         provider::AgentMessage,
         session_manager::{self, OpenSessionResult, Session},
-        settings_manager, skills,
+        settings_manager,
     },
     extensions::skills::bundled_skill_names,
-    modes::tui::{
-        agent_actor::{AgentCommand, CommandRx},
-        worker::{debug_info_text, session_tree_text, share_via_gist},
+    modes::{
+        slash::expand_user_text,
+        tui::{
+            agent_actor::{AgentCommand, CommandRx},
+            app::ReloadCtx,
+            worker::{debug_info_text, session_tree_text, share_via_gist},
+        },
     },
     utils::paths::home_dir,
 };
@@ -51,10 +56,15 @@ enum Task {
 }
 
 /// worker 主循环：队列化命令，回合中只接受中止。
+///
+/// `reload_ctx` 是启动参数里决定 `/reload` 能重扫哪些资源的那份快照
+/// （`--skill` / `--no-context-files` / CLI 系统提示等），与 TUI 共用同一套语义。
 pub async fn run(
     agent: Arc<Mutex<Agent>>,
     mut cmd_rx: CommandRx,
     events: UnboundedSender<GuiEvent>,
+    reload_ctx: ReloadCtx,
+    mut prompt_templates: Vec<PromptTemplate>,
 ) {
     {
         let mut agent = agent.lock().await;
@@ -66,6 +76,10 @@ pub async fn run(
         // 启动时就把已载入的会话历史交给视图：否则续接会话打开后对话区是空的，
         // 依赖历史的扩展命令（`/btw`、`/recap` 的摘录）也拿不到内容
         _ = events.send(GuiEvent::History(agent.messages.clone()));
+        _ = events.send(GuiEvent::PromptAssets {
+            skills: agent.skills.clone(),
+            templates: prompt_templates.clone(),
+        });
     }
 
     let mut on_round: Option<RoundFuture> = None;
@@ -101,12 +115,9 @@ pub async fn run(
         // 回合类命令先归约成 Task，非回合命令就地执行完继续下一轮
         let task = match cmd {
             AgentCommand::Prompt(text) => {
-                // `/skill:名称` 由技能正文展开成真正的提示词（与 TUI 同一套规则）
-                let text = {
-                    let agent = agent.lock().await;
-                    skills::expand_skill_command(&text, &agent.skills)
-                };
-                Task::Text(text)
+                let expanded =
+                    expand_user_text(&text, &agent.lock().await.skills, &prompt_templates);
+                Task::Text(expanded)
             }
             AgentCommand::PromptMessage(msg) => Task::Message(Box::new(msg)),
             AgentCommand::PromptBatch(msgs) => Task::Batch(msgs),
@@ -122,7 +133,7 @@ pub async fn run(
             AgentCommand::Abort => continue,
             cmd => {
                 let mut agent = agent.lock().await;
-                apply(&mut agent, cmd, &events).await;
+                apply(&mut agent, cmd, &events, &reload_ctx, &mut prompt_templates).await;
                 publish(&agent, &events);
                 continue;
             }
@@ -155,7 +166,13 @@ async fn open_operations(agent: &Arc<Mutex<Agent>>) -> HashSet<String> {
 }
 
 /// 非回合命令：就地改 agent 状态。
-async fn apply(agent: &mut Agent, cmd: AgentCommand, events: &UnboundedSender<GuiEvent>) {
+async fn apply(
+    agent: &mut Agent,
+    cmd: AgentCommand,
+    events: &UnboundedSender<GuiEvent>,
+    reload_ctx: &ReloadCtx,
+    prompt_templates: &mut Vec<PromptTemplate>,
+) {
     match cmd {
         AgentCommand::SwitchModel {
             provider,
@@ -174,7 +191,7 @@ async fn apply(agent: &mut Agent, cmd: AgentCommand, events: &UnboundedSender<Gu
         }
         AgentCommand::SwitchCwd { path } => switch_cwd(agent, &path, events),
         AgentCommand::SetCwd { path } => set_cwd(agent, &path, events),
-        AgentCommand::Reload { .. } => reload_assets(agent, events),
+        AgentCommand::Reload { .. } => reload_assets(agent, events, reload_ctx, prompt_templates),
         AgentCommand::Tree => {
             let message = match agent.session.as_ref() {
                 Some(session) => session_tree_text(session),
@@ -192,7 +209,7 @@ async fn apply(agent: &mut Agent, cmd: AgentCommand, events: &UnboundedSender<Gu
             _ = events.send(GuiEvent::Notice(message));
         }
         AgentCommand::DebugInfo => {
-            let message = debug_info_text(&agent);
+            let message = debug_info_text(agent);
             _ = events.send(GuiEvent::Notice(message));
         }
         AgentCommand::BugReport {
@@ -248,6 +265,7 @@ async fn apply(agent: &mut Agent, cmd: AgentCommand, events: &UnboundedSender<Gu
             };
             _ = events.send(GuiEvent::Notice(message));
         }
+        AgentCommand::ResumeZombie { path, action } => resume_zombie(agent, &path, &action, events),
         AgentCommand::NewSession => new_session(agent, events),
         AgentCommand::ResumeSession { path } => resume_session(agent, &path, events),
         // 登录后立刻用新 key（同 TUI）：当前模型就是这个 provider 时直接换 key
@@ -371,11 +389,16 @@ fn write_bug_report(
     }));
 }
 
-/// `/reload`：重读扩展启用状态、上下文文件、技能，再按新内容重建工具与系统提示。
+/// `/reload`：重读扩展启用状态、上下文文件、技能、提示词模板与系统提示，再重建工具。
 ///
-/// 只覆盖 GUI 能自己决定的部分（默认技能发现、当前信任状态）；命令行给的
-/// `--skill`/`--no-context-files` 这类启动参数没有在桌面端留副本，重载后会回到默认。
-fn reload_assets(agent: &mut Agent, events: &UnboundedSender<GuiEvent>) {
+/// `--skill` / `--prompt-template` / `--no-context-files` 这类启动参数取自
+/// [`ReloadCtx`]（启动时那一份），重载后不回到默认。
+fn reload_assets(
+    agent: &mut Agent,
+    events: &UnboundedSender<GuiEvent>,
+    reload_ctx: &ReloadCtx,
+    templates: &mut Vec<PromptTemplate>,
+) {
     let agent_dir = core::settings_manager::agent_dir();
     let home_dir = home_dir();
     let cwd = agent.cwd.clone();
@@ -388,14 +411,18 @@ fn reload_assets(agent: &mut Agent, events: &UnboundedSender<GuiEvent>) {
         &cwd,
         &agent_dir,
         &home_dir,
-        &[],
+        &reload_ctx.skill_paths,
         &bundled_skill_names(),
-        true,
+        reload_ctx.include_default_skills,
         trusted,
         &settings.skills,
     );
 
-    let files = core::context::load_project_context_files(&cwd, &agent_dir);
+    let files = if reload_ctx.no_context_files {
+        Vec::new()
+    } else {
+        core::context::load_project_context_files(&cwd, &agent_dir)
+    };
     agent.rebuild_ctx.context_files = if trusted {
         files
     } else {
@@ -404,12 +431,76 @@ fn reload_assets(agent: &mut Agent, events: &UnboundedSender<GuiEvent>) {
             .filter(|(path, _)| Path::new(path).starts_with(&agent_dir))
             .collect()
     };
+
+    // 系统提示也要重发现：改了 SYSTEM.md / APPEND_SYSTEM.md 之后 `/reload` 得生效，
+    // 规则与 TUI 一致（SYSTEM.md 优先于 --system-prompt，--append-system-prompt 优先于发现）
+    agent.rebuild_ctx.system_prompt =
+        core::context::discover_system_prompt(&cwd, &agent_dir, trusted)
+            .filter(|prompt| !prompt.trim().is_empty())
+            .or_else(|| reload_ctx.cli_system_prompt.clone());
+    agent.rebuild_ctx.append_system_prompt = if reload_ctx.cli_append_system_prompt.is_some() {
+        reload_ctx.cli_append_system_prompt.clone()
+    } else {
+        core::context::discover_append_system_prompt(&cwd, &agent_dir, trusted)
+    };
+
+    // 提示词模板：`--prompt-template` 路径与默认发现开关沿用启动参数
+    *templates = prompt_templates::load_prompt_templates(
+        &cwd,
+        &agent_dir,
+        &reload_ctx.prompt_paths,
+        reload_ctx.include_default_prompt_templates,
+    );
+    for warning in prompt_templates::take_load_warnings() {
+        _ = events.send(GuiEvent::Notice(warning));
+    }
+
+    _ = events.send(GuiEvent::PromptAssets {
+        skills: agent.skills.clone(),
+        templates: templates.clone(),
+    });
+
     agent.rebuild_tools();
     _ = events.send(GuiEvent::Notice(format!(
-        "Reloaded: {} skills, {} context files",
+        "Reloaded: {} skills, {} context files, {} prompt templates",
         agent.skills.len(),
-        agent.rebuild_ctx.context_files.len()
+        agent.rebuild_ctx.context_files.len(),
+        templates.len()
     )));
+}
+
+/// 未完成 operation 面板确认后的恢复：`continue` = 只读容忍装配；
+/// `rewrite` = 先为旧 run 补 `operation_finished` 再装配。确认路径不再二次弹面板。
+fn resume_zombie(agent: &mut Agent, path: &str, action: &str, events: &UnboundedSender<GuiEvent>) {
+    let mut session = match Session::open_checked(path) {
+        OpenSessionResult::Ok(session) => *session,
+        OpenSessionResult::Invalid(error) => {
+            _ = events.send(GuiEvent::Error(format!("Failed to open session: {error}")));
+            return;
+        }
+        // 防御：确认后再读反而行损坏，转修复面板
+        OpenSessionResult::Repairable { path, plan } => {
+            _ = events.send(GuiEvent::SessionRepair { path, plan });
+            return;
+        }
+    };
+
+    let note = if action == "rewrite" {
+        let squashed = session.squash_stale_operations();
+        match session.take_persist_error() {
+            Some(error) => format!(
+                "Squashed {squashed} interrupted run(s), but the disk write failed: {error}"
+            ),
+            None if squashed == 0 => "No stale operations to squash".to_string(),
+            None => {
+                format!("Marked {squashed} interrupted run(s) as finished (session log updated)")
+            }
+        }
+    } else {
+        "Opening session with latest run; older interrupted runs left as-is".to_string()
+    };
+
+    adopt_session(agent, session, events, &note);
 }
 
 /// 把 fork/clone 出来的新会话接到 agent 上，并把历史推给 GUI。
@@ -534,6 +625,16 @@ fn new_session(agent: &mut Agent, events: &UnboundedSender<GuiEvent>) {
 fn resume_session(agent: &mut Agent, path: &str, events: &UnboundedSender<GuiEvent>) {
     match Session::open_checked(path) {
         OpenSessionResult::Ok(session) => {
+            // 崩溃残留的未完成 operation ≥2：先让用户选恢复方式，别直接装配
+            let count = session.open_operations_count();
+            if count >= 2 {
+                _ = events.send(GuiEvent::SessionZombie {
+                    path: path.into(),
+                    count,
+                });
+                return;
+            }
+
             agent.messages = session.build_context_messages();
             agent.session = Some(*session);
             agent.restore_session_tools();
@@ -544,11 +645,9 @@ fn resume_session(agent: &mut Agent, path: &str, events: &UnboundedSender<GuiEve
         OpenSessionResult::Invalid(e) => {
             _ = events.send(GuiEvent::Error(format!("Cannot open session: {e}")));
         }
-        OpenSessionResult::Repairable { plan, .. } => {
-            _ = events.send(GuiEvent::Error(format!(
-                "Session has a corrupt entry; needs repair: {}",
-                plan.error
-            )));
+        // 中间行损坏：交给界面弹修复面板（抢救 / 截断 / 取消），修好后再开
+        OpenSessionResult::Repairable { path, plan } => {
+            _ = events.send(GuiEvent::SessionRepair { path, plan });
         }
     }
 }
@@ -630,11 +729,6 @@ fn snapshot(agent: &Agent) -> Snapshot {
         leaf_entry_id: agent.session.as_ref().and_then(|s| s.clone_target_id()),
         tools: agent.get_active_tools(),
         cwd: agent.cwd.clone(),
-        skills: agent
-            .skills
-            .iter()
-            .map(|s| (s.name.clone(), s.description.clone(), s.source.clone()))
-            .collect(),
         usage,
     }
 }

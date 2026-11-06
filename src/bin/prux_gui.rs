@@ -10,6 +10,9 @@
 use prux::cli::startup::bootstrap;
 
 fn main() {
+    // 启动装配要知道「弹得出面板」的是哪套界面（损坏会话的修复面板不依赖终端）
+    prux::modes::set_gui_binary();
+
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

@@ -185,8 +185,6 @@ pub struct Args {
     #[arg(long = "append-system-prompt", value_name = "TEXT")]
     pub append_system_prompt: Vec<String>,
     /// Launch the interactive TUI instead of the desktop GUI (prux-gui only)
-    ///
-    /// Windows 上不存在：图形子系统的 `prux-gui` 没有控制台，改用 `prux`。
     #[cfg(all(feature = "gui", not(windows)))]
     #[arg(long)]
     pub tui: bool,

@@ -71,16 +71,18 @@ pub fn run(startup: Startup, rt: &Handle) {
     let needs_login = startup.agent.api_key_override.is_none()
         && core::auth::list_configured_providers().is_empty();
 
+    // `-a/--approve` / `--no-approve`：显式给了信任决定就不再弹启动信任面板
+    let trust_override = startup.reload_ctx.trust_override;
+
     rt.spawn(bridge::worker::run(
         Arc::new(Mutex::new(startup.agent)),
         cmd_rx,
         event_tx,
+        startup.reload_ctx,
+        startup.prompt_templates,
     ));
 
     let initial_messages = startup.initial_messages;
-
-    // `-a/--approve` / `--no-approve`：显式给了信任决定就不再弹启动信任面板
-    let trust_override = startup.reload_ctx.trust_override;
 
     // 扩展的 UI 请求（`ask_prompt` / `ShowOverlay`…）只在 ui_ready 为真时才发出
     core::extensions::set_ui_ready(true);

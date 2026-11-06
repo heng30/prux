@@ -473,6 +473,200 @@ impl GuiApp {
         cx.notify();
     }
 
+    /// `/import <path.jsonl>`：校验路径 → 确认替换 → 复制进当前会话目录 → cwd 确认 → 切会话。
+    ///
+    /// 校验顺序与文案同 TUI：参数可带 `@` 前缀（输入框的引用前缀），相对路径按当前目录解析。
+    pub(super) fn start_import(&mut self, raw: &str, cx: &mut Context<Self>) {
+        let source = match import_source(raw, &self.cwd()) {
+            Ok(source) => source,
+            Err(error) => {
+                self.transcript.push_note(Note::Error(error));
+                cx.notify();
+                return;
+            }
+        };
+
+        self.pending_session = Some(PendingSession::Confirm { source });
+        self.ask_choice(
+            "Import session (replaces the current session)",
+            vec![
+                ("Yes, import".to_string(), Action::ImportConfirm),
+                ("No, cancel".to_string(), Action::SessionCancel),
+            ],
+            cx,
+        );
+    }
+
+    /// 确认后的实际导入：`open_checked` 校验完整性 → 复制进会话目录（同名递增，不覆盖）
+    /// → 会话记录的 cwd 与当前不一致时弹确认 → 切会话；中间行损坏则弹修复选择。
+    pub(super) fn run_import(&mut self, source: PathBuf, cx: &mut Context<Self>) {
+        match Session::open_checked(&source.to_string_lossy()) {
+            OpenSessionResult::Ok(session) => {
+                let destination = match import_copy(&source, &self.cwd()) {
+                    Ok(destination) => destination,
+                    Err(error) => {
+                        self.transcript.push_note(Note::Error(error));
+                        cx.notify();
+                        return;
+                    }
+                };
+
+                let cwd = self.cwd();
+                let cwd_missing = session.cwd.is_empty() || !Path::new(&session.cwd).exists();
+                if cwd_missing || session.cwd != cwd {
+                    let recorded = if session.cwd.is_empty() {
+                        "<unknown>".to_string()
+                    } else {
+                        session.cwd.clone()
+                    };
+                    self.pending_session = Some(PendingSession::Cwd { destination });
+                    let title = if cwd_missing {
+                        "Session cwd not found"
+                    } else {
+                        "Session cwd mismatch"
+                    };
+                    self.ask_choice(
+                        title,
+                        vec![
+                            (
+                                format!("Yes, resume in {cwd} (recorded: {recorded})"),
+                                Action::ImportCwdContinue,
+                            ),
+                            ("No, cancel".to_string(), Action::SessionCancel),
+                        ],
+                        cx,
+                    );
+                } else {
+                    self.resume_session_file(destination);
+                    cx.notify();
+                }
+            }
+            OpenSessionResult::Invalid(e) => {
+                self.transcript
+                    .push_note(Note::Error(format!("import failed: {e}")));
+                cx.notify();
+            }
+            OpenSessionResult::Repairable { path, plan } => {
+                self.stage_session_repair(path, plan, RepairIntent::Resume, cx);
+            }
+        }
+    }
+
+    /// 弹「未完成 operation」面板：会话里有崩溃残留的未关闭 run 时，
+    /// 让用户选 Continue（按最新 run 恢复，日志不动）/ Rewrite（把旧 run 标记为已结束）/ Cancel。
+    pub(super) fn stage_zombie_operations(
+        &mut self,
+        path: PathBuf,
+        count: usize,
+        cx: &mut Context<Self>,
+    ) {
+        let path = path.to_string_lossy().to_string();
+        let mut choices: Vec<(String, Action)> = zombie_choices(count)
+            .into_iter()
+            .map(|(label, rewrite)| {
+                (
+                    label,
+                    Action::ResumeZombie {
+                        path: path.clone(),
+                        rewrite,
+                    },
+                )
+            })
+            .collect();
+        choices.push((
+            "Cancel: leave file unchanged".to_string(),
+            Action::ZombieCancel,
+        ));
+        self.ask_choice(
+            format!("Session has {count} unfinished operation(s) (from interrupted runs)"),
+            choices,
+            cx,
+        );
+    }
+
+    /// 弹损坏会话的修复面板：抢救（跳过损坏行）/ 截断（只留前缀）/ 取消。
+    ///
+    /// `/import`、打开已有会话（启动、`/resume`、侧栏）都走这里；区别只在修好之后
+    /// 是「打开」还是「fork 进当前项目」。
+    pub(super) fn stage_session_repair(
+        &mut self,
+        path: PathBuf,
+        plan: SessionRepairPlan,
+        intent: RepairIntent,
+        cx: &mut Context<Self>,
+    ) {
+        let mut choices: Vec<(String, Action)> = repair_choices(&plan)
+            .into_iter()
+            .map(|(label, salvage)| (label, Action::SessionRepair(salvage)))
+            .collect();
+        choices.push(("Cancel (no repair)".to_string(), Action::SessionCancel));
+        self.pending_session = Some(PendingSession::Repair { path, plan, intent });
+        self.ask_choice("Session file corrupted", choices, cx);
+    }
+
+    /// 修复选择后的执行：写回修好的文件，成功则按去向重新打开。
+    pub(super) fn repair_session(&mut self, salvage: bool, cx: &mut Context<Self>) {
+        let Some(PendingSession::Repair { path, plan, intent }) = self.pending_session.take()
+        else {
+            return;
+        };
+
+        if let Err(error) = Session::repair_write(&path.to_string_lossy(), &plan, salvage) {
+            self.transcript
+                .push_note(Note::Error(format!("Session repair failed: {error}")));
+            cx.notify();
+            return;
+        }
+
+        match intent {
+            RepairIntent::Resume => self.resume_session_file(path),
+            RepairIntent::Fork { dir } => {
+                _ = self.cmd_tx.send(AgentCommand::ForkFrom {
+                    path: path.to_string_lossy().to_string(),
+                    dir,
+                });
+            }
+        }
+        cx.notify();
+    }
+
+    /// 确认框 / cwd 确认 / 修复选择共用的取消：丢掉中间状态，不动会话。
+    pub(super) fn cancel_session_op(&mut self, cx: &mut Context<Self>) {
+        let note = match self.pending_session.take() {
+            // 修复被取消：文件保持原样（与 TUI 同文案）
+            Some(PendingSession::Repair { .. }) => "Session repair cancelled, file left unchanged",
+            _ => "Import cancelled",
+        };
+        self.transcript.push_note(Note::Info(note.to_string()));
+        cx.notify();
+    }
+
+    /// 确认列表（导入确认 / cwd 确认 / 修复选择 / `/bug` 附带决定共用同一套外观）。
+    fn ask_choice(
+        &mut self,
+        title: impl Into<String>,
+        choices: Vec<(String, Action)>,
+        cx: &mut Context<Self>,
+    ) {
+        let entries = choices
+            .into_iter()
+            .map(|(label, action)| Entry {
+                label,
+                action,
+                ..Entry::default()
+            })
+            .collect();
+        self.overlay = Some(Overlay::List(List::new(title.into(), entries)));
+        cx.notify();
+    }
+
+    /// 切到某个会话文件（导入复制好的、修好的都用它）。
+    pub(super) fn resume_session_file(&mut self, destination: PathBuf) {
+        _ = self.cmd_tx.send(AgentCommand::ResumeSession {
+            path: destination.to_string_lossy().to_string(),
+        });
+    }
+
     /// `/name`：给当前会话改名（预填现有会话名）。
     pub(super) fn rename_current_session(&mut self, cx: &mut Context<Self>) {
         let Some(path) = self
@@ -574,12 +768,29 @@ impl GuiApp {
                 }
             }
             SessionDialog::BugHint { editor } => {
-                _ = self.cmd_tx.send(AgentCommand::BugReport {
-                    hint: editor.text(),
-                    include_session: true,
-                    include_summary: false,
-                });
-                self.cx_notify(cx);
+                // 与会话记录一起打包前先问一句（同 TUI 的第一个确认；默认不附带）
+                let hint = editor.text();
+                self.ask_choice(
+                    "Include the session transcript?",
+                    vec![
+                        (
+                            "Yes, include it (the zip is saved locally)".to_string(),
+                            Action::BugReport {
+                                hint: hint.clone(),
+                                include_session: true,
+                            },
+                        ),
+                        (
+                            "No, diagnostics only".to_string(),
+                            Action::BugReport {
+                                hint,
+                                include_session: false,
+                            },
+                        ),
+                        ("Cancel".to_string(), Action::None),
+                    ],
+                    cx,
+                );
                 return;
             }
             SessionDialog::Label { editor } => {
@@ -603,20 +814,9 @@ impl GuiApp {
                 return;
             }
             SessionDialog::Import { editor } => {
+                // 真正的校验/确认都在 start_import 里（与 `/import <path>` 同一条路）
                 let raw = editor.text().trim().to_string();
-                let path = paths::resolve_path(&raw, &self.cwd());
-
-                if !path.is_file() {
-                    self.transcript.push_note(Note::Error(format!(
-                        "Import failed: no such file {}",
-                        path.display()
-                    )));
-                } else {
-                    _ = self.cmd_tx.send(AgentCommand::ResumeSession {
-                        path: path.to_string_lossy().to_string(),
-                    });
-                }
-                self.cx_notify(cx);
+                self.start_import(&raw, cx);
                 return;
             }
             SessionDialog::ApiKey { provider, editor } => {
@@ -722,4 +922,90 @@ impl GuiApp {
             .map(sidebar::rows)
             .unwrap_or_default();
     }
+}
+
+/// `/import` 的参数 → 源文件路径：去掉 `@` 前缀，空参数与文件不存在各自给出错误文案。
+///
+/// 文案与 TUI 的 `cmd_import` 一致（同一句话在终端与桌面端都能对上搜索结果）。
+pub(super) fn import_source(raw: &str, cwd: &str) -> Result<PathBuf, String> {
+    let raw = raw.trim();
+    let arg = raw.strip_prefix('@').unwrap_or(raw).trim();
+    if arg.is_empty() {
+        return Err("Usage: /import <path.jsonl>".to_string());
+    }
+
+    let source = paths::resolve_path(arg, cwd);
+    if !source.is_file() {
+        return Err(format!(
+            "import failed: Failed to read session file: {}: No such file or directory",
+            source.display()
+        ));
+    }
+    Ok(source)
+}
+
+/// 把源会话文件复制进当前会话目录，返回可直接打开的路径。
+///
+/// 同名目标已存在时递增编号（`name-1.jsonl`…），复制用 `O_EXCL` 作最后一道保险，
+/// 绝不静默覆盖已有会话；源文件本来就在会话目录里则原样返回。
+pub(super) fn import_copy(source: &Path, cwd: &str) -> Result<PathBuf, String> {
+    let dir = core::session_manager::default_session_dir(cwd, &settings_manager::agent_dir());
+    let Some(name) = source.file_name() else {
+        return Ok(source.to_path_buf());
+    };
+    if dir.join(name) == source {
+        return Ok(source.to_path_buf());
+    }
+
+    std::fs::create_dir_all(&dir)
+        .map_err(|error| format!("import failed: Failed to create session dir: {error}"))?;
+    let destination = paths::uniquify_import_destination(&dir, name);
+    paths::copy_no_overwrite(source, &destination)
+        .map_err(|error| format!("import failed: Failed to copy session: {error}"))?;
+    Ok(destination)
+}
+
+/// 修复面板的可选项（`(文案, 是否走抢救路径)`）：先抢救、后截断，与 TUI 面板同序。
+///
+/// 无法抢救（引用断裂等）时只给截断；调用方在后面补「取消」。
+pub(super) fn repair_choices(plan: &SessionRepairPlan) -> Vec<(String, bool)> {
+    let mut choices = Vec::new();
+    if let Some(content) = plan.salvage_content.as_ref() {
+        choices.push((
+            format!(
+                "Salvage: skip broken lines, keep {} lines ({} dropped)",
+                content.lines().count(),
+                plan.salvaged_skipped
+            ),
+            true,
+        ));
+    }
+    choices.push((
+        format!(
+            "Truncate: keep prefix only ({} lines kept, {} dropped)",
+            plan.valid_lines,
+            plan.dropped_lines()
+        ),
+        false,
+    ));
+    choices
+}
+
+/// 未完成 operation 面板可选项（`(文案, 是否 rewrite)`）：Continue 在前、Rewrite 在后。
+///
+/// `count` 是检测到的未完成 operation 数（含最新一次），被标记为已结束的旧 run 数 = count - 1。
+pub(super) fn zombie_choices(count: usize) -> Vec<(String, bool)> {
+    vec![
+        (
+            "Continue: resume latest run, leave log as-is".to_string(),
+            false,
+        ),
+        (
+            format!(
+                "Rewrite: mark {} older run(s) as finished (backup + append)",
+                count.saturating_sub(1)
+            ),
+            true,
+        ),
+    ]
 }

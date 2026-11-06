@@ -118,6 +118,8 @@ pub fn field_search(theme: &Theme, focused: bool) -> gpui::Div {
 /// 不靠 flex 自动换行：逐字符的 flex 项在换行容器里会把宽度算成「最宽那个字符」，
 /// 整块内容会跑出输入卡片；视觉行由 [`wrap_chunks`] 按排版器量出的真实字宽切。
 /// 超出 [`MAX_VISIBLE_LINES`] 的部分靠滚动看，光标移动时会自动滚进视口。
+// 参数都是渲染期上下文，各调用点传的取值都不同，包结构体反而绕。
+#[allow(clippy::too_many_arguments)]
 pub fn render_wrapped(
     editor: &Editor,
     theme: &Theme,

@@ -1,7 +1,7 @@
 //! 动作与斜杠命令：把面板/菜单的 [`Action`] 与 `/` 命令落到 agent 命令或状态变更上。
 
 use super::*;
-use crate::{cli, core, modes::gui::bridge::GuiEvent, utils::paths};
+use crate::{cli, core, modes::gui::bridge::GuiEvent, modes::slash, utils::paths};
 
 impl GuiApp {
     /// 斜杠命令：与命令面板共用同一批动作。
@@ -25,6 +25,9 @@ impl GuiApp {
             return;
         }
 
+        // `@` 是输入框的引用前缀（`/cwd @../other`），与 TUI 一样先剥掉
+        let arg = arg.trim();
+        let arg = arg.strip_prefix('@').unwrap_or(arg).trim();
         let path = paths::resolve_path(arg, &self.cwd());
         if !path.is_dir() {
             self.transcript.push_note(Note::Error(format!(
@@ -34,7 +37,10 @@ impl GuiApp {
             return;
         }
 
-        let path = path.to_string_lossy().to_string();
+        // 规范路径：底栏与后续工具看到的都是干净路径（顺手消掉 `..` 与符号链接差异）
+        let path = std::fs::canonicalize(&path)
+            .map(|canonical| canonical.to_string_lossy().to_string())
+            .unwrap_or_else(|_| path.to_string_lossy().to_string());
         cwd_store::remember_cwd(&path);
         _ = self.cmd_tx.send(AgentCommand::SwitchCwd { path });
     }
@@ -148,16 +154,13 @@ impl GuiApp {
                 }
             },
             "export" if !arg.is_empty() => {
+                // 路径参数与 TUI 同一套解析（引号包裹的含空格路径 / 只取第一个片段）
                 _ = self.cmd_tx.send(AgentCommand::Export {
-                    out: Some(arg.to_string()),
+                    out: paths::parse_path_arg(arg),
                     theme: None,
                 });
             }
-            "import" if !arg.is_empty() => {
-                _ = self.cmd_tx.send(AgentCommand::ResumeSession {
-                    path: arg.to_string(),
-                });
-            }
+            "import" if !arg.is_empty() => self.start_import(arg, cx),
             // `/model <id>`：有 scope 时只在 scope 里匹配，否则交给 worker 按当前 provider 校验
             "model" if !arg.is_empty() => {
                 let scoped = self
@@ -219,6 +222,15 @@ impl GuiApp {
                     skills: Vec::new(),
                     system_prompt: None,
                     append_system_prompt: None,
+                });
+            }
+            // `/label <entryId> [标签]`：与 TUI 一样吃显式 id（标签为空 = 清除该节点标签）
+            "label" if !arg.is_empty() => {
+                let (entry_id, label) = arg.split_once(char::is_whitespace).unwrap_or((arg, ""));
+                let label = label.trim();
+                _ = self.cmd_tx.send(AgentCommand::Label {
+                    entry_id: entry_id.to_string(),
+                    label: (!label.is_empty()).then(|| label.to_string()),
                 });
             }
             "label" => {
@@ -311,18 +323,12 @@ impl GuiApp {
         }
     }
 
-    /// 兜底：不认识的斜杠命令原样还给输入框（技能命令交给 worker 展开）。
-    fn run_unknown_slash(&mut self, other: &str, _cx: &mut Context<Self>) {
-        match other {
-            other if other.starts_with("skill:") => {
-                // 技能命令：把 `/skill:名称` 交给 worker 展开成提示词并发送
-                _ = self.cmd_tx.send(AgentCommand::Prompt(format!("/{other}")));
-            }
-            other => {
-                // 不认识的命令：原样还给输入框，别悄悄吞掉
-                self.editor.insert(&format!("/{other}"));
-            }
-        }
+    /// 兜底：不认识的斜杠命令按普通输入发送，绝不当成 UI 命令吞掉。
+    ///
+    /// `/skill:名称` 与 `/模板名 参数` 都是由 worker 展开成提示词的，所以两者走同一条路；
+    /// 展开结果才是发给模型的内容（对话区显示的是原文）。
+    fn run_unknown_slash(&mut self, other: &str, cx: &mut Context<Self>) {
+        self.send_prompt(format!("/{other}"), false, cx);
     }
 
     /// 复制最后一条助手回复（`/copy` 与 TUI 的 `app.message.copy` = Ctrl-X 共用）。
@@ -441,6 +447,38 @@ impl GuiApp {
                 self.rebuild_skills_panel(cx);
             }
             Action::HistoryClear(all) => self.clear_history_files(all, cx),
+            Action::ImportConfirm => {
+                if let Some(PendingSession::Confirm { source }) = self.pending_session.take() {
+                    self.run_import(source, cx);
+                }
+            }
+            Action::ImportCwdContinue => {
+                if let Some(PendingSession::Cwd { destination }) = self.pending_session.take() {
+                    self.resume_session_file(destination);
+                }
+            }
+            Action::SessionRepair(salvage) => self.repair_session(salvage, cx),
+            Action::BugReport {
+                hint,
+                include_session,
+            } => {
+                _ = self.cmd_tx.send(AgentCommand::BugReport {
+                    hint,
+                    include_session,
+                    include_summary: false,
+                });
+            }
+            Action::ResumeZombie { path, rewrite } => {
+                _ = self.cmd_tx.send(AgentCommand::ResumeZombie {
+                    path,
+                    action: if rewrite { "rewrite" } else { "continue" }.to_string(),
+                });
+            }
+            Action::ZombieCancel => {
+                self.transcript
+                    .push_note(Note::Info("Session left unopened".to_string()));
+            }
+            Action::SessionCancel => self.cancel_session_op(cx),
             Action::LoginProvider(provider) => {
                 let editor = Editor::new();
                 self.dialog = Some(SessionDialog::ApiKey { provider, editor });
@@ -684,12 +722,22 @@ impl GuiApp {
             return;
         }
 
-        // 和 TUI 一样记进项目级 prompt 历史，`/history` 才翻得到
+        self.send_prompt(text, follow_up, cx);
+    }
+
+    /// 把一段文本作为用户消息发出：展开、记历史、回显、忙碌时排队（同 TUI 的提交路径）。
+    ///
+    /// `/skill:名` 与 `/模板名 参数` 在这里就展开成真正的提示词：忙碌时排队的消息由
+    /// agent 直接注入、不经过 worker 的 `Prompt` 分支，到那里再展开就晚了
+    /// （模板会原样发给模型）。worker 侧仍保留同一次展开，兜住扩展自己发起的 Prompt。
+    fn send_prompt(&mut self, text: String, follow_up: bool, cx: &mut Context<Self>) {
+        // 历史里留用户敲的原文（同 TUI）：展开后的提示词又长又只有这一次有意义
         core::prompt_history::append(
             &self.cwd(),
             &text,
             settings_manager::read_settings_history_max_entries(),
         );
+        let text = slash::expand_user_text(&text, &self.skills, &self.prompt_templates);
 
         if self.busy {
             // 忙碌：只排队，由 agent 在回合内注入 / 结算后取走，不在本地开新回合
@@ -988,7 +1036,7 @@ impl GuiApp {
             .map(|line| line.to_string())
             .collect();
         self.overlay = Some(Overlay::Info(
-            Info::new(format!("Changelog v{}", core::changelog::VERSION), lines).as_markdown(),
+            Info::new(format!("Changelog v{}", core::changelog::VERSION), lines).into_markdown(),
         ));
     }
 }
@@ -1001,6 +1049,7 @@ fn takes_argument(command: &str) -> bool {
             | "thinking"
             | "export"
             | "import"
+            | "label"
             | "model"
             | "session"
             | "settings"

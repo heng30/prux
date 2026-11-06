@@ -30,6 +30,9 @@ pub const HISTORY_ACTIONS: [(&str, &str, bool); 2] = [
 pub const MAX_ITEMS: usize = 40;
 
 /// 有独立 GUI 面板入口的扩展命令：`/` 面板与 Ctrl-M 命令面板里都列（同一个动作两个入口）。
+///
+/// 它们已经作为内置命令写在 [`COMMANDS`] 里，所以扩展注册表里的同名命令在拼候选时被排除
+/// （见 [`crate::modes::slash::candidates`] 的 `exclude`），不然 `/skills` 会出现两条。
 pub const PANEL_COMMANDS: &[&str] = &["skills", "extension", "settings"];
 
 /// 内置命令声明的子命令：`(命令名, 子命令, 说明)`，按声明顺序。
@@ -71,7 +74,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("name", "Rename current session"),
     ("clone", "Clone current branch"),
     ("fork", "Fork current session"),
-    ("label", "Label current branch"),
+    ("label", "Set/clear session label (<entryId> [label])"),
     ("tree", "Session tree"),
     ("import", "Import session file"),
     ("export", "Export session (HTML)"),
@@ -186,17 +189,16 @@ pub fn detect(text_before_cursor: &str) -> Option<(Trigger, usize, String)> {
     Some((Trigger::File, at, rest.to_string()))
 }
 
-/// 命令候选：内置命令 + `extra`（技能、扩展命令）一起做字符顺序匹配并按匹配质量排序。
+/// 命令候选：`candidates`（内置 + 扩展命令 + 技能 + 提示词模板，由
+/// [`crate::modes::slash::candidates`] 拼装）一起做字符顺序匹配并按匹配质量排序。
 ///
-/// `extra` 是 `(名字, 说明)`，名字不含前导 `/`。技能名以 `skill:` 开头时按裸名参与匹配
+/// 名字不含前导 `/`。技能名以 `skill:` 开头时按裸名参与匹配
 /// （`/idea` 不得因 `skill:` 里的字符误命中），显式查 `skill:` 前缀时仍按全名匹配。
-fn command_candidates(extra: &[(String, String)], query: &str) -> Vec<Item> {
-    let mut all: Vec<(&str, &str)> = COMMANDS.to_vec();
-    all.extend(
-        extra
-            .iter()
-            .map(|(name, detail)| (name.as_str(), detail.as_str())),
-    );
+pub fn commands_with(candidates: &[(String, String)], query: &str) -> Vec<Item> {
+    let all: Vec<(&str, &str)> = candidates
+        .iter()
+        .map(|(name, detail)| (name.as_str(), detail.as_str()))
+        .collect();
     let explicit_skill = query.trim().to_lowercase().starts_with("skill:");
     fuzzy_filter(&all, query, move |(name, _): &(&str, &str)| {
         if explicit_skill {
@@ -213,11 +215,6 @@ fn command_candidates(extra: &[(String, String)], query: &str) -> Vec<Item> {
         insert: format!("/{name}"),
     })
     .collect()
-}
-
-/// 命令候选（内置 + 技能 + 扩展命令），排序与查询不分来源。
-pub fn commands_with(extra: &[(String, String)], query: &str) -> Vec<Item> {
-    command_candidates(extra, query)
 }
 
 /// 识别 `/history [关键词]`：返回（整行起点、关键词）。
@@ -464,26 +461,32 @@ mod tests {
         assert!(!Trigger::File.submits_after_apply());
     }
 
+    /// `/` 面板的候选表（不含技能与模板）：内置命令 + 已启用扩展命令。
+    fn panel_candidates() -> Vec<(String, String)> {
+        crate::modes::slash::candidates(COMMANDS, PANEL_COMMANDS, &[], &[])
+    }
+
     /// 命令候选：字符顺序命中即可，按匹配质量排序，带 `/` 前缀展示。
     #[test]
     fn commands_match_in_order_by_quality() {
-        let all = commands_with(&[], "");
-        assert_eq!(all.len(), COMMANDS.len().min(MAX_ITEMS));
+        let candidates = panel_candidates();
+        let all = commands_with(&candidates, "");
+        assert_eq!(all.len(), candidates.len().min(MAX_ITEMS));
         assert_eq!(all[0].label, "/new");
         // 模糊命中：`mdl` 的项目符号顺序命中 `/model`
-        assert_eq!(commands_with(&[], "mdl")[0].label, "/model");
+        assert_eq!(commands_with(&candidates, "mdl")[0].label, "/model");
         // 同分/近分时词边界命中的排前面
-        let re: Vec<String> = commands_with(&[], "re")
+        let re: Vec<String> = commands_with(&candidates, "re")
             .into_iter()
             .map(|item| item.label)
             .collect();
         assert_eq!(re[0], "/resume");
         assert!(re.contains(&"/tree".to_string()));
         // 乱序不算命中
-        assert!(commands_with(&[], "zzz").is_empty());
-        assert!(commands_with(&[], "dle").is_empty());
+        assert!(commands_with(&candidates, "zzz").is_empty());
+        assert!(commands_with(&candidates, "dle").is_empty());
         // 配置类命令也在 `/` 面板里（TUI 对齐）；Ctrl-M 面板只额外保留三个独立面板入口
-        assert_eq!(commands_with(&[], "settings")[0].label, "/settings");
+        assert_eq!(commands_with(&candidates, "settings")[0].label, "/settings");
         assert!(COMMANDS.iter().any(|(name, _)| *name == "trust"));
         assert!(COMMANDS.iter().any(|(name, _)| *name == "cwd"));
     }
@@ -491,25 +494,47 @@ mod tests {
     /// 技能候选按裸名参与模糊匹配，不因 `skill:` 前缀误命中。
     #[test]
     fn skills_match_by_bare_name() {
-        let extra = vec![
+        let skills = vec![
             (
-                "skill:deep-research".to_string(),
+                "deep-research".to_string(),
                 "Multi-agent deep research".to_string(),
             ),
-            ("skill:research-idea".to_string(), "Refine idea".to_string()),
+            ("research-idea".to_string(), "Refine idea".to_string()),
         ];
-        let labels: Vec<String> = commands_with(&extra, "idea")
+        let candidates = crate::modes::slash::candidates(COMMANDS, PANEL_COMMANDS, &skills, &[]);
+        let labels: Vec<String> = commands_with(&candidates, "idea")
             .into_iter()
             .map(|item| item.label)
             .collect();
         assert!(labels.contains(&"/skill:research-idea".to_string()));
         assert!(!labels.contains(&"/skill:deep-research".to_string()));
         // 显式写 skill: 时按完整名称匹配
-        let explicit: Vec<String> = commands_with(&extra, "skill:deep")
+        let explicit: Vec<String> = commands_with(&candidates, "skill:deep")
             .into_iter()
             .map(|item| item.label)
             .collect();
         assert_eq!(explicit, vec!["/skill:deep-research"]);
+    }
+
+    /// 提示词模板也进 `/` 面板候选（与命令同名的不列，分发永远轮不到它）。
+    #[test]
+    fn prompt_templates_appear_as_command_candidates() {
+        let templates = vec![
+            ("review".to_string(), "Review code".to_string()),
+            ("model".to_string(), "Shadowed by the command".to_string()),
+        ];
+        let candidates = crate::modes::slash::candidates(COMMANDS, PANEL_COMMANDS, &[], &templates);
+        let labels: Vec<String> = commands_with(&candidates, "review")
+            .into_iter()
+            .map(|item| item.label)
+            .collect();
+        assert_eq!(labels, vec!["/review"]);
+        let labels: Vec<String> = commands_with(&candidates, "model")
+            .into_iter()
+            .map(|item| item.label)
+            .collect();
+        // 只留命令那条（同名模板被剔除），不会出现两个 `/model`
+        assert_eq!(labels.iter().filter(|label| *label == "/model").count(), 1);
     }
 
     /// 触发词识别：`/` 只在行首，`@` 行内任意位置。

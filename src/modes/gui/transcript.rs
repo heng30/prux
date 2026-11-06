@@ -72,11 +72,13 @@ const MAX_COL_WEIGHT: f32 = 40.;
 /// 面板与对话流同帧渲染，两边的行号都从 0 数，命名空间必须错开，否则 id 撞车。
 const OVERLAY_ID_NAMESPACE: usize = usize::MAX;
 
+/// 缩略图缓存的条目：路径、`(文件长度, 修改时间)` 指纹与解出的图片源。
+type ImageSourceEntry = (PathBuf, (u64, Option<SystemTime>), ImageSource);
+
 thread_local! {
     /// 缩略图图片源缓存：`(路径, (文件长度, 修改时间)) → 图片源`，免掉每帧重读缩略图文件。
     /// `ImageSource` 不是 `Send`，而渲染只在 UI 线程上，故用线程本地变量。
-    static IMAGE_SOURCES: RefCell<Vec<(PathBuf, (u64, Option<SystemTime>), ImageSource)>> =
-        RefCell::new(Vec::new());
+    static IMAGE_SOURCES: RefCell<Vec<ImageSourceEntry>> = const { RefCell::new(Vec::new()) };
 }
 
 thread_local! {
@@ -189,12 +191,39 @@ pub struct Tool {
 }
 
 /// 非对话提示。
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Note {
     /// 一般信息（压缩、重试、状态）
     Info(String),
     /// 错误
     Error(String),
+}
+
+impl Note {
+    /// 是否为空提示：重试提示成功后原地清空内容（不删块，块下标还被
+    /// `tools` 表与 `open_assistant` 引用），渲染时按空块跳过。
+    pub fn is_empty(&self) -> bool {
+        match self {
+            Note::Info(text) | Note::Error(text) => text.is_empty(),
+        }
+    }
+}
+
+/// assistant 消息的收尾提示（与 TUI 的 `append_stop_reason_hint` 同文案）。
+///
+/// `None` = 正常结束（或错误但没有错误文本）。
+fn stop_reason_note(message: &AgentMessage) -> Option<Note> {
+    match message.stop_reason.as_deref() {
+        Some("length") => Some(Note::Error(
+            "Response was truncated before completion.".to_string(),
+        )),
+        Some("aborted") => Some(Note::Error("Operation aborted".to_string())),
+        Some("error") => message
+            .error_message
+            .clone()
+            .map(|error| Note::Error(format!("Error: {error}"))),
+        _ => None,
+    }
 }
 
 /// 对话流里的文本选区：两端都是（行序号, 行内字符下标）。
@@ -319,6 +348,11 @@ pub struct Transcript {
     open_assistant: Option<usize>,
     /// 工具调用 id → 块下标
     tools: HashMap<String, usize>,
+    /// 重试提示状态：`(块下标, 当前次数, 最大次数)`。
+    ///
+    /// 块下标用于原地覆盖同一行；`auto_retry_end` 事件不带 `maxAttempts`，
+    /// 次数只能记在这里（与 TUI 的 `RetryUi` 同理）。
+    retry_note: Option<(usize, u64, u64)>,
 }
 
 impl Transcript {
@@ -327,6 +361,7 @@ impl Transcript {
         self.blocks.clear();
         self.open_assistant = None;
         self.tools.clear();
+        self.retry_note = None;
         clear_image_sources();
     }
 
@@ -357,8 +392,50 @@ impl Transcript {
     }
 
     /// 追加一条提示。
+    ///
+    /// 同一条错误连着来两次时只留一行（中止补的提示 + 消息自带的 `stopReason` 会撞车）；
+    /// Info 不去重——同一条命令连跑两次就该有两次回执。
     pub fn push_note(&mut self, note: Note) {
+        if let (Some(Block::Note(Note::Error(previous))), Note::Error(text)) =
+            (self.blocks.last(), &note)
+            && previous == text
+        {
+            return;
+        }
         self.blocks.push(Block::Note(note));
+    }
+
+    /// 写入重试提示：第一次插入成块，之后原地覆盖同一块。
+    ///
+    /// 不删除重试块：块下标被 `tools` 表与 `open_assistant` 引用，删中间一块会让
+    /// 后续工具块全部错位。收尾时清空文本即可（渲染跳过空块）。
+    fn upsert_retry_note(&mut self, note: Note, attempt: u64, max: u64) {
+        let index = match self.retry_note {
+            Some((index, ..)) => index,
+            None => {
+                self.blocks.push(Block::Note(note.clone()));
+                self.blocks.len() - 1
+            }
+        };
+        self.blocks[index] = Block::Note(note);
+        self.retry_note = Some((index, attempt, max));
+    }
+
+    /// 清空重试提示（恢复成功 / 硬中止）：内容置空，块本身留着。
+    fn clear_retry_note(&mut self) {
+        if let Some((index, ..)) = self.retry_note.take() {
+            self.blocks[index] = Block::Note(Note::Info(String::new()));
+        }
+    }
+
+    /// 请求重新出流即视为网络恢复：只收起「正在重试」那一行。
+    /// 失败行（`Retry failed (n/m)`）留着——它是这一轮最后的信息。
+    fn hide_retry_notice(&mut self) {
+        if let Some((index, ..)) = self.retry_note
+            && matches!(self.blocks[index], Block::Note(Note::Info(_)))
+        {
+            self.clear_retry_note();
+        }
     }
 
     /// 硬中止（Esc）后的收尾：在跑的工具块改成失败，补一条中断提示。
@@ -367,6 +444,8 @@ impl Transcript {
     /// 永远显示 running。
     pub fn abort(&mut self) {
         self.open_assistant = None;
+        // 中止会 drop 回合 future，`auto_retry_end` 不会再来，重试提示得自己收尾
+        self.clear_retry_note();
         for block in &mut self.blocks {
             if let Block::Tool(tool) = block
                 && tool.status == ToolStatus::Running
@@ -414,6 +493,10 @@ impl Transcript {
                         {
                             transcript.push_tool(id, name, arguments, cwd);
                         }
+                    }
+                    // 失败的回合在历史里只剩 stopReason，不补提示就只剩半截正文
+                    if let Some(note) = stop_reason_note(message) {
+                        transcript.push_note(note);
                     }
                 }
                 "system" => {
@@ -483,6 +566,9 @@ impl Transcript {
                     .unwrap_or("");
 
                 if role == "assistant" {
+                    // 重试请求重新出流 = 网络已恢复：重试提示立刻消失（同 TUI），
+                    // 不必等整轮跑完的 `auto_retry_end`
+                    self.hide_retry_notice();
                     self.blocks.push(Block::Assistant(Assistant::default()));
                     self.open_assistant = Some(self.blocks.len() - 1);
                 } else if role == "system" {
@@ -533,6 +619,13 @@ impl Transcript {
                 let Ok(message) = serde_json::from_value::<AgentMessage>(message.clone()) else {
                     return;
                 };
+                // 失败/截断的 assistant 消息：正文是流式拼的，错误文本只在 message_end 里
+                if message.role == "assistant" {
+                    if let Some(note) = stop_reason_note(&message) {
+                        self.push_note(note);
+                    }
+                    return;
+                }
                 if message.role != "user" {
                     return;
                 }
@@ -655,11 +748,37 @@ impl Transcript {
             "compaction_start" => self.push_note(Note::Info("Compacting context…".to_string())),
             "compaction_end" => self.push_note(Note::Info("Context compacted".to_string())),
             "auto_retry_start" => {
-                let attempt = event
-                    .get("attempt")
+                let attempt = event.get("attempt").and_then(Value::as_u64).unwrap_or(1);
+                let max = event
+                    .get("maxAttempts")
                     .and_then(Value::as_u64)
-                    .unwrap_or_default();
-                self.push_note(Note::Info(format!("Request failed, retry #{attempt}…")));
+                    .unwrap_or(1);
+                let delay_ms = event.get("delayMs").and_then(Value::as_u64).unwrap_or(0);
+                // 与 TUI 同为一行原地覆盖的提示；倒计时只在插入时算一次（GUI 没有秒级 tick）
+                let seconds = delay_ms.div_ceil(1000);
+                let text = if seconds > 0 {
+                    format!("Retrying ({attempt}/{max}) in {seconds}s... (escape to cancel)")
+                } else {
+                    format!("Retrying ({attempt}/{max})... (escape to cancel)")
+                };
+                self.upsert_retry_note(Note::Info(text), attempt, max);
+            }
+            "auto_retry_end" => {
+                let success = event
+                    .get("success")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                if success {
+                    // 网络恢复：提示行原地消失（不删块，见 upsert_retry_note）
+                    self.clear_retry_note();
+                } else if let Some((_, attempt, max)) = self.retry_note {
+                    // 失败行留在原地，下一次 start 覆盖它，不堆积
+                    self.upsert_retry_note(
+                        Note::Error(format!("Retry failed ({attempt}/{max})")),
+                        attempt,
+                        max,
+                    );
+                }
             }
             "error" => {
                 let message = event
@@ -752,6 +871,16 @@ impl Transcript {
 pub fn is_blank_assistant(block: &Block) -> bool {
     matches!(block, Block::Assistant(assistant)
         if assistant.text.trim().is_empty() && assistant.thinking.trim().is_empty())
+}
+
+/// 空提示块：重试提示收尾时被清空内容（不删块），渲染时同空助手块一样跳过。
+pub fn is_blank_note(block: &Block) -> bool {
+    matches!(block, Block::Note(note) if note.is_empty())
+}
+
+/// 这一块渲染出来没有任何内容（高度为 0，却仍占一份流间距）。
+pub fn is_blank_block(block: &Block) -> bool {
+    is_blank_assistant(block) || is_blank_note(block)
 }
 
 /// 入参压成一行摘要（过长截断）。
@@ -1148,7 +1277,7 @@ fn image_source(path: &Path) -> ImageSource {
         .ok()
         .and_then(|bytes| {
             let mime = mime::detect_image_mime(&bytes)?;
-            let format = ImageFormat::from_mime_type(&mime)?;
+            let format = ImageFormat::from_mime_type(mime)?;
             Some(ImageSource::from(Arc::new(Image::from_bytes(
                 format, bytes,
             ))))
@@ -2500,6 +2629,116 @@ mod tests {
             ..Assistant::default()
         });
         assert!(!is_blank_assistant(&with_thinking));
+
+        // 重试提示收尾后被清空内容（不删块），同样得跳过
+        let empty_note = Block::Note(Note::Info(String::new()));
+        assert!(is_blank_note(&empty_note));
+        assert!(is_blank_block(&empty_note));
+        assert!(!is_blank_note(&Block::Note(Note::Info("hi".into()))));
+    }
+
+    /// 失败的 assistant 消息要把 stopReason 的错误文本落成提示行（网络错误、截断）。
+    #[test]
+    fn assistant_stop_reason_becomes_note() {
+        let mut failed = AgentMessage::user_text("");
+        failed.role = "assistant".to_string();
+        failed.stop_reason = Some("error".to_string());
+        failed.error_message = Some("connection reset by peer".to_string());
+
+        let mut transcript = Transcript::default();
+        transcript.apply(
+            &serde_json::json!({
+                "type": "message_end",
+                "message": serde_json::to_value(&failed).unwrap(),
+            }),
+            "/tmp",
+        );
+        assert!(matches!(
+            transcript.blocks(),
+            [Block::Note(Note::Error(text))] if text == "Error: connection reset by peer"
+        ));
+
+        // 历史重建走同一条文案：不补提示就只剩半截正文
+        let rebuilt = Transcript::from_messages(&[failed], "/tmp");
+        assert!(matches!(
+            rebuilt.blocks(),
+            [Block::Assistant(_), Block::Note(Note::Error(text))]
+                if text == "Error: connection reset by peer"
+        ));
+    }
+
+    /// 重试提示原地覆盖，成功后清空，失败改成错误行。
+    #[test]
+    fn auto_retry_note_is_updated_in_place() {
+        let mut transcript = Transcript::default();
+        let start = serde_json::json!({
+            "type": "auto_retry_start",
+            "attempt": 1,
+            "maxAttempts": 3,
+            "delayMs": 2000,
+        });
+        transcript.apply(&start, "/tmp");
+        assert!(matches!(
+            transcript.blocks(),
+            [Block::Note(Note::Info(text))] if text == "Retrying (1/3) in 2s... (escape to cancel)"
+        ));
+
+        transcript.apply(
+            &serde_json::json!({
+                "type": "auto_retry_start",
+                "attempt": 2,
+                "maxAttempts": 3,
+                "delayMs": 4000,
+            }),
+            "/tmp",
+        );
+        assert_eq!(transcript.blocks().len(), 1, "重试提示不得堆积成多行");
+
+        // 恢复成功：内容清空、渲染跳过，块本身留着（块下标还被其它表引用）
+        transcript.apply(
+            &serde_json::json!({
+                "type": "auto_retry_end",
+                "attempt": 2,
+                "success": true,
+            }),
+            "/tmp",
+        );
+        assert!(matches!(transcript.blocks(), [block] if is_blank_block(block)));
+
+        // 再次失败：摆在一条新块上（上一条已被清空收尾），不叠加旧行
+        transcript.apply(
+            &serde_json::json!({
+                "type": "auto_retry_start",
+                "attempt": 3,
+                "maxAttempts": 3,
+                "delayMs": 0,
+            }),
+            "/tmp",
+        );
+        transcript.apply(
+            &serde_json::json!({
+                "type": "auto_retry_end",
+                "attempt": 3,
+                "success": false,
+            }),
+            "/tmp",
+        );
+        assert!(matches!(
+            transcript.blocks(),
+            [blank, Block::Note(Note::Error(text))]
+                if is_blank_block(blank) && text == "Retry failed (3/3)"
+        ));
+
+        // 下一轮的 assistant 出流只收起「正在重试」，上一轮的失败行留着
+        transcript.apply(
+            &serde_json::json!({ "type": "message_start", "message": { "role": "assistant" } }),
+            "/tmp",
+        );
+        assert!(matches!(
+            transcript.blocks(),
+            [blank, Block::Note(Note::Error(text)), Block::Assistant(_)]
+                if is_blank_block(blank) && text == "Retry failed (3/3)"
+        ));
     }
 
     /// diff 解析：单行替换做词级标记、多行删除/新增整行着色、块头归上下文。

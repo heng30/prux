@@ -2,12 +2,15 @@
 //!
 //! `/history` 的候选（历史实时过滤 / `@clear` 控制词）在 [`super::history`]。
 
-use super::commands::{slash_commands, subcommands_for};
+use super::commands::{builtin_commands, subcommands_for};
 use crate::{
     core::extensions::suggestion_candidates,
-    modes::tui::{
-        app::{App, FileScanResult, SuggestionItem, SuggestionKind},
-        run_in_event_loop,
+    modes::{
+        slash,
+        tui::{
+            app::{App, FileScanResult, SuggestionItem, SuggestionKind},
+            run_in_event_loop,
+        },
     },
     utils::{
         fuzzy::fuzzy_filter,
@@ -129,7 +132,7 @@ impl App {
     }
 
     /// 刷新 / 命令候选（内置命令 + 已启用扩展命令 + 技能）；命中返回 true。
-    /// 允许输入行以空白开头（pi #10218）：忽略前导空白，但替换锚点要指回原位。
+    /// 允许输入行以空白开头：忽略前导空白，但替换锚点要指回原位。
     fn refresh_command_suggestions(&mut self, prefix: &str) -> bool {
         let command_text = prefix.trim_start();
         let offset = prefix.chars().count() - command_text.chars().count();
@@ -141,13 +144,19 @@ impl App {
             let q = query.to_lowercase();
 
             // 查询字符顺序出现即可命中，按匹配质量（词边界/连续/位置）升序，位置靠前的排前面。
-            // 候选 = 内置命令 + 已启用扩展命令（禁用扩展的命令不出现）。
-            let mut candidates: Vec<(String, String)> = slash_commands();
-
-            // 技能注册为 /skill:name 命令候选（默认开启）
-            for skill in &self.skills {
-                candidates.push((format!("skill:{}", skill.name), skill.description.clone()));
-            }
+            // 候选 = 内置命令 + 已启用扩展命令 + 技能（`skill:名`）+ 提示词模板，
+            // 拼装规则与 GUI 共用（`modes::slash::candidates`）。
+            let skills: Vec<(String, String)> = self
+                .skills
+                .iter()
+                .map(|skill| (skill.name.clone(), skill.description.clone()))
+                .collect();
+            let templates: Vec<(String, String)> = self
+                .prompt_templates
+                .iter()
+                .map(|template| (template.name.clone(), template.description.clone()))
+                .collect();
+            let candidates = slash::candidates(&builtin_commands(), &[], &skills, &templates);
 
             // 技能候选按裸名（去掉 `skill:` 前缀）参与模糊匹配与排序；但显式 `skill:` 查询仍按完整名匹配。
             let explicit_skill = q.starts_with("skill:");

@@ -62,6 +62,30 @@ pub enum Action {
     },
     /// 确认面板里的 Yes：真的删（`true` = 所有项目）
     HistoryClear(bool),
+    /// `/import` 确认：真正开始导入（已校验过文件存在）
+    ImportConfirm,
+    /// `/import` 会话记录的 cwd 与当前不一致：继续在当前目录恢复
+    ImportCwdContinue,
+    /// 会话文件损坏：`true` = 抢救（跳过损坏行），`false` = 截断
+    SessionRepair(bool),
+    /// 未完成 operation 面板：`rewrite` = 先把旧 run 标记为已结束再打开
+    ResumeZombie {
+        /// 会话文件路径
+        path: String,
+        /// true = rewrite，false = continue
+        rewrite: bool,
+    },
+    /// 未完成 operation 面板取消：文件不动，也不打开会话
+    ZombieCancel,
+    /// 导入确认 / cwd 确认 / 修复选择共用的取消
+    SessionCancel,
+    /// `/bug`：带着复现描述打包；`include_session` 决定是否附带会话记录
+    BugReport {
+        /// 用户写的复现描述（可为空）
+        hint: String,
+        /// true = 连同会话记录一起打包
+        include_session: bool,
+    },
     /// 切到某个工作目录（最近目录列表）
     SwitchCwdTo(String),
     /// 打开系统目录选择器
@@ -473,7 +497,7 @@ impl Info {
     }
 
     /// 同一份内容改成按 Markdown 渲染（拿回 `self`，构建时链式用）
-    pub fn as_markdown(mut self) -> Self {
+    pub fn into_markdown(mut self) -> Self {
         self.markdown = true;
         self
     }

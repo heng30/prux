@@ -261,6 +261,26 @@ pub fn resolve_path(raw: &str, cwd: &str) -> PathBuf {
     }
 }
 
+/// 解析命令参数里的第一个路径（`/export <path>` 这类命令共用）。
+///
+/// 取第一个空白分隔的片段，支持 `'..'` / `".."` 包裹的含空格路径；
+/// 参数为空、或引号没闭合时返回 `None`（调用方回落到默认行为）。
+pub fn parse_path_arg(args: &str) -> Option<String> {
+    let args = args.trim_start();
+    if args.is_empty() {
+        return None;
+    }
+    let first = args.chars().next()?;
+    if first == '"' || first == '\'' {
+        let rest = &args[first.len_utf8()..];
+        return rest
+            .find(first)
+            .map(|i| rest[..i].to_string())
+            .filter(|s| !s.is_empty());
+    }
+    Some(args.split_whitespace().next().unwrap_or("").to_string())
+}
+
 /// 展开 ~ 前缀的裸路径
 pub fn expand_tilde_path(raw: String) -> PathBuf {
     resolve_path(&raw, ".")
@@ -313,15 +333,15 @@ pub fn theme_name_from_arg(arg: &str) -> String {
 /// MCP、沙箱与本地 `!cmd`，统一靠这个槽跟随会话，而不是留在进程启动目录。
 pub fn set_session_cwd(dir: &str) {
     #[cfg(any(test, feature = "test-support"))]
-    {
-        let _ = dir;
-        return;
-    }
+    let _ = dir;
 
-    let mut slot = SESSION_CWD
-        .write()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    *slot = Some(PathBuf::from(dir));
+    #[cfg(not(any(test, feature = "test-support")))]
+    {
+        let mut slot = SESSION_CWD
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *slot = Some(PathBuf::from(dir));
+    }
 }
 
 /// 当前工作目录；读取失败时回退 `.`。

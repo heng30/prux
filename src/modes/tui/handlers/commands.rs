@@ -25,7 +25,11 @@ use crate::{
             theme::{Theme, available_theme_names},
         },
     },
-    utils::{glyphs::DEF_DONE, paths::resolve_path, wheel::WheelScrollAccelerator},
+    utils::{
+        glyphs::DEF_DONE,
+        paths::{parse_path_arg, resolve_path},
+        wheel::WheelScrollAccelerator,
+    },
 };
 use std::{
     path::{Path, PathBuf},
@@ -558,7 +562,8 @@ impl App {
 
     /// /export：会话导出由 worker 执行（回执 command_notice）
     fn cmd_export(&mut self, out: Option<&str>) {
-        let out = out.and_then(parse_path_arg);
+        // 去掉命令名，路径解析与 GUI 共用 `utils::paths::parse_path_arg`
+        let out = out.and_then(|raw| parse_path_arg(cmd_arg(raw, "export")));
         let theme = Some(self.theme.name.clone());
         self.worker.send(AgentCommand::Export { out, theme });
     }
@@ -934,40 +939,12 @@ impl App {
     }
 }
 
-/// 解析 "/export <path>" 等带路径命令的参数
-fn parse_path_arg(cmd_with_prefix: &str) -> Option<String> {
-    let space = cmd_with_prefix.find(' ')?;
-    let args = cmd_with_prefix[space + 1..].trim_start();
-    if args.is_empty() {
-        return None;
-    }
-    let first = args.chars().next()?;
-    if first == '"' || first == '\'' {
-        let rest = &args[first.len_utf8()..];
-        return rest
-            .find(first)
-            .map(|i| rest[..i].to_string())
-            .filter(|s| !s.is_empty());
-    }
-    Some(args.split_whitespace().next().unwrap_or("").to_string())
-}
-
-/// 动态命令候选（名称, 描述）：内置命令 + 已启用扩展声明的命令。
-/// 扩展命令随扩展生命周期增删（/extension 禁用、模式过滤）；
-/// 与内置命令重名的扩展命令被排除（内置优先）。
-pub(super) fn slash_commands() -> Vec<(String, String)> {
-    let mut out: Vec<(String, String)> = BUILTIN_COMMANDS
+/// 内置命令的 `(名称, 说明)`（`/` 补全与候选表用；子命令见 [`subcommands_for`]）。
+pub(super) fn builtin_commands() -> Vec<(&'static str, &'static str)> {
+    BUILTIN_COMMANDS
         .iter()
-        .map(|(n, d, _)| (n.to_string(), d.to_string()))
-        .collect();
-    let builtin: Vec<&str> = BUILTIN_COMMANDS.iter().map(|(n, _, _)| *n).collect();
-    for cmd in core::extensions::registered_commands() {
-        if builtin.contains(&cmd.name.as_str()) {
-            continue;
-        }
-        out.push((cmd.name, cmd.description));
-    }
-    out
+        .map(|(name, description, _)| (*name, *description))
+        .collect()
 }
 
 /// 命令的子命令候选（`/<命令> ` 后的二级候选，按声明顺序）。
@@ -1041,6 +1018,13 @@ pub(super) fn extension_keybinding_handler(
         .iter()
         .find(|(e, i, _)| e == ext && i == id)
         .map(|(_, _, h)| *h)
+}
+
+/// 命令候选里「内置 + 扩展」的部分（测试用；补全面板走
+/// [`crate::modes::slash::candidates`]，它会再追加技能与提示词模板）。
+#[cfg(test)]
+pub(super) fn slash_commands() -> Vec<(String, String)> {
+    crate::modes::slash::candidates(&builtin_commands(), &[], &[], &[])
 }
 
 #[cfg(test)]
@@ -2452,19 +2436,16 @@ mod tests {
 
     #[test]
     fn export_path_arg_parses_prefix_and_quotes() {
-        // 对齐 pi getPathCommandArgument：/export ~/out.html 只取路径参数，
-        // 支持引号包裹
+        // 对齐 pi getPathCommandArgument：只取第一个路径参数，支持引号包裹
+        // （`/export` 的命令名由 `cmd_arg` 去掉，解析本体与 GUI 共用）
+        assert_eq!(parse_path_arg("~/out.html"), Some("~/out.html".to_string()));
         assert_eq!(
-            parse_path_arg("export ~/out.html"),
-            Some("~/out.html".to_string())
-        );
-        assert_eq!(
-            parse_path_arg("export \"/tmp/a b.html\""),
+            parse_path_arg("\"/tmp/a b.html\""),
             Some("/tmp/a b.html".to_string())
         );
-        assert_eq!(parse_path_arg("export"), None, "无空格无参数");
-        assert_eq!(parse_path_arg("export "), None, "仅前缀无参数");
-        assert_eq!(parse_path_arg("export foo bar"), Some("foo".to_string()));
+        assert_eq!(parse_path_arg(""), None, "无参数");
+        assert_eq!(parse_path_arg("   "), None, "仅空白");
+        assert_eq!(parse_path_arg("foo bar"), Some("foo".to_string()));
     }
 
     #[test]

@@ -60,12 +60,15 @@ use crate::{
     core::{
         extensions::{self, ExtensionMode, OverlayKey, dispatch_agent_event, git_branch},
         model_scope::ScopedModel,
+        prompt_templates::PromptTemplate,
         provider::AgentMessage,
-        session_manager::Session,
+        session_manager::{OpenSessionResult, Session, SessionRepairPlan},
         settings_manager,
+        skills::Skill,
     },
     extensions::extra_themes,
     modes::tui::{
+        self,
         agent_actor::{AgentCommand, CommandTx},
         handlers::tools::run_shell_command,
     },
@@ -150,6 +153,42 @@ struct SessionMenu {
     position: gpui::Point<Pixels>,
     /// 高亮项：0 = 重命名，1 = 删除。键盘与鼠标共用这一个状态，保证同时只有一行亮
     selected: usize,
+}
+
+/// 会话类操作的进行中状态：`/import` 的确认 → 复制 → cwd 确认，以及损坏会话的修复选择。
+///
+/// 每一步都由覆盖层列表回答，答案落回这里（覆盖层收起时动作已经丢了上下文）。
+enum PendingSession {
+    /// 等用户确认「导入会替换当前会话」
+    Confirm {
+        /// 用户给的源文件
+        source: PathBuf,
+    },
+    /// 已复制进当前会话目录，等用户确认会话记录的 cwd 与当前不一致
+    Cwd {
+        /// 复制后的会话文件（确认后直接切过去）
+        destination: PathBuf,
+    },
+    /// 文件中间行损坏，等用户选择修复方式
+    Repair {
+        /// 待修复的会话文件
+        path: PathBuf,
+        /// 修复方案（截断 / 抢救）
+        plan: SessionRepairPlan,
+        /// 修好之后做什么（决定取消时怎么提示）
+        intent: RepairIntent,
+    },
+}
+
+/// 修好损坏会话之后的去向：`/import`、`/resume`、侧栏、启动选中的会话共用同一个修复面板。
+enum RepairIntent {
+    /// 打开该文件
+    Resume,
+    /// 启动时 `-s` 指向别的目录：修好后 fork 进当前项目
+    Fork {
+        /// 目标会话目录（`None` = 默认目录）
+        dir: Option<PathBuf>,
+    },
 }
 
 /// 会话对话框：重命名 / 删除确认。
@@ -390,6 +429,12 @@ pub struct GuiApp {
     session_menu: Option<SessionMenu>,
     /// 会话对话框（重命名 / 删除确认）
     dialog: Option<SessionDialog>,
+    /// 进行中的会话操作（导入确认 / cwd 不一致 / 损坏修复）
+    pending_session: Option<PendingSession>,
+    /// 本会话可用的技能：worker 启动与 `/reload` 后推来（`/` 补全与提交展开都用）
+    skills: Vec<Skill>,
+    /// 本会话可用的提示词模板：同上（补全要名字，展开要正文）
+    prompt_templates: Vec<PromptTemplate>,
     /// `-a/--approve` / `--no-approve` 的显式信任覆盖：Some 时启动不弹信任面板
     trust_override: Option<bool>,
     /// 停靠面板是否可见（`/dock` 切换或扩展 `ShowDock` 请求置位；无内容时不显示）
@@ -404,6 +449,8 @@ pub struct GuiApp {
 
 impl GuiApp {
     /// 构造根视图：接上事件通道，并在有初始消息时立即开跑第一轮。
+    // 参数是一路透传的启动配置，包成结构体只会多一层解构。
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         theme: Theme,
         cmd_tx: CommandTx,
@@ -510,6 +557,9 @@ impl GuiApp {
             sidebar_hovered: false,
             session_menu: None,
             dialog: None,
+            pending_session: None,
+            skills: Vec::new(),
+            prompt_templates: Vec::new(),
             trust_override,
             dock_visible: false,
             dock_scroll: ScrollHandle::new(),
@@ -517,6 +567,21 @@ impl GuiApp {
         };
         app.start_request_poll(cx);
         app.maybe_ask_trust(cx);
+
+        // 启动时选中的会话损坏：`bootstrap()` 把修复请求 stage 在全局队列里
+        // （它把会话让出来，界面起来后由这里接手；同 TUI 的首帧取用）。
+        // 修复面板压过启动信任面板（会话文件有数据风险，优先级更高；
+        // 信任决定随时可以 `/trust` 补，修复提示错过就只剩一句「打不开」）。
+        if let Some(request) = tui::handlers::take_staged_zombie_operations() {
+            app.stage_zombie_operations(request.path, request.count, cx);
+        }
+        if let Some(request) = tui::handlers::take_staged_session_repair() {
+            let intent = match request.action {
+                tui::app::RepairAction::Resume => RepairIntent::Resume,
+                tui::app::RepairAction::Fork { dir } => RepairIntent::Fork { dir },
+            };
+            app.stage_session_repair(request.path, request.plan, intent, cx);
+        }
 
         // 信任面板优先（安全门控），它没弹时才让登录面板占位
         if needs_login && app.overlay.is_none() {
@@ -586,6 +651,19 @@ impl GuiApp {
                 self.follow_bottom();
             }
             GuiEvent::History(messages) => self.replace_history(messages),
+            GuiEvent::PromptAssets { skills, templates } => {
+                // 启动与 `/reload` 各来一份：补全候选与提交展开都按最新这份走
+                self.skills = skills;
+                self.prompt_templates = templates;
+            }
+            GuiEvent::SessionZombie { path, count } => {
+                // 崩溃残留：先选恢复方式，确认后才装配会话
+                self.stage_zombie_operations(path, count, cx);
+            }
+            GuiEvent::SessionRepair { path, plan } => {
+                // 打开损坏会话：先弹修复面板，确认后写回文件再重开
+                self.stage_session_repair(path, plan, RepairIntent::Resume, cx);
+            }
             GuiEvent::Rewound {
                 messages,
                 removed_input,

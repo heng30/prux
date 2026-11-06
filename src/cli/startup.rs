@@ -37,9 +37,12 @@ use crate::{
         tools_manager,
     },
     extensions::{self, skills::bundled_skill_names},
-    modes::tui::{
-        self,
-        app::{ReloadCtx, RepairAction, SessionRepairRequest, ZombieOperationsRequest},
+    modes::{
+        is_gui_binary,
+        tui::{
+            self,
+            app::{ReloadCtx, RepairAction, SessionRepairRequest, ZombieOperationsRequest},
+        },
     },
     utils::paths::{cwd, ensure_home_env, expand_tilde_path, resolve_path, theme_name_from_arg},
 };
@@ -555,8 +558,8 @@ fn fallback_model() -> (String, String) {
         .unwrap_or_else(|| ("deepseek".to_string(), "deepseek-v4-pro".to_string()))
 }
 
-/// 中间行损坏的会话：非交互（stdin/stdout 非 TTY）直接失败退出；
-/// 交互时把修复请求 stage 到全局队列，TUI 事件循环首帧弹确认面板，
+/// 中间行损坏的会话：没有终端也没有 GUI 时直接失败退出；
+/// 否则把修复请求 stage 到全局队列，界面起来后首帧弹修复面板，
 /// 并返回 None 让主流程正常启动（面板确认后经 worker ResumeSession 重开）。
 fn stage_session_repair_for_tui(path: PathBuf, plan: SessionRepairPlan) -> Option<Session> {
     stage_session_repair_for_tui_req(SessionRepairRequest {
@@ -571,7 +574,8 @@ fn stage_session_repair_for_tui(path: PathBuf, plan: SessionRepairPlan) -> Optio
 /// worker ResumeZombie 决定是否装配；无僵尸或非交互时直接返回会话。
 fn maybe_open_with_zombie_panel(s: Session) -> Option<Session> {
     let count = s.open_operations_count();
-    if count < 2 || !stdin_is_tty() || !stdout_is_tty() {
+    // 没有终端的 TUI 只能按「只读容忍」直接打开（桌面 GUI 没有终端也能弹面板）
+    if count < 2 || (!is_gui_binary() && (!stdin_is_tty() || !stdout_is_tty())) {
         return Some(s);
     }
 
@@ -588,13 +592,14 @@ fn maybe_open_with_zombie_panel(s: Session) -> Option<Session> {
 /// 交互时把修复请求 stage 到全局队列，TUI 事件循环首帧弹确认面板，
 /// 并返回 None 让主流程正常启动（面板确认后经 worker 按动作重开/fork）。
 fn stage_session_repair_for_tui_req(req: SessionRepairRequest) -> Option<Session> {
-    if !stdin_is_tty() || !stdout_is_tty() {
+    // GUI 没有终端也能弹修复面板；没有终端的 TUI 只能报错退出
+    if !is_gui_binary() && (!stdin_is_tty() || !stdout_is_tty()) {
         eprintln!("Error: failed to open session: {}", req.plan.error);
         std::process::exit(1);
     }
 
     eprintln!(
-        "Warning: session corrupted ({}); will ask to repair in the TUI.",
+        "Warning: session corrupted ({}); will ask to repair it in the UI.",
         req.plan.error
     );
 

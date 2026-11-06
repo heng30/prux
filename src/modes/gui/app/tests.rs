@@ -429,3 +429,111 @@ fn bulk_key_targets_only_visible_rows() {
     list.query.insert("bet");
     assert_eq!(bulk_target_names(&list), ["beta"]);
 }
+
+/// `/import` 参数校验：空参数与非存在文件各报一句，存在的文件解析成绝对路径。
+#[test]
+fn import_source_rejects_blank_and_missing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cwd = tmp.path().to_str().unwrap();
+
+    assert_eq!(
+        super::menus::import_source("  ", cwd).unwrap_err(),
+        "Usage: /import <path.jsonl>"
+    );
+    assert_eq!(
+        super::menus::import_source("@", cwd).unwrap_err(),
+        "Usage: /import <path.jsonl>"
+    );
+
+    let missing = super::menus::import_source("nope.jsonl", cwd).unwrap_err();
+    assert!(
+        missing.starts_with("import failed: Failed to read session file: "),
+        "{missing}"
+    );
+    assert!(
+        missing.ends_with(": No such file or directory"),
+        "{missing}"
+    );
+
+    // `@` 前缀与相对路径都要能解析
+    let file = tmp.path().join("s.jsonl");
+    std::fs::write(&file, "").unwrap();
+    assert_eq!(super::menus::import_source("@s.jsonl", cwd).unwrap(), file);
+}
+
+/// 导入复制不覆盖同名会话：第二次导入得到 `-1` 后缀，原文件内容保持原样。
+#[test]
+fn import_copy_never_overwrites() {
+    let _agent = crate::test_support::AgentDirGuard::temp();
+    let tmp = tempfile::tempdir().unwrap();
+    let cwd = tmp.path().to_str().unwrap();
+
+    let source = tmp.path().join("elsewhere.jsonl");
+    std::fs::write(&source, "first").unwrap();
+
+    let first = super::menus::import_copy(&source, cwd).unwrap();
+    assert_eq!(std::fs::read_to_string(&first).unwrap(), "first");
+
+    let second = super::menus::import_copy(&source, cwd).unwrap();
+    assert_ne!(first, second, "同名冲突时必须换一个文件名");
+    assert_eq!(
+        second.file_name().unwrap().to_string_lossy(),
+        "elsewhere-1.jsonl"
+    );
+
+    // 源文件已在会话目录里：就地打开，不再复制
+    assert_eq!(super::menus::import_copy(&first, cwd).unwrap(), first);
+}
+
+/// 修复面板条目：可抢救时先给抢救、再给截断；不可抢救只给截断（取消由调用方补）。
+#[test]
+fn repair_choices_follow_salvage_availability() {
+    use crate::core::session_manager::SessionRepairPlan;
+
+    let plan = SessionRepairPlan {
+        error: "line 3 is broken".into(),
+        total_lines: 10,
+        valid_lines: 4,
+        truncate_content: "header\n".into(),
+        salvage_content: Some("header\nok\nok\n".into()),
+        salvaged_skipped: 5,
+    };
+    let choices = super::menus::repair_choices(&plan);
+    assert_eq!(choices.len(), 2);
+    assert!(choices[0].1, "抢救排第一");
+    assert!(
+        choices[0]
+            .0
+            .starts_with("Salvage: skip broken lines, keep 3 lines")
+    );
+    assert!(!choices[1].1);
+    assert!(choices[1].0.contains("6 dropped"), "{:?}", choices[1].0);
+
+    let repair_only = SessionRepairPlan {
+        salvage_content: None,
+        ..plan
+    };
+    let choices = super::menus::repair_choices(&repair_only);
+    assert_eq!(choices.len(), 1);
+    assert!(!choices[0].1);
+    assert!(
+        choices[0]
+            .0
+            .starts_with("Truncate: keep prefix only (4 lines kept")
+    );
+}
+
+/// 未完成 operation 面板：Continue 在前、Rewrite 说明里给出「旧的 run 数」。
+#[test]
+fn zombie_choices_list_continue_before_rewrite() {
+    let choices = super::menus::zombie_choices(3);
+    assert_eq!(choices.len(), 2);
+    assert!(!choices[0].1, "第一项是 continue");
+    assert!(choices[0].0.starts_with("Continue: resume latest run"));
+    assert!(choices[1].1, "第二项是 rewrite");
+    assert!(
+        choices[1].0.contains("2 older run(s)"),
+        "{:?}",
+        choices[1].0
+    );
+}
