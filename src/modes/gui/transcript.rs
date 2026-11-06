@@ -106,6 +106,8 @@ pub struct Assistant {
     pub text: String,
     /// 思考内容（流式追加，默认折叠显示首行）
     pub thinking: String,
+    /// 思考段是否展开全文（alt+点击切换；收起时只显示前几百字的预览）
+    pub thinking_expanded: bool,
     /// 正文的解析结果缓存
     body: Body,
 }
@@ -287,6 +289,88 @@ pub fn selected_text(sel: TextSel, lines: &[LineInfo]) -> String {
         }
     }
     out.join("\n")
+}
+
+/// 登记一行可选文本，返回（行序号, 命中这一行的字符区间）。
+///
+/// 行序号按渲染顺序递增，`TextSel` 的行号就是这里的顺序；`font_size` 供点选时
+/// 重新排版定位列号，必须与这一行实际渲染的字号一致。
+fn track_line(lines: &mut TextLines, text: &str, font_size: f32) -> (usize, Option<Range<usize>>) {
+    let index = lines.next;
+    lines.next += 1;
+    let len = text.chars().count();
+    lines.rows.borrow_mut().push(LineInfo {
+        index,
+        text: text.to_string(),
+        font_size,
+    });
+    (
+        index,
+        lines
+            .selection
+            .and_then(|selection| selection.range_for(index, len)),
+    )
+}
+
+/// 行元素的边界登记：挂在行的直接父盒上，把孩子盒当成这一行。
+///
+/// 外层行盒的缩进/padding 不进列号换算，否则点选落点会整体偏移。
+fn bounds_handler(
+    lines: &TextLines,
+    index: usize,
+) -> impl Fn(Vec<Bounds<Pixels>>, &mut Window, &mut gpui::App) + 'static {
+    let bounds = lines.bounds.clone();
+    let text_bounds = lines.text_bounds.clone();
+    move |children: Vec<Bounds<Pixels>>, _: &mut Window, _: &mut gpui::App| {
+        if let Some(child) = children.first() {
+            bounds.borrow_mut().insert(index, *child);
+            text_bounds.borrow_mut().insert(index, *child);
+        }
+    }
+}
+
+/// 纯文本行：登记选区，选中部分按字符画底色，并记录屏幕边界。
+///
+/// `font_size` / `color` 要与实际渲染一致：字号用于点选时重新排版定位列号。
+fn text_line(
+    lines: &mut TextLines,
+    theme: &Theme,
+    text: &str,
+    font_size: f32,
+    color: Hsla,
+) -> AnyElement {
+    let (index, selected) = track_line(lines, text, font_size);
+    let element = inline_text(
+        (text.to_string(), Vec::new(), Vec::new()),
+        theme,
+        selected,
+        row_element_id("sel-line", 0, index),
+    );
+    div()
+        .w_full()
+        .min_w_0()
+        .text_color(color)
+        .child(element)
+        .on_children_prepainted(bounds_handler(lines, index))
+        .into_any_element()
+}
+
+/// 结构化行（等宽网格、代码行、diff 行）：同样登记选区，但整行画底色——
+/// 这些行由多个定宽单元拼成，没法按字符切高亮。
+fn block_line(
+    lines: &mut TextLines,
+    theme: &Theme,
+    text: &str,
+    font_size: f32,
+    element: AnyElement,
+) -> AnyElement {
+    let (index, selected) = track_line(lines, text, font_size);
+    let mut row = div().w_full().min_w_0().child(element);
+    if selected.is_some() {
+        row = row.bg(theme.selection);
+    }
+    row.on_children_prepainted(bounds_handler(lines, index))
+        .into_any_element()
 }
 
 /// 渲染对话流的版式上下文：内容可用宽度 + 选区/行登记 + 所属实体。
@@ -1149,7 +1233,7 @@ fn word_tokens(text: &str) -> Vec<&str> {
 }
 
 /// edit 工具的 diff 卡片：行号 gutter + 增/删/上下文配色，词级变动加底色。
-fn diff_body(diff: &str, theme: &Theme, max: usize) -> (AnyElement, usize) {
+fn diff_body(diff: &str, theme: &Theme, max: usize, lines: &mut TextLines) -> (AnyElement, usize) {
     let rows = diff_rows(diff.trim_end());
     let (shown, hidden) = visible_rows(rows.len(), max);
     let mut column = div()
@@ -1169,6 +1253,14 @@ fn diff_body(diff: &str, theme: &Theme, max: usize) -> (AnyElement, usize) {
             DiffKind::Removed => theme.danger.opacity(0.22),
             DiffKind::Context => theme.overlay,
         };
+        let plain = format!(
+            "{}{}",
+            row.gutter,
+            row.spans
+                .iter()
+                .map(|(text, _)| text.as_str())
+                .collect::<String>()
+        );
         let mut line = div().w_full().flex().items_start().gap(px(SPACE_SM));
         if !row.gutter.is_empty() {
             line = line.child(
@@ -1191,7 +1283,13 @@ fn diff_body(diff: &str, theme: &Theme, max: usize) -> (AnyElement, usize) {
             }
             content = content.child(span);
         }
-        column = column.child(line.child(content));
+        column = column.child(block_line(
+            lines,
+            theme,
+            &plain,
+            FONT_SMALL,
+            line.child(content).into_any_element(),
+        ));
     }
     (column.into_any_element(), hidden)
 }
@@ -1207,23 +1305,24 @@ fn visible_rows(total: usize, max: usize) -> (usize, usize) {
 ///
 /// `paint` 决定每行的颜色：工具输出按 diff 着色，write 正文与 shell 命令统一一色。
 /// 返回渲染好的正文与被截掉的行数，“还有 N 行”的提示由卡片统一出（只要一条）。
-fn output_body(text: &str, paint: impl Fn(&str) -> Hsla, max: usize) -> (AnyElement, usize) {
+fn output_body(
+    text: &str,
+    theme: &Theme,
+    paint: impl Fn(&str) -> Hsla,
+    max: usize,
+    lines: &mut TextLines,
+) -> (AnyElement, usize) {
     let mut column = div()
         .w_full()
         .flex()
         .flex_col()
         .overflow_hidden()
         .text_size(px(FONT_SMALL));
-    let lines = text.trim().lines();
-    let (shown, hidden) = visible_rows(lines.clone().count(), max);
-    for line in lines.take(shown) {
-        column = column.child(
-            div()
-                .w_full()
-                .min_w_0()
-                .text_color(paint(line))
-                .child(SharedString::from(line.to_string())),
-        );
+    let rows = text.trim().lines();
+    let (shown, hidden) = visible_rows(rows.clone().count(), max);
+    for line in rows.take(shown) {
+        let color = paint(line);
+        column = column.child(text_line(lines, theme, line, FONT_SMALL, color));
     }
 
     (column.into_any_element(), hidden)
@@ -1237,7 +1336,7 @@ fn output_hint(hidden: usize, expanded: bool) -> Option<String> {
         if expanded {
             format!("⋯ {hidden} more line(s)")
         } else {
-            format!("⋯ {hidden} more line(s) · click to expand")
+            format!("⋯ {hidden} more line(s) · alt+click to expand")
         }
     })
 }
@@ -1406,13 +1505,15 @@ pub fn render_block(
         // 用户消息：右对齐气泡，与助手正文拉开层级
         Block::User(message) => user_block(message, theme, expand_tools, index, ctx, window, cx),
         // 助手回复：不加卡片，直接正文；思考内容单独一段细边框提示（Ctrl-T 收起）
-        Block::Assistant(assistant) => assistant_block(assistant, theme, show_thinking, index, ctx),
+        Block::Assistant(assistant) => {
+            assistant_block(assistant, theme, show_thinking, index, ctx, cx)
+        }
         // 工具调用：带描边的小卡片，状态用圆点表示
-        Block::Tool(tool) => tool_block(tool, theme, expand_tools, index, cx),
+        Block::Tool(tool) => tool_block(tool, theme, expand_tools, index, ctx.lines, cx),
         // 系统消息：灰底细边框 + 标签，和用户/助手区分开
-        Block::System(text) => system_block(text, theme, ctx.width),
+        Block::System(text) => system_block(text, theme, ctx.lines, ctx.width),
         // 提示 / 错误：一行小字 + 记号
-        Block::Note(note) => note_block(note, theme),
+        Block::Note(note) => note_block(note, theme, ctx.lines),
     }
 }
 
@@ -1436,13 +1537,14 @@ fn natural_width(window: &Window, text: &str, font_size: Pixels) -> Pixels {
     })
 }
 
-/// 用户消息气泡：右对齐，长消息可点开，`@图片` 引用渲染成缩略图。
+/// 用户消息气泡：右对齐，长消息可 alt+点击展开（普通点击留给选字复制），
+/// `@图片` 引用渲染成缩略图。
 fn user_block(
     message: &UserMessage,
     theme: &Theme,
     expand_tools: bool,
     index: usize,
-    ctx: &FlowCtx<'_>,
+    ctx: &mut FlowCtx<'_>,
     window: &mut Window,
     cx: &mut Context<GuiApp>,
 ) -> AnyElement {
@@ -1455,9 +1557,9 @@ fn user_block(
     let cap = ctx.width.min(px(USER_BUBBLE_MAX_WIDTH));
     let hint = (hidden > 0).then(|| {
         if expanded {
-            "click to collapse".to_string()
+            "alt+click to collapse".to_string()
         } else {
-            format!("⋯ {hidden} more line(s) · click to expand")
+            format!("⋯ {hidden} more line(s) · alt+click to expand")
         }
     });
 
@@ -1487,14 +1589,19 @@ fn user_block(
         .text_color(theme.text)
         .cursor_pointer()
         .hover(|style| style.bg(theme.overlay_strong))
-        // 点气泡展开/收起长消息
-        .on_click(cx.listener(move |this, _, _, cx| this.toggle_user(index, cx)))
-        .child(
-            div()
-                .w(inner)
-                .min_w_0()
-                .child(SharedString::from(shown.join("\n"))),
-        );
+        // alt+点击气泡展开/收起长消息
+        .on_click(cx.listener(move |this, _, window, cx| {
+            if window.modifiers().alt {
+                this.toggle_user(index, cx);
+            }
+        }));
+
+    // 正文逐行成元素：每行都要能落到选区里（整段一个文本元素时选不到行号）
+    let mut body = div().w(inner).min_w_0().flex().flex_col();
+    for line in &shown {
+        body = body.child(text_line(ctx.lines, theme, line, FONT_BODY, theme.text));
+    }
+    bubble = bubble.child(body);
 
     if let Some(hint) = hint {
         bubble = bubble.child(
@@ -1528,6 +1635,7 @@ fn assistant_block(
     show_thinking: bool,
     index: usize,
     ctx: &mut FlowCtx<'_>,
+    cx: &mut Context<GuiApp>,
 ) -> AnyElement {
     let mut column = div()
         .w_full()
@@ -1537,18 +1645,47 @@ fn assistant_block(
         .pt(px(SPACE_XXS));
 
     if show_thinking && !assistant.thinking.trim().is_empty() {
-        column = column.child(
-            div()
-                .pl(px(SPACE_SM))
-                .border_l_2()
-                .border_color(theme.border_strong)
-                .text_size(px(FONT_SMALL))
-                .text_color(theme.text_tertiary)
-                .child(SharedString::from(crate::utils::display::fit_display(
-                    assistant.thinking.trim(),
-                    300,
-                ))),
-        );
+        let thinking = assistant.thinking.trim();
+        let preview = crate::utils::display::fit_display(thinking, 300);
+        let truncated = preview != thinking;
+        let shown = if assistant.thinking_expanded {
+            thinking
+        } else {
+            preview.as_str()
+        };
+
+        let mut block = div()
+            .id(("thinking", index))
+            .pl(px(SPACE_SM))
+            .border_l_2()
+            .border_color(theme.border_strong)
+            .text_size(px(FONT_SMALL))
+            .flex()
+            .flex_col()
+            .gap(px(SPACE_XXS))
+            .cursor_pointer()
+            .on_click(cx.listener(move |this, _, window, cx| {
+                if window.modifiers().alt {
+                    this.toggle_thinking(index, cx);
+                }
+            }));
+        for line in shown.split('\n') {
+            block = block.child(text_line(
+                ctx.lines,
+                theme,
+                line,
+                FONT_SMALL,
+                theme.text_tertiary,
+            ));
+        }
+        if truncated && !assistant.thinking_expanded {
+            block = block.child(
+                div()
+                    .text_color(theme.text_ghost)
+                    .child(SharedString::from("⋯ alt+click to expand")),
+            );
+        }
+        column = column.child(block);
     }
 
     let cols = (f32::from(ctx.width) / (FONT_SMALL * MONO_ADVANCE)) as usize;
@@ -1564,6 +1701,7 @@ fn tool_block(
     theme: &Theme,
     expand_tools: bool,
     index: usize,
+    lines: &mut TextLines,
     cx: &mut Context<GuiApp>,
 ) -> AnyElement {
     let (color, label) = match tool.status {
@@ -1587,8 +1725,12 @@ fn tool_block(
         .py(px(SPACE_SM))
         .cursor_pointer()
         .hover(|style| style.border_color(theme.border_strong))
-        // 点卡片展开/收起这一块的输出
-        .on_click(cx.listener(move |this, _, _, cx| this.toggle_tool(index, cx)));
+        // alt+点击卡片展开/收起这一块的输出
+        .on_click(cx.listener(move |this, _, window, cx| {
+            if window.modifiers().alt {
+                this.toggle_tool(index, cx);
+            }
+        }));
 
     // shell 类的命令放在卡片第二行，头部只留名字与状态
     let shell = is_shell_tool(&tool.name);
@@ -1609,14 +1751,15 @@ fn tool_block(
         );
 
     // 中间的弹性区：非 shell 放入参摘要，shell 用空白占位（把状态标签推到右侧）
+    // edit / write 的参数体量很大，头部改显文件路径（参数摘要为空）
+    let summary = if shell {
+        String::new()
+    } else if tool.args.is_empty() {
+        tool.path.clone().unwrap_or_default()
+    } else {
+        tool.args.clone()
+    };
     if !shell {
-        // edit / write 的参数体量很大，头部改显文件路径（参数摘要为空）
-        let header_text = if tool.args.is_empty() {
-            tool.path.clone().unwrap_or_default()
-        } else {
-            tool.args.clone()
-        };
-
         header = header.child(
             div()
                 .min_w_0()
@@ -1624,7 +1767,7 @@ fn tool_block(
                 .truncate()
                 .text_size(px(FONT_SMALL))
                 .text_color(theme.text_tertiary)
-                .child(SharedString::from(header_text)),
+                .child(SharedString::from(summary.clone())),
         );
     } else {
         header = header.child(div().flex_1());
@@ -1649,16 +1792,27 @@ fn tool_block(
                 .child(SharedString::from(took)),
         );
     }
-    card = card.child(
-        header.child(
-            status.child(
-                div()
-                    .text_size(px(FONT_CAPTION))
-                    .text_color(color)
-                    .child(SharedString::from(label)),
-            ),
+    // 头部整行登记成一行：「工具名 + 参数摘要」，复制卡片时能看出这是哪一次调用
+    let head_text = if summary.is_empty() {
+        tool.name.clone()
+    } else {
+        format!("{} {}", tool.name, summary)
+    };
+    let header = header.child(
+        status.child(
+            div()
+                .text_size(px(FONT_CAPTION))
+                .text_color(color)
+                .child(SharedString::from(label)),
         ),
     );
+    card = card.child(block_line(
+        lines,
+        theme,
+        &head_text,
+        FONT_SMALL,
+        header.into_any_element(),
+    ));
 
     // 按行截断而不是靠 `max_h` 裁剪：被裁掉的那部分不计入布局高度，
     // 会盖在输入卡片上，也会让钉底算错。
@@ -1674,25 +1828,31 @@ fn tool_block(
     let mut hidden = 0usize;
     if shell && !tool.args.is_empty() {
         let rows = tool.args.trim().lines().count();
-        let (body, rest) = output_body(&tool.args, |_| theme.code_text, max_lines);
+        let (body, rest) = output_body(&tool.args, theme, |_| theme.code_text, max_lines, lines);
         remaining = remaining.saturating_sub(rows.min(max_lines));
         hidden += rest;
         card = card.child(body);
     }
 
     if let Some(diff) = &tool.diff {
-        let (body, rest) = diff_body(diff, theme, remaining);
+        let (body, rest) = diff_body(diff, theme, remaining, lines);
         hidden += rest;
         card = card.child(body);
     } else if let Some(content) = &tool.content {
         // write：先把要写入的正文折起来看一眼，再看工具结果
-        let (body, rest) = output_body(content, |_| theme.text_secondary, remaining);
+        let (body, rest) = output_body(content, theme, |_| theme.text_secondary, remaining, lines);
         hidden += rest;
         card = card.child(body);
     }
 
     if tool.diff.is_none() && !tool.output.trim().is_empty() {
-        let (body, rest) = output_body(&tool.output, |line| line_color(line, theme), remaining);
+        let (body, rest) = output_body(
+            &tool.output,
+            theme,
+            |line| line_color(line, theme),
+            remaining,
+            lines,
+        );
         hidden += rest;
         card = card.child(body);
     }
@@ -1713,7 +1873,7 @@ fn tool_block(
 }
 
 /// 系统消息：灰底细边框 + `system` 标签，逐行渲染。
-fn system_block(text: &str, theme: &Theme, width: Pixels) -> AnyElement {
+fn system_block(text: &str, theme: &Theme, lines: &mut TextLines, width: Pixels) -> AnyElement {
     div()
         .w_full()
         .min_w_0()
@@ -1742,19 +1902,16 @@ fn system_block(text: &str, theme: &Theme, width: Pixels) -> AnyElement {
                 .flex_col()
                 .gap(px(SPACE_XXS))
                 .text_size(px(FONT_SMALL))
-                .text_color(theme.text_tertiary)
-                .children(text.split('\n').map(|line| {
-                    div()
-                        .w_full()
-                        .min_w_0()
-                        .child(SharedString::from(line.to_string()))
-                })),
+                .children(
+                    text.split('\n')
+                        .map(|line| text_line(lines, theme, line, FONT_SMALL, theme.text_tertiary)),
+                ),
         )
         .into_any_element()
 }
 
 /// 提示 / 错误行：`·` 或 `!` 记号 + 逐行正文。
-fn note_block(note: &Note, theme: &Theme) -> AnyElement {
+fn note_block(note: &Note, theme: &Theme, lines: &mut TextLines) -> AnyElement {
     let (text, color, mark) = match note {
         Note::Info(text) => (text, theme.text_tertiary, "·"),
         Note::Error(text) => (text, theme.danger, "!"),
@@ -1780,13 +1937,10 @@ fn note_block(note: &Note, theme: &Theme) -> AnyElement {
                 .flex()
                 .flex_col()
                 .text_size(px(FONT_SMALL))
-                .text_color(color)
-                .children(text.split('\n').map(|line| {
-                    div()
-                        .w_full()
-                        .min_w_0()
-                        .child(SharedString::from(line.to_string()))
-                })),
+                .children(
+                    text.split('\n')
+                        .map(|line| text_line(lines, theme, line, FONT_SMALL, color)),
+                ),
         )
         .into_any_element()
 }
@@ -2040,21 +2194,28 @@ fn render_rows(
                     .font_family(MONO_FONT_FAMILY);
 
                 for line in code {
+                    let text: String = line.iter().map(|(_, part)| part.as_str()).collect();
                     let mut element = div()
                         .w_full()
                         .flex()
                         .text_size(px(FONT_SMALL))
                         .text_color(theme.text);
 
-                    for (color, text) in line {
+                    for (color, part) in line {
                         element = element.child(match color {
                             Some(rgb) => div()
                                 .text_color(theme.rgb(*rgb))
-                                .child(SharedString::from(text.clone())),
-                            None => div().child(SharedString::from(text.clone())),
+                                .child(SharedString::from(part.clone())),
+                            None => div().child(SharedString::from(part.clone())),
                         });
                     }
-                    body = body.child(element);
+                    body = body.child(block_line(
+                        lines,
+                        theme,
+                        &text,
+                        FONT_SMALL,
+                        element.into_any_element(),
+                    ));
                 }
 
                 child_lines.push(None);
@@ -2062,7 +2223,7 @@ fn render_rows(
             }
             Row::Table(table) => {
                 child_lines.push(None);
-                table_body(table, theme, &mut link_id, namespace)
+                table_body(table, theme, lines, &mut link_id, namespace)
             }
             Row::Mono { lines: mono } => {
                 child_lines.push(None);
@@ -2082,7 +2243,7 @@ fn render_rows(
                     .text_size(px(FONT_SMALL))
                     .text_color(theme.code_text);
                 for line in mono {
-                    body = body.child(mono_line(line));
+                    body = body.child(block_line(lines, theme, line, FONT_SMALL, mono_line(line)));
                 }
                 body.into_any_element()
             }
@@ -2175,6 +2336,7 @@ fn mono_run(text: String, height: Pixels) -> AnyElement {
 fn table_body(
     table: &markdown::Table,
     theme: &Theme,
+    lines: &mut TextLines,
     link_id: &mut usize,
     namespace: usize,
 ) -> AnyElement {
@@ -2241,12 +2403,18 @@ fn table_body(
             if index + 1 < cols {
                 cell_div = cell_div.border_r_1().border_color(theme.border);
             }
-            line = line.child(cell_div.child(inline_text(
-                inline_runs(None, cell, theme),
-                theme,
-                None,
-                row_element_id("md-link", namespace, *link_id),
-            )));
+            let (plain, highlights, links) = inline_runs(None, cell, theme);
+            let (line_index, selected) = track_line(lines, &plain, FONT_SMALL);
+            line = line.child(
+                cell_div
+                    .child(inline_text(
+                        (plain, highlights, links),
+                        theme,
+                        selected,
+                        row_element_id("md-link", namespace, *link_id),
+                    ))
+                    .on_children_prepainted(bounds_handler(lines, line_index)),
+            );
             *link_id += 1;
         }
         grid = grid.child(line);
@@ -2431,7 +2599,7 @@ mod tests {
         assert_eq!(output_hint(0, true), None);
         assert_eq!(
             output_hint(3, false),
-            Some("⋯ 3 more line(s) · click to expand".to_string())
+            Some("⋯ 3 more line(s) · alt+click to expand".to_string())
         );
         assert_eq!(output_hint(3, true), Some("⋯ 3 more line(s)".to_string()));
     }
@@ -2613,6 +2781,30 @@ mod tests {
     }
 
     use super::*;
+
+    /// 行登记：行号按渲染顺序递增，选区按字符（不是字节）切片。
+    #[test]
+    fn track_line_numbers_rows_in_render_order() {
+        let mut lines = TextLines {
+            next: 0,
+            selection: Some(TextSel {
+                anchor: (0, 1),
+                focus: (1, 2),
+            }),
+            bounds: Rc::new(RefCell::new(HashMap::new())),
+            text_bounds: Rc::new(RefCell::new(HashMap::new())),
+            rows: Rc::new(RefCell::new(Vec::new())),
+        };
+        let (first, selected) = track_line(&mut lines, "汉字abc", FONT_SMALL);
+        assert_eq!(first, 0);
+        assert_eq!(selected, Some(1..5));
+        let (second, _) = track_line(&mut lines, "xyz", FONT_SMALL);
+        assert_eq!(second, 1);
+        assert_eq!(
+            selected_text(lines.selection.unwrap(), &lines.rows.borrow()),
+            "字abc\nxy"
+        );
+    }
 
     /// 交互元素 id 不能跨块撞车：gpui 每个 id 只留一份状态，同 id 的两个元素会互相
     /// 清掉按下记录，后渲染的那个点击不触发。块内序号每块都从 0 重数，靠命名空间错开。

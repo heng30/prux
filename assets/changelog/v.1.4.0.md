@@ -15,11 +15,13 @@
   per-extension settings panels that extensions raise all work in the window; extension commands
   are written once and share one registry between the two hosts. The keymap is fixed and matches
   the terminal's meaning (it does not read `keybindings.json`), every list and overlay is
-  keyboard-reachable, and the mouse selects and copies, pastes on middle click and drags panel
-  widths; theme, scale, sidebar state and the self-drawn title bar (`gui.frame`) live under `gui`
-  in `settings.json`, and settings toggles (hiding thinking blocks included) apply as soon as
-  they change. `prux-gui --tui` starts the terminal interface from the same binary, and
-  `docs/gui.md` covers the rest.
+  keyboard-reachable, and the mouse selects and copies any rendered block (user bubbles,
+  tool cards, system notices and hints), pastes on middle click and drags panel widths, and
+  `Alt+click` expands a block while a plain click leaves it to text selection; theme, scale,
+  sidebar state and the self-drawn title bar (`gui.frame`) live under `gui` in `settings.json`,
+  and settings toggles (hiding thinking blocks included) apply as soon as they change.
+  `prux-gui --tui` starts the terminal interface from the same binary, and `docs/gui.md` covers
+  the rest.
 
 - **Panels name the keys they answer to**: the session picker now says `Ctrl+R rename · Ctrl+D delete`
   (previously only "Enter confirm"), and the logout list says what Enter does before it
@@ -524,8 +526,9 @@
   斜杠命令、`@` 路径补全、模型与思考级别、技能 / 扩展 / 设置、登录与项目信任、`/rewind`，
   以及扩展发出的提问、覆盖层与独立设置面板都在窗口里可用；扩展命令只写一份，两个宿主共用
   同一张注册表。键位固定成一套（含义与终端一致，不读 `keybindings.json`），列表与覆盖层全键盘
-  可达，鼠标可选中复制、中键粘贴、拖动面板改宽；主题、缩放、会话栏开关与自绘标题栏（`gui.frame`）
-  收在 `gui` 段下写回 `settings.json`，设置面板的开关（含隐藏思考块）改完立即生效。
+  可达，鼠标可选中复制对话流里的任意内容（用户气泡、工具卡片、系统消息与提示行）、中键粘贴、
+  拖动面板改宽，`Alt+点击` 展开折叠块而普通点击留给选字；主题、缩放、会话栏开关与自绘标题栏
+  （`gui.frame`）收在 `gui` 段下写回 `settings.json`，设置面板的开关（含隐藏思考块）改完立即生效。
   `prux-gui --tui` 用同一个二进制启动终端界面，用法见 `docs/gui.md`。
 
 - **面板补上键位提示**：会话选择器现在写明 `Ctrl+R rename · Ctrl+D delete`

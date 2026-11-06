@@ -895,7 +895,7 @@ impl GuiApp {
         }
     }
 
-    /// 点用户气泡：展开/收起过长的那条消息（`None` 时跟随全局 Ctrl-L 开关）。
+    /// alt+点用户气泡：展开/收起过长的那条消息（`None` 时跟随全局 Ctrl-L 开关）。
     pub(super) fn toggle_user(&mut self, index: usize, cx: &mut Context<Self>) {
         if self.repeat_toggle(&format!("user:{index}")) {
             cx.notify();
@@ -912,7 +912,7 @@ impl GuiApp {
         cx.notify();
     }
 
-    /// 点工具卡片：展开/收起这一块的输出（`None` 时跟随全局 Ctrl-L 开关）。
+    /// alt+点工具卡片：展开/收起这一块的输出（`None` 时跟随全局 Ctrl-L 开关）。
     pub(super) fn toggle_tool(&mut self, index: usize, cx: &mut Context<Self>) {
         if self.repeat_toggle(&format!("tool:{index}")) {
             cx.notify();
@@ -923,6 +923,22 @@ impl GuiApp {
         if let Some(transcript::Block::Tool(tool)) = self.transcript.blocks_mut().get_mut(index) {
             let expanded = tool.expanded.unwrap_or(expand_tools);
             tool.expanded = Some(!expanded);
+            self.resized_bottom();
+        }
+        cx.notify();
+    }
+
+    /// alt+点思考段：预览与全文切换（显示与否仍由全局 Ctrl-T 决定）。
+    pub(super) fn toggle_thinking(&mut self, index: usize, cx: &mut Context<Self>) {
+        if self.repeat_toggle(&format!("thinking:{index}")) {
+            cx.notify();
+            return;
+        }
+
+        if let Some(transcript::Block::Assistant(assistant)) =
+            self.transcript.blocks_mut().get_mut(index)
+        {
+            assistant.thinking_expanded = !assistant.thinking_expanded;
             self.resized_bottom();
         }
         cx.notify();

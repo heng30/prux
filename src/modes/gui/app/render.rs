@@ -435,14 +435,25 @@ impl GuiApp {
                     .map_or(*bottom - *top, |next| next.0 - *top - gap);
                 flow = flow.child(div().flex_none().h(height));
                 // 行登记照样回放：选区/复制仍按行号工作，只是这些行不在屏幕上
-                flow_ctx.lines.rows.borrow_mut().extend(
-                    previous
-                        .get(*start..*end)
-                        .unwrap_or_default()
-                        .iter()
-                        .cloned(),
-                );
-                flow_ctx.lines.next = *end;
+                // 行号必须按本帧的顺序重编：前面块的行数变了（展开卡片、正文增长）
+                // 时旧行号会与新登记的行号重叠，同一个号的行边界/HashMap 项就会互相覆盖
+                let base = flow_ctx.lines.next;
+                let replay = previous.get(*start..*end).unwrap_or_default();
+                flow_ctx
+                    .lines
+                    .rows
+                    .borrow_mut()
+                    .extend(
+                        replay
+                            .iter()
+                            .enumerate()
+                            .map(|(offset, line)| transcript::LineInfo {
+                                index: base + offset,
+                                text: line.text.clone(),
+                                font_size: line.font_size,
+                            }),
+                    );
+                flow_ctx.lines.next = base + replay.len();
                 skipped_blocks += 1;
                 kept_ranges.push((*start, *end));
                 rendered_blocks += 1;
