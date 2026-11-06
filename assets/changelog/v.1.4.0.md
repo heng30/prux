@@ -1216,6 +1216,15 @@
   the earlier block's button kept working, which is why only some cards looked broken. Ids now carry
   the block index as a namespace, and the overlay panel's markdown gets a namespace of its own.
 
+- **The desktop GUI's login panel looks like the terminal's**: signing in used to open a bare text
+  box, so whenever the panel also needed a code input line the authorization URL was not shown at
+  all, and the per-provider instruction was one generic sentence. The panel now lays out what the
+  terminal panel lays out — the device user code, the authorization URL (click it to open it in the
+  browser), the "click to open · copied to clipboard" line, the provider's instruction and the label
+  over the code field — and both front ends read those strings from one place. The URL is still
+  copied to the clipboard as it arrives, and the waiting step no longer offers a button that does
+  nothing.
+
 ## 中文
 
 ### 新增
@@ -2128,3 +2137,9 @@
   `gui.frame = false` 在那里的效果是窗口既没有标题栏也没有可拖可关的区域。现在 Windows 上
   `gui.frame` 恒读作 `true`（写盘仍存用户的选择，读取侧按平台收回），建窗一律不带系统装饰，
   设置面板那一行也会说明该平台不可切换。
+
+- **桌面 GUI 的登录面板与终端一致了**：以前登录只弹一个纯文本框，只要面板同时需要一行输入框
+  （授权码 / 重定向 URL），授权地址就完全不显示，说明也只有一句通用文案。现在面板按终端的面板
+  排版：设备用户码、授权地址（点一下即用浏览器打开）、「Click to open · copied to clipboard」
+  提示、该 provider 的说明句、输入框上方的标签，两边共用同一份文案。地址到手时仍自动复制到
+  剪贴板，等待授权的阶段也不再摆一个点不动的确认按钮。

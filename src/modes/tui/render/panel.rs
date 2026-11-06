@@ -1282,37 +1282,22 @@ fn login_oauth_authorization_url_lines(
     )));
     lines.push(Line::from(""));
 
-    // 说明（复制授权码流粘的是页面上的 code#state，anthropic 浏览器流用 Complete login，其余 sign-in）
+    // 说明与输入行标签（复制授权码流粘的是页面上的 code#state，anthropic 浏览器流用 Complete login，其余 sign-in）
     let provider_id = app
         .oauth_login
         .as_ref()
         .map(|o| o.provider_id.as_str())
         .unwrap_or("");
     let copy_code = app.oauth_login.as_ref().is_some_and(|o| o.is_copy_code());
-
-    let (instruction, input_label) = if copy_code {
-        (
-            "Approve access in your browser, then paste the code shown on the page (looks like code#state).",
-            " Paste the code shown on the page (code#state):",
-        )
-    } else if provider_id == "anthropic" {
-        (
-            "Complete login in your browser. If the browser is on another machine, paste the final redirect URL here.",
-            " Complete login in your browser, or paste the authorization code / redirect URL here:",
-        )
-    } else {
-        (
-            "Complete sign-in in your browser. If the browser is on another machine, paste the final redirect URL here.",
-            " Complete sign-in in your browser, or paste the authorization code / redirect URL here:",
-        )
-    };
+    let instruction = core::oauth::authorization_instruction(provider_id, copy_code);
+    let input_label = core::oauth::authorization_input_label(provider_id, copy_code);
 
     // 完整一句：终端宽度不足时自动折行
     for chunk in wrap_text(instruction, width.saturating_sub(4)) {
         lines.push(Line::from(Span::styled(format!(" {}", chunk), muted)));
     }
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(input_label, muted)));
+    lines.push(Line::from(Span::styled(format!(" {input_label}"), muted)));
 
     let (view, _) = layer.filter.visible_window(width.saturating_sub(4));
     let (f, _) = truncate_display(&view, width.saturating_sub(4));

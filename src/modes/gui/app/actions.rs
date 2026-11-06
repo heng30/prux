@@ -1463,9 +1463,10 @@ impl GuiApp {
 
         self.dialog = Some(SessionDialog::Oauth {
             title,
-            body: "Starting…".to_string(),
-            input: false,
-            prompt: false,
+            panel: OauthPanel {
+                note: Some("Starting...".to_string()),
+                ..OauthPanel::default()
+            },
             editor: Editor::new(),
         });
         self.oauth = Some(OauthFlow {
@@ -1492,25 +1493,15 @@ impl GuiApp {
 
         for event in events {
             match event {
-                OauthEvent::Show {
-                    body,
-                    input,
-                    prompt,
-                    copy,
-                } => {
-                    if let Some(value) = copy {
-                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(value));
+                OauthEvent::Show(panel) => {
+                    // 授权地址 / 验证 URI 落面板即复制到系统剪贴板（TUI 同款提示进消息流）
+                    if let Some(url) = panel.url.as_ref() {
+                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(url.clone()));
+                        self.transcript
+                            .push_note(Note::Info(format!("Login URL copied to clipboard: {url}")));
                     }
-                    if let Some(SessionDialog::Oauth {
-                        body: current,
-                        input: show_input,
-                        prompt: allow_empty,
-                        ..
-                    }) = &mut self.dialog
-                    {
-                        *current = body;
-                        *show_input = input;
-                        *allow_empty = prompt;
+                    if let Some(SessionDialog::Oauth { panel: current, .. }) = &mut self.dialog {
+                        *current = panel;
                     }
                 }
                 OauthEvent::Note(text) => self.transcript.push_note(Note::Info(text)),

@@ -758,21 +758,16 @@ impl GuiApp {
     /// 登录面板的 Enter：有输入行就提交授权码，没输入行（等待中）什么也不做。
     /// 返回 true 表示这次确认已被登录面板吃了。
     fn submit_oauth_input(&mut self, cx: &mut Context<Self>) -> bool {
-        let Some(SessionDialog::Oauth {
-            input,
-            prompt,
-            editor,
-            ..
-        }) = &mut self.dialog
-        else {
+        let Some(SessionDialog::Oauth { panel, editor, .. }) = &mut self.dialog else {
             return false;
         };
-        if !*input {
+        if panel.input_label.is_none() {
             return true;
         }
 
+        let allow_empty = panel.allow_empty;
         let text = editor.text().trim().to_string();
-        if !*prompt && text.is_empty() {
+        if !allow_empty && text.is_empty() {
             // 空输入 = 取消登录（同 TUI）
             self.dialog = None;
             self.cancel_oauth();

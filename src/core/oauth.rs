@@ -637,6 +637,33 @@ pub fn supports_copy_code_login(provider_id: &str) -> bool {
     matches!(provider_id, "anthropic")
 }
 
+/// 授权码流登录面板的说明行：告诉用户在浏览器里做什么。
+///
+/// `provider_id`：login_registry 的 provider 标识；
+/// `copy_code`：是否「复制授权码」流程（该流程粘的是页面上的 `code#state`）。
+pub fn authorization_instruction(provider_id: &str, copy_code: bool) -> &'static str {
+    if copy_code {
+        "Approve access in your browser, then paste the code shown on the page (looks like code#state)."
+    } else if provider_id == "anthropic" {
+        "Complete login in your browser. If the browser is on another machine, paste the final redirect URL here."
+    } else {
+        "Complete sign-in in your browser. If the browser is on another machine, paste the final redirect URL here."
+    }
+}
+
+/// 授权码流登录面板的输入行标签：提示用户粘回什么（与 [`authorization_instruction`] 同源）。
+///
+/// `provider_id` / `copy_code` 语义同 [`authorization_instruction`]。
+pub fn authorization_input_label(provider_id: &str, copy_code: bool) -> &'static str {
+    if copy_code {
+        "Paste the code shown on the page (code#state):"
+    } else if provider_id == "anthropic" {
+        "Complete login in your browser, or paste the authorization code / redirect URL here:"
+    } else {
+        "Complete sign-in in your browser, or paste the authorization code / redirect URL here:"
+    }
+}
+
 /// 启动「复制授权码」登录（不绑本地端口）。provider 未实现时报错。
 pub fn start_copy_code_login(provider_id: &str) -> Result<OAuthLogin> {
     match provider_id {

@@ -35,7 +35,7 @@ use super::{
     components::chip,
     composer,
     giff::{self, PanelTab, RightPanel},
-    oauth::OauthEvent,
+    oauth::{OauthEvent, OauthPanel},
     overlay::{
         self, Action, Column, DetailSource, Entry, Info, InfoKind, InfoRow, List, ListKind,
         Overlay, SettingKey, TABLE_AGE_W, TABLE_COUNT_W, TABLE_INPUT_W, TABLE_MODES_W,
@@ -227,12 +227,8 @@ enum SessionDialog {
     Oauth {
         /// 卡片标题（`Login to <provider>`）
         title: String,
-        /// 正文（已按宽度折好行）
-        body: String,
-        /// 是否显示输入行
-        input: bool,
-        /// 是否允许提交空输入（device 的 `AwaitInput`，空值 = 用默认值）
-        prompt: bool,
+        /// 面板内容（URL / 用户码 / 说明 / 输入行标签）
+        panel: OauthPanel,
         /// 授权码输入框
         editor: Editor,
     },

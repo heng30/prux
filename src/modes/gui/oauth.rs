@@ -20,26 +20,29 @@ use std::{
 /// 两次推进之间的间隔：回调连接检查与 device-code 轮询节奏都由它决定。
 const TICK: Duration = Duration::from_millis(300);
 
-/// 授权 URL 在面板里的折断宽度（字符数）：卡片不会自己折长串，塞进去会溢出。
-const URL_WRAP: usize = 58;
-
 /// 流程推给视图的一条进度。
 pub enum OauthEvent {
     /// 更新登录面板的内容
-    Show {
-        /// 面板正文（授权地址 / 设备码 / 提问，已按 `URL_WRAP` 折好行）
-        body: String,
-        /// 是否显示输入行（手动粘贴授权码 / 回答 device 提问）
-        input: bool,
-        /// 是否允许提交空输入（device 的 `AwaitInput`，空值代表用默认值）
-        prompt: bool,
-        /// 需要复制到系统剪贴板的值（授权地址 / 验证 URI）
-        copy: Option<String>,
-    },
+    Show(OauthPanel),
     /// 一条进度/提示消息
     Note(String),
     /// 流程结束：成功带回 provider id 与凭据，失败带回错误文案
     Done(Result<(String, OAuthCredential), String>),
+}
+
+/// 登录面板一帧的内容（与 TUI 的 `LoginOauth` 面板同构）。
+#[derive(Default)]
+pub struct OauthPanel {
+    /// device-code 的用户码（授权码流或等待中为 `None`）
+    pub code: Option<String>,
+    /// 授权地址 / 验证 URI：点击用浏览器打开，落面板时自动复制到剪贴板
+    pub url: Option<String>,
+    /// 说明或等待文案（`None` = 不显示；内部可含换行）
+    pub note: Option<String>,
+    /// 输入行标签（`None` = 不显示输入行，空串 = 有输入行但不要标签）
+    pub input_label: Option<String>,
+    /// 是否允许提交空输入（device 的 `AwaitInput`，空值代表用默认值）
+    pub allow_empty: bool,
 }
 
 /// 一步推进的结果。
@@ -83,64 +86,55 @@ pub async fn run(
 
 /// 首帧：授权码流显示授权地址（顺手复制到剪贴板），device 流显示等待文案或提问。
 fn show_initial(login: &OAuthLogin, events: &Sender<OauthEvent>) {
-    _ = events.send(if let Some(prompt) = login.prompt_text() {
-        OauthEvent::Show {
-            body: format!("{prompt}\n{}", login.prompt_placeholder()),
-            input: true,
-            prompt: true,
-            copy: None,
-        }
-    } else if let Some((user_code, uri)) = login.device_code_info() {
-        OauthEvent::Show {
-            body: device_body(&user_code, &uri),
-            input: false,
-            prompt: false,
-            copy: Some(uri),
-        }
-    } else if login.is_device_code() {
-        OauthEvent::Show {
-            body: "Requesting device code…".to_string(),
-            input: false,
-            prompt: false,
-            copy: None,
-        }
-    } else {
-        let url = login.auth_url();
-        OauthEvent::Show {
-            body: url_body(&url, login.is_copy_code()),
-            input: true,
-            prompt: false,
-            copy: Some(url),
-        }
-    });
+    _ = events.send(OauthEvent::Show(
+        if let Some(prompt) = login.prompt_text() {
+            let placeholder = login.prompt_placeholder();
+            OauthPanel {
+                note: Some(if placeholder.is_empty() {
+                    prompt
+                } else {
+                    format!("{prompt}\n{placeholder}")
+                }),
+                input_label: Some(String::new()),
+                allow_empty: true,
+                ..OauthPanel::default()
+            }
+        } else if let Some((user_code, uri)) = login.device_code_info() {
+            device_panel(&user_code, &uri)
+        } else if login.is_device_code() {
+            OauthPanel {
+                note: Some("Requesting device code.".to_string()),
+                ..OauthPanel::default()
+            }
+        } else {
+            OauthPanel {
+                url: Some(login.auth_url()),
+                note: Some(
+                    oauth::authorization_instruction(&login.provider_id, login.is_copy_code())
+                        .to_string(),
+                ),
+                input_label: Some(
+                    oauth::authorization_input_label(&login.provider_id, login.is_copy_code())
+                        .to_string(),
+                ),
+                allow_empty: false,
+                ..OauthPanel::default()
+            }
+        },
+    ));
 }
 
-/// 授权码流的面板正文：授权地址 + 怎么把码拿回来。
-fn url_body(url: &str, copy_code: bool) -> String {
-    let ask = if copy_code {
-        "Complete the login in your browser, then paste the code#state shown on the page."
-    } else {
-        "Complete the login in your browser, then paste the authorization code (or the full redirect URL)."
-    };
-    format!("{}\n\n{ask}", wrap(url, URL_WRAP))
-}
-
-/// device-code 流的面板正文：用户码 + 验证地址。
-fn device_body(user_code: &str, uri: &str) -> String {
-    format!(
-        "Code: {user_code}\n\n{}\n\nEnter the code above at that URL, then come back — waiting for authorization…",
-        wrap(uri, URL_WRAP)
-    )
-}
-
-/// 按 `width` 个字符硬折长串（URL 里没有可断字的空白）。
-fn wrap(text: &str, width: usize) -> String {
-    let chars: Vec<char> = text.chars().collect();
-    chars
-        .chunks(width)
-        .map(|chunk| chunk.iter().collect::<String>())
-        .collect::<Vec<_>>()
-        .join("\n")
+/// device-code 流的面板内容：用户码 + 验证地址 + 等待文案。
+fn device_panel(user_code: &str, uri: &str) -> OauthPanel {
+    OauthPanel {
+        code: Some(user_code.to_string()),
+        url: Some(uri.to_string()),
+        note: Some(
+            "Enter the code above at the URL in your browser, then return here.\n\nWaiting for authorization..."
+                .to_string(),
+        ),
+        ..OauthPanel::default()
+    }
 }
 
 /// 取消：释放授权码流的本地回调端口，避免下次登录撞端口。
@@ -238,12 +232,10 @@ async fn step(login: &mut OAuthLogin, events: &Sender<OauthEvent>) -> Step {
                             info.wait_before_first_poll,
                         ));
                         flow.step = DeviceStep::Polling;
-                        _ = events.send(OauthEvent::Show {
-                            body: device_body(&flow.user_code, &flow.verification_uri),
-                            input: false,
-                            prompt: false,
-                            copy: Some(flow.verification_uri.clone()),
-                        });
+                        _ = events.send(OauthEvent::Show(device_panel(
+                            &flow.user_code,
+                            &flow.verification_uri,
+                        )));
                         Step::Wait
                     }
                     Err(error) => Step::Done(Err(format!("Device authorization failed: {error}"))),
@@ -334,18 +326,26 @@ async fn exchange(
 mod tests {
     use super::*;
 
+    /// 授权码流：面板要带可点击的 URL 与输入行标签（TUI 同款文案）。
     #[test]
-    fn wrap_breaks_long_urls_without_losing_chars() {
-        let url = format!("https://example.com/auth?{}", "a".repeat(120));
-        let wrapped = wrap(&url, URL_WRAP);
-        assert!(wrapped.lines().all(|line| line.chars().count() <= URL_WRAP));
-        assert_eq!(wrapped.replace('\n', ""), url);
+    fn authorization_panel_carries_url_and_input_label() {
+        let login = oauth::start_copy_code_login("anthropic").unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        show_initial(&login, &tx);
+        let OauthEvent::Show(panel) = rx.recv().unwrap() else {
+            panic!("expected Show");
+        };
+        assert_eq!(panel.url.as_deref(), Some(login.auth_url().as_str()));
+        assert!(panel.input_label.is_some());
+        assert!(panel.note.unwrap().contains("code#state"));
     }
 
+    /// device-code 流：用户码与验证 URI 各就各位，且不显示输入行。
     #[test]
-    fn url_body_keeps_the_url_and_the_instruction() {
-        let body = url_body("https://example.com/auth", true);
-        assert!(body.contains("https://example.com/auth"));
-        assert!(body.contains("code#state"));
+    fn device_panel_carries_code_and_url() {
+        let panel = device_panel("ABCD-1234", "https://example.com/device");
+        assert_eq!(panel.code.as_deref(), Some("ABCD-1234"));
+        assert_eq!(panel.url.as_deref(), Some("https://example.com/device"));
+        assert!(panel.input_label.is_none());
     }
 }

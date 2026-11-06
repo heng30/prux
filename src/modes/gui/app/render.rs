@@ -12,7 +12,11 @@ use super::{
     },
     *,
 };
-use crate::core::extensions::cancel_background_work;
+use crate::{
+    core::extensions::cancel_background_work,
+    modes::gui::{oauth::OauthPanel, overlay::open_url},
+};
+use gpui::{InteractiveElement, StatefulInteractiveElement};
 use std::rc::Rc;
 
 #[cfg(debug_assertions)]
@@ -1566,14 +1570,16 @@ impl GuiApp {
                 ),
                 Some(SessionDialog::Oauth {
                     title,
-                    body,
-                    input,
+                    panel,
                     editor,
                     ..
                 }) => (
                     title.as_str(),
-                    body.clone(),
-                    input.then(|| composer::render(editor, theme)),
+                    String::new(),
+                    panel
+                        .input_label
+                        .is_some()
+                        .then(|| composer::render(editor, theme)),
                 ),
                 Some(SessionDialog::Delete { paths, detail }) => (
                     if paths.len() > 1 {
@@ -1589,7 +1595,12 @@ impl GuiApp {
 
             let ime = self.ime_layer(cx);
             let danger = matches!(self.dialog, Some(SessionDialog::Delete { .. }));
-            let oauth_input = matches!(self.dialog, Some(SessionDialog::Oauth { input: true, .. }));
+            let oauth = match &self.dialog {
+                Some(SessionDialog::Oauth { panel, .. }) => Some(panel),
+                _ => None,
+            };
+
+            let oauth_input = oauth.is_some_and(|panel| panel.input_label.is_some());
             let mut card = div()
                 .relative()
                 .on_mouse_down(
@@ -1613,15 +1624,22 @@ impl GuiApp {
                         .child(SharedString::from(title)),
                 );
 
-            if let Some(field) = field {
-                card = card.child(composer::field(theme, false).child(field));
-            } else {
+            // 登录面板：正文（用户码 / 地址 / 说明）与输入行同时显示，TUI 面板同构
+            if let Some(panel) = oauth {
+                card = card.child(oauth_panel_body(panel, theme));
+            }
+
+            if !body.is_empty() {
                 card = card.child(
                     div()
                         .text_size(px(FONT_SMALL))
                         .text_color(theme.text_secondary)
                         .child(SharedString::from(body)),
                 );
+            }
+
+            if let Some(field) = field {
+                card = card.child(composer::field(theme, false).child(field));
             }
 
             card = card
@@ -1633,6 +1651,8 @@ impl GuiApp {
                             "Enter to delete · Esc cancel"
                         } else if oauth_input {
                             "Enter submit · Esc cancel"
+                        } else if oauth.is_some() {
+                            "Esc cancel"
                         } else {
                             "Enter confirm · Esc cancel"
                         })),
@@ -1666,27 +1686,34 @@ impl GuiApp {
                                         .child(SharedString::from("Cancel")),
                                 ),
                         )
-                        .child(
-                            div()
-                                .id("dialog-confirm")
-                                .h(px(CONTROL_H_MD))
-                                .px(px(SPACE_MD))
-                                .rounded(px(RADIUS_MD))
-                                .flex()
-                                .items_center()
-                                .text_size(px(FONT_SMALL))
-                                .font_weight(gpui::FontWeight::SEMIBOLD)
-                                .bg(theme.inverse)
-                                .text_color(theme.on_inverse)
-                                .cursor_pointer()
-                                .hover(|style| style.opacity(0.86))
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.confirm_dialog(cx);
-                                }))
-                                .child(div().mb(px(text_raise_margin(FONT_SMALL))).child(
-                                    SharedString::from(if danger { "Delete" } else { "Confirm" }),
-                                )),
-                        ),
+                        // 登录面板等待中（无输入行）没有可确认的动作，不摆一个点不动的按钮
+                        .when(oauth.is_none() || oauth_input, |row| {
+                            row.child(
+                                div()
+                                    .id("dialog-confirm")
+                                    .h(px(CONTROL_H_MD))
+                                    .px(px(SPACE_MD))
+                                    .rounded(px(RADIUS_MD))
+                                    .flex()
+                                    .items_center()
+                                    .text_size(px(FONT_SMALL))
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .bg(theme.inverse)
+                                    .text_color(theme.on_inverse)
+                                    .cursor_pointer()
+                                    .hover(|style| style.opacity(0.86))
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.confirm_dialog(cx);
+                                    }))
+                                    .child(div().mb(px(text_raise_margin(FONT_SMALL))).child(
+                                        SharedString::from(if danger {
+                                            "Delete"
+                                        } else {
+                                            "Confirm"
+                                        }),
+                                    )),
+                            )
+                        }),
                 )
                 .child(ime);
 
@@ -1713,6 +1740,76 @@ impl GuiApp {
         }
         root
     }
+}
+
+/// 登录面板正文：用户码 / 授权地址（点击用浏览器打开，落面板时已自动复制）/ 说明 / 输入行标签。
+/// 与 TUI 的 `LoginOauth` 面板同构。
+fn oauth_panel_body(panel: &OauthPanel, theme: &Theme) -> gpui::Div {
+    let mut body = div()
+        .flex()
+        .flex_col()
+        .gap(px(SPACE_XS))
+        .text_size(px(FONT_SMALL))
+        .text_color(theme.text_secondary);
+
+    if let Some(code) = &panel.code {
+        body = body.child(
+            div()
+                .flex()
+                .gap(px(SPACE_XS))
+                .child(
+                    div()
+                        .text_color(theme.text_tertiary)
+                        .child(SharedString::from("Code:")),
+                )
+                .child(
+                    div()
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(theme.text)
+                        .child(SharedString::from(code.clone())),
+                ),
+        );
+    }
+
+    if let Some(url) = &panel.url {
+        let target = url.clone();
+        body = body
+            .child(
+                div()
+                    .id("oauth-url")
+                    .text_color(theme.link)
+                    .cursor_pointer()
+                    .hover(|style| style.underline())
+                    .on_click(move |_, _, _| open_url(&target))
+                    .child(SharedString::from(url.clone())),
+            )
+            .child(
+                div()
+                    .text_size(px(FONT_CAPTION))
+                    .text_color(theme.text_ghost)
+                    .child(SharedString::from("Click to open · copied to clipboard")),
+            );
+    }
+
+    if let Some(note) = &panel.note {
+        body = body.child(
+            div()
+                .text_color(theme.text_secondary)
+                .child(SharedString::from(note.clone())),
+        );
+    }
+
+    if let Some(label) = &panel.input_label
+        && !label.is_empty()
+    {
+        body = body.child(
+            div()
+                .text_color(theme.text_tertiary)
+                .child(SharedString::from(label.clone())),
+        );
+    }
+
+    body
 }
 
 /// 给输入卡片的外层挂位置实测：补全面板要贴着它上沿弹出来。
