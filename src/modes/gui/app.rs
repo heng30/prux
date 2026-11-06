@@ -35,6 +35,7 @@ use super::{
     components::chip,
     composer,
     giff::{self, PanelTab, RightPanel},
+    oauth::OauthEvent,
     overlay::{
         self, Action, Column, DetailSource, Entry, Info, InfoKind, InfoRow, List, ListKind,
         Overlay, SettingKey, TABLE_AGE_W, TABLE_COUNT_W, TABLE_INPUT_W, TABLE_MODES_W,
@@ -191,7 +192,7 @@ enum RepairIntent {
     },
 }
 
-/// 会话对话框：重命名 / 删除确认。
+/// 会话对话框：重命名 / 删除确认 / 登录。
 enum SessionDialog {
     /// 重命名：编辑器里是新名字
     Rename {
@@ -222,6 +223,19 @@ enum SessionDialog {
         /// key 输入框
         editor: Editor,
     },
+    /// OAuth 登录面板：正文是授权地址 / 设备码，输入行粘授权码（或回答 device 提问）
+    Oauth {
+        /// 卡片标题（`Login to <provider>`）
+        title: String,
+        /// 正文（已按宽度折好行）
+        body: String,
+        /// 是否显示输入行
+        input: bool,
+        /// 是否允许提交空输入（device 的 `AwaitInput`，空值 = 用默认值）
+        prompt: bool,
+        /// 授权码输入框
+        editor: Editor,
+    },
     /// 改数值型设置：编辑器里是当前值
     Number {
         /// 改哪一项
@@ -236,6 +250,18 @@ enum SessionDialog {
         /// 确认框正文（单条是「Delete "<标题>"?」，批量是数量与目录）
         detail: String,
     },
+}
+
+/// 进行中的 `/login` OAuth 流程（授权地址 / 设备码 / 回调等待）。
+struct OauthFlow {
+    /// 面板里提交的授权码（或 device 提问的回答）的去处
+    input: std::sync::mpsc::Sender<String>,
+    /// 关面板时置位：流程释放回调端口后退出
+    cancel: Arc<AtomicBool>,
+    /// 流程推来的进度
+    events: std::sync::mpsc::Receiver<OauthEvent>,
+    /// 轮询任务（丢弃即停）
+    _poll: Task<()>,
 }
 
 /// 滚动条拖动状态。
@@ -429,6 +455,8 @@ pub struct GuiApp {
     session_menu: Option<SessionMenu>,
     /// 会话对话框（重命名 / 删除确认）
     dialog: Option<SessionDialog>,
+    /// 进行中的 `/login` OAuth 流程
+    oauth: Option<OauthFlow>,
     /// 进行中的会话操作（导入确认 / cwd 不一致 / 损坏修复）
     pending_session: Option<PendingSession>,
     /// 本会话可用的技能：worker 启动与 `/reload` 后推来（`/` 补全与提交展开都用）
@@ -557,6 +585,7 @@ impl GuiApp {
             sidebar_hovered: false,
             session_menu: None,
             dialog: None,
+            oauth: None,
             pending_session: None,
             skills: Vec::new(),
             prompt_templates: Vec::new(),
@@ -985,6 +1014,12 @@ impl GuiApp {
     /// 读当前工作目录的 git 分支（侧栏底部展示）。
     fn refresh_branch(&mut self) {
         self.branch = git_branch(&self.cwd());
+    }
+
+    /// 收起对话框（`/login` 的 OAuth 流程一并取消，回调端口不能留着）。
+    pub(super) fn close_dialog(&mut self) {
+        self.dialog = None;
+        self.cancel_oauth();
     }
 
     /// 简单重绘（`confirm_dialog` 里提前返回时用）。

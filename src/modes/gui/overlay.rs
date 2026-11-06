@@ -92,8 +92,19 @@ pub enum Action {
     BrowseCwd,
     /// 打开可编辑的设置面板
     Settings,
+    /// `/login` 第一步选定的认证方式：`oauth`（账号登录）或 `api_key`
+    LoginAuthType(String),
     /// 为某个 provider 填 API key
     LoginProvider(String),
+    /// 用 OAuth 登录某个 provider（需要选方式的 provider 会再问一次浏览器 / 复制授权码）
+    LoginOauth(String),
+    /// 已选定的 OAuth 登录方式：`copy_code` = 复制页面上的授权码
+    LoginMethod {
+        /// provider 标识
+        provider: String,
+        /// true = 复制授权码登录，false = 浏览器本地回调
+        copy_code: bool,
+    },
     /// 清除某个 provider 的 API key
     LogoutProvider(String),
     /// 打开扩展管理面板

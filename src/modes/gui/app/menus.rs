@@ -641,8 +641,8 @@ impl GuiApp {
         cx.notify();
     }
 
-    /// 确认列表（导入确认 / cwd 确认 / 修复选择 / `/bug` 附带决定共用同一套外观）。
-    fn ask_choice(
+    /// 确认列表（导入确认 / cwd 确认 / 修复选择 / 登录方式 / `/bug` 附带决定共用同一套外观）。
+    pub(super) fn ask_choice(
         &mut self,
         title: impl Into<String>,
         choices: Vec<(String, Action)>,
@@ -755,8 +755,47 @@ impl GuiApp {
         .detach();
     }
 
-    /// 对话框确认：重命名落盘 / 删除文件 / 切工作目录。
+    /// 登录面板的 Enter：有输入行就提交授权码，没输入行（等待中）什么也不做。
+    /// 返回 true 表示这次确认已被登录面板吃了。
+    fn submit_oauth_input(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(SessionDialog::Oauth {
+            input,
+            prompt,
+            editor,
+            ..
+        }) = &mut self.dialog
+        else {
+            return false;
+        };
+        if !*input {
+            return true;
+        }
+
+        let text = editor.text().trim().to_string();
+        if !*prompt && text.is_empty() {
+            // 空输入 = 取消登录（同 TUI）
+            self.dialog = None;
+            self.cancel_oauth();
+            cx.notify();
+            return true;
+        }
+
+        if let Some(flow) = self.oauth.as_ref() {
+            _ = flow.input.send(text);
+        }
+        if let Some(SessionDialog::Oauth { editor, .. }) = self.dialog.as_mut() {
+            editor.clear();
+        }
+        cx.notify();
+        true
+    }
+
+    /// 对话框确认：重命名落盘 / 删除文件 / 切工作目录 / 登录。
     pub(super) fn confirm_dialog(&mut self, cx: &mut Context<Self>) {
+        // 登录面板的 Enter 是「提交授权码」，不是取消对话框
+        if self.submit_oauth_input(cx) {
+            return;
+        }
         let Some(dialog) = self.dialog.take() else {
             return;
         };
@@ -819,6 +858,8 @@ impl GuiApp {
                 self.start_import(&raw, cx);
                 return;
             }
+            // 登录面板走 [`Self::submit_oauth_input`]，到不了这里
+            SessionDialog::Oauth { .. } => return,
             SessionDialog::ApiKey { provider, editor } => {
                 let key = editor.text().trim().to_string();
                 if !key.is_empty() {

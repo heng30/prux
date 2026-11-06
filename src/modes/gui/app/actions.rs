@@ -479,11 +479,44 @@ impl GuiApp {
                     .push_note(Note::Info("Session left unopened".to_string()));
             }
             Action::SessionCancel => self.cancel_session_op(cx),
+            Action::LoginAuthType(kind) => self.open_login_provider_panel(kind == "oauth", cx),
             Action::LoginProvider(provider) => {
                 let editor = Editor::new();
                 self.dialog = Some(SessionDialog::ApiKey { provider, editor });
                 cx.notify();
             }
+            Action::LoginOauth(provider) => {
+                // 需要先选方式的 provider 先问一句，其余直接开流程
+                if core::oauth::supports_copy_code_login(&provider) {
+                    let name = core::login_registry::provider_name(&provider);
+                    self.ask_choice(
+                        format!("Login to {name}"),
+                        vec![
+                            (
+                                "Browser login · opens a local callback page".to_string(),
+                                Action::LoginMethod {
+                                    provider: provider.clone(),
+                                    copy_code: false,
+                                },
+                            ),
+                            (
+                                "Copy code login · paste the code shown on the page".to_string(),
+                                Action::LoginMethod {
+                                    provider,
+                                    copy_code: true,
+                                },
+                            ),
+                        ],
+                        cx,
+                    );
+                } else {
+                    self.start_oauth_login(provider, false, cx);
+                }
+            }
+            Action::LoginMethod {
+                provider,
+                copy_code,
+            } => self.start_oauth_login(provider, copy_code, cx),
             Action::LogoutProvider(provider) => {
                 match core::auth::remove_auth(&provider) {
                     Ok(()) => self
@@ -982,27 +1015,235 @@ impl GuiApp {
         self.toast(msg, ToastKind::Success, cx);
     }
 
-    /// 登录面板：列出全部支持的 provider，Enter 填 key。
-    pub(super) fn open_login_panel(&mut self, _cx: &mut Context<Self>) {
-        let entries: Vec<Entry> = core::model_resolver::SUPPORTED_PROVIDERS
+    /// `/login` 第一步：选认证方式（账号 OAuth / API key）。
+    pub(super) fn open_login_panel(&mut self, cx: &mut Context<Self>) {
+        self.ask_choice(
+            "Select authentication method",
+            vec![
+                (
+                    "Sign in with an account".to_string(),
+                    Action::LoginAuthType("oauth".to_string()),
+                ),
+                (
+                    "Sign in with an API key".to_string(),
+                    Action::LoginAuthType("api_key".to_string()),
+                ),
+                ("Cancel".to_string(), Action::None),
+            ],
+            cx,
+        );
+    }
+
+    /// `/login` 第二步：按认证方式列出 provider。
+    ///
+    /// 状态列与 TUI 一致：已存凭据 `✓ stored`、环境变量 `✓ env (VAR)`、都没有
+    /// `• not configured`；models.json 里显式声明的 apiKey 会压过环境变量（同 TUI）。
+    pub(super) fn open_login_provider_panel(&mut self, oauth: bool, cx: &mut Context<Self>) {
+        let ids = if oauth {
+            core::login_registry::oauth_provider_ids()
+        } else {
+            core::login_registry::api_key_provider_ids()
+        };
+        let declared = core::model_config::read_models_config();
+
+        let entries: Vec<Entry> = ids
             .iter()
-            .map(|provider| Entry {
-                label: provider.to_string(),
-                cells: vec![if core::auth::has_auth(provider) {
-                    "configured".into()
+            .map(|id| {
+                let stored = core::auth::has_auth(id);
+                let env = if declared.get(*id).is_some_and(|c| c.api_key.is_some()) {
+                    None
                 } else {
-                    String::new()
-                }],
-                action: Action::LoginProvider(provider.to_string()),
-                ..Entry::default()
+                    core::auth::env_key_source(id)
+                };
+                let status = match (stored, env) {
+                    (true, Some(var)) => format!("✓ stored · env ({var})"),
+                    (true, None) => "✓ stored".to_string(),
+                    (false, Some(var)) => format!("✓ env ({var})"),
+                    (false, None) => "• not configured".to_string(),
+                };
+                Entry {
+                    label: core::login_registry::provider_name(id),
+                    cells: vec![status],
+                    action: if oauth {
+                        Action::LoginOauth((*id).to_string())
+                    } else {
+                        Action::LoginProvider((*id).to_string())
+                    },
+                    ..Entry::default()
+                }
             })
             .collect();
-        let mut list = List::new("Login", entries);
+
+        let mut list = List::new(
+            if oauth {
+                "Login — select account provider"
+            } else {
+                "Login — select provider"
+            },
+            entries,
+        );
         list.columns = vec![
             Column::flex("Provider"),
             Column::fixed("Status", TABLE_STATUS_W),
         ];
         self.overlay = Some(Overlay::List(list));
+        cx.notify();
+    }
+
+    /// 启动 OAuth 登录：流程跑在后台任务里，进度由 [`Self::poll_oauth`] 送回面板。
+    pub(super) fn start_oauth_login(
+        &mut self,
+        provider: String,
+        copy_code: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let started = if copy_code {
+            core::oauth::start_copy_code_login(&provider)
+        } else {
+            core::oauth::start_login(&provider)
+        };
+        let login = match started {
+            Ok(login) => login,
+            Err(error) => {
+                self.transcript
+                    .push_note(Note::Error(format!("OAuth setup failed: {error}")));
+                cx.notify();
+                return;
+            }
+        };
+
+        let title = format!("Login to {}", login.provider_name);
+        let (input_tx, input_rx) = std::sync::mpsc::channel();
+        let (event_tx, event_rx) = std::sync::mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+
+        if !crate::utils::async_task::spawn(crate::modes::gui::oauth::run(
+            login,
+            input_rx,
+            cancel.clone(),
+            event_tx,
+        )) {
+            self.transcript.push_note(Note::Error(
+                "OAuth login needs an async runtime, which is unavailable here".to_string(),
+            ));
+            cx.notify();
+            return;
+        }
+
+        // 轮询任务只负责把通道里的进度搬进面板；关掉面板（丢弃本结构）就停
+        let poll = cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(120))
+                    .await;
+                let done = this.update(cx, |app, cx| {
+                    let done = app.poll_oauth(cx);
+                    cx.notify();
+                    done
+                });
+                if done.unwrap_or(true) {
+                    break;
+                }
+            }
+        });
+
+        self.dialog = Some(SessionDialog::Oauth {
+            title,
+            body: "Starting…".to_string(),
+            input: false,
+            prompt: false,
+            editor: Editor::new(),
+        });
+        self.oauth = Some(OauthFlow {
+            input: input_tx,
+            cancel,
+            events: event_rx,
+            _poll: poll,
+        });
+        cx.notify();
+    }
+
+    /// 把 OAuth 流程的进度应用到登录面板。返回 true 表示流程已结束（轮询任务可停）。
+    pub(super) fn poll_oauth(&mut self, cx: &mut Context<Self>) -> bool {
+        let events: Vec<OauthEvent> = {
+            let Some(flow) = self.oauth.as_ref() else {
+                return true;
+            };
+            let mut events = Vec::new();
+            while let Ok(event) = flow.events.try_recv() {
+                events.push(event);
+            }
+            events
+        };
+
+        for event in events {
+            match event {
+                OauthEvent::Show {
+                    body,
+                    input,
+                    prompt,
+                    copy,
+                } => {
+                    if let Some(value) = copy {
+                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(value));
+                    }
+                    if let Some(SessionDialog::Oauth {
+                        body: current,
+                        input: show_input,
+                        prompt: allow_empty,
+                        ..
+                    }) = &mut self.dialog
+                    {
+                        *current = body;
+                        *show_input = input;
+                        *allow_empty = prompt;
+                    }
+                }
+                OauthEvent::Note(text) => self.transcript.push_note(Note::Info(text)),
+                OauthEvent::Done(result) => {
+                    self.dialog = None;
+                    self.finish_oauth(result);
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// OAuth 结束：成功则写凭据并让 worker 即时用上，失败只提示。
+    fn finish_oauth(&mut self, result: Result<(String, core::oauth::OAuthCredential), String>) {
+        let (provider, cred) = match result {
+            Ok(done) => done,
+            Err(message) => {
+                self.transcript.push_note(Note::Error(message));
+                return;
+            }
+        };
+
+        match core::auth::write_oauth_credential(&provider, &cred) {
+            Ok(()) => {
+                let name = core::login_registry::provider_name(&provider);
+                self.transcript.push_note(Note::Info(format!(
+                    "Saved OAuth account for {name}. Credentials saved to {}",
+                    core::auth::auth_path().display()
+                )));
+                _ = self.cmd_tx.send(AgentCommand::ApplyKey {
+                    provider,
+                    key: cred.access,
+                });
+            }
+            Err(error) => self.transcript.push_note(Note::Error(format!(
+                "Failed to save credentials for {provider}: {error}"
+            ))),
+        }
+    }
+
+    /// 关掉 OAuth 登录：通知流程退出并释放回调端口。
+    pub(super) fn cancel_oauth(&mut self) {
+        if let Some(flow) = self.oauth.take() {
+            flow.cancel
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
     }
 
     /// 登出面板：只列已存 key 的 provider。
@@ -1027,6 +1268,9 @@ impl GuiApp {
         }
 
         self.overlay = Some(Overlay::List(List::new("Logout", entries)));
+        if let Some(Overlay::List(list)) = self.overlay.as_mut() {
+            list.hint = Some("↑↓ select · Enter clear key · Esc close".to_string());
+        }
     }
 
     /// 更新日志：当前版本的内嵌 changelog，按 Markdown 渲染在信息面板里。

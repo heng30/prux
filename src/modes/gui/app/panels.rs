@@ -866,6 +866,18 @@ impl GuiApp {
             Column::fixed("Updated", TABLE_AGE_W),
             Column::fixed("Messages", TABLE_COUNT_W),
         ];
+
+        // 列表里真的有会话时才提示这三个键（空列表上它们什么也不做）
+        if list
+            .entries
+            .iter()
+            .any(|entry| matches!(entry.action, Action::LoadSession(_)))
+        {
+            list.hint = Some(
+                "↑↓ select · Enter resume · Ctrl+R rename · Ctrl+D delete · Ctrl+G next · Esc close"
+                    .to_string(),
+            );
+        }
         self.overlay = Some(Overlay::List(list));
     }
 

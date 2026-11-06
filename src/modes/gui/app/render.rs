@@ -1564,6 +1564,17 @@ impl GuiApp {
                     String::new(),
                     Some(composer::render(editor, theme)),
                 ),
+                Some(SessionDialog::Oauth {
+                    title,
+                    body,
+                    input,
+                    editor,
+                    ..
+                }) => (
+                    title.as_str(),
+                    body.clone(),
+                    input.then(|| composer::render(editor, theme)),
+                ),
                 Some(SessionDialog::Delete { paths, detail }) => (
                     if paths.len() > 1 {
                         "Delete sessions"
@@ -1578,6 +1589,7 @@ impl GuiApp {
 
             let ime = self.ime_layer(cx);
             let danger = matches!(self.dialog, Some(SessionDialog::Delete { .. }));
+            let oauth_input = matches!(self.dialog, Some(SessionDialog::Oauth { input: true, .. }));
             let mut card = div()
                 .relative()
                 .on_mouse_down(
@@ -1619,6 +1631,8 @@ impl GuiApp {
                         .text_color(theme.text_ghost)
                         .child(SharedString::from(if danger {
                             "Enter to delete · Esc cancel"
+                        } else if oauth_input {
+                            "Enter submit · Esc cancel"
                         } else {
                             "Enter confirm · Esc cancel"
                         })),
@@ -1643,7 +1657,7 @@ impl GuiApp {
                                 .cursor_pointer()
                                 .hover(|style| style.bg(theme.overlay_strong))
                                 .on_click(cx.listener(|this, _, _, cx| {
-                                    this.dialog = None;
+                                    this.close_dialog();
                                     cx.notify();
                                 }))
                                 .child(
@@ -1690,7 +1704,7 @@ impl GuiApp {
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, _, _, cx| {
-                            this.dialog = None;
+                            this.close_dialog();
                             cx.notify();
                         }),
                     )

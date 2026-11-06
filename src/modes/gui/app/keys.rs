@@ -721,7 +721,7 @@ impl GuiApp {
     /// 对话框按键：重命名时打字进输入框，Enter 确认、Esc 取消。
     pub(super) fn handle_dialog_key(&mut self, key: &str, shift: bool) {
         if key == "escape" {
-            self.dialog = None;
+            self.close_dialog();
             return;
         }
         let Some(dialog) = self.dialog.as_mut() else {
@@ -734,7 +734,8 @@ impl GuiApp {
             | SessionDialog::Import { editor }
             | SessionDialog::Label { editor }
             | SessionDialog::BugHint { editor }
-            | SessionDialog::Number { editor, .. } => editor,
+            | SessionDialog::Number { editor, .. }
+            | SessionDialog::Oauth { editor, .. } => editor,
             SessionDialog::Delete { .. } => return,
         };
         match key {
@@ -765,7 +766,8 @@ impl GuiApp {
             | SessionDialog::Import { editor }
             | SessionDialog::Label { editor }
             | SessionDialog::BugHint { editor }
-            | SessionDialog::Number { editor, .. },
+            | SessionDialog::Number { editor, .. }
+            | SessionDialog::Oauth { editor, .. },
         ) = self.dialog.as_mut()
         {
             editor.insert(&text);

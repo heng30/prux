@@ -2,6 +2,19 @@
 
 ### Added
 
+- **The desktop window can sign in with an account, not just an API key**: `/login` now asks for the
+  authentication method first, then lists either the account (OAuth) providers or the API-key ones,
+  each with its status (`✓ stored`, `✓ env (VAR)`, `• not configured`). Picking an account provider
+  runs the same login flows as the terminal — browser callback, copy-code (the code#state shown on the
+  page is pasted back) and device-code (user code + verification URL) — in a background task, so the
+  window keeps repainting while it waits. The authorization URL or verification URI is copied to the
+  clipboard by itself, credentials land in the same `auth.json`, and the running agent picks up the new
+  token immediately. Closing the panel releases the local callback port.
+
+- **Panels name the keys they answer to**: the session picker now says `Ctrl+R rename · Ctrl+D delete ·
+  Ctrl+G next` (previously only "Enter confirm"), and the logout list says what Enter does before it
+  clears a key.
+
 - **`prux acp` serves the Agent Client Protocol so an editor can drive the same agent**: the new
   `acp` extension injects an `acp` subcommand — `bootstrap()` hands it the fully assembled agent,
   so the editor gets the same model chain, tool set, session file and extension hooks as the TUI,
@@ -1206,6 +1219,16 @@
 ## 中文
 
 ### 新增
+
+- **桌面窗口支持账号登录，不再只有 API key**：`/login` 先问认证方式，再按方式列出账号（OAuth）
+  或 API key 的 provider，并显示各自的状态（`✓ stored`、`✓ env (VAR)`、`• not configured`）。
+  选账号 provider 后走与终端相同的登录流程——浏览器本地回调、复制授权码（把页面上的
+  `code#state` 粘回来）、device-code（用户码 + 验证地址）——整段流程跑在后台任务里，等待期间窗口
+  照常重绘。授权地址 / 验证 URI 自动复制到剪贴板，凭据写进同一个 `auth.json`，当前 agent 立刻
+  用上新 token；关掉面板会释放本地回调端口。
+
+- **面板补上键位提示**：会话选择器现在写明 `Ctrl+R rename · Ctrl+D delete · Ctrl+G next`
+  （此前只有「Enter confirm」），登出列表也在清 key 前说明 Enter 的作用。
 
 - **`prux acp` 把 prux 变成编辑器的 agent 后端**：新增 `acp` 扩展注入 `acp` 子命令——`bootstrap()`
   把**已装配好的** Agent 交给它，因此编辑器拿到的是与 TUI 完全相同的模型链、工具表、会话文件与

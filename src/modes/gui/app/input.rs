@@ -194,7 +194,8 @@ impl GuiApp {
             | SessionDialog::Import { editor }
             | SessionDialog::Label { editor }
             | SessionDialog::BugHint { editor }
-            | SessionDialog::Number { editor, .. },
+            | SessionDialog::Number { editor, .. }
+            | SessionDialog::Oauth { editor, .. },
         ) = &self.dialog
         {
             return editor;
@@ -236,7 +237,8 @@ impl GuiApp {
             | SessionDialog::Import { editor }
             | SessionDialog::Label { editor }
             | SessionDialog::BugHint { editor }
-            | SessionDialog::Number { editor, .. },
+            | SessionDialog::Number { editor, .. }
+            | SessionDialog::Oauth { editor, .. },
         ) = &mut self.dialog
         {
             return editor;

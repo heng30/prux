@@ -11,6 +11,7 @@ mod components;
 mod composer;
 mod giff;
 mod markdown;
+mod oauth;
 mod overlay;
 mod sidebar;
 mod suggest;
