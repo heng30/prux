@@ -93,9 +93,10 @@ pub use tools::{
     ToolLoadoutChanges, unavailable_tool_exec,
 };
 pub use ui::{
-    ExtensionUiRequest, RichSpan, SelectOption, UiNotifyLevel, ask_pending, ask_prompt, next_ui_id,
-    render_custom_message, request_show_dock, request_ui, set_ui_ready, submit_ui_choice,
-    take_pending_ui, ui_ready,
+    ExtensionUiRequest, FormAnswer, FormOption, FormQuestion, FormRequest, FormResponse, RichSpan,
+    SelectOption, UiNotifyLevel, ask_form, ask_pending, ask_prompt, form_host_ready, next_ui_id,
+    render_custom_message, request_show_dock, request_ui, set_form_host, set_ui_ready,
+    submit_ui_choice, take_pending_ui, ui_ready,
 };
 
 /// 扩展声明的 MCP 服务器条目：`(服务器名, 与 `mcp.json` 的 `mcpServers[name]` 同形的 JSON)`。

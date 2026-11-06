@@ -13,16 +13,22 @@
 //! 即等于取消；没有 TUI 事件循环（非交互模式）时立即返回 `None`，调用方据此走 fail-closed 分支。
 
 use crate::core::provider::AgentMessage;
+use futures_util::future::BoxFuture;
 use serde_json::Value;
 use std::{
     collections::{HashMap, VecDeque},
     sync::{
-        Mutex, MutexGuard, OnceLock,
+        Arc, Mutex, MutexGuard, OnceLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
 use tokio::sync::oneshot::Sender;
+
+/// 表单宿主：把问卷交给能渲染表单的一方（如 ACP 客户端），返回用户作答。
+///
+/// 返回 `None` 表示用户取消或关闭面板，调用方按「拒绝作答」处理。
+type FormHost = dyn Fn(FormRequest) -> BoxFuture<'static, Option<FormResponse>> + Send + Sync;
 
 /// 事件循环是否就绪（TUI 在监听扩展 UI 请求）。
 ///
@@ -322,6 +328,86 @@ pub async fn ask_prompt(
         Some(limit) => tokio::time::timeout(limit, wait).await.ok().flatten(),
         None => wait.await,
     }
+}
+
+/// 表单里一个候选选项。
+#[derive(Debug, Clone)]
+pub struct FormOption {
+    /// 展示与回传用的标签。
+    pub label: String,
+    /// 选中它意味着什么、代价是什么。
+    pub description: String,
+    /// 聚焦该选项时展示的预览正文；None = 无预览。
+    pub preview: Option<String>,
+}
+
+/// 表单里的一道题。
+#[derive(Debug, Clone)]
+pub struct FormQuestion {
+    /// 完整问句。
+    pub question: String,
+    /// 短标题，渲染成字段名。
+    pub header: String,
+    /// true = 可多选。
+    pub multi: bool,
+    /// 候选选项。
+    pub options: Vec<FormOption>,
+}
+
+/// 交给宿主渲染的整份问卷。
+#[derive(Debug, Clone)]
+pub struct FormRequest {
+    /// 一句话说明为什么要问，渲染成表单的描述。
+    pub message: String,
+    /// 逐题内容。
+    pub questions: Vec<FormQuestion>,
+}
+
+/// 一道题的作答。
+#[derive(Debug, Default, Clone)]
+pub struct FormAnswer {
+    /// 勾选的选项标签，按勾选顺序；单选至多一个。
+    pub picked: Vec<String>,
+    /// `Type something.` 的自由作答文本；空串 = 没写。
+    pub custom: String,
+}
+
+/// 宿主回传的作答。
+#[derive(Debug, Default, Clone)]
+pub struct FormResponse {
+    /// 逐题作答，与 [`FormRequest::questions`] 一一对应。
+    pub answers: Vec<FormAnswer>,
+    /// 整份问卷的备注；空串 = 没写。
+    pub note: String,
+}
+
+/// 当前进程注册的表单宿主；`None` = 只有覆盖层这一种渲染方式。
+fn form_host() -> &'static Mutex<Option<Arc<FormHost>>> {
+    /// 进程级表单宿主槽。
+    static H: OnceLock<Mutex<Option<Arc<FormHost>>>> = OnceLock::new();
+    H.get_or_init(Default::default)
+}
+
+/// 注册或注销表单宿主（`prux acp` 启动与退出时调用）。
+pub fn set_form_host(host: Option<Arc<FormHost>>) {
+    *form_host().lock().unwrap_or_else(|e| e.into_inner()) = host;
+}
+
+/// 是否有宿主能把问卷渲染成结构化表单。
+pub fn form_host_ready() -> bool {
+    form_host()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .is_some()
+}
+
+/// 把问卷交给表单宿主并等作答；没有宿主时立刻返回 `None`。
+pub async fn ask_form(request: FormRequest) -> Option<FormResponse> {
+    let host = form_host()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()?;
+    host(request).await
 }
 
 /// 面板 Enter/Esc 结果按 id 回传：遍历已启用扩展调用 [`Extension::on_ui_choice`]，

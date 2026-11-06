@@ -490,12 +490,70 @@ fn prepare_arguments(args: &Value) -> Value {
     Value::Object(out)
 }
 
-/// 工具入口：校验 → 入队覆盖层 → 等用户作答 → 组装结果。
+/// 校验后的问卷 → 结构化表单请求（交给能渲染表单的宿主）。
+fn form_request(questions: &[Question]) -> extensions::FormRequest {
+    extensions::FormRequest {
+        message: "The agent needs a few decisions from you before it can continue.".to_string(),
+        questions: questions
+            .iter()
+            .map(|q| extensions::FormQuestion {
+                question: q.question.clone(),
+                header: q.header.clone(),
+                multi: q.multi,
+                options: q
+                    .options
+                    .iter()
+                    .map(|o| extensions::FormOption {
+                        label: o.label.clone(),
+                        description: o.description.clone(),
+                        preview: o.preview.clone(),
+                    })
+                    .collect(),
+            })
+            .collect(),
+    }
+}
+
+/// 宿主回的作答 → 内部 `Submitted`（选项标签找回下标，找不到的丢弃）。
+fn form_submitted(questions: &[Question], response: extensions::FormResponse) -> Submitted {
+    let answers = questions
+        .iter()
+        .enumerate()
+        .map(|(index, question)| {
+            let given = response.answers.get(index).cloned().unwrap_or_default();
+            Answer {
+                picked: given
+                    .picked
+                    .iter()
+                    .filter_map(|label| question.options.iter().position(|o| &o.label == label))
+                    .collect(),
+                custom: given.custom,
+                note: String::new(),
+            }
+        })
+        .collect();
+    Submitted {
+        answers,
+        global_note: response.note,
+    }
+}
+
+/// 工具入口：校验 → 交给表单宿主或入队覆盖层 → 等用户作答 → 组装结果。
 async fn run(args: Value) -> ToolResult {
     let questions = match parse_questions(&args) {
         Ok(questions) => questions,
         Err((code, message)) => return reject(code, message),
     };
+
+    // 宿主能渲染结构化表单（ACP 客户端）时优先走表单：那边的问卷是多题一屏的，
+    // 覆盖层那套逐帧拉取 + 按键回传没有对应协议通道。
+    if extensions::form_host_ready() {
+        let outcome = extensions::ask_form(form_request(&questions)).await;
+        return build_result(
+            &questions,
+            outcome.map(|response| form_submitted(&questions, response)),
+        );
+    }
 
     if !extensions::ui_ready() {
         return reject(
@@ -1205,6 +1263,65 @@ mod tests {
             "multiSelect": multi,
             "options": labels.iter().map(|l| option(l)).collect::<Vec<_>>(),
         })
+    }
+
+    /// 注册了表单宿主时走结构化表单，且不再入队覆盖层请求。
+    #[test]
+    fn form_host_answers_without_overlay() {
+        /// 用例跑完必须摘掉宿主：它是进程级全局态，留着会污染后续用例。
+        struct HostGuard;
+
+        impl Drop for HostGuard {
+            /// 注销表单宿主。
+            fn drop(&mut self) {
+                extensions::set_form_host(None);
+            }
+        }
+
+        let _g = lock();
+        while take_pending_ui().is_some() {}
+        set_ui_ready(false);
+        let _host = HostGuard;
+
+        extensions::set_form_host(
+            Some(
+                std::sync::Arc::new(
+                    |request: extensions::FormRequest| -> futures_util::future::BoxFuture<
+                        'static,
+                        Option<extensions::FormResponse>,
+                    > {
+                        Box::pin(async move {
+                            Some(extensions::FormResponse {
+                                answers: request
+                                    .questions
+                                    .iter()
+                                    .map(|q| extensions::FormAnswer {
+                                        picked: q
+                                            .options
+                                            .first()
+                                            .map(|o| o.label.clone())
+                                            .into_iter()
+                                            .collect(),
+                                        custom: String::new(),
+                                    })
+                                    .collect(),
+                                note: "noted".to_string(),
+                            })
+                        })
+                    },
+                ),
+            ),
+        );
+
+        let result = block_on(run(
+            json!({ "questions": [question("Which?", false, &["a", "b"])] }),
+        ));
+
+        assert!(take_pending_ui().is_none(), "表单宿主可用时不该再弹覆盖层");
+        let details = result.details.expect("details");
+        assert_eq!(details["answers"][0]["kind"], "option");
+        assert_eq!(details["answers"][0]["answer"], "a");
+        assert_eq!(details["globalNote"], "noted");
     }
 
     /// 校验按上游口径报错：空 / 超量 / 重复 / 选项不足 / 保留标签 / 重复标签。

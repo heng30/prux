@@ -2,6 +2,15 @@
 
 ### Added
 
+- **ACP sessions can ask the user a question**: with `clientCapabilities.elicitation.form`
+  advertised during `initialize`, `prux acp` sends `ask_user_question`'s questionnaire as an
+  `elicitation/create` form the client renders; clients without it (Zed 1.3.6 sends no
+  `elicitation` capability) fall back to one `session/request_permission` per single-select
+  question, reporting multi-select questions as unanswered. Other blocking choice panels (such as
+  the permission gate) always go through `session/request_permission`. stdin is read by its own
+  task now, so the client's replies to agent-initiated requests are dispatched without stalling a
+  running prompt turn.
+
 - **The desktop window can sign in with an account, not just an API key**: `/login` now asks for the
   authentication method first, then lists either the account (OAuth) providers or the API-key ones,
   each with its status (`✓ stored`, `✓ env (VAR)`, `• not configured`). Picking an account provider
@@ -1228,6 +1237,13 @@
 ## 中文
 
 ### 新增
+
+- **ACP 会话可以问用户问题了**：客户端在 `initialize` 里广告 `clientCapabilities.elicitation.form`
+  时，`prux acp` 把 `ask_user_question` 的问卷送成 `elicitation/create` 表单由客户端渲染；
+  没广告的客户端（Zed 1.3.6 根本不发 `elicitation` 能力）退化为每道单选题发一次
+  `session/request_permission`，多选题按未作答报告。其余会阻塞等作答的选择面板（如权限门控）
+  一律走 `session/request_permission`。stdin 改由独立任务读取，客户端对 agent 发起请求的答复
+  不会因回合正在跑而被卡住。
 
 - **桌面窗口支持账号登录，不再只有 API key**：`/login` 先问认证方式，再按方式列出账号（OAuth）
   或 API key 的 provider，并显示各自的状态（`✓ stored`、`✓ env (VAR)`、`• not configured`）。
