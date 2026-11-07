@@ -351,9 +351,11 @@ impl GuiApp {
         let theme = self.theme.clone();
 
         let pane_width = self.pane_width.get();
-        // 内容的可用内宽：对话区宽度减去左右内边距（首帧还没量到时按最大宽度估）
+        // 内容的可用内宽：对话区宽度减去左右内边距（首帧还没量到时按最大宽度估）。
+        // 滚动条是绝对定位的浮层（`scrollbar()`），不占布局，内边距本身已经把它让开，
+        // 在这里再扣一次会把每块的可用宽度量小，长句在气泡里提前一个词折行。
         let flow_width = if pane_width > px(0.) {
-            (pane_width - px(SPACE_XL * 2. + SPACE_SM)).min(px(CONTENT_MAX_WIDTH))
+            (pane_width - px(SPACE_XL * 2.)).min(px(CONTENT_MAX_WIDTH))
         } else {
             px(CONTENT_MAX_WIDTH)
         };

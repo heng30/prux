@@ -1521,19 +1521,21 @@ pub fn render_block(
 ///
 /// 盒子按内容定宽时，文本框的实测高度会比折行后的实际高度小（背景只剩一行高、
 /// 下面的字露在背景外），所以先量出换行宽度交给文本框，让测量与绘制用同一个宽度。
+///
+/// 宽度按**逐字 advance 累加**算，不是整行 shaping 的宽度：gpui 的折行器
+/// （`LineWrapper`）就是逐字累加判断放不放得下的，整行 shaping 有 kerning、
+/// 比它认账的宽度小零点几像素，于是「明明放得下」的一行会折行；断行点再被禁则
+/// 处理（`。` 不能起行）拉到前一个字，看着像凭空多出一个字掉到下一行。
 fn natural_width(window: &Window, text: &str, font_size: Pixels) -> Pixels {
     // 正文用的是主题 UI 字体，window 的基础字体不是它：按基础字体量出来的宽度会偏、折行错位
     let mut style = window.text_style();
     style.font_family = UI_FONT_FAMILY.into();
+    let font_id = window.text_system().resolve_font(&style.font());
     text.split('\n').fold(px(0.), |widest, line| {
-        let runs = [style.to_run(line.len())];
-        let shaped = window.text_system().shape_line(
-            SharedString::from(line.to_string()),
-            font_size,
-            &runs,
-            None,
-        );
-        widest.max(shaped.width)
+        let width = line.chars().fold(px(0.), |sum, ch| {
+            sum + window.text_system().layout_width(font_id, font_size, ch)
+        });
+        widest.max(width)
     })
 }
 
