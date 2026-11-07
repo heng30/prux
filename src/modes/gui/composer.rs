@@ -153,7 +153,8 @@ struct Wrap<'a> {
 
 /// 按可用宽度把一行切成若干视觉行（每段是该行的字符区间）。
 ///
-/// `width_of` 给出单个字符的排印宽度；空行返回一个空区间，保证仍然渲染出一行（光标可见）。
+/// `wrap_width` 与 `width_of` 必须用**同一个单位**（[`render_inner`] 两边都给设备像素）；
+/// 空行返回一个空区间，保证仍然渲染出一行（光标可见）。
 pub fn wrap_chunks(
     line: &str,
     wrap_width: f32,
@@ -252,7 +253,9 @@ fn render_inner(
         let chunks = match wrap.as_ref() {
             Some(wrap) => {
                 let font_size = px(FONT_SIZE);
-                let width = f32::from(wrap.width);
+                // 折行预算用设备像素（整数）：布局引擎就是在这个平面上给每个字符元素定宽的。
+                // 容器宽向下取整、字符宽向上取整，两个方向都偏保守——只会少排一个字，不会溢出。
+                let width = (f32::from(wrap.width) * wrap.window.scale_factor()).floor();
                 let at_end = cursor_col.is_some_and(|col| col >= chars.len());
                 wrap_chunks_for_line(line, width, at_end, |ch| {
                     char_width(ch, font_size, wrap.window, &mut widths)
@@ -361,11 +364,14 @@ fn block(color: gpui::Hsla) -> gpui::Div {
         .bg(color)
 }
 
-/// 单个字符的排印宽度：排版器量真字形，不做等宽估算（CJK、回退字体都按实际算）。
+/// 单个字符占的宽度，单位是**设备像素**（整数）：与布局引擎给这个字符元素定宽的算式
+/// 逐步对齐，折行预算才不会与实际排布错开。
 ///
-/// 结果向上取整到物理像素：布局引擎把每个字符元素的宽按**整数物理像素**排布
-/// （16.5px 的字在 1.5 倍缩放下每字实占 25 而非 24.375），亚像素累加会让折行
-/// 每行多塞一个字，那一个字就被行尾裁掉一半。
+/// 两步取整缺一不可：文本元素量宽时把字形宽向上取整到整数逻辑像素
+/// （`elements/text.rs` 的 `size.width.ceil()`），布局引擎再把每个实测尺寸向上取整到
+/// 整数设备像素（`taffy.rs` 的 `ceil_to_device_pixel`）。只取第一道时预算比实际占位
+/// 小，逐字累加的差额把排满的行顶出盒子（行尾字符被裁），且缩放级别一变就换一批字
+/// 触发、看起来时好时坏。
 fn char_width(
     ch: char,
     font_size: gpui::Pixels,
@@ -382,16 +388,21 @@ fn char_width(
     let mut buffer = [0u8; 4];
     let text = ch.encode_utf8(&mut buffer);
     let runs = [style.to_run(text.len())];
-    let scale = window.scale_factor();
-    let width = f32::from(
+    let raw = f32::from(
         window
             .text_system()
             .layout_line(text, font_size, &runs, None)
             .width,
     );
-    let width = (width * scale).ceil() / scale;
+    let width = device_width(raw, window.scale_factor());
     cache.insert(ch, width);
     width
+}
+
+/// 把排版器量出的逻辑宽度换算成布局引擎实际占的**设备像素**（整数）：
+/// 先按文本元素量宽那样向上取整到整数逻辑像素，再向上取整到整数设备像素。
+fn device_width(logical: f32, scale: f32) -> f32 {
+    (logical.ceil() * scale).ceil()
 }
 
 /// 一段同类的字符区间。
@@ -487,6 +498,25 @@ mod tests {
         assert_eq!(wrap_chunks("", 40., |_| 10.), vec![0..0]);
         // 宽度未知时不折行
         assert_eq!(wrap_chunks("abcdef", 0., |_| 10.), vec![0..6]);
+    }
+
+    /// 折行预算必须跟布局引擎的双重向上取整对齐：先到整数逻辑像素，再到整数设备像素。
+    ///
+    /// 只取一道的话预算比实际占位小，一行排满时累计差额就把行尾字符顶出盒子；
+    /// 差额随缩放级别变（哪批字跨过像素边界会换），所以“某个缩放下好、换一个就坏”。
+    #[test]
+    fn char_width_matches_layout_rounding() {
+        // 文本元素量与布局量的两道向上取整
+        assert_eq!(device_width(16.926, 1.25), 22.); // ceil(16.926)=17 → ceil(21.25)=22
+        assert_eq!(device_width(27.3, 1.25), 35.); // ceil(27.3)=28 → ceil(35.0)=35
+        assert_eq!(device_width(7.215, 1.25), 10.); // ceil=8 → ceil(10.0)=10
+        assert_eq!(device_width(13., 1.), 13.);
+        // 离整数最近的字符也会把小数部分抹掉：预算永远 ≥ 真实逻辑宽度
+        for raw in [7.01_f32, 7.5, 7.99, 16.926, 27.3] {
+            for scale in [1., 1.25, 1.5, 2.625] {
+                assert!(device_width(raw, scale) >= raw * scale - 1e-3);
+            }
+        }
     }
 
     /// 行尾光标也占一格：排满时另起一视觉行，还有空位就留在行尾。
