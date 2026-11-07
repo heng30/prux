@@ -19,6 +19,7 @@ pub mod changelog;
 pub mod compaction;
 pub mod config_cache;
 pub mod context;
+pub mod context_breakdown;
 pub mod crash_log;
 pub mod doc_sync;
 pub mod export_html;

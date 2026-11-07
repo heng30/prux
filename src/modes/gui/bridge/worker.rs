@@ -13,7 +13,7 @@ use crate::{
         agent_session::Agent,
         bug_report,
         compaction::{CompactionReason, estimate_context_tokens},
-        crash_log, export_html,
+        context_breakdown, crash_log, export_html,
         extensions::dispatch_exec_ctx,
         prompt_templates::{self, PromptTemplate},
         provider::AgentMessage,
@@ -225,6 +225,22 @@ async fn apply(
         AgentCommand::DebugInfo => {
             let message = debug_info_text(agent);
             _ = events.send(GuiEvent::Notice(message));
+        }
+        AgentCommand::ContextBreakdown => {
+            let tools: Vec<(String, String, serde_json::Value)> = agent
+                .tools
+                .iter()
+                .filter(|(name, _, _)| !agent.hidden_declarations.contains(name))
+                .cloned()
+                .collect();
+            let window = agent
+                .routed_model
+                .as_ref()
+                .unwrap_or(&agent.model)
+                .context_window;
+            let breakdown =
+                context_breakdown::breakdown(&agent.system_prompt, &tools, &agent.messages, window);
+            _ = events.send(GuiEvent::Notice(context_breakdown::render(&breakdown)));
         }
         AgentCommand::BugReport {
             hint,

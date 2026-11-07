@@ -431,6 +431,19 @@ pub fn split_head(text: &str) -> (&str, &str) {
     }
 }
 
+/// 千位分隔的数字，`1234567` → `1,234,567`。
+pub fn fmt_count(n: u32) -> String {
+    let digits = n.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, ch) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

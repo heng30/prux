@@ -26,7 +26,7 @@ use crate::{
         agent_session::Agent,
         bug_report,
         compaction::CompactionReason,
-        crash_log, model_resolver,
+        context_breakdown, crash_log, model_resolver,
         provider::{AgentMessage, ContentBlock, Usage},
         session_manager::{self, OpenSessionResult, Session},
         settings_manager,
@@ -256,6 +256,7 @@ async fn dispatch_cmd(
         AgentCommand::Tree => dispatch_tree(agent).await,
         AgentCommand::DebugInfo => dispatch_debug_info(agent).await,
         AgentCommand::SystemPrompt => dispatch_system_prompt(agent).await,
+        AgentCommand::ContextBreakdown => dispatch_context_breakdown(agent).await,
         AgentCommand::Share { theme } => dispatch_share(agent, theme).await,
         AgentCommand::BugReport {
             hint,
@@ -572,6 +573,29 @@ async fn dispatch_system_prompt(agent: &Arc<Mutex<Agent>>) -> Option<RoundFuture
     } else {
         prompt.to_string()
     };
+    _ = run_in_event_loop(move |ui| ui.on_command_notice(true, msg));
+    None
+}
+
+/// 处理 AgentCommand::ContextBreakdown：把上下文占用按来源拆开回执到聊天区。
+///
+/// 工具只算**本次请求真正声明**的那些（`hidden_declarations` 里的不发包、不占上下文），
+/// 窗口取实际发包模型（虚拟模型已路由到物理模型）的窗口。
+async fn dispatch_context_breakdown(agent: &Arc<Mutex<Agent>>) -> Option<RoundFuture> {
+    let a = agent.lock().await;
+    let tools: Vec<(String, String, Value)> = a
+        .tools
+        .iter()
+        .filter(|(name, _, _)| !a.hidden_declarations.contains(name))
+        .cloned()
+        .collect();
+    let window = a.routed_model.as_ref().unwrap_or(&a.model).context_window;
+    let msg = context_breakdown::render(&context_breakdown::breakdown(
+        &a.system_prompt,
+        &tools,
+        &a.messages,
+        window,
+    ));
     _ = run_in_event_loop(move |ui| ui.on_command_notice(true, msg));
     None
 }

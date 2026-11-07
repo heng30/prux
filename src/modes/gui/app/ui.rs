@@ -133,6 +133,11 @@ impl CommandHost for GuiApp {
         _ = self.cmd_tx.send(AgentCommand::SystemPrompt);
     }
 
+    /// 请 worker 回执上下文占用拆分。
+    fn debug_context_breakdown(&mut self) {
+        _ = self.cmd_tx.send(AgentCommand::ContextBreakdown);
+    }
+
     /// 当前会话文件路径（会话快照里没有则为内存会话）。
     fn session_path(&self) -> Option<String> {
         self.snapshot.as_ref()?.session_path.clone()

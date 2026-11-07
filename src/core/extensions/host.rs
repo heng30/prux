@@ -102,6 +102,9 @@ pub trait CommandHost {
     /// 输出当前系统提示词原文（`/debug system-prompt`）。
     fn debug_system_prompt(&mut self);
 
+    /// 输出上下文窗口的来源拆分（`/debug context`）。
+    fn debug_context_breakdown(&mut self);
+
     /// 当前会话文件路径；内存会话（`--no-session`）为 `None`。
     fn session_path(&self) -> Option<String>;
 
@@ -224,6 +227,8 @@ mod tests {
         fn debug_info(&mut self) {}
 
         fn debug_system_prompt(&mut self) {}
+
+        fn debug_context_breakdown(&mut self) {}
 
         fn set_status(&mut self, text: &str) {
             self.messages.push((text.to_string(), UiNotifyLevel::Info));
