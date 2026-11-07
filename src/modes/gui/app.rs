@@ -808,6 +808,8 @@ impl GuiApp {
 
     /// 用完整消息历史重建对话流（切换/新建会话与 `/rewind` 共用）。
     fn replace_history(&mut self, messages: Vec<AgentMessage>) {
+        // 换会话是重新读分支的时机：期间可能在别的终端切过分支
+        self.refresh_branch();
         self.transcript = Transcript::from_messages(&messages, &self.cwd());
         // 换会话后速率/耗时基线作废（累计用量可能小很多）
         self.meter = UsageMeter::default();
