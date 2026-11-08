@@ -41,6 +41,8 @@
   walks every loaded skill (disabled ones included) and reports those three cases per script with
   its path inside the skill. It only reports — nothing is changed and no skill is blocked. Bundled
   skills also now land executable when installed, so this check has nothing to say about them.
+  The GUI's `/skills` takes the same subcommands: `check` runs the preflight, `settings` opens the
+  skills panel.
 
 ### Fixed
 
@@ -82,7 +84,8 @@
   shebang 指的解释器本机没装，症状都是一句干巴巴的 `Permission denied` / `command not found`，
   之后模型就开始猜。`/skills check` 走一遍已加载的全部技能（含被禁用的），逐个脚本报这三类问题
   并带上它在技能内的路径。它只报告——不改任何东西，也不拦任何技能。内置技能在安装时也会带上
-  执行位，所以它对这些技能没什么可说的。
+  执行位，所以它对这些技能没什么可说的。桌面 GUI 的 `/skills` 收同样的子命令：`check` 跑预检，
+  `settings` 打开技能面板。
 
 ### 修复
 

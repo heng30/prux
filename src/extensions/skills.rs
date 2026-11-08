@@ -23,11 +23,11 @@ pub mod preflight;
 
 use crate::{
     core::{
-        extensions::{Extension, ExtensionCommand, ExtensionMode, ExtensionTool},
+        extensions::{Extension, ExtensionCommand, ExtensionMode, ExtensionTool, SubcommandDef},
         settings_manager::agent_dir,
         skills,
     },
-    extensions::{EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_SKILLS},
+    extensions::{EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_SKILLS, command_arg},
     modes::tui::{app::App, handlers::register_slash_command},
 };
 use std::{path::PathBuf, sync::Arc};
@@ -38,11 +38,16 @@ pub const EXT: &str = "skills";
 pub const CMD: &str = "skills";
 
 /// `/skills` 子命令（顺序 = 输入框候选顺序）。
-const SUBCOMMANDS: &[crate::core::extensions::SubcommandDef] =
-    &[crate::core::extensions::SubcommandDef {
+const SUBCOMMANDS: &[SubcommandDef] = &[
+    SubcommandDef {
+        name: "settings",
+        description: "Open the skills panel (same as a bare /skills)",
+    },
+    SubcommandDef {
         name: "check",
         description: "Check every loaded skill's scripts (shebang interpreter, exec bit)",
-    }];
+    },
+];
 
 /// 自声明工厂：linkme 分布式切片，priority 值大者先注册（见 [`crate::extensions`]）。
 #[linkme::distributed_slice(EXTENSION_FACTORIES)]
@@ -214,9 +219,9 @@ impl Skills {
     }
 }
 
-/// `/skills` 命令入口：`/skills check` 跑运行前预检，其余参数打开技能管理面板。
+/// `/skills` 命令入口：`/skills check` 跑运行前预检，`settings` 与不传参数都打开技能管理面板。
 fn command_skills(st: &mut App, raw: &str) -> bool {
-    if crate::extensions::command_arg(raw).trim() == "check" {
+    if command_arg(raw).trim() == "check" {
         st.run_skill_preflight();
         return false;
     }

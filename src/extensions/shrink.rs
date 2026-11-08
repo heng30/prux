@@ -36,9 +36,7 @@ use crate::{
         provider::AgentMessage,
         tools::ToolError,
     },
-    extensions::{
-        EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_SHRINK, command_arg, util::notify_plain,
-    },
+    extensions::{EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_SHRINK, command_arg},
     utils::{display::format_bytes, output_files::write_output_file},
 };
 use serde_json::Value;
@@ -273,7 +271,7 @@ impl Extension for Shrink {
         }
     }
 
-    /// 被禁用时把统计归零并提示一次（用户关掉后不必再看到旧数字）。
+    /// 被禁用时把统计归零（用户关掉后不必再看到旧数字）。
     fn on_enabled_changed(&self, enabled: bool) {
         if enabled {
             return;
@@ -281,10 +279,6 @@ impl Extension for Shrink {
         SHRUNK.store(0, Ordering::Relaxed);
         BYTES_IN.store(0, Ordering::Relaxed);
         BYTES_OUT.store(0, Ordering::Relaxed);
-        notify_plain(
-            "shrink disabled: tool results pass through unchanged",
-            UiNotifyLevel::Info,
-        );
     }
 }
 
