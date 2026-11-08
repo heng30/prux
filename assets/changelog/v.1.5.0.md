@@ -31,6 +31,10 @@
   element and refuse when its name or role changed, but the AT-SPI path acted on the recorded
   `(bus, path)` directly, so a reused path could drive a different control. Every Linux action and
   read now verifies the identity first and fails with `[STALE_REF]`.
+- **Chinese in monospace text fell back to a system font**: code blocks, inline code and the diff
+  view asked for Source Code Pro only, which carries no CJK glyphs, so each Chinese character was
+  drawn by whichever font the system picked — different on every machine and visibly unlike the
+  rest of the UI. Monospace text now declares the embedded CJK font as its glyph fallback.
 
 ## 中文
 
@@ -55,4 +59,7 @@
 - **Linux 上按 `ref` 操作前不复核节点身份**：macOS 与 Windows 后端会重读元素、名称或角色变了就拒绝，
   但 AT-SPI 那条路径直接拿记录的 `(bus, path)` 动手，路径被复用时会操作到别的控件。
   现在每个 Linux 动作与读值都先复核身份，对不上就报 `[STALE_REF]`。
+- **等宽文本里的中文落到系统字体**：代码块、内联代码与 diff 视图只指定 Source Code Pro，它没有中文字形，
+  于是每个汉字都由系统随手挑的字体画出来——各机器不一样，也和界面其余部分明显不搭。
+  现在等宽文本声明内嵌中文字体作字形回退。
 

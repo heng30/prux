@@ -4,7 +4,7 @@
 //! 这是 GUI 侧唯一的配色来源，不跟随 TUI 的多主题体系。
 
 use crate::utils::color::Rgb;
-use gpui::{Hsla, Pixels, rgb, rgba};
+use gpui::{Font, FontFallbacks, Hsla, Pixels, rgb, rgba};
 use std::{
     sync::atomic::{AtomicU32, Ordering},
     time::Duration,
@@ -325,6 +325,19 @@ impl Theme {
     }
 }
 
+/// 等宽文本用的 [`gpui::Font`]：Source Code Pro + 思源黑体作字形回退。
+///
+/// Source Code Pro 没有中文字形，不显式给回退链时中文会落到系统里随便一个中文字体
+/// （各发行版装的不一样），与界面其余部分字形不一致；Linux / Windows 的后端把
+/// `Font::fallbacks` 当字形级回退链用，所以等宽文本一律经这里取字体。
+pub fn mono_font() -> Font {
+    Font {
+        family: MONO_FONT_FAMILY.into(),
+        fallbacks: Some(FontFallbacks::from_fonts(vec![UI_FONT_FAMILY.to_owned()])),
+        ..Default::default()
+    }
+}
+
 /// 固定高度的行 / chip / 按钮里，文字该挂的下外边距（逻辑像素）。
 ///
 /// flex 居中按 margin box 对半分，所以边距取抬高量的两倍。
@@ -398,5 +411,14 @@ mod tests {
     fn syntect_theme_builds() {
         let theme = Theme::dark().syntect();
         assert!(!theme.scopes.is_empty());
+    }
+
+    /// 等宽文本必须带内嵌中文字体作字形回退，否则中文落到系统字体。
+    #[test]
+    fn mono_font_falls_back_to_embedded_cjk() {
+        let font = mono_font();
+        assert_eq!(font.family.as_ref(), MONO_FONT_FAMILY);
+        let fallbacks = font.fallbacks.expect("等宽字体缺回退链");
+        assert_eq!(fallbacks.fallback_list(), [UI_FONT_FAMILY.to_owned()]);
     }
 }
