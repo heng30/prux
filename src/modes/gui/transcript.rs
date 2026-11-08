@@ -1606,6 +1606,15 @@ fn natural_width(window: &Window, text: &str, font_size: Pixels) -> Pixels {
     })
 }
 
+/// 宽度向上吸附到整数设备像素。
+///
+/// 布局引擎把盒宽吸附到设备像素时是四舍五入（`round_half_toward_zero`，.5 时向下）：
+/// 交给它一个逐字累加出来的自然宽，末位那半像素就被吃掉，而折行判定用的仍然是
+/// 未吸附的自然宽——两边差半像素，一整行就凭空折掉最后一个字。
+fn snap_up(width: Pixels, scale: f32) -> Pixels {
+    gpui::px((f32::from(width) * scale).ceil() / scale)
+}
+
 /// 用户消息气泡：右对齐，长消息可 alt+点击展开（普通点击留给选字复制），
 /// `@图片` 引用渲染成缩略图。
 fn user_block(
@@ -1641,7 +1650,9 @@ fn user_block(
         inner = inner.max(px(thumb_size(path).0));
     }
 
-    let inner = inner.min(cap - px(SPACE_MD * 2.)).ceil();
+    // 文本容器宽向上吸附到设备像素：交给布局的自然宽会被它按设备像素四舍五入，
+    // 少掉的那半像素就能把最后一个字挤到下一行（见 [`snap_up`]）。
+    let inner = snap_up(inner.min(cap - px(SPACE_MD * 2.)), window.scale_factor());
 
     let mut bubble = div()
         .id(("user", index))
@@ -2703,6 +2714,25 @@ fn span_highlight(style: &markdown::SpanStyle, theme: &Theme) -> HighlightStyle 
 
 #[cfg(test)]
 mod tests {
+    /// 气泡可用宽必须经得起布局的设备像素吸附：吸附后不能再比逐字累加的自然宽窄。
+    ///
+    /// 回归：9 个汉字 27.3px（界面缩放 2.1）+ 屏幕缩放 1.25 时自然宽 245.7，
+    /// 只做逻辑像素 `.ceil()` 得 246 → 布局吸附成 307 设备像素 = 245.6 < 245.7，
+    /// 最后一个字被折到下一行，看着像“没到宽度上限就折行”。
+    #[test]
+    fn snapped_width_survives_layout_rounding() {
+        for scale in [1.0_f32, 1.25, 1.5, 2.0, 2.625] {
+            for natural in [245.7_f32, 244.0, 27.3 * 9., 13.4, 100.05, 0.0] {
+                let snapped = f32::from(snap_up(Pixels::from(natural), scale));
+                let laid_out = (snapped * scale).round() / scale;
+                assert!(
+                    laid_out >= natural - 1e-2,
+                    "scale {scale}: 自然宽 {natural} 吸附成 {laid_out}"
+                );
+            }
+        }
+    }
+
     /// 工具输出截断提示：没隐藏行就不提，折叠时提示可点开，展开后只说还剩多少行。
     #[test]
     fn output_hint_counts_hidden_lines() {
