@@ -51,6 +51,8 @@ pub struct Editor {
     kill_ring: Vec<String>,
     /// 下次 yankPop 取第几条（`len()` = 下次从最新开始）
     yank_index: usize,
+    /// 单行框的横向滚动状态：内容超宽时靠它把光标留在视口里（多行框折行，用不上）
+    scroll: gpui::ScrollHandle,
 }
 
 impl Default for Editor {
@@ -73,7 +75,13 @@ impl Editor {
             history_draft: None,
             kill_ring: Vec::new(),
             yank_index: 0,
+            scroll: gpui::ScrollHandle::new(),
         }
+    }
+
+    /// 单行框的横向滚动句柄（渲染时把光标滚进视口用）。
+    pub fn scroll(&self) -> &gpui::ScrollHandle {
+        &self.scroll
     }
 
     /// 全文（行间补 `\n`）。

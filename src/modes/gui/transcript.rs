@@ -10,7 +10,8 @@ use super::{
     markdown,
     theme::{
         DOT_SIZE, FONT_BODY, FONT_CAPTION, FONT_SMALL, MONO_ADVANCE, MONO_FONT_FAMILY, RADIUS_MD,
-        RADIUS_SM, SPACE_LG, SPACE_MD, SPACE_SM, SPACE_XS, SPACE_XXS, Theme, UI_FONT_FAMILY, px,
+        RADIUS_SM, SCROLLBAR_WIDTH, SPACE_LG, SPACE_MD, SPACE_SM, SPACE_XS, SPACE_XXS, Theme,
+        UI_FONT_FAMILY, min_thumb, px,
     },
 };
 use crate::{
@@ -22,18 +23,18 @@ use crate::{
     utils::{
         color::Rgb,
         display::{char_width, display_width, fit_display, format_tool_duration},
-        mime, paths,
+        geometry, mime, paths,
     },
 };
 use base64::Engine as _;
 use gpui::{
     AnyElement, Bounds, Context, ElementId, Entity, FontStyle, FontWeight, HighlightStyle, Hsla,
-    Image, ImageFormat, ImageSource, InteractiveText, IntoElement, ParentElement, Pixels,
-    SharedString, Styled, StyledText, Window, div, prelude::*, relative,
+    Image, ImageFormat, ImageSource, InteractiveText, IntoElement, MouseButton, ParentElement,
+    Pixels, ScrollHandle, SharedString, Styled, StyledText, Window, div, prelude::*, relative,
 };
 use serde_json::Value;
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     collections::HashMap,
     ops::Range,
     path::{Path, PathBuf},
@@ -63,6 +64,8 @@ const IMAGE_THUMB: f32 = 360.0;
 const OVERLAY_COLS: usize = 100;
 /// 等宽块的行高（相对字号）：mermaid 盒图的横线靠行距对齐，每行必须等高。
 const MONO_LINE_HEIGHT: f32 = 1.55;
+/// 代码卡底部横向滚动条的高度：滑块只有几像素，上下留出余量才好按住拖。
+const CODE_SCROLLBAR_H: f32 = 10.;
 
 /// 表格列权重的下限（等效半角列数）：再窄的列也放得下几个字，不至于竖排。
 const MIN_COL_WEIGHT: f32 = 8.;
@@ -143,6 +146,10 @@ enum Row {
         lines: Vec<Vec<(Option<Rgb>, String)>>,
         /// 代码原文：点复制按钮时写进剪贴板的内容（`Arc` 让每帧克隆只是加引用计数）
         text: Arc<str>,
+        /// 正文的横向滚动状态（长行不折行，靠它左右滚）
+        scroll: ScrollHandle,
+        /// 上一帧是否画了底部横向滚动条：内容溢出状态一变就再画一帧
+        bar: Rc<Cell<bool>>,
     },
     /// 等宽多行块：块级公式与 mermaid 图（都已排版成行，靠行首空格对齐）
     Mono {
@@ -357,19 +364,78 @@ fn text_line(
 
 /// 结构化行（等宽网格、代码行、diff 行）：同样登记选区，但整行画底色——
 /// 这些行由多个定宽单元拼成，没法按字符切高亮。
+///
+/// `fill` = 行盒占满容器宽；横向滚动的代码块传 `false`，行按内容宽排，
+/// 长行才能溢出滚动容器（占满宽度的行永远不会溢出）。
 fn block_line(
     lines: &mut TextLines,
     theme: &Theme,
     text: &str,
     font_size: f32,
     element: AnyElement,
+    fill: bool,
 ) -> AnyElement {
     let (index, selected) = track_line(lines, text, font_size);
-    let mut row = div().w_full().min_w_0().child(element);
+    let mut row = if fill {
+        div().w_full().min_w_0().child(element)
+    } else {
+        div().flex_none().child(element)
+    };
     if selected.is_some() {
         row = row.bg(theme.selection);
     }
     row.on_children_prepainted(bounds_handler(lines, index))
+        .into_any_element()
+}
+
+/// 代码卡底部的横向滚动条：轨道整条可拖（滑块太细直接抓不住）。
+///
+/// 视口/上限/偏移都取自上一帧的实测值（物理像素），滑块位置原样按物理像素摆。
+fn code_scrollbar(
+    theme: &Theme,
+    namespace: usize,
+    id: usize,
+    scroll: &ScrollHandle,
+    app: Entity<GuiApp>,
+) -> AnyElement {
+    let viewport = f32::from(scroll.bounds().size.width);
+    let max = f32::from(scroll.max_offset().x);
+    let len = geometry::thumb_height(viewport, max, min_thumb()).min(viewport);
+    let start = geometry::thumb_top(
+        f32::from(scroll.offset().x),
+        max,
+        geometry::thumb_travel(viewport, max, min_thumb()),
+    );
+
+    let handle = scroll.clone();
+    let press_app = app.clone();
+    div()
+        .id(row_element_id("code-scrollbar", namespace, id))
+        .relative()
+        .w_full()
+        .h(px(CODE_SCROLLBAR_H))
+        .cursor_pointer()
+        .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+            press_app.update(cx, |this, cx| this.begin_code_scroll(handle.clone(), cx));
+            // 别让按下冒泡到对话流的全局监听：那会顺手起一个文本选区
+            cx.stop_propagation();
+        })
+        .on_mouse_up(MouseButton::Left, move |_, _, cx| {
+            app.update(cx, |this, cx| {
+                this.code_drag = None;
+                cx.notify();
+            });
+        })
+        .child(
+            div()
+                .absolute()
+                .top(px((CODE_SCROLLBAR_H - SCROLLBAR_WIDTH) / 2.))
+                .left(gpui::px(start))
+                .w(gpui::px(len))
+                .h(px(SCROLLBAR_WIDTH))
+                .rounded(px(RADIUS_SM))
+                .bg(theme.text_ghost),
+        )
         .into_any_element()
 }
 
@@ -1289,6 +1355,7 @@ fn diff_body(diff: &str, theme: &Theme, max: usize, lines: &mut TextLines) -> (A
             &plain,
             FONT_SMALL,
             line.child(content).into_any_element(),
+            true,
         ));
     }
     (column.into_any_element(), hidden)
@@ -1814,6 +1881,7 @@ fn tool_block(
         &head_text,
         FONT_SMALL,
         header.into_any_element(),
+        true,
     ));
 
     // 按行截断而不是靠 `max_h` 裁剪：被裁掉的那部分不计入布局高度，
@@ -2033,6 +2101,8 @@ fn parse_rows(text: &str, theme: &Theme, cols: usize) -> Vec<Row> {
                     lines: code::highlight(&code, lang.as_deref(), &syntect_theme),
                     lang,
                     text: code.into(),
+                    scroll: ScrollHandle::new(),
+                    bar: Rc::new(Cell::new(false)),
                 }
             }
             markdown::Block::Table(table) => Row::Table(table),
@@ -2141,11 +2211,13 @@ fn render_rows(
                 lang,
                 lines: code,
                 text,
+                scroll,
+                bar,
             } => {
                 let copy_id = link_id;
                 link_id += 1;
                 let source = text.clone();
-                let app = app.clone();
+                let copy_app = app.clone();
                 let mut card = div()
                     .w_full()
                     .my(px(SPACE_XS))
@@ -2177,7 +2249,7 @@ fn render_rows(
                                 .hover(|style| style.bg(theme.overlay_strong))
                                 .on_click(move |_, _, cx| {
                                     let source = source.to_string();
-                                    app.update(cx, |this, cx| {
+                                    copy_app.update(cx, |this, cx| {
                                         cx.write_to_clipboard(gpui::ClipboardItem::new_string(
                                             source,
                                         ));
@@ -2188,27 +2260,45 @@ fn render_rows(
                         ),
                 );
 
+                // 正文横向滚动：行不折行、按内容宽度排，长行向右溢出。
+                // 侦听器只能挂在 `Div` 上（赋 id 后就不是了），所以先挂再赋 id。
+                let probe = scroll.clone();
+                let shown = bar.clone();
                 let mut body = div()
                     .flex()
                     .flex_col()
+                    .items_start()
+                    // 滚动容器不写 min_w_0 就会把长行当成最小宽度往上传，整列被撑出窗口
+                    .min_w_0()
+                    .whitespace_nowrap()
                     .px(px(SPACE_SM))
                     .py(px(SPACE_SM))
-                    .font_family(MONO_FONT_FAMILY);
-
+                    .font_family(MONO_FONT_FAMILY)
+                    .on_children_prepainted(move |_, window, _| {
+                        // 溢出了才画底部滚动条；状态一变就补一帧（滚动条占高度，布局会变）
+                        let want = probe.max_offset().x > px(0.);
+                        if shown.replace(want) != want {
+                            window.request_animation_frame();
+                        }
+                    })
+                    .id(row_element_id("code-body", namespace, copy_id))
+                    .overflow_x_scroll()
+                    .track_scroll(scroll);
                 for line in code {
                     let text: String = line.iter().map(|(_, part)| part.as_str()).collect();
                     let mut element = div()
-                        .w_full()
                         .flex()
                         .text_size(px(FONT_SMALL))
                         .text_color(theme.text);
 
                     for (color, part) in line {
+                        // flex_none：着色片段不能缩，缩了就永远溢不出容器、也就没有横向滚动
                         element = element.child(match color {
                             Some(rgb) => div()
+                                .flex_none()
                                 .text_color(theme.rgb(*rgb))
                                 .child(SharedString::from(part.clone())),
-                            None => div().child(SharedString::from(part.clone())),
+                            None => div().flex_none().child(SharedString::from(part.clone())),
                         });
                     }
                     body = body.child(block_line(
@@ -2217,11 +2307,23 @@ fn render_rows(
                         &text,
                         FONT_SMALL,
                         element.into_any_element(),
+                        false,
                     ));
                 }
 
+                // 量到溢出状态变了：滚动条要出现/消失，再画一帧
                 child_lines.push(None);
-                card.child(body).into_any_element()
+                card = card.child(body);
+                if bar.get() {
+                    card = card.child(code_scrollbar(
+                        theme,
+                        namespace,
+                        copy_id,
+                        scroll,
+                        app.clone(),
+                    ));
+                }
+                card.into_any_element()
             }
             Row::Table(table) => {
                 child_lines.push(None);
@@ -2245,7 +2347,14 @@ fn render_rows(
                     .text_size(px(FONT_SMALL))
                     .text_color(theme.code_text);
                 for line in mono {
-                    body = body.child(block_line(lines, theme, line, FONT_SMALL, mono_line(line)));
+                    body = body.child(block_line(
+                        lines,
+                        theme,
+                        line,
+                        FONT_SMALL,
+                        mono_line(line),
+                        true,
+                    ));
                 }
                 body.into_any_element()
             }

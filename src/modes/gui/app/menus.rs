@@ -197,6 +197,15 @@ impl GuiApp {
                             cx.notify();
                         }
 
+                        if this.code_drag.is_some() {
+                            if event.pressed_button == Some(MouseButton::Left) {
+                                this.drag_code_scroll(position, cx);
+                            } else {
+                                this.code_drag = None;
+                                cx.notify();
+                            }
+                        }
+
                         this.drag_sidebar_width(position, event.pressed_button, cx);
                         this.drag_panel_width(position, event.pressed_button, cx);
                         this.set_hover(in_transcript, in_sidebar, event.pressed_button, cx);
@@ -301,6 +310,47 @@ impl GuiApp {
         if let Some(scroll) = self.scroll_of_mut(area) {
             scroll.set_offset(gpui::point(px(0.), gpui::px(target)));
         }
+        cx.notify();
+    }
+
+    /// 代码卡底部横向滚动条：按下时记下句柄与当前偏移，之后按鼠标位移拖。
+    pub(crate) fn begin_code_scroll(&mut self, handle: ScrollHandle, cx: &mut Context<Self>) {
+        let offset = handle.offset().x;
+        self.code_drag = Some(CodeScrollDrag {
+            handle,
+            anchor_x: None,
+            offset,
+        });
+        cx.notify();
+    }
+
+    /// 应用代码卡横向滚动条的拖拽（与 [`Self::drag_scrollbar`] 同一套换算，只是走 x）。
+    pub(super) fn drag_code_scroll(
+        &mut self,
+        position: gpui::Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(mut drag) = self.code_drag.clone() else {
+            return;
+        };
+
+        let Some(anchor_x) = drag.anchor_x else {
+            drag.anchor_x = Some(position.x);
+            self.code_drag = Some(drag);
+            return;
+        };
+
+        let viewport = f32::from(drag.handle.bounds().size.width);
+        let max = f32::from(drag.handle.max_offset().x);
+        if max <= 0. || viewport <= 0. {
+            return;
+        }
+
+        let travel = geometry::thumb_travel(viewport, max, min_thumb());
+        let dx = f32::from(position.x - anchor_x);
+        let target = geometry::drag_offset(f32::from(drag.offset), dx, max, travel);
+        drag.handle
+            .set_offset(gpui::point(gpui::px(target), px(0.)));
         cx.notify();
     }
 

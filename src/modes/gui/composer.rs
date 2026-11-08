@@ -61,7 +61,7 @@ pub type DragHandler =
 
 /// 渲染输入框内容（只读：对话框、补全过滤框等场景）。
 pub fn render(editor: &Editor, theme: &Theme) -> AnyElement {
-    render_inner(editor, theme, None, None, None, true)
+    render_inner(editor, theme, None, None, None, Some(editor.scroll()), true)
 }
 
 /// 搜索框一类单行输入框的渲染（侧栏会话搜索、面板文件搜索、列表面板搜索）。
@@ -81,7 +81,15 @@ pub fn render_field(
             .child(placeholder.into())
             .into_any_element();
     }
-    render_inner(editor, theme, None, None, None, focused)
+    render_inner(
+        editor,
+        theme,
+        None,
+        None,
+        None,
+        Some(editor.scroll()),
+        focused,
+    )
 }
 
 /// 表单输入框的外框：与对话框（设置 API key、重命名会话）里的输入框同一套底色、
@@ -136,7 +144,15 @@ pub fn render_wrapped(
         cursor_mark,
         window,
     };
-    render_inner(editor, theme, Some(pick), Some(drag), Some(wrap), true)
+    render_inner(
+        editor,
+        theme,
+        Some(pick),
+        Some(drag),
+        Some(wrap),
+        None,
+        true,
+    )
 }
 
 /// 折行上下文：可用宽度、滚动句柄、上次让光标滚进视口的位置，以及量字宽用的窗口。
@@ -211,14 +227,20 @@ fn wrap_chunks_for_line(
 }
 
 /// [`render`] 与 [`render_wrapped`] 的公共实现。
+///
+/// `hscroll` 是单行框的横向滚动句柄：内容超宽时每帧把光标所在字符滚进视口，
+/// 多行框靠折行，不需要它。
 fn render_inner(
     editor: &Editor,
     theme: &Theme,
     pick: Option<PickHandler>,
     drag: Option<DragHandler>,
     wrap: Option<Wrap<'_>>,
+    hscroll: Option<&gpui::ScrollHandle>,
     show_cursor: bool,
 ) -> AnyElement {
+    // 单行框才横向滚：多行框各行共用一个句柄会互相覆盖滚动状态
+    let hscroll = hscroll.filter(|_| editor.lines().len() == 1);
     let text_color = theme.text;
     let mut column = div()
         .id("composer")
@@ -281,7 +303,12 @@ fn render_inner(
                 .flex()
                 .flex_shrink_0()
                 .items_center()
-                .h(px(ROW_HEIGHT));
+                .h(px(ROW_HEIGHT))
+                .id(gpui::ElementId::Name(format!("field-row{row}").into()));
+            if let Some(handle) = hscroll {
+                // 单行框：内容超宽时横向滚（行盒就是滚动容器，子项是逐字元素）
+                line_row = line_row.overflow_x_scroll().track_scroll(handle);
+            }
             // 点空白处（行尾之后）落到行尾
             if let Some(pick) = pick.clone() {
                 let end = line.chars().count();
@@ -296,6 +323,12 @@ fn render_inner(
                 let mut element = div()
                     .id(gpui::ElementId::Name(format!("c{row}:{at}").into()))
                     .relative();
+
+                // 字符格不参与压缩：挤出视口才有东西可滚
+                if hscroll.is_some() {
+                    element = element.flex_none();
+                }
+
                 // 块先画、字形后画：绝对定位的块不参与布局，行盒与字形位置都不动
                 match kind {
                     RunKind::Normal => {}
@@ -338,6 +371,13 @@ fn render_inner(
                         .child(block(theme.accent))
                         .child(SharedString::from(" ")),
                 );
+            }
+            // 光标格（行尾那块也在）就是这一行的第 col 个子项：滚到它就把光标留在视口里，
+            // 每帧都调一次，左右移动光标自然重新检查视口。
+            // shortcut: 内容刚刚超宽的那一帧量不到视口上限，下一次重绘（按键/下一帧）才滚到位，
+            // 帧驱动的滚动需要更精确时改成 prepaint 里比对溢出状态再补一帧。
+            if let (Some(handle), true) = (hscroll, show_cursor) {
+                handle.scroll_to_item(editor.cursor().col);
             }
             column = column.child(line_row);
         }

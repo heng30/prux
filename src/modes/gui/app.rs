@@ -258,6 +258,19 @@ pub(super) struct ScrollDrag {
     pub(super) offset: Pixels,
 }
 
+/// 代码卡底部横向滚动条的拖拽状态。
+///
+/// 与 [`ScrollDrag`] 分开：代码卡不属于固定滚动区，句柄随卡自带（每个代码块一个）。
+#[derive(Clone)]
+pub(super) struct CodeScrollDrag {
+    /// 被拖的滚动句柄
+    pub(super) handle: ScrollHandle,
+    /// 首次鼠标移动时的 x（与施加拖拽的位置同源，`None` = 还没定位）
+    pub(super) anchor_x: Option<Pixels>,
+    /// 按下时的横向偏移
+    pub(super) offset: Pixels,
+}
+
 /// toast 级别：决定配色与位置。
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ToastKind {
@@ -430,6 +443,8 @@ pub struct GuiApp {
     composer_cursor: Rc<Cell<Option<(usize, usize)>>>,
     /// 拖动滚动条的状态
     pub(super) scroll_drag: Option<ScrollDrag>,
+    /// 拖动代码卡横向滚动条的状态
+    pub(super) code_drag: Option<CodeScrollDrag>,
     /// 鼠标是否在对话流上（滚动条只在悬停时显示）
     transcript_hovered: bool,
     /// 鼠标是否在侧栏列表上
@@ -572,6 +587,7 @@ impl GuiApp {
             composer_scroll: ScrollHandle::new(),
             composer_cursor: Rc::new(Cell::new(None)),
             scroll_drag: None,
+            code_drag: None,
             transcript_hovered: false,
             sidebar_hovered: false,
             session_menu: None,
