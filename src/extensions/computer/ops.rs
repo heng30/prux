@@ -7,18 +7,19 @@
 use crate::{
     core::tools::{ToolError, ToolResult, ToolResultAttachment},
     extensions::{
-        computer::{a11y, backend, input, schema, state},
+        computer::{a11y, actionable, backend, input, schema, state},
         util::{attachment, opt_bool, opt_f64, opt_i64, opt_str},
     },
     utils::{clipboard, output_files, process},
 };
 use a11y::{A11yNode, A11yOptions, NodeId};
+use actionable::Delivery;
 use backend::{CaptureRequest, ShotFormat};
 use schema::UI_ACTIONS;
 use serde_json::Value;
 use std::{
     io::{Read, Seek, SeekFrom},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 /// 启动日志尾部最多保留的字符数（够看清 chromium 之类的启动告警，又不至于塞满上下文）。
@@ -270,14 +271,19 @@ pub async fn click(args: &Value) -> Result<ToolResult, ToolError> {
 
     blocking(move || input::click(bx, by, &b, c, &m)).await?;
 
-    Ok(ToolResult::text(format!(
+    let text = format!(
         "clicked {button} x{clicks} at ({x}, {y}){}",
         if modifiers.is_empty() {
             String::new()
         } else {
             format!(" with {modifiers}")
         }
-    )))
+    );
+    Ok(with_delivery(
+        ToolResult::text(text),
+        Delivery::Unverified,
+        "a coordinate click is not hit-tested; a screenshot is the only proof it landed",
+    ))
 }
 
 /// `computer_drag`。
@@ -322,7 +328,7 @@ pub async fn drag(args: &Value) -> Result<ToolResult, ToolError> {
     blocking(move || input::drag((fx, fy), (tx, ty), &p, &b, &m)).await?;
 
     let handle = state::remember_drag(to);
-    Ok(ToolResult::text(format!(
+    let text = format!(
         "dragged {button} from ({}, {}) to ({}, {}){}; handle: {handle}",
         from.0,
         from.1,
@@ -333,7 +339,12 @@ pub async fn drag(args: &Value) -> Result<ToolResult, ToolError> {
         } else {
             format!(" with {modifiers}")
         }
-    )))
+    );
+    Ok(with_delivery(
+        ToolResult::text(text),
+        Delivery::Unverified,
+        "a drag is injected blindly; a screenshot is the only proof it landed",
+    ))
 }
 
 /// `computer_scroll`。
@@ -359,9 +370,11 @@ pub async fn scroll(args: &Value) -> Result<ToolResult, ToolError> {
 
     blocking(move || input::scroll(vertical, horizontal)).await?;
 
-    Ok(ToolResult::text(format!(
-        "scrolled {direction} {clicks} notch(es)"
-    )))
+    Ok(with_delivery(
+        ToolResult::text(format!("scrolled {direction} {clicks} notch(es)")),
+        Delivery::Unverified,
+        "the wheel went to whatever is under the pointer",
+    ))
 }
 
 /// 校验 `into_window`：要求那个窗口当前持有焦点。
@@ -391,7 +404,11 @@ pub async fn type_text(args: &Value) -> Result<ToolResult, ToolError> {
     let len = text.chars().count();
     let payload = text.clone();
     blocking(move || input::type_text(&payload)).await?;
-    Ok(ToolResult::text(format!("typed {len} character(s)")))
+    Ok(with_delivery(
+        ToolResult::text(format!("typed {len} character(s)")),
+        Delivery::Unverified,
+        "keystrokes may be dropped by the focused control; read the value back to confirm",
+    ))
 }
 
 /// `computer_key`。
@@ -402,7 +419,11 @@ pub async fn key(args: &Value) -> Result<ToolResult, ToolError> {
     let hold = opt_f64(args, "hold_seconds").unwrap_or(0.0);
     let payload = chord.clone();
     blocking(move || input::press_chord(&payload, repeat, hold)).await?;
-    Ok(ToolResult::text(format!("pressed {chord}")))
+    Ok(with_delivery(
+        ToolResult::text(format!("pressed {chord}")),
+        Delivery::Unverified,
+        "what the chord did depends on the focused control",
+    ))
 }
 
 /// `computer_windows`。
@@ -495,10 +516,14 @@ pub async fn paste(args: &Value) -> Result<ToolResult, ToolError> {
     };
 
     typed?;
-    Ok(ToolResult::text(format!(
-        "pasted {} character(s); clipboard {restore_status}",
-        text.chars().count()
-    )))
+    Ok(with_delivery(
+        ToolResult::text(format!(
+            "pasted {} character(s); clipboard {restore_status}",
+            text.chars().count()
+        )),
+        Delivery::Unverified,
+        "the paste went to the focused control",
+    ))
 }
 
 /// `computer_launch`。
@@ -743,16 +768,33 @@ pub async fn ui_action(args: &Value) -> Result<ToolResult, ToolError> {
         None
     };
 
+    // 写类动作的投递语义与回读结果，由具体分支填。
+    let mut delivery = Delivery::Unverified;
+    let mut note = String::new();
+
     let text = match action.as_str() {
         "invoke" => {
             let node = require_ref(&target, &action)?;
-            first_action(node).await.map_err(ToolError)?;
-            format!("invoked {}", describe(node))
+            let before = preflight(node, &action).await?;
+            // 优先走目标自己声明的那个动词；声明的动作表不可信时才「挨个试」。
+            let verb = match actionable::click_action(&before.probe.actions) {
+                Some(name) => {
+                    a11y::action_by_name(node, name).await.map_err(ToolError)?;
+                    name.to_string()
+                }
+                None => {
+                    first_action(node).await.map_err(ToolError)?;
+                    "default action".to_string()
+                }
+            };
+            format!("invoked {} via {verb}", describe(node))
         }
         "set_value" => {
             let node = require_ref(&target, &action)?;
             let value = arg_str(args, "text")?;
+            let before = preflight(node, &action).await?;
             a11y::set_text(node, value).await.map_err(ToolError)?;
+            (delivery, note) = readback(node, &action, &before.probe, Some(value)).await?;
             format!("set {} on {}", value.chars().count(), describe(node))
         }
         "get_value" => {
@@ -773,6 +815,7 @@ pub async fn ui_action(args: &Value) -> Result<ToolResult, ToolError> {
             let node = require_ref(&target, &action)?;
             let start = opt_i64(args, "start").unwrap_or(0) as i32;
             let end = opt_i64(args, "end").unwrap_or(-1) as i32;
+            preflight(node, &action).await?;
             a11y::select_text(node, start, end)
                 .await
                 .map_err(ToolError)?;
@@ -780,6 +823,7 @@ pub async fn ui_action(args: &Value) -> Result<ToolResult, ToolError> {
         }
         "scroll_into_view" => {
             let node = require_ref(&target, &action)?;
+            preflight(node, &action).await?;
             a11y::action_by_name(node, "scroll")
                 .await
                 .map_err(ToolError)?;
@@ -787,27 +831,33 @@ pub async fn ui_action(args: &Value) -> Result<ToolResult, ToolError> {
         }
         "focus" => {
             let node = require_ref(&target, &action)?;
+            preflight(node, &action).await?;
             a11y::grab_focus(node).await.map_err(ToolError)?;
             format!("focused {}", describe(node))
         }
         "toggle" => {
             let node = require_ref(&target, &action)?;
+            let before = preflight(node, &action).await?;
             a11y::action_by_name(node, "toggle")
                 .await
                 .map_err(ToolError)?;
+            (delivery, note) = readback(node, &action, &before.probe, None).await?;
             format!("toggled {}", describe(node))
         }
         "select" => {
             let node = require_ref(&target, &action)?;
             let index = opt_i64(args, "index").unwrap_or(0) as i32;
+            preflight(node, &action).await?;
             a11y::select_child(node, index).await.map_err(ToolError)?;
             format!("selected child {index} of {}", describe(node))
         }
         "expand" | "collapse" => {
             let node = require_ref(&target, &action)?;
+            let before = preflight(node, &action).await?;
             a11y::action_by_name(node, &action)
                 .await
                 .map_err(ToolError)?;
+            (delivery, note) = readback(node, &action, &before.probe, None).await?;
             format!("{action}ed {}", describe(node))
         }
         "close" | "minimize" | "maximize" | "restore" => {
@@ -826,9 +876,13 @@ pub async fn ui_action(args: &Value) -> Result<ToolResult, ToolError> {
         }
         "locate_text" => {
             let node = require_ref(&target, &action)?;
-            let rect = a11y::node_rect(node).await.ok_or_else(|| {
-                ToolError(format!("{} has no on-screen rectangle", describe(node)))
-            })?;
+            let rect = a11y::probe(node)
+                .await
+                .map_err(ToolError)?
+                .rect
+                .ok_or_else(|| {
+                    ToolError(format!("{} has no on-screen rectangle", describe(node)))
+                })?;
             format!(
                 "{} is at ({}, {}) {}x{}",
                 describe(node),
@@ -840,18 +894,32 @@ pub async fn ui_action(args: &Value) -> Result<ToolResult, ToolError> {
         }
         "click_text" => {
             let node = require_ref(&target, &action)?;
-            let rect = a11y::node_rect(node).await.ok_or_else(|| {
-                ToolError(format!(
-                    "{} has no on-screen rectangle to click",
-                    describe(node)
-                ))
-            })?;
-            let (x, y) = (
-                rect.x + rect.width as i32 / 2,
-                rect.y + rect.height as i32 / 2,
-            );
-            blocking(move || input::click(x, y, "left", 1, "")).await?;
-            format!("clicked {} at ({x}, {y})", describe(node))
+            let before = preflight(node, &action).await?;
+            // 默认走语义动作（不动用户的光标）；显式 headed 才退回坐标点击。
+            match actionable::click_action(&before.probe.actions) {
+                Some(verb) if opt_bool(args, "headed") != Some(true) => {
+                    a11y::action_by_name(node, verb).await.map_err(ToolError)?;
+                    format!("clicked {} through its {verb} action", describe(node))
+                }
+                _ => {
+                    let rect = match before.probe.rect {
+                        Some(rect) => Some(rect),
+                        None => a11y::node_rect(node).await,
+                    }
+                    .ok_or_else(|| {
+                        ToolError(format!(
+                            "{} has no on-screen rectangle to click",
+                            describe(node)
+                        ))
+                    })?;
+                    let (x, y) = (
+                        rect.x + rect.width as i32 / 2,
+                        rect.y + rect.height as i32 / 2,
+                    );
+                    blocking(move || input::click(x, y, "left", 1, "")).await?;
+                    format!("clicked {} at ({x}, {y})", describe(node))
+                }
+            }
         }
         "get_caret" => {
             let node = require_ref(&target, &action)?;
@@ -862,7 +930,18 @@ pub async fn ui_action(args: &Value) -> Result<ToolResult, ToolError> {
         }
         other => unreachable!("action {other} was validated above"),
     };
-    Ok(ToolResult::text(text))
+    // 读类动作与窗口动作没有「送没送到」这件事，回执不加投递行。
+    let silent = schema::READ_ONLY_UI_ACTIONS.contains(&action.as_str())
+        || matches!(
+            action.as_str(),
+            "close" | "minimize" | "maximize" | "restore"
+        );
+    let out = ToolResult::text(text);
+    Ok(if silent {
+        out
+    } else {
+        with_delivery(out, delivery, &note)
+    })
 }
 
 /// 要求给出 ref。
@@ -1041,11 +1120,7 @@ async fn run_step(action: &str, step: &Value) -> Result<String, ToolError> {
         "scroll" => one_line(scroll(step).await),
         "type" => one_line(type_text(step).await),
         "key" => one_line(key(step).await),
-        "wait" => {
-            let seconds = opt_f64(step, "seconds").unwrap_or(1.0).clamp(0.0, 10.0);
-            tokio::time::sleep(Duration::from_secs_f64(seconds)).await;
-            Ok(format!("waited {seconds} s"))
-        }
+        "wait" => wait_step(step).await,
         "screenshot" => {
             let out = screenshot(step).await?;
             Ok(out.text.lines().next().unwrap_or("captured").to_string())
@@ -1080,6 +1155,230 @@ async fn run_step(action: &str, step: &Value) -> Result<String, ToolError> {
 /// 取工具结果的最后一行，作为 batch 的简短回执。
 fn one_line(result: Result<ToolResult, ToolError>) -> Result<String, ToolError> {
     result.map(|out| out.text.lines().next().unwrap_or("").to_string())
+}
+
+/// 给回执加上投递语义行（模型据此判断重试安不安全）。
+fn with_delivery(mut out: ToolResult, delivery: Delivery, note: &str) -> ToolResult {
+    out.text.push('\n');
+    out.text.push_str(&delivery.line(note));
+    out
+}
+
+/// 动作前判定的结果：那次活读也是回读校验的基线。
+struct Before {
+    /// 判定时读到（且复核过身份）的节点。
+    probe: a11y::Probe,
+}
+
+/// 读一次活节点、必要时采样稳定性，然后过闸；不满足就带着原因报错。
+///
+/// shortcut: 每个无障碍调用各自连一次总线，一次写值要 4 次往返（判定、执行、回读两次）；
+/// 等延迟真的成了问题，再把连接提到工具层复复用。
+async fn preflight(node: &NodeId, action: &str) -> Result<Before, ToolError> {
+    let Some(spec) = actionable::spec(action) else {
+        return Err(ToolError(format!(
+            "computer: no actionability spec for {action:?}"
+        )));
+    };
+    let first = a11y::probe(node).await.map_err(ToolError)?;
+    let mut probe = first.clone();
+    let mut stable = None;
+    if spec.stable {
+        tokio::time::sleep(actionable::STABLE_SAMPLE).await;
+        probe = a11y::probe(node).await.map_err(ToolError)?;
+        stable = Some(match (first.rect, probe.rect) {
+            (Some(was), Some(now)) => actionable::same_rect(was, now),
+            // 没有矩形可采样：不当成「不稳定」，交给「可见」那道闸去说。
+            _ => true,
+        });
+    }
+    let evidence = actionable::Evidence {
+        states: &probe.states,
+        actions: &probe.actions,
+        actions_complete: probe.actions_complete,
+        stable,
+        enabled: probe.enabled,
+        hidden: probe.hidden,
+    };
+    let report = actionable::evaluate(spec, &evidence);
+    if !report.actionable() {
+        return Err(not_actionable(node, action, &report));
+    }
+    Ok(Before { probe })
+}
+
+/// 「不满足」的报错：能等好的与等不好的分开说。
+fn not_actionable(node: &NodeId, action: &str, report: &actionable::Report) -> ToolError {
+    let hint = if report.waitable() {
+        "this can still settle: retry, or put a wait step with predicate \"actionable\" before it"
+    } else {
+        "waiting will not help: target a node whose computer_ui row lists a matching action"
+    };
+    ToolError(format!(
+        "[NOT_ACTIONABLE] {action} on {}: {}; {hint}",
+        describe(node),
+        report.reasons()
+    ))
+}
+
+/// 执行后回读：能校验到的标 `verified`，校验不了的说清为什么。
+async fn readback(
+    node: &NodeId,
+    action: &str,
+    before: &a11y::Probe,
+    wrote: Option<&str>,
+) -> Result<(Delivery, String), ToolError> {
+    let Some(spec) = actionable::spec(action) else {
+        return Ok((Delivery::Unverified, String::new()));
+    };
+    let after = a11y::probe(node).await.map_err(ToolError)?;
+    match spec.readback {
+        actionable::Readback::None => Ok((Delivery::Unverified, String::new())),
+        actionable::Readback::Value => {
+            let expected = wrote.unwrap_or("");
+            let actual = a11y::read_value(node).await.map_err(ToolError)?;
+            if redacted(&actual) || is_secret(&after.role) {
+                return Ok((
+                    Delivery::Unverified,
+                    "a secure field reads back masked, so the write cannot be confirmed"
+                        .to_string(),
+                ));
+            }
+            if values_match(&actual, expected) {
+                Ok((
+                    Delivery::Verified,
+                    "the value read back matches".to_string(),
+                ))
+            } else {
+                Err(ToolError(format!(
+                    "[VALUE_NOT_APPLIED] wrote {expected:?} to {} but it reads back as {actual:?}; \
+                     the application rejected or normalised the write (retrying with a corrected value is safe)",
+                    describe(node)
+                )))
+            }
+        }
+        actionable::Readback::State(key) => {
+            let was = before.states.iter().any(|state| state == key);
+            let now = after.states.iter().any(|state| state == key);
+            if was != now {
+                Ok((
+                    Delivery::Verified,
+                    format!("the target's {key} state flipped"),
+                ))
+            } else if after.states.is_empty() {
+                Ok((
+                    Delivery::Unverified,
+                    format!("the target reports no state to compare ({key})"),
+                ))
+            } else {
+                Ok((
+                    Delivery::Unverified,
+                    format!("the target's {key} state did not change"),
+                ))
+            }
+        }
+    }
+}
+
+/// 回读到的值是不是被遮罩了（密码框）。
+fn redacted(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .chars()
+            .all(|c| matches!(c, '\u{2022}' | '*' | '\u{25cf}'))
+}
+
+/// 这个角色是不是密码扱（它们的值读回来也不算数）。
+fn is_secret(role: &str) -> bool {
+    role.to_ascii_lowercase().contains("password")
+}
+
+/// 回读值与写入值是否等价：文本归一后相等，或两边都能当数字看且相等（数字控件会重格式化）。
+fn values_match(actual: &str, expected: &str) -> bool {
+    if normalize(actual) == normalize(expected) {
+        return true;
+    }
+    match (actual.trim().parse::<f64>(), expected.trim().parse::<f64>()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
+}
+
+/// 文本比对前去掉行尾差异：控件常把 `\r\n` 归一成 `\n`、把尾随空格吃掉。
+fn normalize(value: &str) -> String {
+    value.replace("\r\n", "\n").trim_end().to_string()
+}
+
+/// `wait` 步骤：只给 `seconds` 就是睡眠；给了 `ref` 就轮询到谓词成立或超时。
+async fn wait_step(step: &Value) -> Result<String, ToolError> {
+    let Some(reference) = opt_str(step, "ref").map(str::to_string) else {
+        let seconds = opt_f64(step, "seconds").unwrap_or(1.0).clamp(0.0, 10.0);
+        tokio::time::sleep(Duration::from_secs_f64(seconds)).await;
+        return Ok(format!("waited {seconds} s"));
+    };
+    let node = a11y::resolve_ref(&reference).map_err(ToolError)?;
+    let predicate = opt_str(step, "predicate").unwrap_or("exists").to_string();
+    let value = opt_str(step, "value").map(str::to_string);
+    let budget = opt_f64(step, "seconds").unwrap_or(5.0).clamp(0.05, 60.0);
+    let start = Instant::now();
+    loop {
+        let probe = a11y::probe(&node).await.map_err(ToolError)?;
+        if predicate_met(&predicate, value.as_deref(), &node, probe).await? {
+            return Ok(format!(
+                "{predicate} became true after {:.1} s on {}",
+                start.elapsed().as_secs_f64(),
+                describe(&node)
+            ));
+        }
+        if start.elapsed() >= Duration::from_secs_f64(budget) {
+            return Err(ToolError(format!(
+                "[WAIT_TIMEOUT] after {budget} s {} is still not {predicate:?}; \
+                 read the tree again with computer_ui and target what is actually there",
+                describe(&node)
+            )));
+        }
+        tokio::time::sleep(actionable::POLL).await;
+    }
+}
+
+/// 一个等待谓词当前是否成立。
+async fn predicate_met(
+    predicate: &str,
+    value: Option<&str>,
+    node: &NodeId,
+    probe: a11y::Probe,
+) -> Result<bool, ToolError> {
+    Ok(match predicate {
+        "exists" => true,
+        "enabled" => probe.enabled == Some(true),
+        "visible" => probe.hidden != Some(true),
+        "actionable" => {
+            let spec = actionable::spec("invoke").expect("invoke has a spec");
+            let evidence = actionable::Evidence {
+                states: &probe.states,
+                actions: &probe.actions,
+                actions_complete: probe.actions_complete,
+                stable: None,
+                enabled: probe.enabled,
+                hidden: probe.hidden,
+            };
+            actionable::evaluate(spec, &evidence).actionable()
+        }
+        "value" => {
+            let wanted = value.ok_or_else(|| {
+                ToolError(
+                    "computer: predicate \"value\" needs `value` to compare against".to_string(),
+                )
+            })?;
+            let actual = a11y::read_value(node).await.map_err(ToolError)?;
+            normalize(&actual) == normalize(wanted)
+        }
+        other => {
+            return Err(ToolError(format!(
+                "computer: unknown wait predicate {other:?}; one of: exists, enabled, visible, actionable, value"
+            )));
+        }
+    })
 }
 
 /// 按工具名分发到实现。
@@ -1143,6 +1442,21 @@ mod tests {
         assert!(crop_file(&path, [35, 0, 8, 6], None).is_err());
         let not_image = output_files::write_output_file("computer-test", ".txt", b"nope").unwrap();
         assert!(crop_file(&not_image.display().to_string(), [0, 0, 1, 1], None).is_err());
+    }
+
+    /// 回读值的遮罩识别、行尾归一与数字等价。
+    #[test]
+    fn readback_normalisation_and_masking() {
+        assert!(redacted("••••"));
+        assert!(redacted("****"));
+        assert!(!redacted(""));
+        assert!(!redacted("secret"));
+        assert!(is_secret("password text"));
+        assert!(!is_secret("entry"));
+        assert_eq!(normalize("a\r\nb  "), "a\nb");
+        assert!(values_match("5.5", "5.50"));
+        assert!(values_match("done", "done  "));
+        assert!(!values_match("6", "5"));
     }
 
     /// 日志尾部回执：只取末段，空文件与缺失路径都当没有内容。

@@ -19,6 +19,7 @@
 //! `swaymsg`（Wayland 没有平台中立的窗口枚举），输入走 `enigo` 的虚拟键盘/指针协议。
 
 pub mod a11y;
+pub mod actionable;
 pub mod backend;
 pub mod input;
 pub mod ops;
