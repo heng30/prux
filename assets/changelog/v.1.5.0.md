@@ -24,6 +24,23 @@
 - **`computer_actions` can wait on a condition**: a `wait` step given a `ref` polls until a predicate
   holds (`exists`, `enabled`, `visible`, `actionable`, `value`) or the budget runs out, instead of
   sleeping a fixed number of seconds and hoping.
+- **The `shrink` extension compacts tool results by content kind**: a busy repo's `git status`,
+  a noisy build log or a 300-hit grep can fill the context window while carrying almost no
+  information. With the extension on (off by default, Dev mode) every tool result above `minBytes`
+  (2 KB) is classified as search hits, logs, diffs or JSON arrays and re-rendered by information
+  density: hits grouped per file with `[+N more]`, logs keeping head, tail and error/warning lines,
+  diffs keeping changed lines and collapsing unchanged runs, object arrays as a compact table.
+  Nothing is lost — the full original is written to a temp file named in the trailing
+  `[shrunk …]` line, and `keepFull = false` makes it discard instead. A result is never made
+  longer and never replaced by an error; error results pass through untouched. `/shrink` prints
+  the settings and the bytes saved in the session, `/shrink reset` clears them. Configure it in
+  `extensions/shrink.json`.
+- **`/skills check` reports what will break a skill at run time**: a skill whose `scripts/run.sh`
+  has no exec bit, no shebang, or a shebang naming an interpreter this machine does not have fails
+  as a bare `Permission denied` / `command not found`, and the agent then guesses. `/skills check`
+  walks every loaded skill (disabled ones included) and reports those three cases per script with
+  its path inside the skill. It only reports — nothing is changed and no skill is blocked. Bundled
+  skills also now land executable when installed, so this check has nothing to say about them.
 
 ### Fixed
 
@@ -53,6 +70,19 @@
   `headed: true` 才回到原来的像素点击。平台读不到的状态不阻断动作，只把不确定写进回执。
 - **`computer_actions` 的 `wait` 步可以等条件成立**：给了 `ref` 就轮询到谓词成立（`exists`、
   `enabled`、`visible`、`actionable`、`value`）或用尽预算，而不是固定睡几秒碰运气。
+- **`shrink` 扩展按内容类型压缩工具结果**：忙碌仓库里的一条 `git status`、一屏构建日志、几百条
+  grep 命中，几乎不携带信息却能把上下文窗口吃掉。开启该扩展（默认关闭，Dev 模式）后，超过
+  `minBytes`（2 KB）的工具结果会被识别成搜索命中 / 日志 / diff / JSON 数组并按信息密度重排：
+  命中按文件分组、每组留够数后标 `[+N more]`，日志留首尾与错误警告行，diff 只留变更行并把
+  连续未变更折成一行，对象数组渲染成紧凑表格。什么都不丢——完整原文写进临时文件，路径就在末尾
+  那行 `[shrunk …]` 里，`keepFull = false` 时才直接丢弃。结果永远不会被压得更长，也不会被
+  换成错误，失败结果原样通过。`/shrink` 打印当前设置与本会话省下的字节，`/shrink reset` 归零。
+  配置见 `extensions/shrink.json`。
+- **`/skills check` 说出技能跑起来会怎么坏**：`scripts/run.sh` 没有执行位、没有 shebang、或
+  shebang 指的解释器本机没装，症状都是一句干巴巴的 `Permission denied` / `command not found`，
+  之后模型就开始猜。`/skills check` 走一遍已加载的全部技能（含被禁用的），逐个脚本报这三类问题
+  并带上它在技能内的路径。它只报告——不改任何东西，也不拦任何技能。内置技能在安装时也会带上
+  执行位，所以它对这些技能没什么可说的。
 
 ### 修复
 

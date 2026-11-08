@@ -51,6 +51,7 @@ pub mod rtk;
 pub mod sandbox;
 pub mod session_search;
 pub mod shake;
+pub mod shrink;
 pub mod skills;
 pub mod ssh_remote;
 pub mod subagent;
@@ -87,6 +88,12 @@ pub const PRIORITY_PERMISSIONS: u32 = 84;
 pub const PRIORITY_LEAK_GUARD: u32 = 83;
 /// injection-guard 提示注入检测扩展的注册优先级。
 pub const PRIORITY_INJECTION_GUARD: u32 = 82;
+/// shrink 工具结果压缩扩展的注册优先级。
+///
+/// 落在 `AfterToolCall` 链的中间：低于 [`PRIORITY_INJECTION_GUARD`]（注入检测要扫未压缩的原文）、
+/// 高于 [`PRIORITY_HOOKS`]（`PostToolUse` 追加的上下文不该被当成工具输出重排）。
+/// 与 [`PRIORITY_SANDBOX`] 同值不影响语义：sandbox 只挂 `BeforeToolCall`，不在同一条链上。
+pub const PRIORITY_SHRINK: u32 = 81;
 /// sandbox OS 级命令沙箱扩展的注册优先级（与 permissions 同属安全层，紧随其后）。
 pub const PRIORITY_SANDBOX: u32 = 81;
 /// tasks 结构化任务跟踪扩展的注册优先级。

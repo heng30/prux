@@ -25,6 +25,45 @@ use crate::{
 use std::collections::HashSet;
 
 impl App {
+    /// `/skills check`：对当前磁盘上能加载的**全部**技能（含已禁用的）跑运行前预检。
+    ///
+    /// 无过滤地加载是刻意的：禁用状态的技能照样会被重新启用，预检没必要只报一半。
+    /// 问题不改任何东西，只往聊天区报一行（或多个问题行）。
+    pub(crate) fn run_skill_preflight(&mut self) {
+        let agent_dir = agent_dir();
+        let home_dir = home_dir();
+        let bundled_names: Vec<String> =
+            bundled::catalog().iter().map(|c| c.name.clone()).collect();
+        let skills = skills::load_skills(
+            &self.cwd,
+            &agent_dir,
+            &home_dir,
+            &self.reload_ctx.skill_paths,
+            &bundled_names,
+            self.reload_ctx.include_default_skills,
+            self.reload_ctx.trusted,
+            &[],
+        );
+
+        let issues = bundled::preflight::check_all(&skills);
+        if issues.is_empty() {
+            self.push_msg(
+                format!("skills check: {} skill(s), no problems", skills.len()),
+                MsgLevel::Success,
+            );
+            return;
+        }
+        self.push_msg(
+            format!(
+                "skills check: {} problem(s) in {} skill(s)\n{}",
+                issues.len(),
+                skills.len(),
+                issues.join("\n")
+            ),
+            MsgLevel::Warning,
+        );
+    }
+
     /// 打开 `/skills` 面板：先关闭其它模态选择器，丢弃旧草稿并重扫磁盘。
     pub(crate) fn open_skills_panel(&mut self) {
         self.panel.close();
