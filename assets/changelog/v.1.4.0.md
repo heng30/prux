@@ -25,7 +25,9 @@
   same way the layout rounds them, so a full line no longer spills one extra character over the
   right edge of the box; user bubbles measure their width the same per-glyph way and the
   conversation no longer reserves a second scrollbar gutter on top of its padding, so a long
-  sentence no longer drops its last word onto a second line while it still fits.
+  sentence no longer drops its last word onto a second line while it still fits; the conversation
+  column can no longer push the right panel out of the window either, so the panel stays whole once
+  a session has messages.
 
 - **Panels name the keys they answer to**: the session picker now says `Ctrl+R rename · Ctrl+D delete`
   (previously only "Enter confirm"), and the logout list says what Enter does before it
@@ -536,7 +538,8 @@
   `prux-gui --tui` 用同一个二进制启动终端界面，用法见 `docs/gui.md`。输入框折行按排版器量出的
   真实字宽、与实际排布一致的取整方式预算整行，整行不再多排字符把行尾的字挤进边框裁掉；用户气泡
   按同一套逐字宽度量宽，对话流也不再在自身内边距之外多留一条滚动条空白，长句不会在还放得下时
-  把最后一个词折到下一行。
+  把最后一个词折到下一行；对话流也不会再
+  把右侧面板挤出窗口——有消息之后面板与它的搜索框同样完整可见。
 
 - **面板补上键位提示**：会话选择器现在写明 `Ctrl+R rename · Ctrl+D delete`
   （此前只有「Enter confirm」），登出列表也在清 key 前说明 Enter 的作用。

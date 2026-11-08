@@ -1089,7 +1089,7 @@ impl GuiApp {
 
         // 点主区就交回键盘（否则搜索框一直吃键，看着像输入卡片坏了）；面板里的点击是
         // 先 mouse_down 再 click，搜索框自己的 on_click 会重新聚焦回来
-        let mut body = div().flex().flex_1().min_h_0().w_full().on_mouse_down(
+        let mut body = div().flex().flex_1().min_h_0().min_w_0().on_mouse_down(
             MouseButton::Left,
             cx.listener(|this, _, _, cx| {
                 if this.panel.search_focus || this.session_search_focus {
@@ -1172,6 +1172,7 @@ impl GuiApp {
                 .flex()
                 .flex_1()
                 .min_h_0()
+                .min_w_0()
                 .w_full()
                 .child(sidebar)
                 .child(body),
