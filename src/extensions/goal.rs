@@ -4,11 +4,14 @@
 //! 工具均不生效；需在 `/extension` 面板开启（写 settings.json 的 `enabledExtensions`）。
 //!
 //! 允许用户设置长期目标（`/goal [--tokens 50k] <objective>`），agent 持续工作
-//! 直到目标完成（模型调 `update_goal`）、被暂停/清除或 token 预算耗尽。
+//! 直到目标完成或判定无法达成（模型调 `update_goal` 的 complete/blocked）、被暂停/清除或
+//! token 预算耗尽。
 //!
 //! - 状态持久化：经 `AgentCommand::AppendCustomEntry`，worker 空闲追加，`extension:entry_persisted` 回执；
-//! - 工具可见性：`filter_extension_tools` 只在目标 active 时暴露 `get_goal`/`update_goal`
-//!   （`create_goal` 恒可见），状态变化后请求 `RebuildTools` 下一轮生效；
+//! - 工具可见性：`create_goal`/`update_goal` 恒可见，只有 `get_goal` 按 active 门控。
+//!   **收尾工具不能门控**：`RebuildTools` 只在回合之间派发，而目标在 run 里创建时
+//!   续跑边界让本轮永不结束，门控掉的 `update_goal` 整轮都看不到，模型便无法收尾
+//!   （历史缺陷：目标做完后仍每轮续跑，停不下来）；
 //! - 上下文注入（append-only）：`transform_context` 只做"追加"，绝不改写/删除已发出的
 //!   消息——改写中间消息会让 prompt 前缀缓存从该点起全部失效。注入只在边界发生：
 //!   目标激活时追加一次静态契约（objective + 规则 + 预算上限），状态换挡时追加一条
@@ -91,6 +94,8 @@ const MARKER_ACTIVE: &str = "[[goal:active]]";
 const MARKER_PAUSED: &str = "[[goal:paused]]";
 /// 注入消息标记：token 预算耗尽时的收尾指令。
 const MARKER_BUDGET: &str = "[[goal:budget_limited]]";
+/// 注入消息标记：目标被判定为无法达成时的停止指令。
+const MARKER_BLOCKED: &str = "[[goal:blocked]]";
 /// 注入消息标记：目标已完成时的收尾指令。
 const MARKER_COMPLETE: &str = "[[goal:complete]]";
 /// 注入消息标记：目标被清除时的一次性停止指令。
@@ -114,6 +119,8 @@ pub enum GoalStatus {
     Paused,
     /// token 预算已耗尽，停止新工作并让模型收尾本轮。
     BudgetLimited,
+    /// 目标无法达成：模型用 `update_goal` 报出阻塞后置为此态，停止续跑但保留目标。
+    Blocked,
     /// 目标已完成：模型经完成审计后调用 update_goal 置为此态。
     Complete,
 }
@@ -189,6 +196,9 @@ fn render_injection(
         GoalInjection::Control(GoalStatus::BudgetLimited) => {
             goal.map(|g| (MARKER_BUDGET, budget_limit_prompt(g)))
         }
+        GoalInjection::Control(GoalStatus::Blocked) => {
+            goal.map(|g| (MARKER_BLOCKED, blocked_prompt(g)))
+        }
         GoalInjection::Control(GoalStatus::Complete) => {
             goal.map(|g| (MARKER_COMPLETE, complete_prompt(g)))
         }
@@ -255,6 +265,7 @@ fn status_line(goal: &GoalState) -> String {
                 "Goal abandoned".to_string()
             }
         }
+        GoalStatus::Blocked => format!("Goal blocked (/goal resume){}", budget),
         GoalStatus::Complete => format!("Goal achieved{}", budget),
     }
 }
@@ -415,7 +426,9 @@ Before deciding that the goal is achieved, perform a completion audit against th
 \n\
 Do not rely on intent, partial progress, elapsed effort, memory of earlier work, or a plausible final answer as proof of completion. Only mark the goal achieved when the audit shows that the objective has actually been achieved and no required work remains. If any requirement is missing, incomplete, or unverified, keep working instead of marking the goal complete. If the objective is achieved, call update_goal with status \"complete\" so usage accounting is preserved.\n\
 \n\
-Do not call update_goal unless the goal is complete. Do not mark a goal complete merely because the budget is nearly exhausted or because you are stopping work.",
+If the objective cannot be achieved or no defensible path toward it remains, call update_goal with status \"blocked\" and the blocker as reason instead of repeating work.\n\
+\n\
+Do not call update_goal with status \"complete\" unless the goal is complete. Do not mark a goal complete merely because the budget is nearly exhausted or because you are stopping work.",
         objective = goal.objective,
         budget = token_budget,
     )
@@ -439,7 +452,9 @@ Budget:\n\
 - Time spent pursuing goal: {time} seconds\n\
 - Tokens used: {used}\n\
 - Token budget: {budget}\n\
-- Tokens remaining: {remaining}",
+- Tokens remaining: {remaining}\n\
+\n\
+Stop conditions: if the objective is verified as achieved, call update_goal with status \"complete\" so the goal ends and this turn wraps up; if it cannot be achieved or no defensible path remains, call update_goal with status \"blocked\" and the blocker as reason so continuation stops. Never repeat the same blocked report as the whole turn.",
         time = goal.time_used_seconds,
         used = goal.tokens_used,
         budget = token_budget,
@@ -469,7 +484,7 @@ Budget:\n\
 \n\
 The system has marked the goal as budget_limited, so do not start new substantive work for this goal. Wrap up this turn soon: summarize useful progress, identify remaining work or blockers, and leave the user with a clear next step.\n\
 \n\
-Do not call update_goal unless the goal is actually complete.",
+Do not call update_goal with status \"complete\" unless the goal is actually complete; use status \"blocked\" if no defensible path remains.",
         objective = goal.objective,
         time = goal.time_used_seconds,
         used = goal.tokens_used,
@@ -481,6 +496,14 @@ Do not call update_goal unless the goal is actually complete.",
 fn paused_prompt(goal: &GoalState) -> String {
     format!(
         "The active goal has been paused by the user. Stop pursuing it for now and wait for further instructions.\n\nObjective: {}",
+        goal.objective
+    )
+}
+
+/// 目标被模型判定为无法达成时注入的停止指令（目标保留，用户可 /goal resume）。
+fn blocked_prompt(goal: &GoalState) -> String {
+    format!(
+        "The goal has been marked blocked: no defensible path toward it remains. Stop pursuing it now and report the blocker to the user.\n\nObjective: {}",
         goal.objective
     )
 }
@@ -655,7 +678,7 @@ fn show_goal_panel() {
     extensions::request_show_dock();
 }
 
-/// 清除当前目标：内存态置空并落盘，入队一次性停止注入，同时广播变更并通知用户。
+/// 清除当前目标（`/goal clear`）：内存态置空并落盘，入队一次性停止注入，同时广播变更并通知用户。
 fn clear_goal(previous: &GoalState) {
     {
         let mut st = state().lock().unwrap();
@@ -680,10 +703,11 @@ fn clear_goal(previous: &GoalState) {
     );
 }
 
-/// 把目标置为 Complete 并落盘，入队完成注入、刷新可见性，返回更新后的状态。
-fn mark_goal_complete(goal: &GoalState) -> GoalState {
+/// 把目标置为终态（`complete` / `blocked`）并落盘，入队对应注入、刷新可见性、通知用户；
+/// 目标保留，仍可 `/goal resume`。返回更新后的状态。
+fn mark_goal_status(goal: &GoalState, status: GoalStatus) -> GoalState {
     let mut next = goal.clone();
-    next.status = GoalStatus::Complete;
+    next.status = status;
     next.updated_at = now_ms();
 
     {
@@ -691,12 +715,22 @@ fn mark_goal_complete(goal: &GoalState) -> GoalState {
         st.goal = Some(next.clone());
         st.continuation_queued = false;
         st.pending_injections
-            .push_back(GoalInjection::Control(GoalStatus::Complete));
+            .push_back(GoalInjection::Control(status));
     }
 
     persist();
     sync_goal_visibility();
-    notify_goal_event("achieved", &next);
+    if status == GoalStatus::Blocked {
+        notify(
+            vec![
+                RichSpan::fg("warning", "Goal blocked:\n"),
+                RichSpan::plain(next.objective.clone()),
+            ],
+            UiNotifyLevel::Warning,
+        );
+    } else {
+        notify_goal_event("achieved", &next);
+    }
     next
 }
 
@@ -791,6 +825,9 @@ fn restore_from(persisted: PersistedState, pause_active: bool) {
             Some(GoalStatus::BudgetLimited) => st
                 .pending_injections
                 .push_back(GoalInjection::Control(GoalStatus::BudgetLimited)),
+            Some(GoalStatus::Blocked) => st
+                .pending_injections
+                .push_back(GoalInjection::Control(GoalStatus::Blocked)),
             Some(GoalStatus::Complete) => st
                 .pending_injections
                 .push_back(GoalInjection::Control(GoalStatus::Complete)),
@@ -842,7 +879,7 @@ impl Extension for Goal {
 
     /// /extension 面板详情里的一句话用途说明：可持久化的自主目标循环。
     fn description(&self) -> &str {
-        "Persistent autonomous goals: set /goal <objective> [--tokens N], the agent keeps working until complete, paused, cleared, or the token budget is exhausted."
+        "Persistent autonomous goals: set /goal <objective> [--tokens N], the agent keeps working until complete, blocked, paused, cleared, or the token budget is exhausted."
     }
 
     /// 声明移植来源：`pi-goal` 插件（面板展示来源与链接）。
@@ -864,7 +901,7 @@ impl Extension for Goal {
         false
     }
 
-    /// 声明 create_goal / get_goal / update_goal 三个工具（后两个仅目标 active 时对模型可见）。
+    /// 声明 create_goal / get_goal / update_goal 三个工具（`get_goal` 仅目标 active 时对模型可见）。
     fn tools(&self) -> Vec<ExtensionTool> {
         vec![
             ExtensionTool {
@@ -930,19 +967,22 @@ impl Extension for Goal {
                 output_schema: None,
                 name: "update_goal".to_string(),
                 label: Some("Update Goal".to_string()),
-                description: "Mark the current thread goal complete. This tool only accepts status=complete and final turn usage is accounted by the runtime.".to_string(),
+                description: "End the current thread goal: status=complete when the objective is achieved and verified, status=blocked when no defensible path toward it remains. The goal is kept so the user can resume it; final turn usage is accounted by the runtime.".to_string(),
                 parameters: json!({
                     "type": "object",
                     "properties": {
-                        "status": { "type": "string", "enum": ["complete"], "description": "Only complete is accepted." }
+                        "status": { "type": "string", "enum": ["complete", "blocked"], "description": "complete when the objective is achieved; blocked when it cannot be achieved." },
+                        "reason": { "type": "string", "description": "For blocked: the blocker or missing decision that makes the objective unachievable." }
                     },
                     "required": ["status"],
                     "additionalProperties": false
                 }),
-                snippet: "Mark the current goal complete after a strict completion audit".to_string(),
+                snippet: "End the current goal: complete after a strict completion audit, or blocked when no path remains".to_string(),
                 prompt_guidelines: vec![
-                    "Use update_goal only when the current goal objective is fully achieved and verified against concrete evidence.".to_string(),
-                    "Do not use update_goal to pause, resume, abandon, or budget-limit a goal.".to_string(),
+                    "Use update_goal with status=complete only when the current goal objective is fully achieved and verified against concrete evidence.".to_string(),
+                    "Use update_goal with status=blocked only when the objective cannot be achieved or no defensible path remains; continuing would just repeat the same blocked report.".to_string(),
+                    "Do not use update_goal to pause, resume, or budget-limit a goal.".to_string(),
+                    "Ending a goal keeps it on record and stops continuation; the user can set or resume a goal if needed.".to_string(),
                 ],
                 constrained_sampling: false,
                 render_shell: None,
@@ -953,15 +993,14 @@ impl Extension for Goal {
         ]
     }
 
-    /// 工具可见性：create_goal 恒可见；get_goal/update_goal 仅目标 active 时暴露
+    /// 工具可见性：只有 `get_goal` 按 active 门控；`create_goal`/`update_goal`
+    /// 恒可见。门控 `update_goal` 会让 run 中创建的目标永远收不了尾（`RebuildTools` 排在本轮之后，
+    /// 而续跑边界不让本轮结束）。
     fn filter_extension_tools(&self, tools: Vec<ExtensionTool>) -> Vec<ExtensionTool> {
         let active = goal_active();
         tools
             .into_iter()
-            .filter(|t| {
-                matches!(t.name.as_str(), "create_goal")
-                    || (active && matches!(t.name.as_str(), "get_goal" | "update_goal"))
-            })
+            .filter(|t| t.name != "get_goal" || active)
             .collect()
     }
 
@@ -1430,8 +1469,8 @@ fn command_goal(host: &mut dyn CommandHost, raw: &str) -> bool {
 // LLM 工具执行（create_goal / get_goal / update_goal）
 impl Goal {
     /// 执行三个目标工具：`get_goal` 返回当前目标 JSON；`create_goal` 校验 objective 与
-    /// tokenBudget 后创建 active 目标；`update_goal` 仅接受 status=complete 并结算完成。
-    /// 参数非法、目标缺失或状态不匹配时返回 `ToolError`。
+    /// tokenBudget 后创建 active 目标；`update_goal` 接受 status=complete/blocked，置为对应终态并收尾
+    /// （目标保留，仍可 `/goal resume`）。参数非法、目标缺失或状态不匹配时返回 `ToolError`。
     fn execute_goal_tool(
         &self,
         name: &str,
@@ -1479,23 +1518,33 @@ impl Goal {
             }
             "update_goal" => {
                 let status = args.get("status").and_then(|v| v.as_str()).unwrap_or("");
-                if status != "complete" {
-                    return Err(ToolError(
-                        "update_goal only accepts status=complete.".to_string(),
-                    ));
-                }
+                let status = match status {
+                    "complete" => GoalStatus::Complete,
+                    "blocked" => GoalStatus::Blocked,
+                    other => {
+                        return Err(ToolError(format!(
+                            "update_goal only accepts status=complete or status=blocked, got \"{other}\"."
+                        )));
+                    }
+                };
                 let goal = state().lock().unwrap().goal.clone();
                 let Some(goal) = goal else {
                     return Err(ToolError("No goal is set.".to_string()));
                 };
-                mark_goal_complete(&goal);
-                let next = state().lock().unwrap().goal.clone().unwrap();
+                let reason = args
+                    .get("reason")
+                    .and_then(|v| v.as_str())
+                    .map(str::trim)
+                    .filter(|r| !r.is_empty())
+                    .map(str::to_string);
+                let next = mark_goal_status(&goal, status);
                 Ok(ToolResult::text(
                     serde_json::to_string_pretty(&json!({
                         "goal": next,
                         "remainingTokens": next
                             .token_budget
                             .map(|b| b.saturating_sub(next.tokens_used)),
+                        "reason": reason,
                     }))
                     .unwrap_or_default(),
                 ))
@@ -1616,19 +1665,22 @@ mod tests {
     }
 
     #[test]
-    fn active_tool_visibility_toggles_with_status() {
+    fn stop_tools_stay_visible_without_goal() {
         let _g = setup();
         let ext = Goal::new();
         let tools = ext.tools();
-        // 无目标：只暴露 create_goal
+        // 无目标：不暴露 get_goal，但收尾工具必须恒可见（run 中创建的目标看不到重建后的列表）
         let visible: Vec<String> = ext
             .filter_extension_tools(tools.clone())
             .iter()
             .map(|t| t.name.clone())
             .collect();
-        assert_eq!(visible, vec!["create_goal".to_string()]);
+        assert_eq!(
+            visible,
+            vec!["create_goal".to_string(), "update_goal".to_string()]
+        );
 
-        // 激活目标：get_goal/update_goal 可见
+        // 激活目标：get_goal 也可见
         let next = create_goal_state("objective", None);
         {
             let mut st = state().lock().unwrap();
@@ -1648,7 +1700,7 @@ mod tests {
             ]
         );
 
-        // 完成：回到只暴露 create_goal
+        // 完成：get_goal 隐去，收尾工具仍在
         let mut st = state().lock().unwrap();
         if let Some(g) = &mut st.goal {
             g.status = GoalStatus::Complete;
@@ -1659,7 +1711,41 @@ mod tests {
             .iter()
             .map(|t| t.name.clone())
             .collect();
-        assert_eq!(visible, vec!["create_goal".to_string()]);
+        assert_eq!(
+            visible,
+            vec!["create_goal".to_string(), "update_goal".to_string()]
+        );
+    }
+
+    /// update_goal complete：停下续跑循环并收尾，但目标保留（便于后续 resume）。
+    #[test]
+    fn complete_goal_stops_continuation_and_keeps_goal() {
+        let _g = setup();
+        let ext = Goal::new();
+        ext.execute_tool("create_goal", &json!({ "objective": "shipped objective" }))
+            .unwrap();
+        drain_ui_requests();
+
+        ext.execute_tool("update_goal", &json!({ "status": "complete" }))
+            .unwrap();
+
+        let st = state().lock().unwrap();
+        let goal = st.goal.as_ref().expect("完成不移除目标");
+        assert_eq!(goal.status, GoalStatus::Complete);
+        assert_eq!(goal.objective, "shipped objective");
+        assert!(!st.continuation_queued, "完成后不应再排队续跑");
+        drop(st);
+
+        // 结算边界不再续跑（回归：目标做完后仍无限续跑）
+        assert!(
+            ext.on_boundary(&json!({
+                "type": "agent_before_settle",
+                "agentScope": "main",
+                "outcome": "completed",
+                "hasQueuedMessages": false,
+            }))
+            .is_none()
+        );
     }
 
     #[test]
@@ -1696,11 +1782,14 @@ mod tests {
             .unwrap_err();
         assert!(err.0.contains("tokenBudget"));
 
-        // update_goal 只接受 complete
+        // update_goal 拒绝 complete/blocked 以外的状态
         let err = ext
             .execute_tool("update_goal", &json!({ "status": "paused" }))
             .unwrap_err();
-        assert!(err.0.contains("only accepts status=complete"));
+        assert!(
+            err.0
+                .contains("only accepts status=complete or status=blocked")
+        );
 
         // 正确完成
         let r = ext
@@ -1715,6 +1804,40 @@ mod tests {
         // get_goal：返回当前目标 JSON
         let r = ext.execute_tool("get_goal", &json!({})).unwrap();
         assert!(r.text.contains("new objective"));
+
+        // update_goal blocked：目标转 blocked、保留（可 resume）
+        let r = ext
+            .execute_tool(
+                "update_goal",
+                &json!({ "status": "blocked", "reason": "needs user input" }),
+            )
+            .unwrap();
+        assert!(r.text.contains("needs user input"));
+        assert_eq!(
+            state().lock().unwrap().goal.as_ref().unwrap().status,
+            GoalStatus::Blocked
+        );
+        drain_ui_requests();
+
+        // 结算边界不再续跑（避免模型只能反复报同一个阻塞）
+        assert!(
+            ext.on_boundary(&json!({
+                "type": "agent_before_settle",
+                "agentScope": "main",
+                "outcome": "completed",
+                "hasQueuedMessages": false,
+            }))
+            .is_none(),
+            "blocked 目标不得继续续跑"
+        );
+
+        let mut msgs = vec![AgentMessage::user_text("hello")];
+        ext.transform_context(&mut msgs).unwrap();
+        assert!(
+            msgs.last().unwrap().text().contains(MARKER_BLOCKED),
+            "blocked 要注入一次性停止指令：{:?}",
+            msgs.last().unwrap().text()
+        );
     }
 
     #[test]
