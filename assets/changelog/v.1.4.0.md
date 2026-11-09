@@ -222,7 +222,8 @@
   and the log path at once — stdin is `/dev/null`, and stdout/stderr go to that log file instead
   of the terminal. `read_process_output` returns an output snapshot (status, pid, elapsed time
   and the last N lines; reading does not consume the log, and omitting `id` lists every job),
-  while `stop_process` kills the whole process group. `/ps` toggles the dock section (three-stage,
+  while `stop_process` kills the whole process group. Both tools, and `/ps stop`, also accept a
+  bare job number (`1` means `job-1`). `/ps` toggles the dock section (three-stage,
   like `/todos`), `/ps list` prints the job list, `/ps stop <id>` stops a job and `/ps clear`
   drops finished ones. The dock section lists only running jobs (freshly finished ones are removed
   on the next frame, and the section hides itself once none are left). A job keeps running after
@@ -689,9 +690,10 @@
   dev server、watcher 这类长命命令会把一整轮卡到超时。`background_bash` 把命令丢到后台，立刻
   返回 `job-N`、pid 与日志路径——stdin 接 `/dev/null`，stdout/stderr 写进那个日志文件而不是
   继承终端。`read_process_output` 返回输出**快照**（状态、pid、耗时、最后 N 行；读不消费日志，
-  省略 `id` 列出全部 job），`stop_process` 杀掉整个进程组。`/ps` 三段式切换停靠段显隐
-  （同 `/todos`），`/ps list` 打印清单，`/ps stop <id>` 停止、`/ps clear` 丢掉已完成记录。停靠段只列
-  运行中的 job——刚结束的行在下一帧被刷掉，全部结束时段落与面板自动收起。job 不随回合结束消失，
+  省略 `id` 列出全部 job），`stop_process` 杀掉整个进程组；两个工具与 `/ps stop` 也接受只写序号
+  （`1` 即 `job-1`）。`/ps` 三段式切换停靠段显隐（同 `/todos`），`/ps list` 打印清单，
+  `/ps stop <id>` 停止、`/ps clear` 丢掉已完成记录。停靠段只列运行中的 job——刚结束的行在下一帧被刷掉，
+  全部结束时段落与面板自动收起。job 不随回合结束消失，
   禁用本扩展会停掉全部运行中的 job。默认不启用（`Dev` 模式）。
 
 - **新增小球落位式启动横幅**：新的 `bouncyballs-banner` 扩展把左侧 logo 拆成一颗颗球——art 的

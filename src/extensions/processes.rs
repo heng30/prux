@@ -90,7 +90,7 @@ const SUBCOMMANDS: &[SubcommandDef] = &[
     },
     SubcommandDef {
         name: "stop",
-        description: "Stop a background job: /ps stop job-1",
+        description: "Stop a background job: /ps stop 1",
     },
     SubcommandDef {
         name: "clear",
@@ -333,7 +333,7 @@ fn read_tool() -> ExtensionTool {
                 "properties": {
                     "id": {
                         "type": "string",
-                        "description": "Job id (e.g. job-1). Omit to list all jobs."
+                        "description": "Job id (e.g. job-1; a bare number like `1` works too). Omit to list all jobs."
                     },
                     "lines": {
                         "type": "integer",
@@ -360,7 +360,7 @@ fn stop_tool() -> ExtensionTool {
                 "properties": {
                     "id": {
                         "type": "string",
-                        "description": "Job id to stop (e.g. job-1)."
+                        "description": "Job id to stop (`job-1`; a bare number like `1` works too)."
                     }
                 },
                 "required": ["id"]
@@ -501,7 +501,10 @@ fn reap(mut child: std::process::Child, pid: u32) {
 
 /// `read_process_output`：省略 id 时列全部 job，否则给该 job 的输出快照。
 fn read(args: &Value) -> Result<ToolResult, ToolError> {
-    let Some(id) = opt_str(args, "id").map(str::trim).filter(|s| !s.is_empty()) else {
+    let Some(id) = opt_str(args, "id")
+        .map(normalize_id)
+        .filter(|s| !s.is_empty())
+    else {
         return Ok(ToolResult::text(list_text()));
     };
     let lines = opt_i64(args, "lines")
@@ -514,7 +517,7 @@ fn read(args: &Value) -> Result<ToolResult, ToolError> {
             .jobs
             .iter()
             .find(|j| j.id == id)
-            .ok_or_else(|| unknown_job(id, &st))?;
+            .ok_or_else(|| unknown_job(&id, &st))?;
         (detail_header(job), job.log.clone())
     };
 
@@ -539,10 +542,19 @@ fn unknown_job(id: &str, st: &State) -> ToolError {
     ))
 }
 
+/// 归一化 job id：只写序号时补上 `job-` 前缀（`1` 与 `job-1` 等价）。
+fn normalize_id(raw: &str) -> String {
+    let id = raw.trim();
+    if !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()) {
+        format!("job-{id}")
+    } else {
+        id.to_string()
+    }
+}
+
 /// `stop_process`：杀整个进程组并回报。
 fn stop(args: &Value) -> Result<ToolResult, ToolError> {
-    let id = req_str(args, "id")?;
-    let id = id.trim().to_string();
+    let id = normalize_id(&req_str(args, "id")?);
     let pid = {
         let mut st = lock();
         let idx = st
@@ -844,6 +856,12 @@ mod tests {
         let again = stop(&json!({ "id": "job-1" })).unwrap_err();
         assert!(again.0.contains("already finished"), "{}", again.0);
 
+        // 只写序号也能停（不必记 `job-` 前缀）
+        start_job("sleep 30", "/tmp").unwrap();
+        let stopped = stop(&json!({ "id": "2" })).unwrap().text;
+        assert!(stopped.contains("Stopped job-2"), "{stopped}");
+        wait_finished("job-2").expect("job-2 应结束");
+
         reset();
     }
 
@@ -862,6 +880,10 @@ mod tests {
 
         let err = read(&json!({ "id": "job-9" })).unwrap_err();
         assert!(err.0.contains("known jobs: job-1"), "{}", err.0);
+
+        // 只写序号也认（`1` → `job-1`）
+        let text = read(&json!({ "id": "1" })).unwrap().text;
+        assert!(text.contains("job-1 running"), "{text}");
 
         reset();
     }
