@@ -21,15 +21,7 @@
   sidebar state and the self-drawn title bar (`gui.frame`) live under `gui` in `settings.json`,
   and settings toggles (hiding thinking blocks included) apply as soon as they change.
   `prux-gui --tui` starts the terminal interface from the same binary, and `docs/gui.md` covers
-  the rest. The input card wraps each line by the glyph widths the shaper measures, rounded the
-  same way the layout rounds them, so a full line no longer spills one extra character over the
-  right edge of the box; user bubbles measure their width the same per-glyph way and round their
-  available width up to whole device pixels, so half-pixel rounding no longer pushes the last
-  character onto a second line; the
-  conversation no longer reserves a second scrollbar gutter on top of its padding, so a long
-  sentence no longer drops its last word onto a second line while it still fits; the conversation
-  column can no longer push the right panel out of the window either, so the panel stays whole once
-  a session has messages.
+  the rest.
 
 - **Panels name the keys they answer to**: the session picker now says `Ctrl+R rename · Ctrl+D delete`
   (previously only "Enter confirm"), and the logout list says what Enter does before it
@@ -538,12 +530,7 @@
   可达，鼠标可选中复制对话流里的任意内容（用户气泡、工具卡片、系统消息与提示行）、中键粘贴、
   拖动面板改宽，`Alt+点击` 展开折叠块而普通点击留给选字；主题、缩放、会话栏开关与自绘标题栏
   （`gui.frame`）收在 `gui` 段下写回 `settings.json`，设置面板的开关（含隐藏思考块）改完立即生效。
-  `prux-gui --tui` 用同一个二进制启动终端界面，用法见 `docs/gui.md`。输入框折行按排版器量出的
-  真实字宽、与实际排布一致的取整方式预算整行，整行不再多排字符把行尾的字挤进边框裁掉；用户气泡
-  按同一套逐字宽度量宽、可用宽向上吸附到整设备像素（半像素的舍入不会再把最后一个字挤到下一行），
-  对话流也不再在自身内边距之外多留一条滚动条空白，长句不会在还放得下时
-  把最后一个词折到下一行；对话流也不会再
-  把右侧面板挤出窗口——有消息之后面板与它的搜索框同样完整可见。
+  `prux-gui --tui` 用同一个二进制启动终端界面，用法见 `docs/gui.md`。
 
 - **面板补上键位提示**：会话选择器现在写明 `Ctrl+R rename · Ctrl+D delete`
   （此前只有「Enter confirm」），登出列表也在清 key 前说明 Enter 的作用。
