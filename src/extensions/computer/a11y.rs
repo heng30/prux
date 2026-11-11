@@ -1,8 +1,11 @@
 //! 无障碍通道：读窗口的控件树并在控件上执行动作。
 //!
 //! 平台各有一套语义（AT-SPI2 / UI Automation / AXUIElement），这里只保留三样共同能力：
-//! **读一棵带 ref 的树**、**按 ref 执行一个动作**、**按 ref 读/写值**。工具层（`computer_ui`、
-//! `computer_ui_action`）只认这一层，不认任何平台的接口名。
+//! **读一棵带 ref 的树**、**复核一个 ref 还指向原来那个节点**、**按 ref 执行一个动作**、
+//! **按 ref 读/写值**。工具层（`computer_ui`、`computer_ui_action`）只认这一层，不认任何平台的接口名。
+//!
+//! 三个平台在发动作之前都会做一次身份复核（[`probe`]，或平台自己的 `element_for`）：
+//! 角色或可访问名对不上就报陈旧 ref，绝不「大概是它」。
 
 #[cfg(target_os = "linux")]
 mod linux;
@@ -102,6 +105,27 @@ pub struct A11ySnapshot {
     pub nodes: Vec<NodeId>,
 }
 
+/// 一次活的节点读：动作前判定的证据，也是「这个 ref 还是不是同一个东西」的复验。
+#[derive(Debug, Clone, Default)]
+pub struct Probe {
+    /// 读到的角色名；与 ref 记录的不一致就是陈旧 ref。
+    pub role: String,
+    /// 读到的可访问名；与 ref 记录的不一致就是陈旧 ref。
+    pub name: String,
+    /// 状态名（`enabled` / `checked` / `expanded` / `iconified` …）。
+    pub states: Vec<String>,
+    /// 目标声明的动作名。
+    pub actions: Vec<String>,
+    /// 这份动作名是否完整（只有完整时「没声明」才能当拒绝用）。
+    pub actions_complete: bool,
+    /// 屏幕矩形。
+    pub rect: Option<Rect>,
+    /// 明确报告的可用状态；`None` 表示平台没给。
+    pub enabled: Option<bool>,
+    /// 明确报告的隐藏/离屏状态；`None` 表示平台没给。
+    pub hidden: Option<bool>,
+}
+
 /// 最近几次读树的快照（ref 前缀 → 节点身份）。
 fn snapshots() -> &'static Mutex<Vec<A11ySnapshot>> {
     static SNAPSHOTS: OnceLock<Mutex<Vec<A11ySnapshot>>> = OnceLock::new();
@@ -157,6 +181,14 @@ pub async fn read_tree(
     options: A11yOptions,
 ) -> Result<(Vec<A11yNode>, Vec<NodeId>), String> {
     imp::read_tree(window, options).await
+}
+
+/// 读一个节点的活状态，并核对它还是不是 ref 记录的那个节点。
+///
+/// 角色或可访问名对不上时返回陈旧 ref 的报错，而不是照着旧地址操作——
+/// AT-SPI 只给 `(bus, path)`，路径复用后不加这一步就会点到隔壁控件上。
+pub async fn probe(target: &NodeId) -> Result<Probe, String> {
+    imp::probe(target).await
 }
 
 /// 执行第 `index` 个动作。

@@ -162,7 +162,7 @@ impl GuiApp {
             "panel" => self.slash_panel(cx),
             "dock" => self.slash_dock(cx),
             "sidebar" => self.slash_sidebar(cx),
-            "skills" => self.slash_skills(cx),
+            "skills" => self.slash_skills(arg, cx),
             "extension" => self.slash_extensions(cx),
             "scoped-models" => self.slash_scoped_models(cx),
             "settings" if !arg.is_empty() => self.slash_extension_settings(arg, cx),
@@ -461,8 +461,12 @@ impl GuiApp {
         cx.notify();
     }
 
-    /// `/skills`：打开技能面板。
-    fn slash_skills(&mut self, cx: &mut Context<Self>) {
+    /// `/skills`：打开技能面板；`/skills check` 先跑运行前预检。
+    fn slash_skills(&mut self, arg: &str, cx: &mut Context<Self>) {
+        if arg.trim() == "check" {
+            self.skills_check(cx);
+            return;
+        }
         self.open_skills_panel(cx);
     }
 
@@ -1828,6 +1832,7 @@ fn takes_argument(command: &str) -> bool {
             | "bug"
             | "cwd"
             | "theme"
+            | "skills"
     )
 }
 

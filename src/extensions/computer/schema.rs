@@ -171,7 +171,7 @@ fn actions() -> ExtensionTool {
                 "scale": { "type": "number", "description": "Scale for the trailing screenshot (default 1)." }
             }
         }),
-        "Run a list of desktop steps in one call (click/type/key/scroll/drag/UI actions), optionally followed by a screenshot.",
+        "Run a list of desktop steps in one call (click/type/key/scroll/drag/UI actions), optionally followed by a screenshot. A `wait` step either sleeps (`seconds`) or polls a ref until a predicate holds (`ref` + `predicate` + `value`).",
     )
     .with_annotations(ToolAnnotations { read_only: false, destructive: false, idempotent: false })
 }
@@ -192,8 +192,11 @@ fn step_schema() -> Value {
             "direction": { "type": "string", "enum": ["up", "down", "left", "right"], "description": "scroll: direction." },
             "clicks": { "type": "integer", "description": "scroll: wheel notches (1-20) or click: click count." },
             "button": { "type": "string", "description": "click: left (default), right or middle." },
-            "seconds": { "type": "number", "description": "wait: how long to sleep (maximum 10)." },
-            "ref": { "type": "string", "description": "UI actions: a ref from computer_ui (s1.4)." },
+            "seconds": { "type": "number", "description": "wait: how long to sleep (maximum 10), or — with `ref` — the budget for the predicate (maximum 60, default 5)." },
+            "ref": { "type": "string", "description": "UI actions: a ref from computer_ui (s1.4). wait: the node to poll." },
+            "predicate": { "type": "string", "enum": ["exists", "enabled", "visible", "actionable", "value"], "description": "wait: what to poll for when `ref` is given (default exists). `actionable` answers \"would an invoke succeed now\"." },
+            "value": { "type": "string", "description": "wait: the text predicate `value` compares the control against." },
+            "headed": { "type": "boolean", "description": "click_text: true moves the pointer and clicks the pixels even when the node offers a semantic click action (default false, which does not touch the user's cursor)." },
             "window": { "type": "integer", "description": "focus: window id to bring forward." },
             "op": { "type": "string", "enum": ["get", "set", "clear"], "description": "clipboard: operation." },
             "from_frame": from_frame_param(),
@@ -209,7 +212,7 @@ fn step_schema() -> Value {
 fn click() -> ExtensionTool {
     ExtensionTool::simple(
         "computer_click",
-        "Click at an absolute screen coordinate. Coordinates are screen pixels — the same units the capture envelope reports, and the units computer_windows prints.",
+        "Click at an absolute screen coordinate. Coordinates are screen pixels — the same units the capture envelope reports, and the units computer_windows prints. The reply ends with a `delivery:` verdict; a coordinate click is never verified, so take a screenshot when the outcome matters.",
         json!({
             "type": "object",
             "required": ["x", "y"],
@@ -365,7 +368,7 @@ fn ui() -> ExtensionTool {
 fn ui_action() -> ExtensionTool {
     ExtensionTool::simple(
         "computer_ui_action",
-        "Act on a window through its accessibility interface instead of moving the mouse: invoke a button, set an edit field's value, read it back, select text, toggle a checkbox, select a list item, expand or collapse, focus a control, or click/locate a node by its text. Far more reliable than clicking pixels and it works without stealing the user's focus. Use computer_ui first to get a ref.",
+        "Act on a window through its accessibility interface instead of moving the mouse: invoke a button, set an edit field's value, read it back, select text, toggle a checkbox, select a list item, expand or collapse, focus a control, or click/locate a node by its text. Far more reliable than clicking pixels and it works without stealing the user's focus. Use computer_ui first to get a ref. The last line of the reply is a `delivery:` verdict saying whether the action verifiably took effect and whether a retry is safe.",
         json!({
             "type": "object",
             "required": ["action"],
@@ -375,8 +378,9 @@ fn ui_action() -> ExtensionTool {
                     "enum": UI_ACTIONS,
                     "description": "One of the accessibility actions. get_value/get_text/locate_text/get_caret are reads and safe to repeat."
                 },
-                "ref": { "type": "string", "description": "The [s1.4] marker computer_ui printed next to a node. The node is re-read and matched by name and role; a ref from an older read is refused with a stale-ref error rather than guessed." },
+                "ref": { "type": "string", "description": "The [s1.4] marker computer_ui printed next to a node. The node is re-read before acting and matched by name and role; a ref from an older read is refused with a stale-ref error rather than guessed." },
                 "window": { "type": "integer", "description": "Window id; used when no ref is given (or for the window actions close/minimize/maximize/restore)." },
+                "headed": { "type": "boolean", "description": "click_text: true clicks the pixels even when the node offers a semantic click action (default false, so the user's cursor is left alone)." },
                 "name": { "type": "string", "description": "click_text/locate_text: text to search for in the tree." },
                 "text": { "type": "string", "description": "set_value: the text to write." },
                 "start": { "type": "integer", "description": "select_text: start character offset (default 0)." },

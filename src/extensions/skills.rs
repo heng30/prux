@@ -19,13 +19,15 @@ mod embedded {
     include!(concat!(env!("OUT_DIR"), "/embedded_skills.rs"));
 }
 
+pub mod preflight;
+
 use crate::{
     core::{
-        extensions::{Extension, ExtensionCommand, ExtensionMode, ExtensionTool},
+        extensions::{Extension, ExtensionCommand, ExtensionMode, ExtensionTool, SubcommandDef},
         settings_manager::agent_dir,
         skills,
     },
-    extensions::{EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_SKILLS},
+    extensions::{EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_SKILLS, command_arg},
     modes::tui::{app::App, handlers::register_slash_command},
 };
 use std::{path::PathBuf, sync::Arc};
@@ -34,6 +36,18 @@ use std::{path::PathBuf, sync::Arc};
 pub const EXT: &str = "skills";
 /// 斜杠命令名（不含前导 `/`）。
 pub const CMD: &str = "skills";
+
+/// `/skills` 子命令（顺序 = 输入框候选顺序）。
+const SUBCOMMANDS: &[SubcommandDef] = &[
+    SubcommandDef {
+        name: "settings",
+        description: "Open the skills panel (same as a bare /skills)",
+    },
+    SubcommandDef {
+        name: "check",
+        description: "Check every loaded skill's scripts (shebang interpreter, exec bit)",
+    },
+];
 
 /// 自声明工厂：linkme 分布式切片，priority 值大者先注册（见 [`crate::extensions`]）。
 #[linkme::distributed_slice(EXTENSION_FACTORIES)]
@@ -145,6 +159,8 @@ pub fn is_installed(name: &str) -> bool {
 /// 「检查并创建」：把该扩展技能缺失的文件写入 `agent_dir()/skills/<name>/**`。
 ///
 /// 已存在的文件**一律不覆盖**（对齐 `extra-themes` 的内容幂等口径，保护外部定制）；
+/// 新写下的脚本（[`preflight::is_script`]，模板除外）补执行位——用户装完就能跑，
+/// 不会先卡在 `Permission denied` 上。
 /// 返回本次新写入的文件数；技能名不在目录中或写盘失败时返回 `Err`。
 pub fn materialize(name: &str) -> Result<usize, String> {
     let Some(skill) = catalog_skill(name) else {
@@ -169,9 +185,27 @@ pub fn materialize(name: &str) -> Result<usize, String> {
             return Err(format!("write {}: {e}", target.display()));
         }
 
+        if preflight::is_script(&target) && !preflight::is_template(&target) {
+            set_executable(&target);
+        }
         written += 1;
     }
     Ok(written)
+}
+
+/// 给新落盘的脚本补执行位（非 Unix 平台空实现：那边按扩展名判定可执行）。
+fn set_executable(path: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(path) {
+            let mut perms = meta.permissions();
+            perms.set_mode(0o755);
+            let _ = std::fs::set_permissions(path, perms);
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = path;
 }
 
 /// `skills` 扩展：只有一条 `/skills` 命令，无工具、无钩子。
@@ -185,8 +219,12 @@ impl Skills {
     }
 }
 
-/// `/skills` 命令入口：打开技能管理面板。
-fn command_skills(st: &mut App, _raw: &str) -> bool {
+/// `/skills` 命令入口：`/skills check` 跑运行前预检，`settings` 与不传参数都打开技能管理面板。
+fn command_skills(st: &mut App, raw: &str) -> bool {
+    if command_arg(raw).trim() == "check" {
+        st.run_skill_preflight();
+        return false;
+    }
     st.open_skills_panel();
     false
 }
@@ -221,9 +259,11 @@ impl Extension for Skills {
     fn commands(&self) -> Vec<ExtensionCommand> {
         vec![ExtensionCommand {
             name: CMD.to_string(),
-            description: "Manage skills (enable/disable, install bundled)".to_string(),
+            description: "Manage skills (enable/disable, install bundled); /skills check reports \
+                          script problems (missing shebang, interpreter, exec bit)"
+                .to_string(),
             busy_safe: true,
-            subcommands: Vec::new(),
+            subcommands: SUBCOMMANDS.to_vec(),
         }]
     }
 
@@ -236,6 +276,28 @@ impl Extension for Skills {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{core::skills::Skill, test_support::AgentDirGuard};
+
+    /// 落盘后的内置技能通过运行前预检：脚本已带执行位，`*.template.*` 按约定跳过。
+    #[test]
+    fn installed_bundled_skills_pass_preflight() {
+        let _dir = AgentDirGuard::temp();
+        for entry in catalog() {
+            materialize(&entry.name).expect("落盘失败");
+        }
+        let skills: Vec<Skill> = catalog()
+            .into_iter()
+            .map(|c| Skill {
+                path: c.target_skill_md(),
+                base_dir: c.target_dir(),
+                name: c.name,
+                description: c.description,
+                disable_model_invocation: c.disable_model_invocation,
+                source: "builtin".to_string(),
+            })
+            .collect();
+        assert_eq!(preflight::check_all(&skills), Vec::<String>::new());
+    }
 
     #[test]
     fn catalog_groups_embedded_files_by_directory() {

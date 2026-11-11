@@ -7,7 +7,7 @@
 //! 所有 COM 调用都在本线程内完成（不跨 `await`），避免 `IUIAutomationElement` 在未初始化 COM 的
 //! 线程上被使用。
 
-use super::{A11yNode, A11yOptions, NodeId};
+use super::{A11yNode, A11yOptions, NodeId, Probe};
 use crate::extensions::computer::{backend, state::Rect};
 use windows::{
     Win32::{
@@ -324,6 +324,27 @@ fn element_for(target: &NodeId) -> Result<IUIAutomationElement, String> {
         ));
     }
     Ok(element)
+}
+
+/// 读一个节点的活状态（身份由 `element_for` 逐层核对）。
+pub async fn probe(target: &NodeId) -> Result<Probe, String> {
+    let element = element_for(target)?;
+    Ok(Probe {
+        role: target.role.clone(),
+        name: target.name.clone(),
+        states: states_of(&element),
+        actions: patterns_of(&element),
+        // 这里探测的是具体 pattern，与 AT-SPI 的动作名不是同一套词汇。
+        actions_complete: false,
+        rect: rect_of(&element),
+        enabled: unsafe { element.CurrentIsEnabled().ok().map(|value| value.as_bool()) },
+        hidden: unsafe {
+            element
+                .CurrentIsOffscreen()
+                .ok()
+                .map(|value| value.as_bool())
+        },
+    })
 }
 
 /// 执行第 `index` 个动作（UIA 的 `invoke` 没有序号概念，0 表示"默认动作"）。

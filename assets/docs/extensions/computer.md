@@ -27,7 +27,7 @@
 |---|---|
 | `computer_screenshot` | 截屏（整屏 / 指定显示器 / 区域 / 单个窗口），可缩放、选 PNG/JPEG；返回图片 + 几何 + `frame` id |
 | `computer_crop` | 裁剪磁盘上的图片文件（如上一张截图的 `file:` 路径），按图像像素给 `region`，保留原始像素细节 |
-| `computer_actions` | 一次调用执行多步（click / type / key / drag / scroll / wait / paste / clipboard / focus / 无障碍动作），可选末尾截图 |
+| `computer_actions` | 一次调用执行多步（click / type / key / drag / scroll / wait / paste / clipboard / focus / 无障碍动作），可选末尾截图；`wait` 步可轮询到条件成立 |
 | `computer_click` | 绝对坐标点击（左/右/中键、双击三击、修饰键） |
 | `computer_drag` | 拖拽，可用 `path` 给途经点；`from_last` / `continue_from` 接着上一笔 |
 | `computer_scroll` | 滚轮（方向 + 格数），可先把指针移到目标上 |
@@ -89,6 +89,41 @@ Linux **不支持 X11**：截图、输入与坐标都按 Wayland 会话实现，
 且**帧对应的窗口在之后移动或改尺寸时，按该帧发出的动作会被拒绝**（`[FRAME_STALE]`），
 而不是照着旧图画面上点下去。
 
+## 动作前的判定与投递回执
+
+无障碍动作执行前，先读一次目标并过几道闸；执行后回读一次，回执**最后一行**是投递语义：
+
+```text
+delivery: delivered-verified (retry unsafe); the value read back matches
+delivery: delivered-unverified (retry unsafe); the target's checked state did not change
+delivery: not-delivered (retry safe)
+```
+
+- `not-delivered` —— 没送出去，**重试安全**。
+- `delivered-unverified` —— 送出去了，但没有证据证明目标真的变了；直接重试可能变成双击。
+- `delivered-verified` —— 回读到了变化（写值后读回一致、`checked`/`expanded` 翻转）。
+
+判定失败的报错以错误码开头，且区分「等一等可能就好」与「等也没用」：
+
+| 错误码 | 含义 |
+|---|---|
+| `[NOT_ACTIONABLE]` | 目标不可见 / 不稳定 / 已禁用 / 没有声明对应该动作的能力。前三种会附带「可以再试或加一个 wait 步」，最后一种会说等待无用 |
+| `[VALUE_NOT_APPLIED]` | `set_value` 写进去的值读回来不一样：应用拒绝或规整了这次写入 |
+| `[STALE_REF]` | `ref` 指向的节点已经换成别的东西（角色或名称对不上），需要用 `computer_ui` 重新读树 |
+| `[WAIT_TIMEOUT]` | `wait` 等到预算用尽，谓词仍未成立 |
+
+判定读不到的信息（平台不报告 `enabled`、不枚举动作表）**不阻断**动作：照常执行，只把不确定性写进回执。
+`computer_click` 一类的坐标点击没有命中测试（取不到窗口叠放顺序），因此永远是 `delivered-unverified`。
+
+`wait` 步给了 `ref` 就变成轮询，预算由 `seconds` 给（默认 5 秒，上限 60）：
+
+```jsonc
+{ "action": "wait", "ref": "s3.12", "predicate": "actionable", "seconds": 10 }
+{ "action": "wait", "ref": "s3.7", "predicate": "value", "value": "done" }
+```
+
+`predicate` 可取 `exists`（默认）、`enabled`、`visible`、`actionable`（现在去 invoke 它会不会被拒）、`value`。
+
 ## 安全与边界
 
 - 默认不启用：只有你在 `/extension` 面板里打开过本扩展，这些工具才存在。
@@ -118,3 +153,7 @@ Linux **不支持 X11**：截图、输入与坐标都按 Wayland 会话实现，
 | `/extension` 面板里找不到本扩展 | 当前是极简模式（Minimal）；本扩展只在 Dev / Creator / 全部模式可用 |
 | macOS 关窗/最小化没反应或关错了 | 这些动作是 ⌘ W / ⌘ M / ⌃⌘ F 模拟，应用改过快捷键就会失效；改用 `computer_ui_action` 或 `computer_click` |
 | `select_text` 报未接线 / `get_caret` 报没有光标 | Windows 与 macOS 上这两个无障碍动作尚未实现，改用 `computer_key` 或 `computer_type` |
+| `[NOT_ACTIONABLE]` 说目标不可见/已禁用 | 目标被最小化、还在动画里或者真的是灰的；等一等，或在它前面加一个 `predicate: "actionable"` 的 `wait` 步 |
+| `[NOT_ACTIONABLE]` 说没有对应能力 | 这个控件不支持该动作（例如没有 click 动作的静态文本）；用 `computer_ui` 换一个节点，或改用坐标点击 |
+| `[VALUE_NOT_APPLIED]` | 控件拒绝了这次写值（只读、格式校验失败、被输入法拦下）；修正取值后重试，或改用 `computer_type` / `computer_paste` |
+| `[STALE_REF]` | 界面变了，旧 `ref` 指向的位置现在是别的控件；重新 `computer_ui` 拿新 `ref` |

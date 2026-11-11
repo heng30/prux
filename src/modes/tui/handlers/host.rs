@@ -120,6 +120,11 @@ impl CommandHost for App {
         self.worker.send(AgentCommand::SystemPrompt);
     }
 
+    /// 请 worker 回执上下文占用拆分。
+    fn debug_context_breakdown(&mut self) {
+        self.worker.send(AgentCommand::ContextBreakdown);
+    }
+
     /// 当前会话文件路径。
     fn session_path(&self) -> Option<String> {
         self.current_session_path.clone()

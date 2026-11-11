@@ -9,9 +9,9 @@ use super::{
     components::dot,
     markdown,
     theme::{
-        DOT_SIZE, FONT_BODY, FONT_CAPTION, FONT_SMALL, MONO_ADVANCE, MONO_FONT_FAMILY, RADIUS_MD,
-        RADIUS_SM, SCROLLBAR_WIDTH, SPACE_LG, SPACE_MD, SPACE_SM, SPACE_XS, SPACE_XXS, Theme,
-        UI_FONT_FAMILY, min_thumb, px,
+        DOT_SIZE, FONT_BODY, FONT_CAPTION, FONT_SMALL, MONO_ADVANCE, RADIUS_MD, RADIUS_SM,
+        SCROLLBAR_WIDTH, SPACE_LG, SPACE_MD, SPACE_SM, SPACE_XS, SPACE_XXS, Theme, UI_FONT_FAMILY,
+        min_thumb, mono_font, px,
     },
 };
 use crate::{
@@ -2284,7 +2284,7 @@ fn render_rows(
                     .whitespace_nowrap()
                     .px(px(SPACE_SM))
                     .py(px(SPACE_SM))
-                    .font_family(MONO_FONT_FAMILY)
+                    .font(mono_font())
                     .on_children_prepainted(move |_, window, _| {
                         // 溢出了才画底部滚动条；状态一变就补一帧（滚动条占高度，布局会变）
                         let want = probe.max_offset().x > px(0.);
@@ -2354,7 +2354,7 @@ fn render_rows(
                     .border_color(theme.border)
                     .bg(theme.inset)
                     .overflow_hidden()
-                    .font_family(MONO_FONT_FAMILY)
+                    .font(mono_font())
                     .text_size(px(FONT_SMALL))
                     .text_color(theme.code_text);
                 for line in mono {

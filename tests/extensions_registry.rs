@@ -57,6 +57,7 @@ fn register_all_collects_and_sorts_slices() {
         "debug",
         "tool-search",
         "codemode",
+        "shrink",
         "jet",
         "browser",
         "update-check",
@@ -201,6 +202,10 @@ fn register_all_collects_and_sorts_slices() {
     assert!(
         !is_extension_enabled("shake"),
         "shake 应默认不启用（会改写模型上下文，Dev / Creator 工具）"
+    );
+    assert!(
+        !is_extension_enabled("shrink"),
+        "shrink 应默认不启用（压缩会丢信息，由用户显式开启）"
     );
     assert!(
         !is_extension_enabled("processes"),

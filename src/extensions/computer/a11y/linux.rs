@@ -7,7 +7,7 @@
 //! 能力取决于应用有没有实现无障碍：GTK/Qt 默认实现，Electron 需要 `--force-renderer-accessibility`，
 //! 终端类应用通常只有一层空壳。读不到东西时返回的是"这个应用没有暴露无障碍"，而不是空树。
 
-use super::{A11yNode, A11yOptions, NodeId};
+use super::{A11yNode, A11yOptions, NodeId, Probe};
 use crate::extensions::computer::{backend, state::Rect};
 use zbus::{Connection, OwnedVariant};
 
@@ -453,9 +453,76 @@ async fn application_for_pid(conn: &Connection, pid: u32) -> Result<(String, Str
     ))
 }
 
+/// 陈旧 ref 的报错（复核与活读共用同一套文案）。
+fn stale_ref(target: &NodeId, role: &str, name: &str) -> String {
+    format!(
+        "[STALE_REF] the element at {} is now {role} {name:?}, not {} {:?}; read the tree again",
+        target.path, target.role, target.name
+    )
+}
+
+/// 读回 `(role, name)` 并核对它还是不是 ref 记录的那个节点。
+///
+/// AT-SPI 只给地址，不给对象身份；路径被复用时不加这一步就会操作到隔壁控件上。
+async fn identity(conn: &Connection, target: &NodeId) -> Result<(String, String), String> {
+    let role = role_name(conn, &target.bus, &target.path).await?;
+    let name = string_property(conn, &target.bus, &target.path, IFACE_ACCESSIBLE, "Name")
+        .await
+        .unwrap_or_default();
+    if role != target.role || name != target.name {
+        return Err(stale_ref(target, &role, &name));
+    }
+    Ok((role, name))
+}
+
+/// 连到无障碍总线并复核 ref：所有动作与读值都从这里拿连接，不在陈旧 ref 上操作。
+async fn open(target: &NodeId) -> Result<Connection, String> {
+    let conn = connect().await?;
+    identity(&conn, target).await?;
+    Ok(conn)
+}
+
+/// 读一个节点的活状态（并复核身份）。
+pub async fn probe(target: &NodeId) -> Result<Probe, String> {
+    let conn = connect().await?;
+    let (role, name) = identity(&conn, target).await?;
+    let bus = target.bus.as_str();
+    let path = target.path.as_str();
+    let states = states(&conn, bus, path).await;
+    Ok(Probe {
+        role,
+        name,
+        actions: action_names(&conn, bus, path).await,
+        actions_complete: true,
+        rect: extents(&conn, bus, path).await,
+        enabled: enabled_state(&states),
+        hidden: hidden_state(&states),
+        states,
+    })
+}
+
+/// 状态位里的可用性：读不到状态位时返回 `None`，而不是当成不可用。
+fn enabled_state(states: &[String]) -> Option<bool> {
+    (!states.is_empty()).then(|| states.iter().any(|state| state == "enabled"))
+}
+
+/// 状态位里的可见性：只认平台明确给出的位。
+fn hidden_state(states: &[String]) -> Option<bool> {
+    if states.iter().any(|state| state == "iconified") {
+        return Some(true);
+    }
+    if states
+        .iter()
+        .any(|state| state == "visible" || state == "showing")
+    {
+        return Some(false);
+    }
+    None
+}
+
 /// 在一个节点上执行动作。
 pub async fn do_action(target: &NodeId, index: u32) -> Result<(), String> {
-    let conn = connect().await?;
+    let conn = open(target).await?;
     let (ok,): (bool,) = call_with(
         &conn,
         &target.bus,
@@ -478,7 +545,7 @@ pub async fn do_action(target: &NodeId, index: u32) -> Result<(), String> {
 
 /// 读一个可编辑控件的文本。
 pub async fn read_text(target: &NodeId) -> Result<String, String> {
-    let conn = connect().await?;
+    let conn = open(target).await?;
     let (count,): (i32,) = call(
         &conn,
         &target.bus,
@@ -507,7 +574,7 @@ pub async fn read_text(target: &NodeId) -> Result<String, String> {
 
 /// 写入一个可编辑控件（优先 `EditableText.SetTextContents`，退回 `Value.SetCurrentValue`）。
 pub async fn set_text(target: &NodeId, text: &str) -> Result<(), String> {
-    let conn = connect().await?;
+    let conn = open(target).await?;
     let result: Result<(bool,), String> = call_with(
         &conn,
         &target.bus,
@@ -543,7 +610,7 @@ pub async fn set_text(target: &NodeId, text: &str) -> Result<(), String> {
 
 /// 读控件的值（`Value.CurrentValue` 或文本内容）。
 pub async fn read_value(target: &NodeId) -> Result<String, String> {
-    let conn = connect().await?;
+    let conn = open(target).await?;
     let (value,): (OwnedVariant,) = call_with(
         &conn,
         &target.bus,
@@ -562,7 +629,7 @@ pub async fn read_value(target: &NodeId) -> Result<String, String> {
 
 /// 给控件焦点。
 pub async fn grab_focus(target: &NodeId) -> Result<(), String> {
-    let conn = connect().await?;
+    let conn = open(target).await?;
     let (ok,): (bool,) = call(
         &conn,
         &target.bus,
@@ -581,7 +648,7 @@ pub async fn grab_focus(target: &NodeId) -> Result<(), String> {
 
 /// 选一段文本。
 pub async fn select_text(target: &NodeId, start: i32, end: i32) -> Result<(), String> {
-    let conn = connect().await?;
+    let conn = open(target).await?;
     let (ok,): (bool,) = call_with(
         &conn,
         &target.bus,
@@ -601,7 +668,7 @@ pub async fn select_text(target: &NodeId, start: i32, end: i32) -> Result<(), St
 
 /// 选一个子项（列表/表格）。
 pub async fn select_child(target: &NodeId, index: i32) -> Result<(), String> {
-    let conn = connect().await?;
+    let conn = open(target).await?;
     let (ok,): (bool,) = call_with(
         &conn,
         &target.bus,
@@ -621,7 +688,7 @@ pub async fn select_child(target: &NodeId, index: i32) -> Result<(), String> {
 
 /// 读光标位置（字符偏移）；不支持时返回 `None`。
 pub async fn caret_offset(target: &NodeId) -> Option<i32> {
-    let conn = connect().await.ok()?;
+    let conn = open(target).await.ok()?;
     let (offset,): (i32,) = call(
         &conn,
         &target.bus,
@@ -636,7 +703,7 @@ pub async fn caret_offset(target: &NodeId) -> Option<i32> {
 
 /// 在节点上按下某个具名动作（`expand` / `collapse` / `toggle` …）；找不到就报错。
 pub async fn action_by_name(target: &NodeId, wanted: &str) -> Result<(), String> {
-    let conn = connect().await?;
+    let conn = open(target).await?;
     let reply = conn
         .call_method(
             Some(target.bus.as_str()),
@@ -672,6 +739,6 @@ pub async fn action_by_name(target: &NodeId, wanted: &str) -> Result<(), String>
 
 /// 读节点的矩形（用于 `click_text` 定位）。
 pub async fn node_rect(target: &NodeId) -> Option<Rect> {
-    let conn = connect().await.ok()?;
+    let conn = open(target).await.ok()?;
     extents(&conn, &target.bus, &target.path).await
 }

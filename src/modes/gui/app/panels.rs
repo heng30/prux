@@ -3,7 +3,7 @@
 use super::*;
 use crate::{
     cli::args::thinking_level_description,
-    core::{self, tools},
+    core::{self, skills::Skill, tools},
     extensions::skills,
     utils::paths,
 };
@@ -297,6 +297,28 @@ impl GuiApp {
         self.mark_space_activates();
         if let Some(Overlay::List(list)) = self.overlay.as_mut() {
             list.hint = Some(TOGGLE_PANEL_HINT.to_string());
+        }
+        cx.notify();
+    }
+
+    /// `/skills check`：对全部可发现的技能跑运行前预检，问题写进对话区。
+    ///
+    /// 与 TUI 一样无过滤地扫描：已禁用的技能照样会被重新启用，没必要只报一半。
+    pub(super) fn skills_check(&mut self, cx: &mut Context<Self>) {
+        let skills = load_skills(&[]);
+        let issues = skills::preflight::check_all(&skills);
+        if issues.is_empty() {
+            self.transcript.push_note(Note::Info(format!(
+                "skills check: {} skill(s), no problems",
+                skills.len()
+            )));
+        } else {
+            self.transcript.push_note(Note::Error(format!(
+                "skills check: {} problem(s) in {} skill(s)\n{}",
+                issues.len(),
+                skills.len(),
+                issues.join("\n")
+            )));
         }
         cx.notify();
     }
@@ -1135,28 +1157,27 @@ fn hotkey_rows() -> Vec<InfoRow> {
     rows
 }
 
+/// 扫描技能（`filter` 为空 = 已启用与已禁用的都在内）。
+fn load_skills(filter: &[String]) -> Vec<Skill> {
+    core::skills::load_skills(
+        &paths::cwd().to_string_lossy(),
+        &settings_manager::agent_dir(),
+        &paths::home_dir(),
+        &[],
+        &skills::bundled_skill_names(),
+        true,
+        true,
+        filter,
+    )
+}
+
 /// 扫描技能并返回快照（`rules` 是未落盘的草稿规则，启用态按它实算）。
 fn skills_snapshot(rules: &[String]) -> SkillsSnapshot {
-    let home_dir = paths::home_dir();
-    let cwd = paths::cwd().to_string_lossy().to_string();
-    let agent_dir = settings_manager::agent_dir();
-    let bundled = skills::bundled_skill_names();
-
-    let load = |filter: &[String]| {
-        core::skills::load_skills(
-            &cwd,
-            &agent_dir,
-            &home_dir,
-            &[],
-            &bundled,
-            true,
-            true,
-            filter,
-        )
-    };
-
-    let all = load(&[]);
-    let enabled: HashSet<String> = load(rules).into_iter().map(|skill| skill.name).collect();
+    let all = load_skills(&[]);
+    let enabled: HashSet<String> = load_skills(rules)
+        .into_iter()
+        .map(|skill| skill.name)
+        .collect();
     let rows = all
         .into_iter()
         .map(|skill| {

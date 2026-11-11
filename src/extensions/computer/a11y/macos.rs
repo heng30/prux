@@ -7,7 +7,7 @@
 //! 需要用户在「系统设置 → 隐私与安全性 → 辅助功能」里给 prux 授权；没有授权时
 //! `AXUIElementCopyAttributeValue` 统一返回 `-25211`（kAXErrorAPIDisabled）。
 
-use super::{A11yNode, A11yOptions, NodeId};
+use super::{A11yNode, A11yOptions, NodeId, Probe};
 use crate::extensions::computer::{backend, state::Rect};
 use std::{
     ffi::{c_char, c_void},
@@ -445,6 +445,30 @@ fn element_for(target: &NodeId) -> Result<Owned, String> {
         ));
     }
     Ok(element)
+}
+
+/// 读一个布尔属性；属性不存在或不是布尔时返回 `None`。
+fn bool_attribute(element: CFRef, name: &str) -> Option<bool> {
+    let value = attribute(element, name)?;
+    unsafe {
+        (CFGetTypeID(value.raw()) == CFBooleanGetTypeID()).then(|| CFBooleanGetValue(value.raw()))
+    }
+}
+
+/// 读一个节点的活状态（身份由 `element_for` 逐层核对）。
+pub async fn probe(target: &NodeId) -> Result<Probe, String> {
+    let element = element_for(target)?;
+    Ok(Probe {
+        role: target.role.clone(),
+        name: target.name.clone(),
+        states: states_of(element.raw()),
+        actions: actions_of(element.raw()),
+        // AX 的动作名只反映元素级动作，不枚举全部能力。
+        actions_complete: false,
+        rect: rect_of(element.raw()),
+        enabled: bool_attribute(element.raw(), "AXEnabled"),
+        hidden: bool_attribute(element.raw(), "AXHidden"),
+    })
 }
 
 /// 执行 AX 动作。
