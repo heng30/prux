@@ -50,8 +50,9 @@
   `prux auth logout <provider>` removes the stored credential. Both exit non-zero with a message when
   the provider is unknown or nothing is stored.
 - **A session whose directory is gone asks what to do instead of failing**: reopening such a session
-  (`/import`, `/resume`) now offers `Continue` (run it in the current directory this once, ask again
-  next time), `Fork` (copy it into the current directory as a new session, original kept) or `Cancel`.
+  (`/import`, `/resume`, the sidebar and the session pickers in both interfaces) now offers
+  `Continue` (run it in the current directory this once, ask again next time), `Fork` (copy it into
+  the current directory as a new session, original kept) or `Cancel`.
 
 ### Changed
 
@@ -188,7 +189,8 @@
 - **Confirming a device-code login cancelled it**: on the login panel an empty input plus Enter meant
   "cancel", so the natural way to say "yes, open the page" threw the login away. Enter now opens the
   verification URL and copies the code to the clipboard (either step failing only prints a hint);
-  cancelling stays on Esc.
+  cancelling stays on Esc. The desktop interface offers the same by click: the code copies itself and
+  the URL opens the browser.
 - **Windows path containment was case-sensitive**: `C:\Repo` and `C:\repo\file` were treated as
   unrelated, so a file inside the project could be reported as outside it. The comparison now folds
   case on Windows only; component-wise matching on other platforms is unchanged.
@@ -228,9 +230,9 @@
   打印授权地址（设备码流程还打印验证码），本机浏览器重定向会被自动接住，粘回回调 URL 或
   `code#state` 同样可用；`--api-key` 改为提示粘贴 key，`--no-browser` 只打印地址不开浏览器。
   `prux auth logout <provider>` 删除已存凭据。provider 未知或没有可删的凭据时以非零退出码报错。
-- **存储目录已消失的会话会先问怎么办**：重新打开这类会话（`/import`、`/resume`）现在给三选——
-  `Continue`（本次用当前目录，下次仍会问）、`Fork`（复制成当前目录下的新会话，原会话保留）、
-  `Cancel`。
+- **存储目录已消失的会话会先问怎么办**：重新打开这类会话（`/import`、`/resume`、两个界面的侧栏与
+  会话选择器）现在给三选——`Continue`（本次用当前目录，下次仍会问）、`Fork`（复制成当前目录下的
+  新会话，原会话保留）、`Cancel`。
 
 ### 变更
 
@@ -328,7 +330,7 @@
   `/session` 会标成 `provider-reported`。
 - **确认设备码登录反而把登录取消了**：登录面板上空输入 + Enter 原本等于「取消」，
   于是想「好，打开页面吧」的那一下把登录丢了。现在 Enter 打开验证地址并把验证码复制到剪贴板
-  （两步失败都只提示），取消仍是 Esc。
+  （两步失败都只提示），取消仍是 Esc。桌面版用点击达成同一件事：点验证码即复制，点地址即开浏览器。
 - **Windows 上路径包含判断区分了大小写**：`C:\Repo` 与 `C:\repo\file` 被当成无关路径，
   项目内的文件可能被判成「目录之外」。现在只在 Windows 上折叠大小写，其它平台仍按组件比较、行为不变。
 

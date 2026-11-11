@@ -804,6 +804,9 @@ message_delta 三处），`compute_cost` 遇到已置真的标记就不再用目
 临时用当前 cwd 恢复、`Fork (new session ID, original kept)` → `AgentCommand::ForkFrom` 复制成
 当前 cwd 下的新会话、`Cancel`。`/resume` 侧用新增的轻量 `session_manager::read_session_cwd`
 （只读首行 header）判断，不做完整加载。
+桌面 GUI 同样覆盖：`/import`、`/resume`、侧栏点会话与 `/session <n>` 都走
+`open_session_with_cwd_check` / `stage_cwd_choice`（Action 为 `ImportCwdContinue` /
+`ImportCwdFork`），措辞与终端界面一致（含各自的目录）。
 **仍缺**：启动参数 `--resume` / `--session` 走的是 `cli/startup.rs`，还没有这一步（pi 覆盖）；
 `/import` 的重复副本问题 prux 本来就用 `uniquify_import_destination` + `copy_no_overwrite` 规避。
 
