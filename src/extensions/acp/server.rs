@@ -25,11 +25,20 @@ use crate::core::{
     settings_manager::agent_dir,
 };
 use serde_json::{Map, Value, json};
-use std::{sync::Arc, sync::atomic::Ordering, time::Duration};
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicU8, Ordering},
+    },
+    time::Duration,
+};
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
     sync::mpsc,
 };
+
+/// 主循环收到的入站消息。
+type Messages = mpsc::UnboundedReceiver<Incoming>;
 
 /// 进程没有会话文件时的协议级会话标识（`--no-session`）。
 const EPHEMERAL_SESSION_ID: &str = "prux-acp";
@@ -43,11 +52,53 @@ const TYPE_SOMETHING: &str = "Type something.";
 /// `initialize` 能力日志的大小上限：超过就在下次写入时整份重写。
 const LOG_MAX_BYTES: u64 = 64 * 1024;
 
-/// 主循环收到的入站消息。
-type Messages = mpsc::UnboundedReceiver<Incoming>;
+/// 关停阶段：0 = 正常，1 = 关停已开始（在途工作不再被打断），2 = 强制退出。
+///
+/// stdin EOF 与 SIGTERM 常常同时到达（Paseo / systemd 就这么干）：每个信号都直接丢下 future
+/// 会让 MCP token 刷新、会话落盘这类收尾被截断。所以首个 EOF / 信号只置位，第二个才立即退。
+static SHUTDOWN: AtomicU8 = AtomicU8::new(0);
+
+/// 把关停推进到「已开始」；返回是否由本次调用推进（`false` 表示早在关停中）。
+fn initiate_shutdown() -> bool {
+    SHUTDOWN
+        .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
+}
+
+/// 监听 SIGTERM / SIGINT：首个信号不打断收尾，第二个才 `exit`。
+fn spawn_signal_watch() {
+    tokio::spawn(async {
+        loop {
+            wait_for_signal().await;
+            if !initiate_shutdown() {
+                std::process::exit(0);
+            }
+        }
+    });
+}
+
+/// 等下一个终止信号（Unix 上含 SIGTERM，各平台都含 Ctrl+C）。
+#[cfg(unix)]
+async fn wait_for_signal() {
+    use tokio::signal::unix::{SignalKind, signal};
+    let mut term = signal(SignalKind::terminate()).expect("install SIGTERM handler");
+    let mut int = signal(SignalKind::interrupt()).expect("install SIGINT handler");
+    tokio::select! {
+        _ = term.recv() => {}
+        _ = int.recv() => {}
+    }
+}
+
+/// 等下一个终止信号（非 Unix：只有 Ctrl+C）。
+#[cfg(not(unix))]
+async fn wait_for_signal() {
+    let _ = tokio::signal::ctrl_c().await;
+}
 
 /// 跑 ACP 服务端，直到 stdin 关闭。返回进程退出码。
 pub(super) async fn run(agent: Agent) -> i32 {
+    spawn_signal_watch();
+
     let mut agent = agent;
     let session_id = agent
         .session
@@ -195,6 +246,8 @@ async fn handle_prompt(
 
     let mut turn = Box::pin(agent.prompt_messages(vec![AgentMessage::user_text(&text)]));
     let mut stop_reason = "end_turn";
+    // stdin 关闭后不再轮询它：本轮还要跑完，读任务已经结束，继续 select 只会空转。
+    let mut messages_closed = false;
     let mut ui_tick = tokio::time::interval(UI_POLL);
     ui_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
@@ -207,9 +260,14 @@ async fn handle_prompt(
                 }
                 break;
             }
-            msg = messages.recv() => {
+            msg = messages.recv(), if !messages_closed => {
                 let Some(msg) = msg else {
-                    // stdin 关闭：客户端进程已走，丢弃本轮 future 后退出（同 TUI 的硬中断路径）。
+                    // stdin 关闭：首次只置位并让本轮跑完（收尾里还有 MCP token 刷新与会话落盘），
+                    // 关停已开始后再次 EOF 才按硬中断丢弃本轮。
+                    messages_closed = true;
+                    if initiate_shutdown() {
+                        continue;
+                    }
                     abort.store(true, Ordering::Relaxed);
                     return;
                 };
@@ -568,6 +626,13 @@ fn tool_kind(tool: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 关停闩锁：首次调用推进状态，之后的 EOF / 信号不再推进（第二个信号才硬退）。
+    #[test]
+    fn shutdown_latch_is_first_wins() {
+        assert!(initiate_shutdown());
+        assert!(!initiate_shutdown());
+    }
 
     #[test]
     fn prompt_text_joins_text_blocks_and_skips_others() {

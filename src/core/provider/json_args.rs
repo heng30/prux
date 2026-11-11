@@ -15,6 +15,12 @@ use serde_json::{Value, json};
 /// 刻意**不含** `u`：`\u` 只有后接 4 位十六进制才算合法，`\usepackage` 之类按字面文本处理。
 const VALID_ESCAPES: [char; 8] = ['"', '\\', '/', 'b', 'f', 'n', 'r', 't'];
 
+/// 流式解析中允许重新解析的最大参数长度。
+///
+/// 超过它的工具参数（大文件 `write` 的内容）不再逐 delta 重解析：每次重解析都是从头的全量扫描，
+/// 累积串越长越吃 CPU 与内存（90 KB 的参数在流式期间能吃掉上百 MB）。
+const STREAMING_ARGS_REPARSE_LIMIT: usize = 64 * 1024;
+
 /// 把字符串里的一个原始控制字符转义成合法 JSON 转义。
 fn escape_control(c: char) -> String {
     match c {
@@ -173,6 +179,19 @@ fn close_incomplete_json(s: &str) -> String {
     out
 }
 
+/// 流式工具调用参数的刷新：参数超过阈值后不再重解析，沿用上一次的结果。
+///
+/// shortcut: 超过 `STREAMING_ARGS_REPARSE_LIMIT` 后流式期间看不到参数继续增长，
+/// 定稿时仍由 [`parse_tool_call_arguments`] 完整解析；若将来要保留逐步展示，需换成增量解析器。
+pub(crate) fn streaming_arguments(partial: &str, previous: &Value) -> Value {
+    if previous.as_object().is_some_and(|o| !o.is_empty())
+        && partial.len() > STREAMING_ARGS_REPARSE_LIMIT
+    {
+        return previous.clone();
+    }
+    parse_streaming_json(partial)
+}
+
 /// 流式（可能不完整）JSON 解析：修复后解析 → 最长可解析前缀 → 补全未闭合结构 → 空对象。
 ///
 /// 任何输入都返回一个 JSON 值（对象），调用方无需处理错误。
@@ -296,5 +315,21 @@ mod tests {
         // 没给参数 → 空对象、无错误
         assert_eq!(parse_tool_call_arguments(None), (json!({}), None));
         assert_eq!(parse_tool_call_arguments(Some("  ")), (json!({}), None));
+    }
+
+    /// 参数超过阈值后不再重解析：沿用上次结果，避免流式期间 O(n²) 的全量扫描。
+    #[test]
+    fn streaming_arguments_stop_reparsing_past_the_limit() {
+        let previous = json!({ "path": "a.rs" });
+        let short = r#"{"path":"a.rs","content":"x"#;
+        assert_eq!(streaming_arguments(short, &previous)["content"], "x");
+
+        let huge = format!(
+            r#"{{"content":"{}"#,
+            "x".repeat(STREAMING_ARGS_REPARSE_LIMIT + 1)
+        );
+        assert_eq!(streaming_arguments(&huge, &previous), previous);
+        // 还没有解析出任何参数时不沿用空对象，免得丢掉首次出现的内容
+        assert_ne!(streaming_arguments(&huge, &json!({})), json!({}));
     }
 }

@@ -125,6 +125,7 @@ tokio = { version = "1.53", default-features = false, features = [
   "sync",
   "time",
   "macros",
+  "signal",
   "io-std",
   "io-util",
   "process",

@@ -51,6 +51,11 @@ const MD_HR: (&str, &str) = ("mdHr", "#808080");
 const MD_LIST_BULLET: (&str, &str) = ("mdListBullet", "#8abeb7");
 /// 公式（行内 `$...$` / 块级 `$$...$$`）渲染结果的前景色：沿用代码块色 `mdCodeBlock`。
 const MD_MATH: (&str, &str) = ("mdCodeBlock", "#b5bd68");
+/// 单条消息渲染出的最大行数。
+///
+/// 深度嵌套引用这类输入会让行数乘法增长（每层折一次行），行数失控后每帧排版与绘制都会卡住。
+/// 超限时截断并附一行提示，而不是把输出全部交给上层。
+const MAX_RENDERED_LINES: usize = 20_000;
 
 /// 渲染结果行：`Wrap` 需词级折行，`Fixed` 已格式化（列表/引用/表格行）不再折行，`Code` 代码行折行时保留行首缩进
 enum OutLine {
@@ -422,6 +427,15 @@ impl MdRenderer<'_> {
                 OutLine::Code(s) => out.extend(wrap_code_spans(s, width)),
                 OutLine::Fixed(s) => out.push(Line::from(s)),
             }
+        }
+
+        if out.len() > MAX_RENDERED_LINES {
+            let dropped = out.len() - MAX_RENDERED_LINES;
+            out.truncate(MAX_RENDERED_LINES);
+            out.push(Line::from(Span::styled(
+                format!("… {dropped} more lines not rendered"),
+                self.style(MD_QUOTE).add_modifier(Modifier::ITALIC),
+            )));
         }
         out
     }
@@ -1409,6 +1423,16 @@ fn is_cjk(c: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 行数爆炸的输入被截断并附提示，延长渲染不能再把排版拖死。
+    #[test]
+    fn oversized_render_is_truncated_with_a_notice() {
+        let text = "- item\n".repeat(MAX_RENDERED_LINES + 10);
+        let lines = render_markdown(&text, 40, &theme());
+        assert_eq!(lines.len(), MAX_RENDERED_LINES + 1);
+        let last = text_of(&lines).pop().unwrap();
+        assert!(last.contains("more lines not rendered"), "{last:?}");
+    }
 
     fn text_of(lines: &[Line<'static>]) -> Vec<String> {
         lines

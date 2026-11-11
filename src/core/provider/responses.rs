@@ -18,7 +18,7 @@ use super::{
         flush_pending_system_messages, instruction_role, sanitize_surrogates,
         supports_mid_convo_system_messages, truncate_for_error,
     },
-    json_args::{parse_streaming_json, parse_tool_call_arguments},
+    json_args::{parse_streaming_json, parse_tool_call_arguments, streaming_arguments},
     retry::{DEFAULT_MAX_RETRIES, send_with_retry},
     track_stream_bytes,
     usage::{apply_service_tier_cost, compute_cost},
@@ -1015,7 +1015,10 @@ fn close_grammar_input(slot: &mut Slot) {
 
 /// 按当前 JSON 缓冲刷新槽内已解析的 arguments。
 fn refresh_grammar_arguments(slot: &mut Slot) {
-    slot.arguments = parse_streaming_json(slot.partial_json.as_deref().unwrap_or("{}"));
+    slot.arguments = streaming_arguments(
+        slot.partial_json.as_deref().unwrap_or("{}"),
+        &slot.arguments,
+    );
 }
 
 /// `response.custom_tool_call_input.delta/done`：把裸源码包装成 JSON 参数并转发增量。
@@ -1139,7 +1142,7 @@ fn handle_tool_call_arguments_delta(
     {
         let d = ev.get("delta").and_then(|v| v.as_str()).unwrap_or("");
         partial.push_str(d);
-        slot.arguments = parse_streaming_json(partial);
+        slot.arguments = streaming_arguments(partial, &slot.arguments);
         if let Some(f) = on_event.as_mut() {
             f.push(RawStreamEvent::ToolCallDelta {
                 content_index: slot.content_index,

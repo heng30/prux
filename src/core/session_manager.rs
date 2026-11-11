@@ -979,8 +979,9 @@ impl Session {
             lane: Some(MAIN_LANE.to_string()),
             entry,
         };
-        self.persist_mutation(&mutation);
-        _ = self.state.apply_mutation(mutation);
+        if self.persist_mutation(&mutation) {
+            _ = self.state.apply_mutation(mutation);
+        }
         self.name = self.state.get_name().map(|s| s.to_string());
         id
     }
@@ -1000,19 +1001,24 @@ impl Session {
             },
         );
         let mutation = SessionMutation::Record { record };
-        self.persist_mutation(&mutation);
-        _ = self.state.apply_mutation(mutation);
+        if self.persist_mutation(&mutation) {
+            _ = self.state.apply_mutation(mutation);
+        }
         id
     }
 
-    /// 持久化一条 mutation；写盘失败不 panic 也不阻塞运行，
-    /// 只把错误记进 `persist_error` 供收尾时经 TUI 提示。
-    fn persist_mutation(&mut self, mutation: &SessionMutation) {
-        if let Err(e) = self.try_persist_mutation(mutation) {
-            // 写盘失败不 panic、不阻塞运行（正在进行的 AI 会话比落盘重要），
-            // 但绝不能静默：记录错误，由 run 收尾处经 TUI error 事件提示用户。
-            // 否则磁盘日志缺行，内存投影与磁盘分叉（open op 残留的另一个来源）。
-            self.persist_error = Some(format!("failed to persist session update: {e}"));
+    /// 持久化一条 mutation；返回是否可以在内存里应用它。
+    ///
+    /// 写盘失败不 panic 也不阻塞运行（正在进行的 AI 会话比落盘重要），但**不**把这条应用到内存：
+    /// 内存里留下磁盘上没有的条目，后续条目就会指向不存在的父节点，恢复会话时整段历史与工具结果都会丢。
+    /// 错误记进 `persist_error`，由 run 收尾处经 TUI error 事件提示用户。
+    fn persist_mutation(&mut self, mutation: &SessionMutation) -> bool {
+        match self.try_persist_mutation(mutation) {
+            Ok(()) => true,
+            Err(e) => {
+                self.persist_error = Some(format!("failed to persist session update: {e}"));
+                false
+            }
         }
     }
 
@@ -1163,8 +1169,9 @@ impl Session {
             return;
         }
 
-        self.persist_mutation(&m);
-        _ = self.state.apply_mutation(m);
+        if self.persist_mutation(&m) {
+            _ = self.state.apply_mutation(m);
+        }
         self.name = self.state.get_name().map(|s| s.to_string());
     }
 
@@ -1446,8 +1453,9 @@ impl Session {
         if let SessionMutation::Lane { seq, .. } = &mut m {
             *seq = self.state.next_sequence();
         }
-        self.persist_mutation(&m);
-        _ = self.state.apply_mutation(m);
+        if self.persist_mutation(&m) {
+            _ = self.state.apply_mutation(m);
+        }
         Ok(())
     }
 
@@ -2231,6 +2239,31 @@ mod tests {
         let text = std::fs::read_to_string(&file).unwrap();
         assert!(text.contains("\"kind\":\"header\""));
         assert!(list_sessions(&dir).contains(&file));
+    }
+
+    /// 写盘失败时不把条目应用进内存。
+    ///
+    /// 否则内存里会留下磁盘上没有的条目，后续条目挂到一个不存在的父节点上，
+    /// 恢复会话时整段历史与工具结果一起丢。
+    #[test]
+    fn failed_persist_keeps_memory_in_step_with_disk() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut session = session_at(tmp.path());
+        session.append_message(&user("one"));
+
+        // 把会话文件换成一个目录：追加写入必失败
+        let bogus = tmp.path().join("bogus");
+        std::fs::create_dir_all(&bogus).unwrap();
+        session.session_file = Some(bogus);
+
+        let before = session.state.entries().len();
+        session.append_message(&user("two"));
+        assert!(session.take_persist_error().is_some(), "写盘失败要报错");
+        assert_eq!(
+            session.state.entries().len(),
+            before,
+            "写盘失败的条目不得进内存"
+        );
     }
 
     /// Windows 上 `canonicalize` 返回 `\\?\...`，`?` 不能进文件名：

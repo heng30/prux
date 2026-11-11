@@ -619,6 +619,12 @@ impl App {
                 self.confirm_submenu();
             }
             self.dirty = true;
+        } else if kb.matches(key, "tui.select.pageUp") {
+            self.settings_selector.move_selection(-10);
+            self.dirty = true;
+        } else if kb.matches(key, "tui.select.pageDown") {
+            self.settings_selector.move_selection(10);
+            self.dirty = true;
         } else if kb.matches(key, "tui.select.up")
             || (key.code == KeyCode::Char('k') && key.modifiers.contains(KeyModifiers::CONTROL))
         {

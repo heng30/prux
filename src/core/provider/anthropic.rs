@@ -18,7 +18,7 @@ use super::{
         flush_pending_system_messages, sanitize_surrogates, supports_mid_convo_system_messages,
         truncate_for_error,
     },
-    json_args::{parse_streaming_json, parse_tool_call_arguments},
+    json_args::{parse_tool_call_arguments, streaming_arguments},
     provider_session_headers,
     retry::{DEFAULT_MAX_RETRIES, send_with_retry},
     session_affinity_headers, track_stream_bytes,
@@ -1290,7 +1290,7 @@ fn handle_anthropic_content_block_delta(
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
             slot.partial_json.push_str(d);
-            slot.arguments = parse_streaming_json(&slot.partial_json);
+            slot.arguments = streaming_arguments(&slot.partial_json, &slot.arguments);
             if let Some(f) = on_event.as_mut() {
                 f.push(RawStreamEvent::ToolCallDelta {
                     content_index: slot.content_index,
