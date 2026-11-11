@@ -24,11 +24,19 @@
 
 `prux` is a minimal terminal coding agent. The core stays small and focused, and its capabilities are extended through extensions, skills, prompt templates, themes, and customizable keybindings. It is a Rust rewrite of [@earendil-works/pi-coding-agent](https://github.com/earendil-works/pi), staying aligned with upstream in behavior and wording for the most part.
 
+<div>
 <p align="center">
   <img src="https://raw.githubusercontent.com/heng30/prux/main/screenshot/image.gif" alt="image demo" width="45%">
   <img width="2%">
   <img src="https://raw.githubusercontent.com/heng30/prux/main/screenshot/code.gif" alt="code demo" width="45%">
 </p>
+
+<div width="16px"></div>
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/heng30/prux/main/screenshot/gui.gif" alt="gui demo" width="100%">
+</p>
+</div>
 
 ## Features
 
