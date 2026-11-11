@@ -1,7 +1,9 @@
 //! 下拉菜单、侧栏会话菜单与拖拽：标题栏/输入区的浮层与宽度调整。
 
 use super::*;
-use crate::{cli::args::thinking_level_text, core, modes::cwd_store, utils::paths};
+use crate::{
+    cli::args::thinking_level_text, core, core::session_manager, modes::cwd_store, utils::paths,
+};
 use std::path::Path;
 
 impl GuiApp {
@@ -563,31 +565,14 @@ impl GuiApp {
                     }
                 };
 
-                let cwd = self.cwd();
                 let cwd_missing = session.cwd.is_empty() || !Path::new(&session.cwd).exists();
-                if cwd_missing || session.cwd != cwd {
+                if cwd_missing || session.cwd != self.cwd() {
                     let recorded = if session.cwd.is_empty() {
                         "<unknown>".to_string()
                     } else {
                         session.cwd.clone()
                     };
-                    self.pending_session = Some(PendingSession::Cwd { destination });
-                    let title = if cwd_missing {
-                        "Session cwd not found"
-                    } else {
-                        "Session cwd mismatch"
-                    };
-                    self.ask_choice(
-                        title,
-                        vec![
-                            (
-                                format!("Yes, resume in {cwd} (recorded: {recorded})"),
-                                Action::ImportCwdContinue,
-                            ),
-                            ("No, cancel".to_string(), Action::SessionCancel),
-                        ],
-                        cx,
-                    );
+                    self.stage_cwd_choice(destination, recorded, cwd_missing, cx);
                 } else {
                     self.resume_session_file(destination);
                     cx.notify();
@@ -602,6 +587,61 @@ impl GuiApp {
                 self.stage_session_repair(path, plan, RepairIntent::Resume, cx);
             }
         }
+    }
+
+    /// 会话记录的 cwd 缺失或与当前不同：弹三选（Continue / Fork / Cancel），与 TUI 同一套措辞。
+    /// `destination`：要打开的会话文件（已复制进当前会话目录）；`recorded`：会话记录的 cwd；
+    /// `cwd_missing`：记录的目录是否已不存在（决定标题文案）。
+    pub(super) fn stage_cwd_choice(
+        &mut self,
+        destination: PathBuf,
+        recorded: String,
+        cwd_missing: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let cwd = self.cwd();
+        let title = if cwd_missing {
+            "Session cwd not found"
+        } else {
+            "Session cwd mismatch"
+        };
+        self.pending_session = Some(PendingSession::Cwd { destination });
+        self.ask_choice(
+            title,
+            vec![
+                (
+                    format!("Continue in {cwd} (asks again next time, recorded: {recorded})"),
+                    Action::ImportCwdContinue,
+                ),
+                (
+                    format!("Fork into {cwd} (new session ID, original kept)"),
+                    Action::ImportCwdFork,
+                ),
+                ("Cancel".to_string(), Action::SessionCancel),
+            ],
+            cx,
+        );
+    }
+
+    /// 侧栏点会话：记录的 cwd 缺失或不同就先问，否则直接切换。
+    /// 与 TUI 的 `/resume` 同一条判断（只读首行 header，不做完整加载）。
+    pub(super) fn open_session_with_cwd_check(&mut self, path: &str, cx: &mut Context<Self>) {
+        let file = PathBuf::from(path);
+        if let Some(session_cwd) = session_manager::read_session_cwd(&file) {
+            let cwd_missing = session_cwd.is_empty() || !Path::new(&session_cwd).exists();
+            if cwd_missing || session_cwd != self.cwd() {
+                let recorded = if session_cwd.is_empty() {
+                    "<unknown>".to_string()
+                } else {
+                    session_cwd
+                };
+                self.stage_cwd_choice(file, recorded, cwd_missing, cx);
+                return;
+            }
+        }
+        _ = self.cmd_tx.send(AgentCommand::ResumeSession {
+            path: path.to_string(),
+        });
     }
 
     /// 弹「未完成 operation」面板：会话里有崩溃残留的未关闭 run 时，

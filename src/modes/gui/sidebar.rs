@@ -21,7 +21,6 @@ use crate::{
         session_manager::{default_session_dir, list_sessions},
         settings_manager::agent_dir,
     },
-    modes::tui::agent_actor::{AgentCommand, CommandTx},
     utils::{display::fit_display, paths::dir_name},
 };
 use gpui::{
@@ -35,6 +34,9 @@ type ClickHandler = Box<dyn Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::
 
 /// 会话行右键回调：参数是会话文件路径。
 type ContextHandler = Rc<dyn Fn(&str, &gpui::MouseDownEvent, &mut gpui::Window, &mut gpui::App)>;
+
+/// 会话行左键回调：参数是会话文件路径（cwd 已消失时改走三选确认）。
+type PathHandler = Rc<dyn Fn(&str, &mut gpui::Window, &mut gpui::App)>;
 
 /// 会话按最近活动时间分的组。
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -155,8 +157,8 @@ pub struct SidebarCtx<'a> {
     pub scroll: &'a ScrollHandle,
     /// 列表滚动条元素
     pub scrollbar: AnyElement,
-    /// 命令下发端（点行切会话用）
-    pub cmd_tx: CommandTx,
+    /// 点会话行：参数是会话文件路径（按 cwd 是否还在决定直接切还是先问）
+    pub open_session: PathHandler,
     /// 点「+ 新会话」
     pub new_session: ClickHandler,
     /// 会话行右键：参数是会话文件路径
@@ -180,7 +182,7 @@ pub fn render(ctx: SidebarCtx<'_>) -> AnyElement {
         focus_search,
         scroll,
         scrollbar,
-        cmd_tx,
+        open_session,
         new_session,
         context_menu,
         change_cwd,
@@ -223,7 +225,7 @@ pub fn render(ctx: SidebarCtx<'_>) -> AnyElement {
                 loading,
                 query,
                 scroll,
-                cmd_tx,
+                open_session,
                 context_menu,
             ))
             .child(scrollbar),
@@ -308,7 +310,7 @@ fn session_list(
     loading: bool,
     query: &str,
     scroll: &ScrollHandle,
-    cmd_tx: CommandTx,
+    open_session: PathHandler,
     context_menu: ContextHandler,
 ) -> AnyElement {
     let mut list = div()
@@ -404,7 +406,7 @@ fn session_list(
                     .child(SharedString::from(format!("· {} messages", row.messages))),
             );
 
-        let tx = cmd_tx.clone();
+        let open = open_session.clone();
         let path = row.path.clone();
         let menu = context_menu.clone();
         let menu_path = row.path.clone();
@@ -415,9 +417,7 @@ fn session_list(
                 .on_mouse_down(MouseButton::Right, move |event, window, cx| {
                     menu(&menu_path, event, window, cx);
                 })
-                .on_click(move |_, _, _| {
-                    _ = tx.send(AgentCommand::ResumeSession { path: path.clone() });
-                }),
+                .on_click(move |_, window, cx| open(&path, window, cx)),
         );
     }
     list.into_any_element()

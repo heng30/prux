@@ -64,7 +64,7 @@ impl GuiApp {
                 match arg.parse::<usize>() {
                     Ok(index) if index >= 1 && index <= paths.len() => {
                         let path = paths[index - 1].to_string_lossy().to_string();
-                        _ = self.cmd_tx.send(AgentCommand::ResumeSession { path });
+                        self.open_session_with_cwd_check(&path, cx);
                     }
                     _ => self.transcript.push_note(Note::Error(format!(
                         "invalid index: {arg} (available 1-{})",
@@ -597,7 +597,7 @@ impl GuiApp {
         match action {
             Action::None => self.act_none(),
             Action::Command(command) => self.act_command(command),
-            Action::LoadSession(path) => self.act_load_session(path),
+            Action::LoadSession(path) => self.act_load_session(path, cx),
             Action::SetDark(is_dark) => self.act_set_dark(is_dark),
             Action::Open(kind) => self.act_open(kind, cx),
             Action::UiChoice { id, text } => self.act_ui_choice(id, text),
@@ -616,6 +616,7 @@ impl GuiApp {
             Action::HistoryClear(all) => self.act_history_clear(all, cx),
             Action::ImportConfirm => self.act_import_confirm(cx),
             Action::ImportCwdContinue => self.act_import_cwd_continue(),
+            Action::ImportCwdFork => self.act_import_cwd_fork(),
             Action::SessionRepair(salvage) => self.act_session_repair(salvage, cx),
             Action::BugReport {
                 hint,
@@ -663,9 +664,9 @@ impl GuiApp {
         _ = self.cmd_tx.send(*command);
     }
 
-    /// `Action::LoadSession`：切到某个会话文件。
-    fn act_load_session(&mut self, path: String) {
-        _ = self.cmd_tx.send(AgentCommand::ResumeSession { path });
+    /// `Action::LoadSession`：切到某个会话文件（cwd 已消失时先问 Continue / Fork / Cancel）。
+    fn act_load_session(&mut self, path: String, cx: &mut Context<Self>) {
+        self.open_session_with_cwd_check(&path, cx);
     }
 
     /// `Action::SetDark`：切明暗主题。
@@ -803,10 +804,21 @@ impl GuiApp {
         }
     }
 
-    /// `Action::ImportCwdContinue`：会话记录的目录与当前不同，仍就在当前目录恢复。
+    /// `Action::ImportCwdContinue`：会话记录的目录与当前不同，仍就在当前目录恢复（下次仍会问）。
     fn act_import_cwd_continue(&mut self) {
         if let Some(PendingSession::Cwd { destination }) = self.pending_session.take() {
             self.resume_session_file(destination);
+        }
+    }
+
+    /// `Action::ImportCwdFork`：把会话复制成当前目录下的新会话，原会话保留。
+    /// 与 TUI 的 `Fork` 选项、启动参数 `-s <别处>` 修好后的去向同一条路（`ForkFrom`）。
+    fn act_import_cwd_fork(&mut self) {
+        if let Some(PendingSession::Cwd { destination }) = self.pending_session.take() {
+            _ = self.cmd_tx.send(AgentCommand::ForkFrom {
+                path: destination.to_string_lossy().to_string(),
+                dir: None,
+            });
         }
     }
 

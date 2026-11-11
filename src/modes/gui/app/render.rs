@@ -15,6 +15,7 @@ use super::{
 use crate::{
     core::extensions::cancel_background_work,
     modes::gui::{oauth::OauthPanel, overlay::open_url},
+    utils::clipboard,
 };
 use gpui::{InteractiveElement, StatefulInteractiveElement};
 use std::rc::Rc;
@@ -1041,7 +1042,6 @@ impl GuiApp {
                 loading: self.sessions_loading,
                 scroll: &self.sessions_scroll,
                 scrollbar: self.scrollbar(ScrollArea::Sidebar, &theme, cx),
-                cmd_tx: self.cmd_tx.clone(),
                 new_session: Box::new(cx.listener(|this, _, _, cx| {
                     _ = this.cmd_tx.send(AgentCommand::NewSession);
                     this.transcript.clear();
@@ -1050,9 +1050,16 @@ impl GuiApp {
                     cx.notify();
                 })),
                 change_cwd: Box::new(cx.listener(|this, _, _, cx| this.open_cwd_menu(cx))),
+                open_session: {
+                    let app = cx.entity();
+                    Rc::new(move |path: &str, _, cx| {
+                        let path = path.to_string();
+                        app.update(cx, |this, cx| this.open_session_with_cwd_check(&path, cx));
+                    })
+                },
                 context_menu: {
                     let app = cx.entity();
-                    std::rc::Rc::new(move |path: &str, event: &gpui::MouseDownEvent, _, cx| {
+                    Rc::new(move |path: &str, event: &gpui::MouseDownEvent, _, cx| {
                         let path = path.to_string();
                         let position = event.position;
                         app.update(cx, |this, cx| this.open_session_menu(&path, position, cx));
@@ -1746,8 +1753,8 @@ impl GuiApp {
     }
 }
 
-/// 登录面板正文：用户码 / 授权地址（点击用浏览器打开，落面板时已自动复制）/ 说明 / 输入行标签。
-/// 与 TUI 的 `LoginOauth` 面板同构。
+/// 登录面板正文：用户码（点击复制）/ 授权地址（点击用浏览器打开，落面板时已自动复制）/
+/// 说明 / 输入行标签。与 TUI 的 `LoginOauth` 面板同构（TUI 那边是空 Enter 开浏览器 + 复制码）。
 fn oauth_panel_body(panel: &OauthPanel, theme: &Theme) -> gpui::Div {
     let mut body = div()
         .flex()
@@ -1757,6 +1764,7 @@ fn oauth_panel_body(panel: &OauthPanel, theme: &Theme) -> gpui::Div {
         .text_color(theme.text_secondary);
 
     if let Some(code) = &panel.code {
+        let copy = code.clone();
         body = body.child(
             div()
                 .flex()
@@ -1768,8 +1776,14 @@ fn oauth_panel_body(panel: &OauthPanel, theme: &Theme) -> gpui::Div {
                 )
                 .child(
                     div()
+                        .id("oauth-code")
                         .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .text_color(theme.text)
+                        .text_color(theme.link)
+                        .cursor_pointer()
+                        .hover(|style| style.underline())
+                        .on_click(move |_, _, _| {
+                            _ = clipboard::write_clipboard(&copy);
+                        })
                         .child(SharedString::from(code.clone())),
                 ),
         );
@@ -1791,7 +1805,9 @@ fn oauth_panel_body(panel: &OauthPanel, theme: &Theme) -> gpui::Div {
                 div()
                     .text_size(px(FONT_CAPTION))
                     .text_color(theme.text_ghost)
-                    .child(SharedString::from("Click to open · copied to clipboard")),
+                    .child(SharedString::from(
+                        "Click the URL to open it (already copied) · click the code to copy it",
+                    )),
             );
     }
 

@@ -64,8 +64,10 @@ pub enum Action {
     HistoryClear(bool),
     /// `/import` 确认：真正开始导入（已校验过文件存在）
     ImportConfirm,
-    /// `/import` 会话记录的 cwd 与当前不一致：继续在当前目录恢复
+    /// `/import` 或 `/resume` 会话记录的 cwd 与当前不一致：继续在当前目录恢复（下次还问）
     ImportCwdContinue,
+    /// `/import` 或 `/resume` 会话记录的 cwd 与当前不一致：复制成当前目录下的新会话（原会话保留）
+    ImportCwdFork,
     /// 会话文件损坏：`true` = 抢救（跳过损坏行），`false` = 截断
     SessionRepair(bool),
     /// 未完成 operation 面板：`rewrite` = 先把旧 run 标记为已结束再打开
