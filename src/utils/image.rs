@@ -11,7 +11,7 @@
 //! 非内联格式（bmp 等）先转 PNG（`converted_from` 记录原 mime）。
 
 use base64::Engine as _;
-use image::{DynamicImage, ImageFormat, imageops::FilterType};
+use image::{DynamicImage, ImageFormat, codecs::jpeg::JpegEncoder, imageops::FilterType};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -174,29 +174,47 @@ fn is_inline(mime: &str) -> bool {
     INLINE_IMAGE_MIMES.contains(&mime)
 }
 
-/// 编码候选：PNG + 多档 JPEG（质量由高到低），返回第一个满足 `max_bytes` 者。
+/// 编码候选：首选 PNG 与「配置质量的 JPEG」中较小者，都不满足 `max_bytes` 时再逐档降质。
+///
+/// 大照片用 PNG 会白传几倍体积，所以不能固定 PNG 优先。
 fn encode_within_limit(img: &DynamicImage, limits: ImageResizeLimits) -> Option<(Vec<u8>, String)> {
-    let mut candidates: Vec<(Vec<u8>, &'static str)> = Vec::new();
-
-    let mut png = Vec::new();
+    let mut png: Option<Vec<u8>> = None;
+    let mut buf = Vec::new();
     if img
-        .write_to(&mut std::io::Cursor::new(&mut png), ImageFormat::Png)
+        .write_to(&mut std::io::Cursor::new(&mut buf), ImageFormat::Png)
         .is_ok()
     {
-        candidates.push((png, "image/png"));
+        png = Some(buf);
     }
 
     // JPEG 不支持 alpha：先转 RGB8
     let rgb = img.to_rgb8();
     let mut qualities: Vec<u8> = vec![limits.jpeg_quality, 85, 70, 55, 40];
     qualities.dedup();
+    let mut jpegs: Vec<Vec<u8>> = Vec::new();
     for quality in qualities {
         let mut jpeg = Vec::new();
-        let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, quality);
+        let encoder = JpegEncoder::new_with_quality(&mut jpeg, quality);
         if rgb.write_with_encoder(encoder).is_ok() {
-            candidates.push((jpeg, "image/jpeg"));
+            jpegs.push(jpeg);
         }
     }
+
+    let mut candidates: Vec<(Vec<u8>, &'static str)> = Vec::new();
+    let mut jpegs = jpegs.into_iter();
+    match (png, jpegs.next()) {
+        (Some(png), Some(jpeg)) if jpeg.len() < png.len() => {
+            candidates.push((jpeg, "image/jpeg"));
+            candidates.push((png, "image/png"));
+        }
+        (Some(png), jpeg) => {
+            candidates.push((png, "image/png"));
+            candidates.extend(jpeg.map(|b| (b, "image/jpeg")));
+        }
+        (None, Some(jpeg)) => candidates.push((jpeg, "image/jpeg")),
+        (None, None) => {}
+    }
+    candidates.extend(jpegs.map(|b| (b, "image/jpeg")));
 
     candidates
         .into_iter()
@@ -456,6 +474,21 @@ mod tests {
             note.unwrap()
                 .contains("original 4000x100, displayed at 2000x50")
         );
+    }
+
+    #[test]
+    fn prefers_the_smaller_of_png_and_jpeg() {
+        // 噪声照片：JPEG 明显比 PNG 小，缩放后应选 JPEG（pi #11551）
+        let bytes = noisy_png_bytes(400, 400);
+        let limits = ImageResizeLimits {
+            max_width: 100,
+            max_height: 100,
+            ..Default::default()
+        };
+        let out = prepare_image(&bytes, "image/png", limits, true).unwrap();
+        assert!(out.was_resized);
+        assert_eq!(out.mime_type, "image/jpeg");
+        assert_eq!(out.converted_from.as_deref(), Some("image/png"));
     }
 
     #[test]

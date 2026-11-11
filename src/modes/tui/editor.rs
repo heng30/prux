@@ -186,7 +186,69 @@ impl Editor {
             self.mark();
         }
         self.last_was_type = true;
+        // 光标落在 marker 内部时先退到其起始（不切碎 marker）
+        self.snap_cursor_out_of_marker(false);
         self.insert_char_inline(c);
+    }
+
+    /// 光标右侧紧邻的 paste marker 是否恰好从光标处开始：返回其结束 char 索引。
+    fn marker_starting_at_cursor(&self) -> Option<usize> {
+        let line = self.lines.get(self.cursor_line)?;
+        for m in paste_marker_re().find_iter(line) {
+            let start = line[..m.start()].chars().count();
+            let end = line[..m.end()].chars().count();
+            if start == self.cursor_col {
+                return Some(end);
+            }
+        }
+        None
+    }
+
+    /// 把落在 marker 内部的光标挪到 `forward` 方向的边界（marker 外部不动）。
+    fn snap_cursor_out_of_marker(&mut self, forward: bool) {
+        let Some(line) = self.lines.get(self.cursor_line) else {
+            return;
+        };
+        for m in paste_marker_re().find_iter(line) {
+            let start = line[..m.start()].chars().count();
+            let end = line[..m.end()].chars().count();
+            if self.cursor_col > start && self.cursor_col < end {
+                self.cursor_col = if forward { end } else { start };
+                return;
+            }
+        }
+    }
+
+    /// 把删除区间 `[start, end)` 外扩到完整的 paste marker，返回 `(start, end, 是否外扩)`。
+    /// 部分删除会让正则失配、存储被丢，提交时把残骸当正文发出。
+    fn expand_over_markers(&self, start: usize, end: usize) -> (usize, usize, bool) {
+        let Some(line) = self.lines.get(self.cursor_line) else {
+            return (start, end, false);
+        };
+        let (mut s, mut e, mut touched) = (start, end, false);
+        for m in paste_marker_re().find_iter(line) {
+            let ms = line[..m.start()].chars().count();
+            let me = line[..m.end()].chars().count();
+            if ms < e && s < me {
+                s = s.min(ms);
+                e = e.max(me);
+                touched = true;
+            }
+        }
+        (s, e, touched)
+    }
+
+    /// 删除当前行 `[start, end)` 区间（已保证不切碎 marker），并在碰到 marker 时重排存储。
+    fn remove_char_range(&mut self, start: usize, end: usize) {
+        let (start, end, touched) = self.expand_over_markers(start, end);
+        let chars: Vec<char> = self.lines[self.cursor_line].chars().collect();
+        let mut out: Vec<char> = chars[..start].to_vec();
+        out.extend(chars[end..].iter());
+        self.lines[self.cursor_line] = out.into_iter().collect();
+        self.cursor_col = start;
+        if touched {
+            self.renumber_paste_markers();
+        }
     }
 
     /// 无 undo 记录的字符插入（供 insert_text/paste_text 批量调用，避免长文本撑爆 undo 栈）
@@ -221,6 +283,7 @@ impl Editor {
 
     /// 逐字符插入文本但不写撤销栈：`\n` 拆行、`\r` 忽略，供批量插入复用。
     fn insert_raw(&mut self, text: &str) {
+        self.snap_cursor_out_of_marker(false);
         for c in text.chars() {
             if c == '\n' {
                 self.split_line();
@@ -258,6 +321,7 @@ impl Editor {
         self.mark();
 
         if line_count > PASTE_MAX_LINES || char_count > PASTE_MAX_CHARS {
+            self.snap_cursor_out_of_marker(false);
             self.pastes.push(filtered);
             let id = self.pastes.len();
             let marker = if line_count > PASTE_MAX_LINES {
@@ -277,6 +341,8 @@ impl Editor {
     pub fn newline(&mut self) {
         self.content_changed();
         self.mark();
+        // 光标在 marker 内部时先退到起始：marker 不能跨行（正则按行匹配）
+        self.snap_cursor_out_of_marker(false);
         self.split_line();
     }
 
@@ -376,15 +442,21 @@ impl Editor {
         }
     }
 
-    /// 删除光标处的字符；光标已在行尾时把下一行并入当前行。写撤销栈。
+    /// 删除光标处的字符；命中 paste marker 时整段删除（marker 是原子单元，不切碎）；
+    /// 光标已在行尾时把下一行并入当前行。写撤销栈。
     pub fn delete(&mut self) {
         self.last_was_type = false;
         self.content_changed();
         self.mark();
-        let mut chars: Vec<char> = self.lines[self.cursor_line].chars().collect();
-        if self.cursor_col < chars.len() {
-            chars.remove(self.cursor_col);
-            self.lines[self.cursor_line] = chars.into_iter().collect();
+        // 光标落在 marker 内部：先挪到其末尾（等价「上一个原子单元」）
+        self.snap_cursor_out_of_marker(true);
+        let line_len = self.line_char_len();
+        if self.cursor_col < line_len {
+            // 光标正好在 marker 开头 → 整段删除，避免留下半截 marker
+            let end = self
+                .marker_starting_at_cursor()
+                .unwrap_or(self.cursor_col + 1);
+            self.remove_char_range(self.cursor_col, end);
         } else if self.cursor_line + 1 < self.lines.len() {
             let next = self.lines.remove(self.cursor_line + 1);
             self.lines[self.cursor_line].push_str(&next);
@@ -488,10 +560,7 @@ impl Editor {
         self.mark();
         let chars: Vec<char> = self.lines[self.cursor_line].chars().collect();
         let removed: String = chars[word_start..before].iter().collect();
-        let mut out: Vec<char> = chars[..word_start].to_vec();
-        out.extend(chars[before..].iter());
-        self.lines[self.cursor_line] = out.into_iter().collect();
-        self.cursor_col = word_start;
+        self.remove_char_range(word_start, before);
         removed
     }
 
@@ -513,9 +582,7 @@ impl Editor {
         self.content_changed();
         self.mark();
         let removed: String = chars[start..i].iter().collect();
-        let mut out: Vec<char> = chars[..start].to_vec();
-        out.extend(chars[i..].iter());
-        self.lines[self.cursor_line] = out.into_iter().collect();
+        self.remove_char_range(start, i);
         removed
     }
 
@@ -529,9 +596,7 @@ impl Editor {
         self.mark();
         let chars: Vec<char> = self.lines[self.cursor_line].chars().collect();
         let removed: String = chars[..col].iter().collect();
-        let rest: String = chars[col..].iter().collect();
-        self.lines[self.cursor_line] = rest;
-        self.cursor_col = 0;
+        self.remove_char_range(0, col);
         removed
     }
 
@@ -545,8 +610,7 @@ impl Editor {
         self.content_changed();
         self.mark();
         let removed: String = chars[col..].iter().collect();
-        let head: String = chars[..col].iter().collect();
-        self.lines[self.cursor_line] = head;
+        self.remove_char_range(col, chars.len());
         removed
     }
 
@@ -1456,6 +1520,59 @@ mod tests {
         assert_eq!(exp.first().map(|s| s.as_str()), Some("c0"), "第一个仍为 C");
         assert_eq!(exp.last().map(|s| s.as_str()), Some("b11"), "第二个仍为 B");
         assert!(!exp.contains(&"a0".to_string()), "A 已移除");
+    }
+
+    /// paste marker 是原子单元：Delete / 删词 / 打字都不能把它切成半截（切碎后正则失配、
+    /// 存储被 renumber 丢掉，提交时会把残骸当正文发出，pi #11923）。
+    #[test]
+    fn paste_marker_survives_edits_atomically() {
+        let big: Vec<String> = (0..12).map(|i| format!("l{}", i)).collect();
+        let body = big.join("\n");
+
+        // Delete 停在 marker 开头 → 整段删除（不是删掉第一个 '['）
+        let mut e = Editor::new();
+        e.paste_text(&body);
+        e.home();
+        e.delete();
+        assert!(e.lines[0].is_empty(), "marker 应整段删除: {:?}", e.lines);
+        assert!(!e.expanded_text().contains("[paste"));
+
+        // 在 marker 中间打字 → 光标退到 marker 起始，marker 保持完整
+        let mut e = Editor::new();
+        e.paste_text(&body);
+        e.cursor_col = 4;
+        e.insert_char('x');
+        assert_eq!(e.lines[0], "x[paste #1 +12 lines]");
+        assert_eq!(e.expanded_text().lines().count(), 12, "存储仍能展开");
+
+        // 删词跨过 marker → 整段 marker 一并删除，存储不再残留
+        let mut e = Editor::new();
+        e.insert_text("head ");
+        e.paste_text(&body);
+        e.delete_word_backward();
+        assert_eq!(e.lines[0], "head ", "词删除吃掉整个 marker，只留词首空白");
+        assert_eq!(e.expanded_text(), "head ", "存储已同步清理");
+
+        // 在 marker 中间换行 → 光标退到 marker 起始，marker 不跨行
+        let mut e = Editor::new();
+        e.paste_text(&body);
+        e.cursor_col = 4;
+        e.newline();
+        assert_eq!(e.lines, vec!["", "[paste #1 +12 lines]"]);
+        assert_eq!(e.expanded_text().lines().count(), 13);
+
+        // 删到行尾跨过 marker → 同样整段删除
+        let mut e = Editor::new();
+        e.insert_text("head");
+        e.paste_text(&body);
+        e.cursor_col = 0;
+        e.kill_line_end();
+        assert!(
+            e.lines[0].is_empty(),
+            "kill_line_end 应吃掉整个 marker: {:?}",
+            e.lines
+        );
+        assert_eq!(e.expanded_text(), "");
     }
 
     #[test]

@@ -460,7 +460,7 @@ impl MdRenderer<'_> {
             let lines: Vec<OutLine> = match ev {
                 Event::Start(Tag::Heading { level, .. }) => self.render_heading(src, *level),
                 Event::Start(Tag::Paragraph) => {
-                    let spans = self.collect_inline(src, base);
+                    let spans = self.collect_inline(src, base, width);
                     vec![OutLine::Wrap(spans)]
                 }
                 Event::Start(Tag::CodeBlock(kind)) => {
@@ -542,7 +542,7 @@ impl MdRenderer<'_> {
         } else {
             line.push(Span::raw(prefix));
         }
-        line.extend(self.collect_inline(src, style));
+        line.extend(self.collect_inline(src, style, usize::MAX));
         vec![OutLine::Wrap(line)]
     }
 
@@ -669,7 +669,12 @@ impl MdRenderer<'_> {
     }
 
     /// 收集行内事件直到 `end` 事件。style 为当前累积样式。
-    fn collect_inline<'a>(&self, src: &mut dyn EventSource<'a>, style: Style) -> Spans {
+    fn collect_inline<'a>(
+        &self,
+        src: &mut dyn EventSource<'a>,
+        style: Style,
+        width: usize,
+    ) -> Spans {
         let mut out: Spans = Vec::new();
         let mut pending = String::new();
         let flush = |pending: &mut String, out: &mut Spans| {
@@ -680,8 +685,7 @@ impl MdRenderer<'_> {
         while let Some(ev) = src.next_event() {
             match ev {
                 Event::Text(t) => pending.push_str(t),
-                // 对齐 pi-tui：段落内软换行保留为 \n（applyTextWithNewlines），
-                // 不做 markdown 默认的「单换行→空格」折叠
+                // 段落内软换行保留为 \n（applyTextWithNewlines），不做 markdown 默认的「单换行→空格」折叠
                 Event::SoftBreak => pending.push('\n'),
                 Event::HardBreak => {
                     flush(&mut pending, &mut out);
@@ -693,22 +697,24 @@ impl MdRenderer<'_> {
                 }
                 Event::Start(Tag::Emphasis) => {
                     flush(&mut pending, &mut out);
-                    let inner = self.collect_inline(src, style.add_modifier(Modifier::ITALIC));
+                    let inner =
+                        self.collect_inline(src, style.add_modifier(Modifier::ITALIC), width);
                     out.extend(inner);
                 }
                 Event::Start(Tag::Strong) => {
                     flush(&mut pending, &mut out);
-                    let inner = self.collect_inline(src, style.add_modifier(Modifier::BOLD));
+                    let inner = self.collect_inline(src, style.add_modifier(Modifier::BOLD), width);
                     out.extend(inner);
                 }
                 Event::Start(Tag::Strikethrough) => {
                     flush(&mut pending, &mut out);
-                    let inner = self.collect_inline(src, style.add_modifier(Modifier::CROSSED_OUT));
+                    let inner =
+                        self.collect_inline(src, style.add_modifier(Modifier::CROSSED_OUT), width);
                     out.extend(inner);
                 }
                 Event::Start(Tag::Link { dest_url, .. }) => {
                     flush(&mut pending, &mut out);
-                    let inner = self.collect_inline(src, style);
+                    let inner = self.collect_inline(src, style, width);
                     let text: String = inner.iter().map(|s| s.content.as_ref()).collect();
                     let href = dest_url.to_string();
                     out.extend(self.render_link_spans(text, &href));
@@ -724,7 +730,7 @@ impl MdRenderer<'_> {
                 }
                 Event::DisplayMath(t) => {
                     flush(&mut pending, &mut out);
-                    out.push(self.render_display_math(t));
+                    out.push(self.render_display_math(t, width));
                 }
                 Event::End(_) => {
                     flush(&mut pending, &mut out);
@@ -768,13 +774,19 @@ impl MdRenderer<'_> {
         }
     }
 
-    /// 渲染 display math `$$...$$`（mdCodeBlock），不支持/语法错误回退原文。
-    fn render_display_math(&self, src: &str) -> Span<'static> {
+    /// 渲染 display math `$$...$$`（mdCodeBlock）。
+    ///
+    /// 2D 布局无法逐行折行：渲染结果任一行超过 `width` 就回退原始 LaTeX；
+    /// `width` 为 `usize::MAX` 表示不检查
+    /// （标题/表格单元格这类拿不到可用宽度的位置）。语法不支持时同样回退原文。
+    fn render_display_math(&self, src: &str, width: usize) -> Span<'static> {
         let src = src.trim().to_string();
-        match latex::render_latex(&src, true) {
-            Some(s) => Span::styled(s, self.style(MD_MATH)),
-            None => Span::styled(format!("$${}$$", src), self.style(MD_MATH)),
+        if let Some(s) = latex::render_latex(&src, true)
+            && s.lines().all(|line| display_width(line) <= width)
+        {
+            return Span::styled(s, self.style(MD_MATH));
         }
+        Span::styled(format!("$${}$$", src), self.style(MD_MATH))
     }
 
     /// 递归渲染列表（Start(List) 已被消费）。
@@ -952,7 +964,7 @@ impl MdRenderer<'_> {
             let block_lines = if saw_block {
                 self.render_blocks(&mut seg_source, width, depth, base)
             } else {
-                let spans = self.collect_inline(&mut seg_source, base);
+                let spans = self.collect_inline(&mut seg_source, base, width);
                 if spans.is_empty() {
                     continue;
                 }
@@ -987,7 +999,7 @@ impl MdRenderer<'_> {
                 // 单元格走 collect_inline：保留 code span / strong / em / link 等行内样式，
                 // 并消费 End(TableCell)（collect_inline 遇 End 即返回）
                 Event::Start(Tag::TableCell) => {
-                    let cell = self.collect_inline(src, base);
+                    let cell = self.collect_inline(src, base, usize::MAX);
                     if let Some(row) = cur_row.as_mut() {
                         row.push(cell);
                     }
@@ -1635,6 +1647,24 @@ mod tests {
         let joined = t.join("\n");
         assert!(joined.contains('∑'), "求和符号: {:?}", t);
         assert!(joined.contains('─'), "display 分式线应堆叠: {:?}", t);
+    }
+
+    /// 宽到放不下的 display 公式回退原始 LaTeX，而不是把分式逐字符拆散（pi #11483）。
+    #[test]
+    fn oversized_display_math_falls_back_to_latex() {
+        let input = "$$\n\\frac{a+b+c+d+e+f+g+h+i+j}{x+y+z+w+v+u+t+s+r+q}\n$$";
+        let lines = render_markdown(input, 12, &theme());
+        let t = text_of(&lines);
+        assert!(
+            t.iter().any(|l| l.contains("\\frac")),
+            "超宽公式应回退原文: {:?}",
+            t
+        );
+        assert!(
+            !t.iter().any(|l| l.contains('─')),
+            "不应再输出 2D 布局: {:?}",
+            t
+        );
     }
 
     #[test]

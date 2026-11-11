@@ -152,6 +152,26 @@
   `tool_execution_end` event carried the result text alone, so an image that had just been read
   stayed invisible until the transcript was rebuilt from history. The event now carries the
   attachments as image blocks, in the same shape and order as the `toolResult` message.
+- **F1–F12 typed invisible characters into the editor**: under the kitty keyboard protocol
+  (kitty, ghostty, foot, wezterm) these keys arrive as private-use codepoints, and only F13+ and the
+  lock keys were translated — F1–F12 fell through to a plain character, so a keypress left an
+  invisible glyph in the input box. F1–F12 are now turned back into the real function key, and any
+  other private-use codepoint is dropped instead of being inserted.
+- **A resized photo was sent as PNG even when JPEG was several times smaller**: the encoder took the
+  first candidate under the byte limit and PNG always came first, so a large photo paid for a
+  lossless encoding nobody asked for. PNG and the JPEG at the configured quality are now compared
+  and the smaller one wins; lower JPEG quality is used only when neither fits.
+- **A display formula wider than the terminal was broken up character by character**: a fraction or
+  a sum is a 2D layout and cannot be wrapped row by row, so splitting it destroyed the meaning. A
+  formula whose rendered output does not fit the available width now falls back to its LaTeX source.
+- **Editing around a collapsed paste could leave the marker half-deleted**: only Backspace treated
+  `[paste #N …]` as one unit, so Delete, word deletes, kill-to-line-end and typing inside the marker
+  could split it — the marker stopped matching, its stored text was dropped, and the leftover
+  fragment was sent as the prompt. Paste markers are now atomic for every edit.
+- **A directory name could inject escape sequences into the terminal title**: the window title is
+  built from the current directory's name and written as an OSC sequence, with nothing stripped, so a
+  folder named with an embedded escape byte could reach the terminal. Control characters are removed
+  before the title is written.
 
 ## 中文
 
@@ -263,4 +283,17 @@
   与会话落盘可能一起丢。现在首个 EOF/信号让当前回合跑完，第二个信号才立即退出。
 - **GUI 里刚 read 进来的图片要切会话才出现**：实时 `tool_execution_end` 事件只带结果文本，
   刚读到的图片要等对话流按历史重建才看得见。现在事件按 `toolResult` 消息同形同序带上图片块。
+- **F1–F12 会往编辑器里灌不可见字符**：kitty 键盘协议下（kitty、ghostty、foot、wezterm）
+  这些键以私用区码点上报，而只有 F13+ 与几个 lock 键被翻译，F1–F12 落到普通字符兜底，
+  按一下就在输入框留下看不见的字符。现在 F1–F12 还原成真正的功能键，其余私用区码点直接丢弃。
+- **缩放后的照片明明 JPEG 小几倍却仍然发 PNG**：编码器取第一个满足字节上限的候选，而 PNG 永远排第一，
+  于是大照片白白走了没人要求的无损编码。现在先比较 PNG 与「配置质量的 JPEG」取较小者，
+  两者都放不下才逐档降低 JPEG 质量。
+- **超宽的 display 公式被逐字符拆开**：分式、求和是 2D 布局，无法逐行折行，拆开就没了含义。
+  渲染结果放不进可用宽度的公式现在回退到 LaTeX 原文。
+- **在折叠粘贴附近编辑会把 marker 删成半截**：原先只有 Backspace 把 `[paste #N …]` 当一个整体，
+  Delete、删词、删到行尾、以及在 marker 中间打字都会把它切开；切开后正则失配、存储被丢，
+  残骸会被当成正文发出去。现在所有编辑操作都把 paste marker 当原子单元。
+- **目录名能往终端标题里注入转义序列**：窗口标题由当前目录名拼成、以 OSC 序列写出，没有任何过滤，
+  名字里夹 ESC 就能把控制序列送进终端。现在写标题前先剥掉控制字符。
 

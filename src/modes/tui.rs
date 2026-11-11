@@ -523,15 +523,19 @@ fn drain_next_batch(st: &mut App) -> Option<Vec<AgentMessage>> {
     None
 }
 
-/// 进入备用屏幕 + raw mode + 键盘增强协议（kitty protocol）。
-/// REPORT_ALL_KEYS_AS_ESCAPE_CODES 让所有按键以 CSI u 上报完整修饰符（否则 Ctrl+Shift+C
-/// 会被终端降级为 \x03，与普通 Ctrl+C 无法区分），终端不支持时静默降级（忽略错误）。
+/// 把终端标题更新为「APP_NAME - 当前目录名」。
+/// 目录名里的 C0/C1 先剥掉：OSC 序列以 BEL 结束，名字里夹 ESC 就能往终端注入转义序列。
 fn update_terminal_title(shared: &Rc<RefCell<App>>) {
     let basename = {
         let st = shared.borrow();
         Path::new(&st.cwd)
             .file_name()
-            .map(|s| s.to_string_lossy().to_string())
+            .map(|s| {
+                s.to_string_lossy()
+                    .chars()
+                    .filter(|c| !c.is_control())
+                    .collect::<String>()
+            })
             .unwrap_or_default()
     };
 

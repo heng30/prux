@@ -209,6 +209,13 @@ pub fn handle_event(shared: &Rc<RefCell<App>>, event: Event) -> KeyAction {
         return KeyAction::Continue;
     }
 
+    // kitty 键盘协议把功能键/媒体键以私用区码点（U+E000..U+F8FF）经 CSI-u 上报，
+    // crossterm 只映射了 F13+ 与部分 lock 键；未映射的（含 F1–F12 的 U+E014..U+E01F）
+    // 会落到 `Char` 兜底，直接进编辑器就是看不见的乱码。
+    let Some(key) = normalize_kitty_key(key) else {
+        return KeyAction::Continue;
+    };
+
     let mut st = shared.borrow_mut();
 
     // 扩展覆盖层（FleetView / 会话查看器）：存在时接管键盘
@@ -270,6 +277,24 @@ pub fn handle_event(shared: &Rc<RefCell<App>>, event: Event) -> KeyAction {
             KeyAction::Continue
         }
         EditorAction::Continue => KeyAction::Continue,
+    }
+}
+
+/// 归一 kitty 协议上报的私用区（PUA）码点：F1–F12 还原成 `F(n)`，其余 PUA 字符
+/// 不是文本，直接丢弃（返回 `None`）。非 PUA 按键原样返回。
+fn normalize_kitty_key(key: KeyEvent) -> Option<KeyEvent> {
+    let KeyCode::Char(c) = key.code else {
+        return Some(key);
+    };
+    match c as u32 {
+        // kitty 的功能键私用区起点：U+E014 起依次对应 F1..F12
+        0xE014..=0xE01F => Some(KeyEvent {
+            code: KeyCode::F((c as u32 - 0xE014 + 1) as u8),
+            ..key
+        }),
+        // F13+ 的未映射码点、媒体键、修饰键：丢弃，避免落进编辑器
+        0xE000..=0xF8FF => None,
+        _ => Some(key),
     }
 }
 
@@ -979,6 +1004,34 @@ mod tests {
     /// 替代全局锁 + 进程级 env 劫持（并行互不干扰、无死锁）。
     fn test_agent_dir() -> crate::test_support::AgentDirGuard {
         crate::test_support::AgentDirGuard::temp()
+    }
+
+    /// kitty 协议把 F1–F12 编成私用区码点（U+E014..U+E01F），其余 PUA 码点不是文本：
+    /// 前者还原成 `F(n)`，后者丢弃，绝不能落进编辑器（pi #11345/#11419）。
+    #[test]
+    fn kitty_pua_codepoints_are_mapped_or_dropped() {
+        let f1 = normalize_kitty_key(KeyEvent::new(
+            KeyCode::Char('\u{e014}'),
+            KeyModifiers::CONTROL,
+        ))
+        .expect("F1 应被映射");
+        assert_eq!(f1.code, KeyCode::F(1));
+        assert_eq!(f1.modifiers, KeyModifiers::CONTROL);
+
+        let f12 = normalize_kitty_key(KeyEvent::new(KeyCode::Char('\u{e01f}'), KeyModifiers::NONE))
+            .expect("F12 应被映射");
+        assert_eq!(f12.code, KeyCode::F(12));
+
+        // 未映射的 PUA（媒体键 / F13+ 码点）：丢弃
+        assert!(
+            normalize_kitty_key(KeyEvent::new(KeyCode::Char('\u{e040}'), KeyModifiers::NONE))
+                .is_none()
+        );
+
+        // 普通字符不受影响
+        let a = normalize_kitty_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE))
+            .expect("普通字符应原样返回");
+        assert_eq!(a.code, KeyCode::Char('a'));
     }
 
     /// 回归：Tab 补全（命令候选与路径补全）修改编辑器后必须置脏，否则主循环
