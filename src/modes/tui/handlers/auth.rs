@@ -756,7 +756,7 @@ mod tests {
             "provider 面板应保持打开（修复 close 覆盖 bug）"
         );
         assert_eq!(st.panel.top().unwrap().kind, PanelKind::LoginProvider);
-        assert_eq!(st.panel.top().unwrap().items.len(), 35);
+        assert_eq!(st.panel.top().unwrap().items.len(), 36);
     }
 
     #[test]

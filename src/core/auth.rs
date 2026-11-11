@@ -348,7 +348,7 @@ pub fn api_key_env_var(provider: &str) -> Option<&'static str> {
         "openai" => "OPENAI_API_KEY",
         "openrouter" => "OPENROUTER_API_KEY",
         "qwen-token-plan" | "qwen-token-plan-individual" => "QWEN_TOKEN_PLAN_API_KEY",
-        "qwen-token-plan-cn" => "QWEN_TOKEN_PLAN_CN_API_KEY",
+        "qwen-token-plan-cn" | "qwen-token-plan-individual-cn" => "QWEN_TOKEN_PLAN_CN_API_KEY",
         "together" => "TOGETHER_API_KEY",
         "typesafe" => "TYPESAFE_API_KEY",
         "vercel-ai-gateway" => "AI_GATEWAY_API_KEY",

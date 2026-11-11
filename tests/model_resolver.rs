@@ -32,6 +32,16 @@ const STORE: &str = r#"{
         "contextWindow": 128000
       }
     ]
+  },
+  "llama/local": {
+    "models": [
+      {
+        "id": "qwen3",
+        "name": "Qwen3",
+        "api": "openai-completions",
+        "baseUrl": "http://127.0.0.1:8080/v1"
+      }
+    ]
   }
 }"#;
 
@@ -110,6 +120,11 @@ fn model_resolver_full_flow() {
     assert_eq!(
         parse_model_arg("llama3.1:8b"),
         (None, "llama3.1:8b".into(), None)
+    );
+    // provider id 自带 `/`（本地 llama.cpp 从 URL 派生）：按最长已知前缀切
+    assert_eq!(
+        parse_model_arg("llama/local/qwen3"),
+        (Some("llama/local".into()), "qwen3".into(), None)
     );
 }
 

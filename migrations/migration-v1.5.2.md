@@ -13,7 +13,22 @@
 **状态标记**：🔧 应修/应移植　⚠️ 需对照 pi 逐项核对（口径可能已偏差或需实测）　✅ 已满足/无此问题（附理由）
 ❌ 结构性不适用（prux 无对应实现）　🆕 本区间新增的候选移植项
 
-**实施状态（21 条 🔧 已全部落地，⚠️ 21 条待核对，🆕 14 条未开工）**：
+**实施状态（第一轮 21 条 🔧、第二轮数据面与 6 条 ⚠️ 已落地；其余 ⚠️ 待核对、🆕 14 条未开工）**：
+
+**第二轮（⚠️ 中已确认缺的 + 数据面）**：
+
+- **数据面**：`default_model_id` 13 项已跟到 1.5.2；新增 `qwen-token-plan-individual-cn`
+  （`SUPPORTED_PROVIDERS` / `login_registry` / `auth.rs` 的 `QWEN_TOKEN_PLAN_CN_API_KEY`），
+  模型数据由 `scripts/sync-models.py` 的派生规则生成（`DERIVED_PROVIDERS`：中国目录 ∩
+  Individual 白名单），不是手写 JSON。
+- **1.15** 只做了闸门（超 64 KB 不再重解析中间增量），增量解析器未移植；
+- **1.26 / 1.29 / 1.31 / 1.38 / 1.42** 已修；
+- **1.25** 判定不改：prux 的 `simple_completion` 不发 effort 字段，不会撞 pi 那个 400；
+- **1.28** 复核已满足：busy/steer 的消息经 `expand_at_image_refs` 缩放后才入队；
+- **1.34** 未做（需要性能基线，块级缓存失效条件易出错）；
+- 1.16–1.20、1.32–1.34、1.36–1.39、1.41 仍为「需实测」。
+
+**第一轮（21 条 🔧）**：
 
 | 提交 | 内容 |
 |---|---|
@@ -22,6 +37,7 @@
 | `e9d9e04` | 1.1 / 1.2 / 1.3 / 1.4 / 1.5 / 1.6（grep / find / read / bash） |
 | `1238c60` | 1.27 / 1.30 / 1.35 / 1.40（导出、Markdown、终端识别、MCP OAuth） |
 
+上表的哈希在本仓 `git log` 里查不到（当初只记了分组，没记真实提交）；判断落地情况以代码为准。
 各条的现状描述保留为「实施前」的记录；复核对齐时看「建议」是否已按其口径落地。
 
 ---
@@ -237,6 +253,9 @@ pi 现在是 **`2.1.322`**（`packages/ai/src/api/anthropic-messages.ts:109`）�
 
 #### 1.15 ⚠️ 流式工具参数每个 delta 全量重解析（O(n²)）
 
+> **第二轮**：只落地了闸门（`json_args::streaming_arguments`，超 64 KB 的中间增量不再重解析），
+> 增量解析器本身未移植。
+
 **pi 1.5.0 Fixed**（#9265）：新增增量容错 JSON 解析器 `StreamingJsonParser` /
 `ToolCallArgumentsStream`，每个 delta 只读一次；此前每来一段就把累积串整体重解析
 （90 KB 的 `write` 峰值 ~140 MB 堆，500 KB 要几分钟）。
@@ -347,6 +366,9 @@ MCP / 子代理 / agent-memory 全部按已信任处理。
 
 #### 1.25 ⚠️ `/tree` 分支摘要不吃会话的 thinking 级别
 
+> **第二轮结论：不改**。`simple_completion` 不发 effort 字段，被限额的账号不会撞 pi 那个 400；
+> 补上 thinking 只会让摘要更贵。
+
 **pi 1.5.0 Fixed**（#11444）：摘要请求会带上会话 thinking 级别，避免 reasoning 模型收到
 不支持的 `none` effort 而拒绝。
 
@@ -355,6 +377,8 @@ MCP / 子代理 / agent-memory 全部按已信任处理。
 若没有，则 prux 反而不会撞这个 400，但摘要质量与一致性弱于 pi。
 
 #### 1.26 ⚠️ 会话写入失败时，内存里留下了磁盘上没有的 entry
+
+> **第二轮：已修**。`persist_mutation` 返回是否可应用，4 处调用改为「写成功才 `apply_mutation`」。
 
 **pi 1.5.0 Fixed**（#11460）：写失败后后续 entry 指向不存在的父节点，恢复会话会丢历史与工具。
 
@@ -376,12 +400,17 @@ MCP / 子代理 / agent-memory 全部按已信任处理。
 
 #### 1.28 ⚠️ steering / follow-up 消息里的图片没走缩放
 
+> **第二轮复核：已满足**。busy/steer 提交走同一段 `expand_at_image_refs`（带 `current_image_resize_limits`），
+> 图片消息经 `worker.prompt_message` 入队。
+
 **pi 1.5.1 Fixed**（#11738）：队列里的图片按空闲输入的规格缩放，不按原图发送/保存。
 
 **prux 现状**：图片缩放入口在 `src/utils/image.rs`，**需核对** `/steer` 与排队 follow-up
 的图片是否也过这条路径（`src/modes/tui/handlers.rs` 的忙碌期提交分支）。
 
 #### 1.29 ⚠️ `--model <provider>/<id>` 对含斜杠的 provider id 失败
+
+> **第二轮：已修**。`split_provider_prefix` 从右往左按最长已知 provider id 切，都不已知时退回第一个 `/`。
 
 **pi 1.5.0 Fixed**（#11394）：llama.cpp 从 URL 派生的 provider id 带斜杠。
 
@@ -402,6 +431,8 @@ provider（`models.json` 自定义 provider 可以有），优先级低。
 处理），GUI 侧 `src/modes/gui/markdown.rs` 同步。
 
 #### 1.31 ⚠️ 深度嵌套 blockquote 行数爆炸
+
+> **第二轮**：只做了总行数闸门（`MAX_RENDERED_LINES` = 20000，超出截断并提示），引用深度计数未加。
 
 **pi 1.5.0 Fixed**（#11272）：边框宽度耗尽后会指数级产出大量行，直到渲染卡死。
 
@@ -427,6 +458,8 @@ provider（`models.json` 自定义 provider 可以有），优先级低。
 建议和其它折行修复合并处理。
 
 #### 1.34 ⚠️ Markdown 每帧全量重渲染
+
+> **第二轮：未做**。已有解析缓存（`parsed_events`），块级布局缓存需要性能基线与失效条件设计，本轮不动。
 
 **pi 1.5.0/1.5.1 Fixed**（#10971）：复用上次渲染的顶层块，流式消息只重渲染最后一块；
 `Text.setText()` 文本未变时不再重新折行。
@@ -465,6 +498,8 @@ provider（`models.json` 自定义 provider 可以有），优先级低。
 marker 文本后仍按 marker 展开（即「展开失败静默当文本发出」）。
 
 #### 1.38 ⚠️ `pageUp`/`pageDown` 被列表与自动补全忽略
+
+> **第二轮复核**：设置主列表、会话/面板选择器、`@` 补全本来就响应翻页；只缺设置**子面板**，已补。
 
 **pi 1.5.0 Fixed**（#7629）：`SelectList` / `SettingsList` / 自动补全支持翻页键；
 全屏模式下翻页键先给聚焦的组件，而不是滚动对话流。
@@ -508,6 +543,8 @@ JSON，**不校验** `authorization_endpoint` / `token_endpoint` 的 scheme；
 ### F. ACP 模式（`prux acp`）
 
 #### 1.42 ⚠️ ACP 的退出清理与信号处理
+
+> **第二轮：已修**。新增 `SHUTDOWN` 闩锁 + SIGTERM/SIGINT 监听：首个 EOF/信号让当前回合跑完，第二个才 `exit`。
 
 **pi 1.5.0 Fixed**（#11599）：RPC 模式在空闲时忽略扩展的 `ctx.shutdown()`；stdin EOF 与
 SIGTERM 同时到达时（Paseo / systemd 就是这么干的）清理被截断，结果丢了刚刷新的 MCP token、
@@ -705,11 +742,12 @@ OSC 7501「等我」）；`Component.capturesViewportInput`（聚焦组件吃掉
 
 ---
 
-## 四、模型目录 / 默认模型表（代码侧还剩这一处）
+## 四、模型目录 / 默认模型表（第二轮已完成）
 
-数据已同步，**只剩 `src/core/model_resolver.rs:1336-1374` 的 `default_model_id` 要跟上**
-（pi 侧真源：`packages/coding-agent/src/core/model-resolver.ts:20` 的
-`defaultModelPerProvider`）：
+`default_model_id` 已按 pi 的 `defaultModelPerProvider`（`packages/coding-agent/src/core/model-resolver.ts:20`）
+逐项跟到 1.5.2；`qwen-token-plan-individual-cn` 已作为独立 provider 加入，
+模型数据由 `scripts/sync-models.py` 的 `DERIVED_PROVIDERS` 规则派生（中国目录 ∩ Individual 白名单），
+`make sync-models-check` 幂等。下表保留为「实施前」对照：
 
 | provider | prux 现值 | pi 1.5.2 |
 |---|---|---|
@@ -730,8 +768,7 @@ OSC 7501「等我」）；`Component.capturesViewportInput`（聚焦组件吃掉
 `cerebras`、`zai`、`zai-coding-cn`、`kimi-coding`、`meta`、`fireworks`、`together`、`deepseek`、
 `ant-ling`、`xiaomi*`。
 
-另需补 `qwen-token-plan-individual-cn`（见 2.12），并在 `auth.rs` 里给它
-`QWEN_TOKEN_PLAN_CN_API_KEY`。
+`qwen-token-plan-individual-cn` 已补（见 2.12），`auth.rs` 里走 `QWEN_TOKEN_PLAN_CN_API_KEY`。
 
 > 改完这套表，`model_resolver.rs` 里那条「`openai` 目录应保留 `gpt-5.4`」之类的断言要一并核对，
 > 别把 `openai` 与 `github-copilot` 混改。

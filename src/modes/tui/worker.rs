@@ -1820,7 +1820,7 @@ mod tests {
         })
         .await
         .expect("登录后应同步 current_provider 镜像");
-        assert_eq!(app.current_model.as_deref(), Some("claude-opus-4-8"));
+        assert_eq!(app.current_model.as_deref(), Some("claude-opus-5-5"));
         assert!(!app.no_model_available, "footer 应恢复显示模型名");
         assert!(
             app.system_messages

@@ -204,6 +204,13 @@ pub const LOGIN_PROVIDERS: &[LoginProviderInfo] = &[
         supports_api_key: true,
     },
     LoginProviderInfo {
+        id: "qwen-token-plan-individual-cn",
+        name: "Qwen Token Plan Individual CN",
+        base_url: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+        is_subscription: false,
+        supports_api_key: true,
+    },
+    LoginProviderInfo {
         id: "together",
         name: "Together",
         base_url: "https://api.together.ai/v1",
@@ -318,7 +325,7 @@ mod tests {
 
     #[test]
     fn registry_exposes_providers() {
-        assert_eq!(LOGIN_PROVIDERS.len(), 35);
+        assert_eq!(LOGIN_PROVIDERS.len(), 36);
         assert_eq!(provider_name("deepseek"), "DeepSeek");
         assert_eq!(provider_name("opencode"), "OpenCode Zen");
         assert_eq!(provider_name("opencode-go"), "OpenCode Go");

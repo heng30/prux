@@ -44,6 +44,19 @@
   The GUI's `/skills` takes the same subcommands: `check` runs the preflight, `settings` opens the
   skills panel.
 
+### Changed
+
+- **New sessions default to each provider's current flagship model**: the built-in per-provider table
+  now points at the models the catalog lists as current — `anthropic` → `claude-opus-5-5`, `openai` /
+  `azure` / `github-copilot` → `gpt-6.1-sol`, `google` → `gemini-4-argon`, `moonshotai` /
+  `moonshotai-cn` / `opencode` → `kimi-k2.7-code`, `opencode-go` → `kimi-k3.1-pro`, `minimax` /
+  `minimax-cn` → `MiniMax-M3`, `baseten` → `zai-org/GLM-5.3`, `vercel-ai-gateway` →
+  `zai/glm-5.3`, `huggingface` → `moonshotai/Kimi-K2.7-Code`, `qwen-token-plan` /
+  `qwen-token-plan-cn` → `qwen3.8-max`. Only the fallback used when nothing is chosen changes; a
+  default saved in `settings.json` or a `--model` argument still wins.
+- **`qwen-token-plan-individual-cn` is a provider of its own**: the Token Plan Individual
+  allowlist served from the China endpoint, authenticated with `QWEN_TOKEN_PLAN_CN_API_KEY`.
+
 ### Fixed
 
 - **A `ref` on Linux was not re-checked before acting**: the macOS and Windows backends re-read the
@@ -116,6 +129,25 @@
   authorization URL were accepted with any scheme, so a server could supply `file:` or a custom
   protocol such as `search-ms:` that the platform URL handler launches locally. Only `http:` and
   `https:` are accepted now.
+- **A large streamed tool call re-parsed its whole argument buffer on every delta**: each chunk
+  re-scanned the accumulated JSON from the start, so a big `write` cost minutes of CPU and hundreds
+  of MB of heap. Past 64 KB the intermediate deltas are no longer re-parsed; the final arguments are
+  still parsed in full once the call is complete.
+- **A failed session write left an entry that never reached the disk**: the entry went into memory
+  anyway, so later entries chained to a parent the file does not have and a resumed session lost
+  that history and its tool results. An entry is now applied to memory only after it is written;
+  the failure is still reported.
+- **`--model` could not name a provider whose id contains a slash**: the split took the first slash,
+  so a URL-derived provider id such as `llama/local` lost its second segment. The provider prefix
+  is now matched against the longest known provider id.
+- **Deeply nested blockquotes could render without bound**: every level re-wrapped its inner lines,
+  so the line count multiplied until layout stalled. A message that would render past 20,000 lines is
+  cut there with a notice instead.
+- **PageUp/PageDown did nothing in settings sub-panels**: the checked-list sub-panel only moved one
+  row per key. Both paging keys now move ten rows there too.
+- **ACP could cut its own cleanup short**: stdin EOF and SIGTERM arriving together dropped the
+  in-flight work, so a refreshed MCP token or a session write could be lost. The first EOF or signal
+  now lets the current turn finish, and only a second one exits immediately.
 
 ## 中文
 
@@ -148,6 +180,18 @@
   并带上它在技能内的路径。它只报告——不改任何东西，也不拦任何技能。内置技能在安装时也会带上
   执行位，所以它对这些技能没什么可说的。桌面 GUI 的 `/skills` 收同样的子命令：`check` 跑预检，
   `settings` 打开技能面板。
+
+### 变更
+
+- **新会话默认用各 provider 当前的主力模型**：内置默认模型表改指目录里标为当前的那批——`anthropic` →
+  `claude-opus-5-5`，`openai` / `azure` / `github-copilot` → `gpt-6.1-sol`，`google` →
+  `gemini-4-argon`，`moonshotai` / `moonshotai-cn` / `opencode` → `kimi-k2.7-code`，`opencode-go`
+  → `kimi-k3.1-pro`，`minimax` / `minimax-cn` → `MiniMax-M3`，`baseten` → `zai-org/GLM-5.3`，
+  `vercel-ai-gateway` → `zai/glm-5.3`，`huggingface` → `moonshotai/Kimi-K2.7-Code`，
+  `qwen-token-plan` / `qwen-token-plan-cn` → `qwen3.8-max`。改的只是「什么都没选」时的回退；
+  `settings.json` 里存过的默认值或 `--model` 参数仍然优先。
+- **新增 `qwen-token-plan-individual-cn` provider**：中国端点上的 Token Plan Individual 白名单，
+  凭据为 `QWEN_TOKEN_PLAN_CN_API_KEY`。
 
 ### 修复
 
@@ -202,4 +246,15 @@
 - **恶意 MCP 服务器可以把非 web 地址交给浏览器**：OAuth 元数据与最终授权地址原先接受任意 scheme，
   服务器给 `file:` 或 `search-ms:` 这类自定义协议时会被平台 URL handler 本地拉起。
   现在只接受 `http:` 与 `https:`。
+- **大工具调用的流式参数在每个增量上重解析整串**：每来一段就把累积的 JSON 从头扫一遍，一次大
+  `write` 能吃掉几分钟 CPU 和几百 MB 堆。现在超过 64 KB 后中间增量不再重解析，收尾时仍完整解析一次。
+- **会话写盘失败时条目只留在内存里**：写入失败也照样应用，后续条目就挂到磁盘上没有的父节点上，
+  恢复会话时那段历史与工具结果一起丢。现在只有写成功才应用进内存，失败仍然照报。
+- **`--model` 指不了 id 含 `/` 的 provider**：原先按第一个斜杠切，`llama/local` 这类从 URL 派生的
+  provider 会丢掉第二段。现在按最长已知 provider id 匹配前缀。
+- **深层嵌套引用可以无限生成行**：每层都把内层行再折一次，行数乘法增长直到排版卡住。
+  一条消息渲染超过 20000 行时在那里截断并附一行提示。
+- **设置子面板里 PageUp/PageDown 不起作用**：勾选列表原先每次只移一行。现在两个翻页键都移十行。
+- **ACP 会把自己的收尾切断**：stdin EOF 与 SIGTERM 同时到达时在途工作被直接丢弃，刷新到的 MCP token
+  与会话落盘可能一起丢。现在首个 EOF/信号让当前回合跑完，第二个信号才立即退出。
 

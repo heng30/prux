@@ -54,6 +54,7 @@ pub const SUPPORTED_PROVIDERS: &[&str] = &[
     "qwen-token-plan",
     "qwen-token-plan-cn",
     "qwen-token-plan-individual",
+    "qwen-token-plan-individual-cn",
     "together",
     "typesafe",
     "vercel-ai-gateway",
@@ -1336,32 +1337,33 @@ pub fn is_known_provider(provider: &str) -> bool {
 fn default_model_id(provider: &str) -> Option<&'static str> {
     Some(match provider {
         "ant-ling" => "Ring-2.6-1T",
-        "anthropic" => "claude-opus-4-8",
+        "anthropic" => "claude-opus-5-5",
         "azure" => "gpt-6.1-sol",
-        "baseten" => "zai-org/GLM-5.2",
+        "baseten" => "zai-org/GLM-5.3",
         "cerebras" => "gpt-oss-120b",
         "deepseek" => "deepseek-v4-pro",
         "fireworks" => "accounts/fireworks/models/kimi-k3",
         "github-copilot" => "gpt-6.1-sol",
-        "google" => "gemini-3.1-pro-preview",
+        "google" => "gemini-4-argon",
         "groq" => "openai/gpt-oss-120b",
-        "huggingface" => "moonshotai/Kimi-K2.6",
+        "huggingface" => "moonshotai/Kimi-K2.7-Code",
         "kimi-coding" => "kimi-for-coding",
         "meta" => "muse-spark-1.3",
-        "minimax" => "MiniMax-M2.7",
-        "minimax-cn" => "MiniMax-M2.7",
-        "moonshotai" => "kimi-k2.6",
-        "moonshotai-cn" => "kimi-k2.6",
+        "minimax" => "MiniMax-M3",
+        "minimax-cn" => "MiniMax-M3",
+        "moonshotai" => "kimi-k2.7-code",
+        "moonshotai-cn" => "kimi-k2.7-code",
         "nvidia" => "nvidia/nemotron-3.5-super-vl-120b-a12b",
-        "openai" => "gpt-5.5",
-        "opencode" => "kimi-k2.6",
-        "opencode-go" => "kimi-k3",
-        "openrouter" => "moonshotai/kimi-k2.6",
-        "qwen-token-plan" => "qwen3.7-max",
-        "qwen-token-plan-cn" => "qwen3.7-max",
+        "openai" => "gpt-6.1-sol",
+        "opencode" => "kimi-k2.7-code",
+        "opencode-go" => "kimi-k3.1-pro",
+        "openrouter" => "moonshotai/kimi-k2.7-code",
+        "qwen-token-plan" => "qwen3.8-max",
+        "qwen-token-plan-cn" => "qwen3.8-max",
         "qwen-token-plan-individual" => "qwen3.8-max",
+        "qwen-token-plan-individual-cn" => "qwen3.8-max",
         "together" => "moonshotai/Kimi-K3",
-        "vercel-ai-gateway" => "zai/glm-5.1",
+        "vercel-ai-gateway" => "zai/glm-5.3",
         "xai" => "grok-4.7",
         "xiaomi" => "mimo-v2.6-pro",
         "xiaomi-token-plan-ams" => "mimo-v2.6-pro",
@@ -1435,13 +1437,28 @@ pub fn parse_model_arg(arg: &str) -> (Option<String>, String, Option<String>) {
         (m.to_string(), None)
     };
 
-    if let Some((p, m)) = arg.split_once('/') {
+    if let Some((p, m)) = split_provider_prefix(arg) {
         let (model, thinking) = split(m);
         (Some(p.to_string()), model, thinking)
     } else {
         let (model, thinking) = split(arg);
         (None, model, thinking)
     }
+}
+
+/// 切出 `provider/模型`：provider id 自身可能含 `/`（从 URL 派生的自定义 provider），
+/// 所以斜杠位置从右往左试，取第一个已知 provider；都不已知时退回第一个 `/`，
+/// 让「未知 provider」的报错路径保持可见。
+fn split_provider_prefix(arg: &str) -> Option<(&str, &str)> {
+    let mut slashes: Vec<usize> = arg.match_indices('/').map(|(i, _)| i).collect();
+    let fallback = slashes.first().copied();
+    while let Some(i) = slashes.pop() {
+        let (prefix, rest) = (&arg[..i], &arg[i + 1..]);
+        if !rest.is_empty() && is_known_provider(prefix) {
+            return Some((prefix, rest));
+        }
+    }
+    fallback.map(|i| (&arg[..i], &arg[i + 1..]))
 }
 
 #[cfg(test)]
@@ -2237,10 +2254,10 @@ mod tests {
         // 只给 provider：用该 provider 的默认模型（查表）
         let (p, m, _) = resolve_provider_model(Some("opencode"), None, &s).unwrap();
         assert_eq!(p, "opencode");
-        assert_eq!(m, "kimi-k2.6");
+        assert_eq!(m, "kimi-k2.7-code");
         let (p, m, _) = resolve_provider_model(Some("openai"), None, &s).unwrap();
         assert_eq!(p, "openai");
-        assert_eq!(m, "gpt-5.5");
+        assert_eq!(m, "gpt-6.1-sol");
         // CLI 显式模型/设置优先于回退
         let (p, m, _) = resolve_provider_model(None, Some("deepseek/deepseek-v4-pro"), &s).unwrap();
         assert_eq!(p, "deepseek");
@@ -2335,13 +2352,13 @@ mod tests {
         );
         assert_eq!(
             default_model_for("openai").unwrap(),
-            ("openai".to_string(), "gpt-5.5".to_string())
+            ("openai".to_string(), "gpt-6.1-sol".to_string())
         );
         assert_eq!(
             default_model_for("google").unwrap(),
-            ("google".to_string(), "gemini-3.1-pro-preview".to_string())
+            ("google".to_string(), "gemini-4-argon".to_string())
         );
-        // pi 0.99.0：fireworks / opencode-go / together 默认改指 Kimi K3
+        // pi 0.99.0：fireworks / together 默认改指 Kimi K3；opencode-go 到 1.5.2 起指 kimi-k3.1-pro
         assert_eq!(
             default_model_for("fireworks").unwrap(),
             (
@@ -2351,7 +2368,7 @@ mod tests {
         );
         assert_eq!(
             default_model_for("opencode-go").unwrap(),
-            ("opencode-go".to_string(), "kimi-k3".to_string())
+            ("opencode-go".to_string(), "kimi-k3.1-pro".to_string())
         );
         assert_eq!(
             default_model_for("together").unwrap(),

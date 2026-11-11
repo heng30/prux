@@ -38,6 +38,13 @@ SYNC_MARK = os.path.join(ROOT, "migrations", "sync.md")
 # pi 的模型类型；其他取值（将来新增的操作）不属于本次同步范围，整条丢弃
 MODEL_TYPES = ("chat", "image", "classifier")
 
+# 派生 provider：上游没有独立的 data 文件，模型集 = 来源 provider 的目录 ∩ 白名单 provider 的 id。
+# 键为派生 provider，值为 (模型来源 provider, 白名单来源 provider)。
+DERIVED_PROVIDERS = {
+    # 中国端点的 Individual：中国目录里只保留 Individual 白名单内的模型
+    "qwen-token-plan-individual-cn": ("qwen-token-plan-cn", "qwen-token-plan-individual"),
+}
+
 # pi-ai data 目录的候选位置：pi 可执行文件所在 npm 安装树 + 常见全局目录
 CANDIDATES = [
     "node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/providers/data",
@@ -103,6 +110,20 @@ def flatten(data_path):
     return buckets
 
 
+def provider_buckets(data_dir, prov):
+    """一个 provider 的类型分组；派生 provider 筛自来源目录，并把条目的 provider 字段改成本身。"""
+    derived = DERIVED_PROVIDERS.get(prov)
+    if derived is None:
+        return flatten(os.path.join(data_dir, prov + ".json"))
+    base, allowlist = derived
+    allow = {mid for models in flatten(os.path.join(data_dir, allowlist + ".json")).values() for mid in models}
+    source = flatten(os.path.join(data_dir, base + ".json"))
+    return {
+        t: {mid: {**m, "provider": prov} for mid, m in source[t].items() if mid in allow}
+        for t in MODEL_TYPES
+    }
+
+
 def catalog_for(buckets):
     """单 provider 的数组式目录：chat → image → classifier，同类内按 id 排序。"""
     out = []
@@ -125,7 +146,7 @@ def desired_files(data_dir, providers):
     files = {}
     all_providers = {}
     for prov in providers:
-        buckets = flatten(os.path.join(data_dir, prov + ".json"))
+        buckets = provider_buckets(data_dir, prov)
         models = catalog_for(buckets)
         all_providers[prov] = models
         files[f"providers/{prov}.json"] = serialize(chat_catalog(models))
@@ -171,7 +192,11 @@ def main():
         sys.exit("未找到 pi-ai 模型数据目录；请安装 pi 或使用 --pi-ai-data 指定")
 
     providers = supported_providers()
-    missing = [p for p in providers if not os.path.exists(os.path.join(data_dir, p + ".json"))]
+    missing = [
+        p
+        for p in providers
+        if p not in DERIVED_PROVIDERS and not os.path.exists(os.path.join(data_dir, p + ".json"))
+    ]
     if missing:
         sys.exit(f"pi-ai data 缺少以下 provider 文件: {', '.join(missing)}")
 
