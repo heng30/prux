@@ -395,7 +395,7 @@ pub async fn execute_bash_with_env(
     // 每个输出流单独一个读取任务，经 channel 汇总到一个消费任务。
     // 不能用单任务轮流读：某一侧无数据但未关闭时读操作会挂住，另一侧写满 64 KiB 管道后
     // 两边互等（`yes x | head -n 300000` 这类大批量输出必死锁）。
-    let read_task = {
+    let mut read_task = {
         let shared = shared.clone();
         let on_chunk = on_chunk.clone();
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
@@ -432,21 +432,27 @@ pub async fn execute_bash_with_env(
     };
 
     let mut timed_out = false;
-    let status = match timeout {
-        Some(t) => {
-            let timeout_dur = Duration::from_secs_f64(t);
-            match tokio::time::timeout(timeout_dur, child.wait()).await {
-                Ok(s) => s.ok(),
+    // 超时是**整段**的截止点，不是只压住「等 shell 退出」：命令已退出、但它启动的后台进程
+    // 还占着管道时，只看 `child.wait()` 会永远等不到超时。
+    let deadline = timeout.map(|t| started_at + Duration::from_secs_f64(t));
+    let mut status = None;
+    match deadline {
+        Some(deadline) => {
+            match tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), child.wait())
+                .await
+            {
+                Ok(s) => status = s.ok(),
                 Err(_) => {
                     timed_out = true;
                     kill_process_tree(pid as u32);
                     _ = child.wait().await;
-                    None
                 }
             }
         }
-        None => child.wait().await.ok(),
-    };
+        None => status = child.wait().await.ok(),
+    }
+    // shell 自己的退出码与耗时：超时时用来区分「命令其实跑完了」与「命令还在跑」
+    let shell_exit = status.as_ref().map(|s| (s.code(), started_at.elapsed()));
 
     let cancelled = cancel_flag.load(Ordering::SeqCst);
     if cancelled {
@@ -457,7 +463,22 @@ pub async fn execute_bash_with_env(
         bash_procs_registry().lock().unwrap().remove(id);
     }
 
-    _ = read_task.await;
+    // 管道收尾同样受截止点约束
+    match deadline {
+        Some(deadline) => {
+            if tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), &mut read_task)
+                .await
+                .is_err()
+            {
+                timed_out = true;
+                kill_process_tree(pid as u32);
+                let _ = read_task.await;
+            }
+        }
+        None => {
+            let _ = read_task.await;
+        }
+    }
 
     // 取回收集器本体（不能 clone：Clone 不共享已落盘的完整输出文件，
     // 会丢掉 tail 之外的输出与 `full_output_path`）。此时读取任务已结束，强引用只剩这一份。
@@ -475,13 +496,19 @@ pub async fn execute_bash_with_env(
     if cancelled {
         output_text = append_status(&output_text, "Command was cancelled");
     } else if timed_out {
-        output_text = append_status(
-            &output_text,
-            &format!(
-                "Command timed out after {} seconds",
-                timeout.unwrap_or(0.0) as i64
-            ),
-        );
+        let timeout_secs = timeout.unwrap_or(0.0);
+        let mut status_line = format!("Command timed out after {} seconds", timeout_secs as i64);
+        // shell 在截止点之前就已退出：把真实结果与「后台进程还在写」一起说清楚
+        if let Some((Some(code), after)) = shell_exit
+            && after < Duration::from_secs_f64(timeout_secs)
+        {
+            let after = (after.as_secs_f64() * 10.0).round() / 10.0;
+            status_line.push_str(&format!(
+                ". The shell exited with code {} after {} seconds, but background processes it started kept writing output until the timeout.",
+                code, after
+            ));
+        }
+        output_text = append_status(&output_text, &status_line);
     } else if let Some(code) = exit_code.filter(|c| *c != 0) {
         output_text = append_status(&output_text, &format!("Command exited with code {}", code));
     }
@@ -976,6 +1003,42 @@ async fn bash_outcome_carries_structured_output() {
     assert!(output.contains("out") && output.contains("err"), "{output}");
     // 未截断时不给出临时文件路径
     assert!(structured.get("full_output_path").is_none());
+}
+
+/// 命令已退出、但后台子进程一直占着管道时，超时必须生效并说清 shell 的真实结果（pi #11613）。
+#[tokio::test]
+#[cfg(unix)]
+#[allow(clippy::await_holding_lock)] // 串行锁必须跨 await 持有（测试间互斥，无同 runtime 竞争者）
+async fn bash_timeout_reports_shell_exit_when_pipes_stay_open() {
+    let _g = crate::test_support::AUTH_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let tmp = tempfile::tempdir().unwrap();
+    let started = std::time::Instant::now();
+    // 后台进程每 0.2s 写一行、共 30s：shell 立刻退出，管道一直不关
+    let out = execute_bash_with(
+        "(for i in $(seq 1 150); do echo tick; sleep 0.2; done) & exit 7",
+        Some(1.0),
+        tmp.path().to_str().unwrap(),
+        None,
+        None,
+    )
+    .await;
+    assert!(out.timed_out, "应判为超时: {}", out.text);
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "不能在管道上无界等待"
+    );
+    assert!(
+        out.text.contains("Command timed out after 1 seconds"),
+        "{}",
+        out.text
+    );
+    assert!(
+        out.text.contains("The shell exited with code 7 after"),
+        "应报出 shell 的真实退出码: {}",
+        out.text
+    );
 }
 
 #[tokio::test]

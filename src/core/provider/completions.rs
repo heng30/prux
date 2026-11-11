@@ -179,8 +179,20 @@ fn convert_assistant_message(
 
     let mut assistant_msg = serde_json::Map::new();
     assistant_msg.insert("role".into(), json!("assistant"));
-    // openai SDK 默认 content 为 null；deepseek 需要 content
-    assistant_msg.insert("content".into(), Value::Null);
+
+    // openai SDK 默认 content 为 null；deepseek 需要 content；
+    // 部分兼容端点要求空串而非 null（compat.requiresNonNullAssistantContent）
+    let empty_content = if model_resolver::compat_bool(
+        &model.provider,
+        &model.model_id,
+        "requiresNonNullAssistantContent",
+        false,
+    ) {
+        json!("")
+    } else {
+        Value::Null
+    };
+    assistant_msg.insert("content".into(), empty_content);
 
     // 其它模型（或其它 provider/api）产生的 thinking 不重放：
     // 签名的 reasoning 只对造它的模型有效，当文本发过去会让新模型把旧推理当成自己的回答。

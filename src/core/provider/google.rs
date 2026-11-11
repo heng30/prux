@@ -34,6 +34,36 @@ use std::{
     },
 };
 
+/// 值本身就是「名字 → 子 schema」映射的关键字：它下面的键是名字，不是 schema 关键字。
+const JSON_SCHEMA_NAME_MAPS: [&str; 6] = [
+    "properties",
+    "patternProperties",
+    "$defs",
+    "definitions",
+    "dependentSchemas",
+    "dependencies",
+];
+
+/// 值里装的是子 schema（或子 schema 数组）的关键字，要递归但不当名字映射处理。
+const JSON_SCHEMA_SUBSCHEMAS: [&str; 16] = [
+    "additionalProperties",
+    "unevaluatedProperties",
+    "propertyNames",
+    "items",
+    "prefixItems",
+    "additionalItems",
+    "unevaluatedItems",
+    "contains",
+    "allOf",
+    "anyOf",
+    "oneOf",
+    "not",
+    "if",
+    "then",
+    "else",
+    "contentSchema",
+];
+
 /// 自动生成 tool call id 时追加的自增序号，保证同一毫秒内也不重名。
 static TOOL_CALL_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -515,6 +545,7 @@ pub(crate) fn convert_google_messages(
 }
 
 /// 把工具定义列表转成 `{functionDeclarations: [...]}`，参数用 `parametersJsonSchema` 字段。
+/// Gemini 忽略 `const`、只认 `enum`，所以字符串/数字 `const` 改写成单值 `enum`。
 fn convert_google_tools(tool_defs: &[(String, String, Value)]) -> Value {
     let declarations: Vec<Value> = tool_defs
         .iter()
@@ -522,11 +553,50 @@ fn convert_google_tools(tool_defs: &[(String, String, Value)]) -> Value {
             json!({
                 "name": name,
                 "description": description,
-                "parametersJsonSchema": parameters
+                "parametersJsonSchema": rewrite_const_as_enum(parameters, false)
             })
         })
         .collect();
     json!({ "functionDeclarations": declarations })
+}
+
+/// 把 schema 里的字符串/数字 `const` 改写成单值 `enum`（`enum` 已存在时不动）。
+///
+/// `is_name_map` 为真时当前层的键是属性名/定义名，不是 schema 关键字，不能做 `const` 判定；
+/// `default`/`examples`/`enum` 这些「字面数据」位置的值原样保留。
+fn rewrite_const_as_enum(schema: &Value, is_name_map: bool) -> Value {
+    match schema {
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|item| rewrite_const_as_enum(item, false))
+                .collect(),
+        ),
+        Value::Object(map) => {
+            let mut out = serde_json::Map::with_capacity(map.len());
+            for (key, value) in map {
+                let mapped = if is_name_map || JSON_SCHEMA_SUBSCHEMAS.contains(&key.as_str()) {
+                    rewrite_const_as_enum(value, false)
+                } else if JSON_SCHEMA_NAME_MAPS.contains(&key.as_str()) {
+                    rewrite_const_as_enum(value, true)
+                } else {
+                    value.clone()
+                };
+                out.insert(key.clone(), mapped);
+            }
+            if !is_name_map
+                && !out.contains_key("enum")
+                && out
+                    .get("const")
+                    .is_some_and(|v| v.is_string() || v.is_number())
+            {
+                let value = out.remove("const").expect("const checked above");
+                out.insert("enum".into(), Value::Array(vec![value]));
+            }
+            Value::Object(out)
+        }
+        other => other.clone(),
+    }
 }
 
 /// 把 Gemini 的 finishReason 映射为内部 stop_reason；未知原因归为 `error` 并附带原文说明。
@@ -1272,6 +1342,42 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Gemini 忽略 `const`、只认 `enum`：字符串/数字 `const` 改写成单值 `enum`（pi #11308）。
+    #[test]
+    fn const_becomes_single_value_enum() {
+        let params = json!({
+            "type": "object",
+            "properties": {
+                "kind": { "const": "image" },
+                "level": { "const": 3 },
+                "already": { "const": "a", "enum": ["a", "b"] },
+                "flag": { "const": true },
+                "list": { "items": { "const": "x" } },
+                "defaults": { "type": "array", "default": [{ "const": "keep" }] }
+            },
+            "$defs": { "Inner": { "const": "d" } }
+        });
+        let out = convert_google_tools(&[("t".into(), "d".into(), params)]);
+        let p = &out["functionDeclarations"][0]["parametersJsonSchema"];
+        assert_eq!(p["properties"]["kind"]["enum"], json!(["image"]));
+        assert!(p["properties"]["kind"].get("const").is_none());
+        assert_eq!(p["properties"]["level"]["enum"], json!([3]));
+        // enum 已存在：不动
+        assert_eq!(p["properties"]["already"]["enum"], json!(["a", "b"]));
+        assert_eq!(p["properties"]["already"]["const"], json!("a"));
+        // 非字符串/数字的 const 保留原样
+        assert_eq!(p["properties"]["flag"]["const"], json!(true));
+        // 数组元素是子 schema，也要改写
+        assert_eq!(p["properties"]["list"]["items"]["enum"], json!(["x"]));
+        // default 里的字面数据不动
+        assert_eq!(
+            p["properties"]["defaults"]["default"],
+            json!([{ "const": "keep" }])
+        );
+        // $defs 的键是定义名，其值是 schema
+        assert_eq!(p["$defs"]["Inner"]["enum"], json!(["d"]));
     }
 
     #[test]

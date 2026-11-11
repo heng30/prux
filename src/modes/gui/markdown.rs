@@ -92,6 +92,12 @@ pub enum Block {
 }
 
 /// Markdown 源码 → 渲染单元序列。
+/// 是否是完整的 HTML 注释（`<!-- ... -->`，允许跨行）。
+fn is_html_comment(html: &str) -> bool {
+    let trimmed = html.trim();
+    trimmed.starts_with("<!--") && trimmed.ends_with("-->")
+}
+
 pub fn parse(text: &str) -> Vec<Block> {
     // LaTeX 开关：关闭时公式保留源码文本（同 TUI 的 `latex` 设置）
     let render_latex = settings_manager::read_settings_latex();
@@ -224,11 +230,13 @@ pub fn parse(text: &str) -> Vec<Block> {
                 });
             }
             Event::Html(html) | Event::InlineHtml(html) => {
-                spans.push(Span {
-                    text: html.to_string(),
-                    style,
-                    url: link_url.clone(),
-                });
+                if !is_html_comment(&html) {
+                    spans.push(Span {
+                        text: html.to_string(),
+                        style,
+                        url: link_url.clone(),
+                    });
+                }
             }
             Event::Start(Tag::Strong) => style.bold = true,
             Event::End(TagEnd::Strong) => style.bold = false,

@@ -7,7 +7,7 @@
 use crate::{
     core::session_manager::{self, Session, format_session_age},
     modes::tui::line_input::InputBox,
-    utils::paths::mtime_of,
+    utils::{fuzzy, paths::mtime_of},
 };
 use regex::{Regex, RegexBuilder};
 use std::{
@@ -1239,91 +1239,9 @@ fn parse_query(query: &str) -> ParsedQuery {
     }
 }
 
-/// fuzzy 匹配（字符有序子序列，低分更好）
+/// fuzzy 匹配（字符有序子序列，低分更好）：统一走 [`crate::utils::fuzzy`]。
 fn fuzzy_match(query: &str, text: &str) -> Option<f64> {
-    let query_lower: Vec<char> = query.to_lowercase().chars().collect();
-    let text_lower: Vec<char> = text.to_lowercase().chars().collect();
-
-    let score_for = |q: &[char]| -> Option<f64> {
-        if q.is_empty() {
-            return Some(0.0);
-        }
-
-        if q.len() > text_lower.len() {
-            return None;
-        }
-
-        let mut qi = 0usize;
-        let mut score = 0.0f64;
-        let mut last: i64 = -1;
-        let mut consecutive = 0i64;
-
-        for (i, &c) in text_lower.iter().enumerate() {
-            if qi >= q.len() {
-                break;
-            }
-
-            if c == q[qi] {
-                let is_boundary =
-                    i == 0 || matches!(text_lower[i - 1], ' ' | '-' | '_' | '.' | '/' | ':');
-
-                if last == i as i64 - 1 {
-                    consecutive += 1;
-                    score -= (consecutive * 5) as f64;
-                } else {
-                    consecutive = 0;
-                    if last >= 0 {
-                        score += (i as i64 - last - 1) as f64 * 2.0;
-                    }
-                }
-
-                if is_boundary {
-                    score -= 10.0;
-                }
-
-                score += i as f64 * 0.1;
-                last = i as i64;
-                qi += 1;
-            }
-        }
-
-        if qi < q.len() {
-            return None;
-        }
-
-        if q.iter().collect::<String>() == text_lower.iter().collect::<String>() {
-            score -= 100.0;
-        }
-
-        Some(score)
-    };
-
-    let primary = score_for(&query_lower);
-    if primary.is_some() {
-        return primary;
-    }
-
-    // 字母+数字交换兜底（"abc12" ↔ "12abc"）
-    let alpha: String = query_lower
-        .iter()
-        .filter(|c| c.is_ascii_alphabetic())
-        .collect();
-
-    let digits: String = query_lower.iter().filter(|c| c.is_ascii_digit()).collect();
-    if alpha.is_empty() || digits.is_empty() || alpha.len() + digits.len() != query_lower.len() {
-        return primary;
-    }
-
-    let swapped1: String = digits.clone() + &alpha;
-    let swapped2: String = alpha + &digits;
-    let swapped = if swapped1 == query_lower.iter().collect::<String>() {
-        swapped2
-    } else {
-        swapped1
-    };
-    let s = score_for(&swapped.chars().collect::<Vec<_>>())?;
-
-    Some(s + 5.0)
+    fuzzy::fuzzy_match(query, text)
 }
 
 /// 会话匹配

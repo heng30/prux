@@ -325,13 +325,18 @@ fn parse_on(value: &str) -> bool {
 /// 环境变量能识别出的图形协议；识别不出时 `None`（由调用方决定回落到什么）。
 ///
 /// kitty 系（kitty / ghostty / wezterm / Warp / Rex）走 kitty 协议，
-/// iTerm2 走自有协议，其余（含 VS Code、Alacritty、Windows Terminal）没有可用的内联图片协议。
+/// iTerm2 走自有协议，Orca 在宣告 `ORCA_IMAGE_PROTOCOL=kitty` 时也走 kitty 协议；
+/// 其余（含 VS Code、Alacritty、Windows Terminal）没有可用的内联图片协议。
 fn env_protocol() -> Option<ProtocolType> {
     let term_program = env_lower("TERM_PROGRAM");
     let term = env_lower("TERM");
     let has = |name: &str| std::env::var_os(name).is_some_and(|v| !v.is_empty());
 
-    let kitty = has("KITTY_WINDOW_ID")
+    // Orca 的 xterm.js 图片插件用 kitty 协议，但它只在显式宣告时才支持
+    let orca_kitty = term_program == "orca" && env_lower("ORCA_IMAGE_PROTOCOL") == "kitty";
+
+    let kitty = orca_kitty
+        || has("KITTY_WINDOW_ID")
         || term_program == "kitty"
         || term_program == "ghostty"
         || term_program == "rex"

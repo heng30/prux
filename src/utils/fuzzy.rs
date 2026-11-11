@@ -8,6 +8,9 @@
 //! 相等，再用距离兑“是不是拼错了”），供键名/标识符的 typo 提示使用。
 
 /// 计算 query 对 text 的匹配分；不匹配返回 None。分数越低表示匹配质量越高
+///
+/// 对 text 里**每个**可能起点各匹配一次取最优：单次贪心会让「散落在前部的命中」
+/// 压过「后面更紧凑的命中」（`opus` 把 `gpt-oss-120b` 类结果排到 `claude-opus-4.1` 前）。
 fn fuzzy_match_score(query_lower: &[char], text_lower: &[char]) -> Option<f64> {
     if query_lower.is_empty() {
         return Some(0.0);
@@ -16,12 +19,31 @@ fn fuzzy_match_score(query_lower: &[char], text_lower: &[char]) -> Option<f64> {
         return None;
     }
 
+    let mut best: Option<f64> = None;
+    for start in 0..text_lower.len() {
+        if text_lower[start] != query_lower[0] {
+            continue;
+        }
+        if let Some(score) = score_alignment(query_lower, text_lower, start) {
+            best = Some(best.map_or(score, |b: f64| b.min(score)));
+        }
+    }
+
+    let mut best = best?;
+    if query_lower == text_lower {
+        best -= 100.0;
+    }
+    Some(best)
+}
+
+/// 从 `start` 起贪心匹配整条 query 的得分；匹配不到返回 None。
+fn score_alignment(query_lower: &[char], text_lower: &[char], start: usize) -> Option<f64> {
     let mut query_index = 0usize;
     let mut score = 0.0f64;
     let mut last_match_index = -1isize;
     let mut consecutive_matches = 0i32;
 
-    for (i, &c) in text_lower.iter().enumerate() {
+    for (i, &c) in text_lower.iter().enumerate().skip(start) {
         if query_index >= query_lower.len() {
             break;
         }
@@ -49,15 +71,7 @@ fn fuzzy_match_score(query_lower: &[char], text_lower: &[char]) -> Option<f64> {
         }
     }
 
-    if query_index < query_lower.len() {
-        return None;
-    }
-
-    if query_lower == text_lower {
-        score -= 100.0;
-    }
-
-    Some(score)
+    (query_index == query_lower.len()).then_some(score)
 }
 
 /// 主匹配；不中且为「字母+数字」或「数字+字母」连读时交换两段再试一次（+5 惩罚）。
@@ -220,6 +234,18 @@ mod tests {
         assert!(fuzzy_match("lo", "clone").is_some());
         // l 在 o 之后 -> 不中（alphabetical 中 o 先于 l 出现，但需连续顺序……ole 中 o 前 l 后）
         assert!(fuzzy_match("lo", "ahol").is_none());
+    }
+
+    /// 散落在前部的命中不能压过后部更紧凑的命中（pi #11220：`opus` 要先排到 `claude-opus-4.1`）。
+    #[test]
+    fn later_contiguous_match_beats_earlier_scattered_one() {
+        // 同一段文本里，前部散落一处 a-b-c、后部一处连续 abc
+        let scattered = fuzzy_match("abc", "axxbxxxxczz").unwrap();
+        let contiguous = fuzzy_match("abc", "axxbxxxxcabc").unwrap();
+        assert!(
+            contiguous < scattered,
+            "contiguous({contiguous}) 应优于 scattered({scattered})"
+        );
     }
 
     #[test]

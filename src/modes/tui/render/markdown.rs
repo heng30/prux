@@ -363,8 +363,14 @@ pub fn collect_link_spans(lines: &[Line<'static>], theme: &Theme) -> Vec<LinkSpa
 }
 
 /// 链接的目标 URL：优先取 ` (url)` 片段（去掉外层括号与空白），没有时用可见文本
-/// （裸链接）；邮箱形态（含 `@`、无 `:`、无空白）补 `mailto:`，与 `render_link_spans` 的
-/// `href` 处理一致。
+/// （裸链接）；邮箱形态（含 `@`、无 `:`、无空白）补 `mailto:`，
+/// 与 `render_link_spans` 的`href` 处理一致。
+/// 是否是完整的 HTML 注释（`<!-- ... -->`，允许跨行）。
+fn is_html_comment(html: &str) -> bool {
+    let trimmed = html.trim();
+    trimmed.starts_with("<!--") && trimmed.ends_with("-->")
+}
+
 fn link_target(url_part: &str, text: &str) -> String {
     let trimmed = url_part
         .trim()
@@ -693,7 +699,11 @@ impl MdRenderer<'_> {
                     let href = dest_url.to_string();
                     out.extend(self.render_link_spans(text, &href));
                 }
-                Event::Html(t) => pending.push_str(t),
+                Event::Html(t) => {
+                    if !is_html_comment(t) {
+                        pending.push_str(t);
+                    }
+                }
                 Event::InlineMath(t) => {
                     flush(&mut pending, &mut out);
                     out.push(self.render_inline_math(t));
@@ -1624,6 +1634,26 @@ mod tests {
         let lines = render_markdown("$x^2", 60, &theme());
         let t = text_of(&lines);
         assert!(t[0].contains("$x^2"), "未闭合公式应原样显示: {:?}", t);
+    }
+
+    /// HTML 注释不是可见文本（pi #11710）。
+    #[test]
+    fn html_comments_are_not_rendered() {
+        let theme = theme();
+        let lines = render_markdown("before\n\n<!-- hidden note -->\n\nafter", 60, &theme);
+        let text = lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("before") && text.contains("after"), "{text}");
+        assert!(!text.contains("hidden note"), "{text}");
+        assert!(!text.contains("<!--"), "{text}");
     }
 
     #[test]

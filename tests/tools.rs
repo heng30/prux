@@ -259,6 +259,121 @@ async fn grep_no_matches() {
     assert!(t.contains("No matches"));
 }
 
+/// glob 相对 `path`（与输出路径同一形态），不是相对 agent 的启动目录（pi #11807）。
+#[tokio::test]
+async fn grep_glob_is_relative_to_path() {
+    let dir = temp_cwd();
+    std::fs::create_dir_all(dir.path().join("repo/migrations/main")).unwrap();
+    std::fs::create_dir_all(dir.path().join("repo/other")).unwrap();
+    std::fs::write(dir.path().join("repo/migrations/main/a.js"), "needle\n").unwrap();
+    std::fs::write(dir.path().join("repo/other/b.js"), "needle\n").unwrap();
+
+    let result = execute_grep(
+        "needle",
+        Some("repo"),
+        Some("migrations/main/*.js"),
+        false,
+        true,
+        None,
+        None,
+        cwd_str(&dir),
+    )
+    .await
+    .unwrap();
+    let ToolResult { text: t, .. } = result;
+    assert!(t.contains("a.js"), "{t}");
+    assert!(!t.contains("b.js"), "{t}");
+
+    // 前导 `./` 被忽略
+    let result = execute_grep(
+        "needle",
+        Some("repo"),
+        Some("./migrations/main/*.js"),
+        false,
+        true,
+        None,
+        None,
+        cwd_str(&dir),
+    )
+    .await
+    .unwrap();
+    assert!(result.text.contains("a.js"), "{}", result.text);
+}
+
+/// 上下文行由 ripgrep 产出：匹配行 `file:line:`、上下文行 `file-line-`（pi #9276）。
+#[tokio::test]
+async fn grep_context_lines_come_from_ripgrep() {
+    let dir = temp_cwd();
+    std::fs::write(dir.path().join("f.txt"), "one\ntwo\nneedle\nfour\nfive\n").unwrap();
+    let result = execute_grep(
+        "needle",
+        Some("f.txt"),
+        None,
+        false,
+        true,
+        Some(1),
+        None,
+        cwd_str(&dir),
+    )
+    .await
+    .unwrap();
+    let ToolResult { text: t, .. } = result;
+    assert!(t.contains("f.txt-2- two"), "{t}");
+    assert!(t.contains("f.txt:3: needle"), "{t}");
+    assert!(t.contains("f.txt-4- four"), "{t}");
+    assert!(!t.contains("five"), "{t}");
+}
+
+/// 结果数**恰好**等于 limit 时不提示 limit reached，多一条才提示（pi #11423）。
+#[tokio::test]
+async fn grep_and_find_limit_notice_needs_extra_result() {
+    let dir = temp_cwd();
+    std::fs::write(dir.path().join("two.txt"), "hit\nhit\n").unwrap();
+    let result = execute_grep(
+        "hit",
+        Some("two.txt"),
+        None,
+        false,
+        true,
+        None,
+        Some(2),
+        cwd_str(&dir),
+    )
+    .await
+    .unwrap();
+    let ToolResult { text: t, .. } = result;
+    assert!(!t.contains("limit reached"), "{t}");
+
+    std::fs::write(dir.path().join("three.txt"), "hit\nhit\nhit\n").unwrap();
+    let result = execute_grep(
+        "hit",
+        Some("three.txt"),
+        None,
+        false,
+        true,
+        None,
+        Some(2),
+        cwd_str(&dir),
+    )
+    .await
+    .unwrap();
+    assert!(result.text.contains("limit reached"), "{}", result.text);
+
+    // find：恰好 limit 个文件同样不提示
+    for name in ["x.md", "y.md"] {
+        std::fs::write(dir.path().join(name), "x").unwrap();
+    }
+    let result = execute_find("*.md", None, Some(2), cwd_str(&dir))
+        .await
+        .unwrap();
+    assert!(!result.text.contains("limit reached"), "{}", result.text);
+    std::fs::write(dir.path().join("z.md"), "x").unwrap();
+    let result = execute_find("*.md", None, Some(2), cwd_str(&dir))
+        .await
+        .unwrap();
+    assert!(result.text.contains("limit reached"), "{}", result.text);
+}
+
 #[tokio::test]
 async fn find_by_glob() {
     let dir = temp_cwd();
@@ -270,6 +385,35 @@ async fn find_by_glob() {
     let ToolResult { text: t, .. } = result;
     assert!(t.contains("a.md"));
     assert!(!t.contains("b.txt"));
+}
+
+/// Windows 分隔符的路径模式与 `src/**/*.ts` 都要按路径语义匹配（pi #9262）。
+#[tokio::test]
+async fn find_path_patterns_normalize_separators() {
+    let dir = temp_cwd();
+    std::fs::create_dir_all(dir.path().join("src/deep")).unwrap();
+    std::fs::write(dir.path().join("src/a.ts"), "x").unwrap();
+    std::fs::write(dir.path().join("src/deep/b.ts"), "x").unwrap();
+    std::fs::write(dir.path().join("src/notes.md"), "x").unwrap();
+
+    // 反斜杠写法等价于正斜杠
+    let result = execute_find(r"src\*.ts", None, None, cwd_str(&dir))
+        .await
+        .unwrap();
+    let ToolResult { text: t, .. } = result;
+    assert!(t.contains("a.ts"), "{t}");
+    assert!(!t.contains("notes.md"), "{t}");
+
+    // `src/*.ts` 不匹配子目录；`src/**/*.ts` 两种层级都匹配
+    let result = execute_find("src/*.ts", None, None, cwd_str(&dir))
+        .await
+        .unwrap();
+    assert!(!result.text.contains("deep/b.ts"), "{}", result.text);
+    let result = execute_find("src/**/*.ts", None, None, cwd_str(&dir))
+        .await
+        .unwrap();
+    assert!(result.text.contains("a.ts"), "{}", result.text);
+    assert!(result.text.contains("b.ts"), "{}", result.text);
 }
 
 #[tokio::test]

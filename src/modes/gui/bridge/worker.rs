@@ -6,7 +6,6 @@
 //! 回合被 `Abort` 打断的方式也与 TUI 一致——直接 drop 底层 prompt future。
 
 use super::{GuiEvent, Snapshot, UsageTotals};
-
 use crate::{
     core::{
         self,
@@ -273,10 +272,16 @@ async fn apply(
                         settings_manager::SessionShareDestination::Radius => {
                             "Share failed: Radius upload is not supported; set sessionShareDestination to \"gist\"".to_string()
                         }
-                        _ => share_via_gist(
-                            session,
-                            theme.as_deref(),
-                        ),
+                        _ => {
+                            let session_file = session
+                                .get_session_file()
+                                .map(|p| p.to_string_lossy().to_string());
+                            share_via_gist(
+                                session,
+                                theme.as_deref(),
+                                agent.export_extras(session_file.as_deref()),
+                            )
+                        }
                     }
                 }
                 None => "Share failed: no current session".to_string(),
@@ -286,7 +291,13 @@ async fn apply(
         AgentCommand::Export { out, theme } => {
             let message = match agent.session.as_ref() {
                 Some(session) => {
-                    match export_html::export_session(session, out.as_deref(), theme.as_deref()) {
+                    let extras = agent.export_extras(None);
+                    match export_html::export_session_extra(
+                        session,
+                        out.as_deref(),
+                        theme.as_deref(),
+                        Some(extras),
+                    ) {
                         Ok(path) => format!("Exported: {path}"),
                         Err(error) => format!("Export failed: {error}"),
                     }

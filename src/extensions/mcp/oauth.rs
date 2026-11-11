@@ -701,6 +701,10 @@ pub async fn begin_login_with_cancel(
         &oauth.authorization_params,
     )?;
 
+    // 授权地址会被交给平台 URL handler（打开浏览器），只允许 http(s)：
+    // 恶意服务器给 `file:` / `search-ms:` 之类的 scheme 时能在客户端侧直接拉起本地程序。
+    ensure_web_url(&authorization_url, "authorization endpoint")?;
+
     Ok(PendingLogin {
         state,
         authorization_url,
@@ -811,10 +815,24 @@ async fn fetch_authorization_metadata(
         bail!("MCP OAuth metadata {url} returned HTTP {status}")
     }
 
-    response
+    let metadata = response
         .json::<AuthorizationMetadata>()
         .await
-        .with_context(|| format!("parse MCP OAuth metadata from {url}"))
+        .with_context(|| format!("parse MCP OAuth metadata from {url}"))?;
+    // 元数据里的端点同样只认 http(s)：它们也会被拉进浏览器或拿去发请求
+    ensure_web_url(&metadata.authorization_endpoint, "authorization_endpoint")?;
+    ensure_web_url(&metadata.token_endpoint, "token_endpoint")?;
+    Ok(metadata)
+}
+
+/// 校验 URL 是 `http:`/`https:`；`field` 只用于错误文案。
+fn ensure_web_url(url: &str, field: &str) -> Result<()> {
+    let parsed =
+        url::Url::parse(url.trim()).with_context(|| format!("invalid {field} URL: {url}"))?;
+    match parsed.scheme() {
+        "http" | "https" => Ok(()),
+        scheme => bail!("refusing non-web {field} URL ({scheme}): {url}"),
+    }
 }
 
 /// 构造 rmcp 的 AuthorizationManager（已挂文件凭据存储）。
@@ -980,6 +998,21 @@ mod tests {
         first.clear().await.unwrap();
         assert!(first.load().await.unwrap().is_none());
         assert!(second.load().await.unwrap().is_some());
+    }
+
+    /// 授权端点只允许 http(s)：`file:` / 自定义 scheme 会被平台 URL handler 直接拉起（pi 1.5.0）。
+    #[test]
+    fn only_web_urls_are_accepted_for_oauth_endpoints() {
+        assert!(ensure_web_url("https://example.com/authorize", "ep").is_ok());
+        assert!(ensure_web_url("http://127.0.0.1:3118/authorize", "ep").is_ok());
+        for bad in [
+            "file:///etc/passwd",
+            "search-ms:query=x",
+            "javascript:alert(1)",
+            "not a url",
+        ] {
+            assert!(ensure_web_url(bad, "ep").is_err(), "{bad} 应被拒绝");
+        }
     }
 
     #[test]

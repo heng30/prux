@@ -1373,6 +1373,19 @@ fn default_model_id(provider: &str) -> Option<&'static str> {
     })
 }
 
+/// 读取模型目录原始条目 `compat.<key>` 的布尔值；条目或字段缺失时返回 `default`。
+///
+/// 给「只在个别兼容端点上需要」的开关用：这类开关进 `ModelConfig` 要改十几处结构体字面量，
+/// 而 `ModelConfig` 又不透传整个 compat，故按需回查目录。
+pub fn compat_bool(provider: &str, model_id: &str, key: &str, default: bool) -> bool {
+    provider_models(provider)
+        .iter()
+        .find(|m| m.get("id").and_then(|v| v.as_str()) == Some(model_id))
+        .and_then(|m| m.get("compat").and_then(|c| c.get(key)))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(default)
+}
+
 /// provider 的默认模型：默认模型表优先。
 /// 表中 id 不在当前合并视图时回退合并视图（基线 + store + models.json）第一个
 /// chat 条目（目录里的 image/classifier 条目不能当默认模型用）；

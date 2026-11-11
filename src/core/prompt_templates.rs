@@ -139,16 +139,28 @@ fn strip_yaml_quotes(s: &str) -> String {
     s.to_string()
 }
 
-/// bash 风格参数切分（支持单双引号）
+/// bash 风格参数切分（支持单双引号与反斜杠转义）
 ///
 /// 空引号（`""` / `''`）会产生一个空串参数，不能丢弃：
 /// 否则后续位置参数整体前移，`${N:-default}` 的默认值会落错位置。
+/// 词内撇号（`doesn't`）不开引号；无闭合的引号按字面文本保留（pi #11861）。
 pub fn parse_command_args(args_string: &str) -> Vec<String> {
     let mut args = Vec::new();
     let mut current = String::new();
     let mut quote: Option<char> = None;
     let mut started = false;
+    let mut escaped = false;
     for c in args_string.chars() {
+        if escaped {
+            current.push(c);
+            escaped = false;
+            continue;
+        }
+        // 反斜杠在引号内外都转义下一个字符（`\"` / `\'` / `\ `）
+        if c == '\\' {
+            escaped = true;
+            continue;
+        }
         if let Some(q) = quote {
             if c == q {
                 quote = None;
@@ -156,8 +168,13 @@ pub fn parse_command_args(args_string: &str) -> Vec<String> {
                 current.push(c);
             }
         } else if c == '"' || c == '\'' {
-            quote = Some(c);
-            started = true;
+            // 引号只在参数起始处（或空白之后）开始引号；词内撇号是普通字符
+            if current.is_empty() {
+                started = true;
+                quote = Some(c);
+            } else {
+                current.push(c);
+            }
         } else if c.is_whitespace() {
             if started {
                 args.push(std::mem::take(&mut current));
@@ -454,6 +471,23 @@ mod tests {
             substitute_args("$1 ${2:-fallback} $3", &parse_command_args("a \"\" c")),
             "a fallback c"
         );
+    }
+
+    /// 词内撇号不开引号、无闭合引号按文本保留、支持反斜杠转义（pi #11861）。
+    #[test]
+    fn arg_quotes_need_a_word_boundary() {
+        assert_eq!(
+            parse_command_args("doesn't open a quote"),
+            vec!["doesn't", "open", "a", "quote"]
+        );
+        // 未闭合引号：剩余内容仍是参数文本
+        assert_eq!(parse_command_args("a \"bc"), vec!["a", "bc"]);
+        // 转义引号
+        assert_eq!(
+            parse_command_args(r#"a \"quoted\" b"#),
+            vec!["a", "\"quoted\"", "b"]
+        );
+        assert_eq!(parse_command_args(r#"x 'it\'s'"#), vec!["x", "it's"]);
     }
 
     #[test]

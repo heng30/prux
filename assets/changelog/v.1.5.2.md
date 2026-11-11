@@ -54,6 +54,68 @@
   view asked for Source Code Pro only, which carries no CJK glyphs, so each Chinese character was
   drawn by whichever font the system picked — different on every machine and visibly unlike the
   rest of the UI. Monospace text now declares the embedded CJK font as its glyph fallback.
+- **Claude tools that share schema definitions lost them**: the request kept only `properties` and
+  `required` and dropped the schema's root `$defs`/`definitions`, so every property `$ref` pointed at
+  nothing — tools whose parameters share a nested model (common for MCP servers) made the model send
+  the wrong arguments, and some compatible gateways rejected the request outright. Both are sent now.
+- **Gemini rejected tools whose schema uses `const`**: Gemini ignores `const` in
+  `parametersJsonSchema` and honors `enum` only, so such a tool failed the whole request. String and
+  number `const` values are now sent as single-value `enum`s; literal data in `default`, `examples`
+  and existing `enum`s is left untouched.
+- **OpenAI Responses sent the affinity header under the wrong name**: it used `session_id` instead of
+  the documented `session-id`, so the server-side session affinity never took effect. Responses now
+  sends `session-id`; OpenAI-compatible completions keep `session_id`.
+- **Some transient failures were not retried, and a plan limit was**: a stream a gateway cut off after
+  the reply began, a socket the other side closed, and a ChatGPT subscription whose usage data is
+  briefly unavailable now retry. Zhipu/Z.ai plan-limit errors (code `1308`, sent as HTTP 429) no
+  longer retry until the cap resets, and neither do OpenCode Go's "available balance" limits.
+- **LiteLLM's context overflow was not recognised**: its `ContextWindowExceededError` wording
+  (`context window exceeded`) was missing from the overflow patterns, so a request that only needed
+  compaction failed instead of being compacted and retried.
+- **Gateways that reject `content: null` now get an empty string**: an assistant message that carries
+  only tool calls used to send `content: null` unconditionally. Set
+  `compat.requiresNonNullAssistantContent` on such a model in `models.json` and it sends `""`.
+- **A saved "do not trust" was ignored for projects that need no trust**: when a project had nothing
+  that requires trust (for example only an `AGENTS.md`), startup short-circuited to trusted and never
+  looked at the saved decision, so the project's MCP servers, subagent configs and memory were read
+  as trusted. A saved decision now wins; auto-trust applies only when no decision was saved.
+- **Prompt template arguments broke on apostrophes**: an apostrophe inside a word (`doesn't`) opened a
+  quote and swallowed the rest of the line, and `\"` stayed a backslash and a quote. Quotes now start
+  only at the beginning of an argument, an unclosed quote stays text, and `\"` / `\'` give a literal
+  quote.
+- **Search ranked a scattered hit above a better contiguous one**: `/model`, `/resume` and the file
+  suggester scored only the first possible alignment, so `opus` could list a loose match before
+  `claude-opus-4.1`. Every alignment is scored now and the best one wins.
+- **`tool_search` could not find anything with a Chinese query**: the tokenizer kept ASCII letters and
+  digits only, so a query like `搜索` became empty and every non-English search returned nothing.
+  Letters of any script now match, with CJK text split per character.
+- **`grep` read its `glob` from the wrong folder**: with `path: "repo"`, a glob such as
+  `migrations/main/*.js` matched nothing because it was resolved against the directory the agent was
+  started in. Globs are now relative to `path`, and a leading `./` is ignored.
+- **`grep` with `context` read whole files into memory**: context lines came from reading each matched
+  file in full, which ran out of memory on large files and shifted line numbers in files with lone
+  carriage returns. They now come from ripgrep itself.
+- **`grep` and `find` reported the limit when the result count was exactly the limit**: the notice said
+  `Use limit=… for more` although nothing was cut. It appears only when there really are more results.
+- **`find` ignored Windows-style path patterns**: `src\**\*.ts` was not treated as a path pattern at
+  all, so it matched nothing. Separators are normalised, and a leading `./` is ignored.
+- **`read` loaded the whole file even with `offset`/`limit`**: opening a huge log ran out of memory.
+  Only the file head is read now (to recognise images) and the requested line range is streamed, so
+  `offset` near the end of a multi-gigabyte file costs nothing.
+- **`bash` could wait forever when a background process held the pipe**: the timeout covered only the
+  shell's exit, so `cmd & exit 0` with the background job still writing hung the tool. The timeout now
+  covers the output drain too, and the error reports the shell's real exit code and when it exited.
+- **Exported HTML did not show the system prompt and tools**: `/export` and sharing wrote the entries
+  only, so the two sections that explain what the session ran with stayed empty. Both now carry the
+  system prompt and the tool declarations actually sent for this request (hidden ones excluded).
+- **HTML comments in Markdown showed up as text**: `<!-- ... -->` was rendered as visible text in the
+  TUI and the GUI. Comments are dropped; other inline HTML is unchanged.
+- **Orca fell back to text for images and lost true color**: Orca is now recognised as a true-color
+  terminal, and uses Kitty images when it advertises `ORCA_IMAGE_PROTOCOL=kitty`.
+- **A malicious MCP server could hand the browser a non-web URL**: OAuth metadata and the final
+  authorization URL were accepted with any scheme, so a server could supply `file:` or a custom
+  protocol such as `search-ms:` that the platform URL handler launches locally. Only `http:` and
+  `https:` are accepted now.
 
 ## 中文
 
@@ -95,4 +157,49 @@
 - **等宽文本里的中文落到系统字体**：代码块、内联代码与 diff 视图只指定 Source Code Pro，它没有中文字形，
   于是每个汉字都由系统随手挑的字体画出来——各机器不一样，也和界面其余部分明显不搭。
   现在等宽文本声明内嵌中文字体作字形回退。
+- **Claude 上共享 schema 定义的工具丢了定义**：请求只保留 `properties` 与 `required`，把 schema 根部的
+  `$defs`/`definitions` 一起丢了，属性里的 `$ref` 于是指向空——多个工具共用嵌套模型时（MCP 服务器常见）
+  模型会给出错误参数，部分兼容网关直接拒绝请求。现在两者一并下发。
+- **Gemini 拒绝带 `const` 的工具 schema**：Gemini 忽略 `parametersJsonSchema` 里的 `const`、只认 `enum`，
+  于是整个请求失败。现在字符串与数字的 `const` 改写成单值 `enum`；`default`、`examples` 与已有 `enum`
+  里的字面数据原样保留。
+- **OpenAI Responses 的会话亲和头用错了名字**：发的是 `session_id`，而文档里是 `session-id`，
+  服务端会话亲和一直没生效。Responses 现在发 `session-id`；OpenAI 兼容的 completions 仍是 `session_id`。
+- **有些瞬时故障没重试，套餐上限却在重试**：网关在回复已开始后截断的流、对端关闭的 socket、
+  ChatGPT 订阅用量数据短暂不可用，现在都会重试。Zhipu/Z.ai 的套餐上限（错误码 `1308`，以 HTTP 429 下发）
+  在额度重置前不再重试，OpenCode Go 的「可用余额」限额同样不重试。
+- **LiteLLM 的上下文溢出没被识别**：溢出文案表里缺 `context window exceeded`（`ContextWindowExceededError`），
+  本该压缩后重试的请求直接失败了。
+- **拒绝 `content: null` 的网关现在收到空串**：只带工具调用的 assistant 消息原先无条件发 `content: null`。
+  在 `models.json` 里给这类模型设 `compat.requiresNonNullAssistantContent` 即改发 `""`。
+- **已保存的「不信任」对无需信任的项目不生效**：项目里没有需要信任的资源时（比如只有一份
+  `AGENTS.md`），启动直接短路成「信任」、根本不看已保存的决策，于是项目的 MCP 服务器、子代理配置
+  与记忆都按已信任读取。现在已保存的决策优先，没有决策时才自动信任。
+- **提示词模板参数遇到撇号就串行**：词内撇号（`doesn't`）会开引号并吞掉后面整行，`\"` 也仍是
+  反斜杠加引号。现在引号只在参数起始处生效，未闭合的引号按文本保留，`\"` / `\'` 给出字面引号。
+- **搜索把散落的命中排在更好的连续命中之前**：`/model`、`/resume` 与文件补全只给第一个可能对齐位置
+  打分，`opus` 可能把松散命中排到 `claude-opus-4.1` 前面。现在每个对齐位置都打分并取最优。
+- **`tool_search` 用中文查不到任何工具**：分词只保留 ASCII 字母与数字，`搜索` 这类查询分词后为空，
+  所有非英文检索都返回空。现在任意书写系统的字母都能命中，中日韩文本按单字切词。
+- **`grep` 的 `glob` 从错误的目录起算**：`path: "repo"` 时 `migrations/main/*.js` 这类 glob 一个都
+  匹配不到，因为它相对的是 agent 的启动目录。现在 glob 相对 `path`，前导 `./` 被忽略。
+- **`grep` 带 `context` 时把整个文件读进内存**：上下文行是靠整文件读入命中文件得到的，大文件会吃光内存，
+  含孤立回车符的文件还会让行号错位。现在上下文行由 ripgrep 自己产出。
+- **`grep` 与 `find` 在结果数恰好等于 limit 时也提示 limit**：明明没有截断却提示 `Use limit=… for more`。
+  现在只有确实还有更多结果时才提示。
+- **`find` 不认 Windows 风格路径模式**：`src\**\*.ts` 没被当成路径模式，一个文件都匹配不到。
+  现在分隔符会归一，前导 `./` 被忽略。
+- **`read` 给了 `offset`/`limit` 也整文件读入**：打开几百 MB 的日志会吃光内存。现在只读文件头判断图片、
+  按行区间流式读取，在多 GB 文件末尾 `offset` 也不花代价。
+- **`bash` 在后台进程占着管道时会一直等**：超时只管「shell 退出」，`cmd & exit 0` 而后台作业还在写时
+  工具会挂住。现在超时也覆盖输出收尾，错误里还会带上 shell 的真实退出码与退出时间。
+- **导出的 HTML 看不到系统提示词与工具**：`/export` 与分享只写会话条目，解释这次会话用什么跑起来的
+  两节一直是空的。现在两者都带上系统提示词与本次真正声明的工具（被隐藏的不算）。
+- **Markdown 里的 HTML 注释被当正文显示**：`<!-- ... -->` 在 TUI 与 GUI 里都会被画出来。现在注释被丢弃，
+  其余内联 HTML 行为不变。
+- **Orca 终端的图片退化成文本、也没有 truecolor**：现在 Orca 被识别为支持 truecolor，
+  并在宣告 `ORCA_IMAGE_PROTOCOL=kitty` 时使用 Kitty 图片。
+- **恶意 MCP 服务器可以把非 web 地址交给浏览器**：OAuth 元数据与最终授权地址原先接受任意 scheme，
+  服务器给 `file:` 或 `search-ms:` 这类自定义协议时会被平台 URL handler 本地拉起。
+  现在只接受 `http:` 与 `https:`。
 

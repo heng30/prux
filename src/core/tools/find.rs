@@ -63,9 +63,13 @@ pub async fn execute_find_with_ops(
     if !inside_git {
         args.push("--no-require-git".into());
     }
+    // 多要一条才能区分「恰好 limit 个」与「还有更多」：后者才提示 limit
     args.push("--max-results".into());
-    args.push(effective_limit.to_string());
+    args.push((effective_limit + 1).to_string());
 
+    // Windows 分隔符与路径写法先归一：`src\**\*.ts` 也要按路径模式处理
+    let pattern = pattern.replace('\\', "/");
+    let pattern = pattern.trim_start_matches("./");
     let mut effective_pattern = pattern.to_string();
     if pattern.contains('/') {
         args.push("--full-path".into());
@@ -143,7 +147,8 @@ pub async fn execute_find_with_ops(
         ));
     }
 
-    let result_limit_reached = relativized.len() >= effective_limit;
+    let result_limit_reached = relativized.len() > effective_limit;
+    let relativized: Vec<String> = relativized.into_iter().take(effective_limit).collect();
     let raw_output = relativized.join("\n");
     let truncation = truncate::truncate_head(&raw_output, (Some(usize::MAX), None));
     let mut result_output = truncation.content;

@@ -82,52 +82,45 @@ pub async fn execute_read_with_ops(
             e
         ))
     })?;
-    let bytes = match ops.read_file(&abs) {
-        Ok(b) => b,
-        Err(e) => {
-            return Err(ToolError(format!(
-                "Error reading file: {}. {}",
-                absolute_path.display(),
-                e
-            )));
-        }
+    let read_error = |e: std::io::Error| {
+        ToolError(format!(
+            "Error reading file: {}. {}",
+            absolute_path.display(),
+            e
+        ))
     };
-    let mime_type = detect_supported_image_mime_type(&bytes);
-    if let Some(mime) = mime_type {
+
+    // 只读文件头判图片：整文件读入在大文件上会 OOM（pi #9654）
+    let head = ops.read_head(&abs, 4096).map_err(read_error)?;
+    if let Some(mime) = detect_supported_image_mime_type(&head) {
+        let bytes = ops.read_file(&abs).map_err(read_error)?;
         return Ok(read_image_result(mime, &bytes, &image_opts));
     }
 
-    // 非 UTF-8 用 U+FFFD 替换（尽力渲染乱码文本）
-    let text_content = String::from_utf8_lossy(&bytes).to_string();
-    let all_lines: Vec<&str> = text_content.split('\n').collect();
-    let total_file_lines = all_lines.len();
     let start_line = match offset {
         Some(o) => (o - 1).max(0) as usize,
         None => 0,
     };
     let start_line_display = start_line + 1;
-    if start_line >= all_lines.len() {
+    // 只取需要的行区间（流式读，不整文件入内存）
+    let (all_lines, total_file_lines) = ops
+        .read_lines_range(&abs, start_line, limit.map(|l| start_line + l as usize))
+        .map_err(read_error)?;
+    if start_line >= total_file_lines {
         return Err(ToolError(format!(
             "Offset {} is beyond end of file ({} lines total)",
             offset.unwrap_or(0),
-            all_lines.len()
+            total_file_lines
         )));
     }
 
-    let selected_content: String;
-    let mut user_limited_lines: Option<usize> = None;
-    if let Some(limit) = limit {
-        let end_line = (start_line + limit as usize).min(all_lines.len());
-        selected_content = all_lines[start_line..end_line].join("\n");
-        user_limited_lines = Some(end_line - start_line);
-    } else {
-        selected_content = all_lines[start_line..].join("\n");
-    }
+    let selected_content = all_lines.join("\n");
+    let user_limited_lines = limit.map(|_| all_lines.len());
 
     let truncation = truncate::truncate_head(&selected_content, (None, None));
     let mut output_text: String;
     if truncation.first_line_exceeds_limit {
-        let first_line_size = truncate::format_size(all_lines[start_line].len());
+        let first_line_size = truncate::format_size(all_lines.first().map_or(0, |l| l.len()));
         output_text = format!(
             "[Line {} is {}, exceeds {} limit. Use bash: sed -n '{}p' {} | head -c {}]",
             start_line_display,
@@ -160,8 +153,8 @@ pub async fn execute_read_with_ops(
             }
         }
     } else if let Some(limited) = user_limited_lines {
-        if start_line + limited < all_lines.len() {
-            let remaining = all_lines.len() - (start_line + limited);
+        if start_line + limited < total_file_lines {
+            let remaining = total_file_lines - (start_line + limited);
             let next_offset = start_line + limited + 1;
             output_text = format!(
                 "{}\n\n[{} more lines in file. Use offset={} to continue.]",

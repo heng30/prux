@@ -760,7 +760,13 @@ pub(crate) fn session_affinity_headers(model: &ModelConfig) -> Vec<(&'static str
 
     let mut out = Vec::new();
     if format == "openai" {
-        out.push(("session_id", sid.to_string()));
+        // OpenAI Responses 文档里的头名是 `session-id`（无下划线），completions 侧仍是 `session_id`
+        let name = if model.api == "openai-responses" {
+            "session-id"
+        } else {
+            "session_id"
+        };
+        out.push((name, sid.to_string()));
     }
     out.push(("x-client-request-id", sid.to_string()));
 
@@ -1914,6 +1920,13 @@ mod tests {
         m.session_id = Some("sess-1".into());
         m.session_affinity_format = Some("openai-nosession".into());
         assert_eq!(names(&m), vec!["x-client-request-id"]);
+
+        // openai-responses：文档里的亲和头是 `session-id`（pi #11639）
+        let mut m = model(false, None);
+        m.api = "openai-responses".into();
+        m.provider = "openai".into();
+        m.session_id = Some("sess-1".into());
+        assert_eq!(names(&m), vec!["session-id", "x-client-request-id"]);
 
         // anthropic-messages：同样受开关限制；格式 openrouter 时换 x-session-id
         let mut m = model(false, None);

@@ -616,7 +616,14 @@ async fn dispatch_share(agent: &Arc<Mutex<Agent>>, theme: Option<String>) -> Opt
             // prux 没有 Radius provider，`auto` 与 `gist` 同样走 gist
             settings_manager::SessionShareDestination::Auto
             | settings_manager::SessionShareDestination::Gist => {
-                share_via_gist(&session, theme.as_deref())
+                let session_file = session
+                    .get_session_file()
+                    .map(|p| p.to_string_lossy().to_string());
+                share_via_gist(
+                    &session,
+                    theme.as_deref(),
+                    a.export_extras(session_file.as_deref()),
+                )
             }
         },
         None => "share failed: no current session".to_string(),
@@ -628,7 +635,9 @@ async fn dispatch_share(agent: &Arc<Mutex<Agent>>, theme: Option<String>) -> Opt
 }
 
 /// 导出会话 HTML 并用 `gh gist create --public=false` 上传，返回给聊天区的回执文本。
-pub(crate) fn share_via_gist(session: &Session, theme: Option<&str>) -> String {
+///
+/// `extras` 是 [`Agent::export_extras`] 给出的系统提示词与工具清单。
+pub(crate) fn share_via_gist(session: &Session, theme: Option<&str>, extras: Value) -> String {
     let Ok(tmp) = tempfile::Builder::new()
         .prefix(&format!("{APP_NAME}-share-"))
         .suffix(".html")
@@ -638,17 +647,10 @@ pub(crate) fn share_via_gist(session: &Session, theme: Option<&str>) -> String {
     };
 
     let path = tmp.path().to_string_lossy().to_string();
-    let session_file = session
-        .get_session_file()
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_default();
 
-    if let Err(e) = core::export_html::export_session_extra(
-        session,
-        Some(&path),
-        theme,
-        Some(serde_json::json!({ "sessionFile": session_file })),
-    ) {
+    if let Err(e) =
+        core::export_html::export_session_extra(session, Some(&path), theme, Some(extras))
+    {
         return format!("share failed: {e}");
     }
 
@@ -795,10 +797,18 @@ async fn dispatch_export(
 ) -> Option<RoundFuture> {
     let a = agent.lock().await;
     let msg = match a.session.as_ref() {
-        Some(s) => match core::export_html::export_session(s, out.as_deref(), theme.as_deref()) {
-            Ok(p) => format!("exported: {}", p),
-            Err(e) => format!("export failed: {}", e),
-        },
+        Some(s) => {
+            let extras = a.export_extras(None);
+            match core::export_html::export_session_extra(
+                s,
+                out.as_deref(),
+                theme.as_deref(),
+                Some(extras),
+            ) {
+                Ok(p) => format!("exported: {}", p),
+                Err(e) => format!("export failed: {}", e),
+            }
+        }
         None => "no current session".to_string(),
     };
     let ok = msg.starts_with("exported");

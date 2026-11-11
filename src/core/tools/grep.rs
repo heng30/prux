@@ -92,19 +92,33 @@ pub async fn execute_grep_with_ops(
     if literal {
         args.push("--fixed-strings".into());
     }
+    // 上下文行交给 ripgrep 自己产出：整文件读入内存既费内存，孤立 `\r` 还会让行号错位
+    if context_value > 0 {
+        args.push("-C".into());
+        args.push(context_value.to_string());
+    }
     if let Some(g) = glob {
+        // glob 相对 `path`（与输出路径同一形态），前导 `./` 没有意义
         args.push("--glob".into());
-        args.push(g.into());
+        args.push(g.trim_start_matches("./").to_string());
     }
     args.push("--".into());
     args.push(pattern.into());
-    args.push(search_path.to_string_lossy().to_string());
 
     let rg_bin =
         tools_manager::rg_path().ok_or_else(|| ToolError(tools_manager::install_hint("rg")))?;
 
-    let mut child = match tokio::process::Command::new(&rg_bin)
-        .args(&args)
+    let mut command = tokio::process::Command::new(&rg_bin);
+    // 目录搜索时把 cwd 设到 path：否则 `--glob` 相对的是 agent 的启动目录而不是 path
+    if is_directory {
+        command.current_dir(&search_path);
+        args.push(".".into());
+    } else {
+        args.push(search_path.to_string_lossy().to_string());
+    }
+    command.args(&args);
+
+    let mut child = match command
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .hide_console()
@@ -126,8 +140,8 @@ pub async fn execute_grep_with_ops(
         String::from_utf8_lossy(&buf).to_string()
     });
 
-    // 收集匹配（流式解析 JSON 行）
-    let mut matches: Vec<(String, usize, String)> = Vec::new(); // (file, line, text)
+    // 收集匹配与上下文行（流式解析 JSON 行）：(是否匹配行, file, line, text)
+    let mut matches: Vec<(bool, String, usize, String)> = Vec::new();
     let mut match_count = 0usize;
     let mut match_limit_reached = false;
 
@@ -143,37 +157,40 @@ pub async fn execute_grep_with_ops(
             if line.trim().is_empty() {
                 continue;
             }
-            if match_count >= effective_limit {
-                kill_flag_parse.store(true, Ordering::SeqCst);
-                break;
-            }
             let Ok(v) = serde_json::from_str::<Value>(&line) else {
                 continue;
             };
-            if v.get("type").and_then(|t| t.as_str()) == Some("match") {
+            let kind = v.get("type").and_then(|t| t.as_str());
+            let is_match = kind == Some("match");
+            // 只消费匹配与上下文行（`-C` 时 rg 会插 context 事件，顺序即输出顺序）
+            if !is_match && kind != Some("context") {
+                continue;
+            }
+            if is_match {
                 match_count += 1;
-                let file = v
-                    .pointer("/data/path/text")
-                    .and_then(|x| x.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let line_num = v
-                    .pointer("/data/line_number")
-                    .and_then(|x| x.as_u64())
-                    .unwrap_or(0) as usize;
-                let line_text = v
-                    .pointer("/data/lines/text")
-                    .and_then(|x| x.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                if !file.is_empty() && line_num > 0 {
-                    matches.push((file, line_num, line_text));
-                }
-                if match_count >= effective_limit {
+                // 多读一条匹配才能区分「恰好 limit 条」与「还有更多」：后者才提示 limit
+                if match_count > effective_limit {
                     match_limit_reached = true;
                     kill_flag_parse.store(true, Ordering::SeqCst);
                     break;
                 }
+            }
+            let file = v
+                .pointer("/data/path/text")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string();
+            let line_num = v
+                .pointer("/data/line_number")
+                .and_then(|x| x.as_u64())
+                .unwrap_or(0) as usize;
+            let line_text = v
+                .pointer("/data/lines/text")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string();
+            if !file.is_empty() && line_num > 0 {
+                matches.push((is_match, file, line_num, line_text));
             }
         }
         (matches, match_limit_reached)
@@ -204,46 +221,33 @@ pub async fn execute_grep_with_ops(
         return Ok(ToolResult::text("No matches found".to_string()));
     }
 
-    // 格式化输出
+    // 格式化输出：匹配行 `file:line: text`，上下文行 `file-line- text`（与 rg 的惯例一致）
     let mut output_lines: Vec<String> = Vec::new();
     let mut lines_truncated = false;
-    if context_value == 0 {
-        for (file, line_num, line_text) in &matches {
-            let rel = format_grep_path(file, &search_path, is_directory);
-            let sanitized = line_text
-                .replace("\r\n", "\n")
-                .replace('\r', "")
-                .trim_end_matches('\n')
-                .to_string();
-            let (truncated, was) = truncate::truncate_line(&sanitized, GREP_MAX_LINE_LENGTH);
-            if was {
-                lines_truncated = true;
-            }
-            output_lines.push(format!("{}:{}: {}", rel, line_num, truncated));
+    for (is_match, file, line_num, line_text) in &matches {
+        // 目录搜索时 rg 的 cwd 是 path，输出路径相对 path，这里还原成绝对路径再相对化
+        let full_path = if is_directory {
+            search_path
+                .join(file.trim_start_matches("./"))
+                .to_string_lossy()
+                .to_string()
+        } else {
+            file.clone()
+        };
+        let rel = format_grep_path(&full_path, &search_path, is_directory);
+        let sanitized = line_text
+            .replace("\r\n", "\n")
+            .replace('\r', "")
+            .trim_end_matches('\n')
+            .to_string();
+        let (truncated, was) = truncate::truncate_line(&sanitized, GREP_MAX_LINE_LENGTH);
+        if was {
+            lines_truncated = true;
         }
-    } else {
-        for (file, line_num, _) in &matches {
-            let rel = format_grep_path(file, &search_path, is_directory);
-            let file_lines = read_file_lines(file).await;
-            if file_lines.is_empty() {
-                output_lines.push(format!("{}:{}: (unable to read file)", rel, line_num));
-                continue;
-            }
-            let start = line_num.saturating_sub(context_value).max(1);
-            let end = (line_num + context_value).min(file_lines.len());
-            for current in start..=end {
-                let line_text = file_lines.get(current - 1).cloned().unwrap_or_default();
-                let sanitized = line_text.replace('\r', "");
-                let (truncated, was) = truncate::truncate_line(&sanitized, GREP_MAX_LINE_LENGTH);
-                if was {
-                    lines_truncated = true;
-                }
-                if current == *line_num {
-                    output_lines.push(format!("{}:{}: {}", rel, current, truncated));
-                } else {
-                    output_lines.push(format!("{}-{}- {}", rel, current, truncated));
-                }
-            }
+        if *is_match {
+            output_lines.push(format!("{}:{}: {}", rel, line_num, truncated));
+        } else {
+            output_lines.push(format!("{}-{}- {}", rel, line_num, truncated));
         }
     }
 
@@ -274,19 +278,6 @@ pub async fn execute_grep_with_ops(
         output.push_str(&format!("\n\n[{}]", notices.join(". ")));
     }
     Ok(ToolResult::text(output))
-}
-
-/// 读取文本文件并按行拆分（统一为 LF、去掉 CR）；读取失败时返回空 `Vec`。
-async fn read_file_lines(file_path: &str) -> Vec<String> {
-    match tokio::fs::read_to_string(file_path).await {
-        Ok(content) => content
-            .replace("\r\n", "\n")
-            .replace('\r', "")
-            .split('\n')
-            .map(|s| s.to_string())
-            .collect(),
-        Err(_) => Vec::new(),
-    }
 }
 
 /// 输出路径：目录搜索时相对路径，否则 basename

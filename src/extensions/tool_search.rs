@@ -386,11 +386,31 @@ pub fn tokenize(text: &str) -> Vec<String> {
         spaced.push(*c);
     }
 
-    spaced
-        .to_lowercase()
-        .split(|c: char| !c.is_ascii_alphanumeric())
-        .filter(|term| !term.is_empty() && !STOP_WORDS.contains(term))
-        .map(stem)
+    // 非 ASCII 字母（中日韩、泰文等）按**单字**成词：这些语言词间没有空格，
+    // 只认 ASCII 会让中文查询分词后为空、永远搜不到工具。
+    let mut terms: Vec<String> = Vec::new();
+    let mut ascii_run = String::new();
+    for c in spaced.to_lowercase().chars() {
+        if c.is_ascii_alphanumeric() {
+            ascii_run.push(c);
+            continue;
+        }
+        if !ascii_run.is_empty() {
+            terms.push(std::mem::take(&mut ascii_run));
+        }
+        if c.is_alphanumeric() {
+            terms.push(c.to_string());
+        }
+    }
+    if !ascii_run.is_empty() {
+        terms.push(ascii_run);
+    }
+
+    terms
+        .into_iter()
+        .filter(|term| !term.is_empty() && !STOP_WORDS.contains(&term.as_str()))
+        // 词干只对 ASCII 生效：stem 按字节切尾巴，非 ASCII 会切在多字节字符中间
+        .map(|term| if term.is_ascii() { stem(&term) } else { term })
         .collect()
 }
 
@@ -673,6 +693,28 @@ mod tests {
         assert_eq!(tokenize("list_issues"), vec!["list", "issue"]);
         // 停用词被丢弃
         assert_eq!(tokenize("the of and"), Vec::<String>::new());
+    }
+
+    /// 中文等无空格语言按单字成词：只认 ASCII 会让中文查询永远零结果（pi #10816）。
+    #[test]
+    fn tokenizes_non_ascii_text() {
+        assert_eq!(tokenize("搜索"), vec!["搜", "索"]);
+        assert_eq!(
+            tokenize("搜索GitHub_repo"),
+            vec!["搜", "索", "git", "hub", "repo"]
+        );
+        // 词干只对 ASCII 生效（非 ASCII 不会被按字节切坏）
+        assert_eq!(tokenize("記事を検索する").len(), 7);
+    }
+
+    #[test]
+    fn ranks_chinese_query() {
+        let docs = vec![
+            doc("search_memory", "搜索历史记忆"),
+            doc("read", "Read a file"),
+        ];
+        let matches = rank("搜索", &docs, DEFAULT_LIMIT);
+        assert_eq!(matches[0].0, "search_memory");
     }
 
     #[test]

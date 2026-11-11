@@ -1320,6 +1320,30 @@ impl Agent {
         self.model.supported_thinking_levels()
     }
 
+    /// HTML 导出附带的数据：系统提示词与本次声明的工具清单（`sessionFile` 可选）。
+    ///
+    /// 导出页据此展示「系统提示词」与「可用工具」两节；隐藏不声明的工具不算在内。
+    pub fn export_extras(&self, session_file: Option<&str>) -> Value {
+        let tools: Vec<Value> = self
+            .tools
+            .iter()
+            .filter(|(name, _, _)| !self.hidden_declarations.contains(name))
+            .map(|(name, description, parameters)| {
+                json!({ "name": name, "description": description, "parameters": parameters })
+            })
+            .collect();
+        let mut extra = json!({
+            "systemPrompt": self.system_prompt,
+            "tools": tools,
+        });
+        if let Some(file) = session_file
+            && let Some(obj) = extra.as_object_mut()
+        {
+            obj.insert("sessionFile".into(), json!(file));
+        }
+        extra
+    }
+
     /// 选中的模型是否为虚拟模型（`api` 为 [`virtual_models::VIRTUAL_MODEL_API`]）。
     pub fn selected_is_virtual(&self) -> bool {
         virtual_models::is_virtual_api(&self.model.api)
@@ -2364,7 +2388,7 @@ impl Agent {
     fn is_retryable_assistant_error(msg: &str) -> bool {
         let m = msg.to_lowercase();
         /// 不可重试错误特征子串：配额或计费耗尽等，命中则直接失败。
-        const NON_RETRYABLE: [&str; 11] = [
+        const NON_RETRYABLE: [&str; 12] = [
             "gousagelimiterror",
             "freeusagelimiterror",
             "monthly usage limit reached",
@@ -2378,9 +2402,17 @@ impl Agent {
             "subscription_sharing_usage_limit_exceeded",
             // Sign in with ChatGPT 的 Business 工作区上限：只有管理员能提额
             "subscription_sharing_workplace_individual_usage_limit_exceeded",
+            // OpenCode Go 套餐限额文案（启用「可用余额」后继续）
+            "available balance",
         ];
 
         if NON_RETRYABLE.iter().any(|p| m.contains(p)) {
+            return false;
+        }
+
+        // Zhipu/Z.ai（open.bigmodel.cn）1308：套餐用量上限，以 429 下发但几小时后才重置，
+        // 重试永远不可能成功。要求带引号且后面不是数字，避开其它数字串。
+        if Self::contains_zhipu_usage_limit(&m) {
             return false;
         }
 
@@ -2431,6 +2463,11 @@ impl Agent {
             // websocket 传输
             "websocket closed",
             "websocket error",
+            "subscription_sharing_usage_unavailable",
+            "subscription_sharing_user_unavailable",
+            "socket connection was closed",
+            // 网关转发的 Anthropic 流中途被截断
+            "cut short after the reply had begun",
             // 流提前结束
             "ended without",
             "stream ended before message_stop",
@@ -2455,6 +2492,27 @@ impl Agent {
     /// 只说 `failed, reason:` 太宽，故要求与 `request to ` 同时出现。
     fn is_oauth_token_refresh_failure(m: &str) -> bool {
         m.contains("request to ") && m.contains(" failed, reason:")
+    }
+
+    /// `m`（已小写）里是否出现 Zhipu/Z.ai 的套餐用量上限错误码 1308。
+    ///
+    /// 只认紧跟 `code` 字段的 1308：形如 `"code": "1308"` / `"code":1308` / `code: 1308`；
+    /// 数字必须是完整的（`13080` 不算），避免把无关数字串当上限。
+    fn contains_zhipu_usage_limit(m: &str) -> bool {
+        let mut rest = m;
+        while let Some(pos) = rest.find("code") {
+            // `code` 与数字之间可能夹着引号、冒号与空白（`"code":1308` / `"code": "1308"`）
+            let tail = rest[pos + 4..].trim_start_matches(|c: char| {
+                c == '"' || c == '\'' || c == ':' || c.is_whitespace()
+            });
+            if let Some(after) = tail.strip_prefix("1308")
+                && after.chars().next().is_none_or(|c| !c.is_ascii_digit())
+            {
+                return true;
+            }
+            rest = &rest[pos + 4..];
+        }
+        false
     }
 
     /// `m`（已小写）里是否出现独立的 HTTP 状态码 token。
@@ -3249,6 +3307,7 @@ impl Agent {
             "exceeds the available context size",
             "greater than the context length",
             "context window exceeds limit",
+            "context window exceeded",
             "exceeded model token limit",
             "too large for model",
             "is longer than the model",
@@ -4676,6 +4735,29 @@ mod tests {
             "response body was 5242880 bytes, nothing else to report"
         ));
         assert!(!Agent::is_retryable_assistant_error("random model error"));
+        // 1.5.x：下游流被截断要重试；OpenCode Go 的「可用余额」与 Zhipu 1308 不重试
+        assert!(Agent::is_retryable_assistant_error(
+            "Claude Code's stream from Anthropic was cut short after the reply had begun"
+        ));
+        assert!(Agent::is_retryable_assistant_error(
+            "subscription_sharing_usage_unavailable"
+        ));
+        assert!(Agent::is_retryable_assistant_error(
+            "socket connection was closed"
+        ));
+        assert!(!Agent::is_retryable_assistant_error(
+            "provider returned 429 Too Many Requests: {\"error\":{\"code\":1308,\"message\":\"usage limit\"}}"
+        ));
+        assert!(!Agent::is_retryable_assistant_error(
+            "provider returned 429 Too Many Requests: {\"code\": \"1308\"}"
+        ));
+        // 1308 不是完整数字（13080）时不当作套餐上限
+        assert!(Agent::is_retryable_assistant_error(
+            "provider returned 503 Service Unavailable: \"code\":\"13080\""
+        ));
+        assert!(!Agent::is_retryable_assistant_error(
+            "enable available balance to continue"
+        ));
     }
 
     use crate::core::provider::Citation;
@@ -5244,6 +5326,10 @@ mod tests {
         ));
         assert!(Agent::is_overflow_error_str(
             "Your input exceeds the context window of this model"
+        ));
+        // LiteLLM 前置检查（pi 1.5.0 #11492）
+        assert!(Agent::is_overflow_error_str(
+            "litellm.ContextWindowExceededError: Context Window exceeded for given call."
         ));
         assert!(Agent::is_overflow_error_str(
             "exceeds the model's maximum context length of 131072 tokens"

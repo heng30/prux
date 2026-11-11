@@ -52,7 +52,7 @@ const DEFAULT_THINKING_BUDGET: u32 = 1024;
 const ERROR_TOOL_IMAGE_PLACEHOLDER: &str = "(image attached after the tool results)";
 
 /// OAuth 订阅登录时模拟的 Claude Code 版本（`/usage` 的配额端点也要求同一个 UA）
-pub(crate) const CLAUDE_CODE_VERSION: &str = "2.1.280";
+pub(crate) const CLAUDE_CODE_VERSION: &str = "2.1.322";
 
 /// 连续的 toolResult 消息可能带 signature 的 thinking 要做 redacted 判定，重放时按文本内容识别
 fn is_redacted_thinking(block: &ContentBlock) -> bool {
@@ -655,8 +655,10 @@ fn convert_anthropic_system_message(msg: &AgentMessage) -> Option<Value> {
 }
 
 /// 把 `(name, description, parameters)` 工具定义转为 anthropic tools 数组：
-/// `input_schema` 只取原 schema 的 properties/required，`eager_input_streaming` 逐工具透传，
+/// `input_schema` 只取原 schema 的 properties/required，**外加** `$defs`/`definitions`
+/// （属性里的 `$ref` 靠它们解析，pi #9557），`eager_input_streaming` 逐工具透传，
 /// 并在最后一个工具上挂 `cache_control`（提示缓存断点）。
+/// 其余根关键字不进：Anthropic 对根级 `anyOf`/`oneOf`/`allOf` 直接 400。
 fn convert_anthropic_tools(
     tool_defs: &[(String, String, Value)],
     eager_input_streaming: bool,
@@ -664,17 +666,23 @@ fn convert_anthropic_tools(
     let mut tools: Vec<Value> = tool_defs
         .iter()
         .map(|(name, description, parameters)| {
-            let properties = parameters.get("properties").cloned().unwrap_or(json!({}));
-            let required = parameters.get("required").cloned().unwrap_or(json!([]));
+            let mut input_schema = json!({
+                "type": "object",
+                "properties": parameters.get("properties").cloned().unwrap_or(json!({})),
+                "required": parameters.get("required").cloned().unwrap_or(json!([])),
+            });
+            for key in ["$defs", "definitions"] {
+                if let Some(defs) = parameters.get(key)
+                    && let Some(obj) = input_schema.as_object_mut()
+                {
+                    obj.insert(key.to_string(), defs.clone());
+                }
+            }
             json!({
                 "name": name,
                 "description": description,
                 "eager_input_streaming": eager_input_streaming,
-                "input_schema": {
-                    "type": "object",
-                    "properties": properties,
-                    "required": required
-                }
+                "input_schema": input_schema
             })
         })
         .collect();
@@ -1921,6 +1929,27 @@ mod tests {
             assert_eq!(asst["content"][0]["signature"], "", "{provider}");
             assert_eq!(asst["content"][0]["thinking"], "reasoning", "{provider}");
         }
+    }
+
+    /// 非 strict 工具 schema 必须把根 `$defs`/`definitions` 一起下发，否则属性里的
+    /// `$ref` 悬空、Claude 给出错参数（pi #9557）。
+    #[test]
+    fn tool_schema_keeps_root_defs() {
+        let params = json!({
+            "type": "object",
+            "properties": { "q": { "$ref": "#/$defs/Query" } },
+            "required": ["q"],
+            "$defs": { "Query": { "type": "object" } },
+            "definitions": { "Legacy": { "type": "string" } }
+        });
+        let tools = convert_anthropic_tools(&[("t".into(), "d".into(), params)], false);
+        let schema = &tools[0]["input_schema"];
+        assert_eq!(schema["$defs"]["Query"]["type"], "object");
+        assert_eq!(schema["definitions"]["Legacy"]["type"], "string");
+        assert_eq!(schema["properties"]["q"]["$ref"], "#/$defs/Query");
+        assert_eq!(schema["required"], json!(["q"]));
+        // 根级其它关键字仍不下发（Anthropic 对根 anyOf/oneOf 直接 400）
+        assert!(schema.get("anyOf").is_none());
     }
 
     #[test]
