@@ -13,7 +13,17 @@
 **状态标记**：🔧 应修/应移植　⚠️ 需对照 pi 逐项核对（口径可能已偏差或需实测）　✅ 已满足/无此问题（附理由）
 ❌ 结构性不适用（prux 无对应实现）　🆕 本区间新增的候选移植项
 
-**实施状态（第一轮 21 条 🔧、第二轮数据面与 6 条 ⚠️ 已落地；其余 ⚠️ 待核对、🆕 14 条未开工）**：
+**实施状态（第一轮 21 条 🔧、第二轮数据面与 6 条 ⚠️、第三轮对上游复核后修 4 条）**：
+
+**第三轮（对着上游 `pi` 源码逐条复核，修了 4 条、关掉 9 条）**：
+
+- 已修：**1.32 / 1.36 / 1.37 / 1.39** + 图片取小编码（`utils/image.rs`）；
+- 1.36 是**真的 bug**（上一轮判「已满足」是错的）：crossterm 0.29 只映射 F13+ 与
+  lock 键，F1–F12 的 CSI-u 私用区码点（U+E014–U+E01F）落到 `Char` 兜底进编辑器；
+- 复核后改为「已满足 / 不适用」：1.16、1.17、1.19、1.20、1.33；
+- 1.9 重新定性：不是「capped org 的 low 兜底」，而是整套 **mid-convo effort** 未实现
+  （目录已带 `supportsMidConvoEffort`，代码零引用），待单独排期；
+- 1.41 只剩 rmcp 侧两处（JSON 成功响应与错误体无大小上限）。
 
 **第二轮（⚠️ 中已确认缺的 + 数据面）**：
 
@@ -184,6 +194,16 @@ pi 现在是 **`2.1.322`**（`packages/ai/src/api/anthropic-messages.ts:109`）�
 **建议**：照 pi 的做法在请求里补一个固定 `low` 的顶层 effort（细节以 pi 的
 `anthropic-messages.ts` 为准），或至少实测一次被限额账号。
 
+
+> **第三轮（对上游复核）：重新定性为「mid-convo effort 未实现」，不是单独的 low 兜底。**
+> pi 的 `output_config: { effort: "low" }` 在 `effortMessages` 分支里
+> （`packages/ai/src/api/anthropic-messages.ts:1545-1556`，前提 `compat.supportsMidConvoEffort`），
+> 真实档位由逐条 system 消息的 effort marker 传（`:1840-1844`）。prux 目录里
+> `claude-opus-5-5` / `sonnet-5-5` / `haiku-5-5` / `fable-5-*` 都是 `supportsMidConvoEffort: true`，
+> 但 `supportsMidConvoEffort` / `supportsMidConvoToolChanges` 在 `src/` 里零引用
+> （`supportsMidConvoSystemMessages` 已实现）。要补就得连「per-message 档位」一起做，属单独排期项，
+> 本轮不动。
+
 #### 1.10 🔧 Gemini 工具 schema 里的 `const` 被拒
 
 **pi 1.5.0 Fixed**（#11308）：`const` 转成单值 `enum`，且不改写 `default`/`examples`/`enum`
@@ -278,6 +298,14 @@ System One 端点被混用；prux `src/core/provider.rs:697-712` 用
 `base_url` 由目录给。**需实测**：拿 `opencode`/`opencode-go` 各一条真实请求，确认协议端点
 与两个头都在正确位置。
 
+
+> **第三轮：✅ 已满足。** pi 的 `isOpenCode`（`packages/ai/src/utils/identity.ts:100`）就是
+> provider/`baseUrl` 判定，与 prux `provider.rs:690-712` 同一口径；四个协议的端点两边都由目录给
+> （prux：`/inference/openai/v1`、`/inference/anthropic`、`/inference/google/v1beta`，
+> opencode-go 全部带 `/go/`），不存在「协议端点混用」的代码路径。
+> **遗留（数据面）**：pi 还有 `typesafe-system-one` 分类器条目（`/inference/systemone/v1`），
+> prux 的 `assets/models/providers/opencode*.json` 里没有，需要查 `scripts/sync-models.py` 的过滤规则。
+
 #### 1.17 ⚠️ Kimi K3.1 系列仍在使用 K2 的请求参数
 
 **pi 1.5.0 Fixed**：K3.1 Pro / Highspeed 改发 `reasoning_effort`（low/high/max）、
@@ -286,6 +314,14 @@ System One 端点被混用；prux `src/core/provider.rs:697-712` 用
 **prux 现状**：请求参数来自目录 `thinkingFormat` / `sampling` 等字段，模型条目已随
 `make sync-models` 更新。**需实测**一次 K3.1 的 thinking 与计费，确认没有残留 K2 假设
 （`kimi-coding` 的 `k3-256k` 计费同样要核）。
+
+
+> **第三轮：✅ 代码侧已满足。** pi 的 K3 compat（`packages/ai/catalog/families/kimi.ts`）是
+> `thinkingFormat: "openai"` + `supportsReasoningEffort` + `requiresReasoningContentOnAssistantMessages`，
+> prux 目录逐字段一致；代码侧 `thinkingFormat: "openai"` 走默认分支发 `reasoning_effort`
+> （`completions.rs:980-992`），缺 `reasoning_content` 时补 `""`（`:279`）。
+> 「接受中途新增工具」靠 `supportsMidConvoToolAdditions`（pi 侧声明），prux 不读该字段、
+> 每轮全量声明 tools，等价于兼容做法，不是缺陷。剩真实 K3.1 请求实测（计费 / 服务端行为）。
 
 #### 1.18 ⚠️ OpenCode DeepSeek 长缓存保留时发 `prompt_cache_retention` 被拒
 
@@ -303,6 +339,13 @@ System One 端点被混用；prux `src/core/provider.rs:697-712` 用
 （`src/core/agent_session.rs:158`、`:9782`），是否给这两个模型下 `additional_tools` 需核对
 `responses.rs` 的工具声明分支。**需实测**：先让 gpt-5.5 调一次工具，再切到 gpt-5.4/5.5 继续。
 
+
+> **第三轮：❌ 不适用。** pi 只为 `OPENAI_TOOL_SEARCH_MODEL_IDS`（5.6+/6.x）开
+> `supportsAdditionalTools`（`packages/ai/catalog/providers/openai.ts:131`、
+> `families/openai.ts:48-57`），5.4/5.5 本来就顶层声明。prux 从不发 `additional_tools`
+> （`supportsAdditionalTools` 零引用）→ 没有 namespace 可丢，不会复现。
+> 记一条未实现的新能力：`gpt-6.1-*` 的 tool search / additional_tools prux 没有。
+
 #### 1.20 ⚠️ provider 连接错误把底层原因藏起来
 
 **pi 1.5.1 Fixed**（#11695）：connection refused / 证书错误不再被通用文案盖住。
@@ -311,6 +354,10 @@ System One 端点被混用；prux `src/core/provider.rs:697-712` 用
 但**需实测**一次 `https` 证书错误与一次 `127.0.0.1:1` 拒连，确认原因出现在给模型/用户的
 文案里，而不只在日志里。
 
+
+> **第三轮：✅ 已满足。** pi 的做法是 `withCauseDetail`（`packages/ai/src/utils/error-body.ts:62-86`，
+> 附最深 cause + `(code)`）；prux `src/error.rs:84` 的 `display_full()` 展开整条 source 链，
+> `provider.rs:1698/1725` 用它组装 error_message，`agent_session.rs:4695` 有 connection refused 断言。
 ### C. 会话 / CLI / 信任
 
 #### 1.21 🔧 没有「需要信任的资源」时，`trust.json` 里显式「不信任」被自动信任覆盖
@@ -449,6 +496,12 @@ provider（`models.json` 自定义 provider 可以有），优先级低。
 **prux 现状**：`markdown.rs:697-705` 的 `InlineMath`/`DisplayMath` 走自研 latex 渲染
 （`src/core/latex.rs`）。超宽时的行为**需实测**：拿一条长分式在 40 列宽度下渲染。
 
+
+> **第三轮：已修。** pi（`packages/tui/src/components/markdown.ts:614-623`）渲染后逐行量宽，
+> 任一行超宽就回退原始 LaTeX。prux 的 `render_display_math` 现在收 `width`，
+> 渲染结果任一行超过可用宽度即回退 `$$…$$`（标题/表格单元格这类拿不到宽度的位置传
+> `usize::MAX` 不检查）。用例：`oversized_display_math_falls_back_to_latex`。
+
 #### 1.33 ⚠️ 样式词正好落在折行宽度时下一行多一个空格 / 删除线渗进 padding
 
 **pi 1.5.0 Fixed**（#10925）。
@@ -456,6 +509,11 @@ provider（`models.json` 自定义 provider 可以有），优先级低。
 **prux 现状**：折行在 `src/modes/tui/render/markdown.rs` 的 `wrap_line_spans`，是自研实现，
 **需实测**（构造「加粗词正好填满一行」与「删除线跨行」两条用例）。这类 bug 单项影响小，
 建议和其它折行修复合并处理。
+
+
+> **第三轮：✅ 不适用。** pi 需要修是因为它把行 pad 到整宽（`markdown.ts:462-470`）；
+> prux 折行后不补 padding，且断行后的行首空格 token 直接丢弃（`wrap_spans` 的
+> `if tok.space { continue }`）→「多一个空格」与「删除线渗进 padding」两个前提都不成立。
 
 #### 1.34 ⚠️ Markdown 每帧全量重渲染
 
@@ -489,6 +547,14 @@ provider（`models.json` 自定义 provider 可以有），优先级低。
 `src/core/keybindings.rs:58` 支持 F1~F24。**需实测**：在 kitty/ghostty 里按 F5、Shift+F5、F13，
 确认没有私用区字符进编辑器。
 
+
+> **第三轮：已修（上一轮判「已满足」是错的）。** kitty 协议下 F1–F12 以
+> `CSI <57364..57375>u` 上报，crossterm 0.29 只映射 `57358-57363`（lock 键）与 `57376+`（F13–F34），
+> 其余落到 `char::from_u32` → `KeyCode::Char(c)` 兜底（`crossterm/src/event/sys/unix/parse.rs:433-451`、
+> `:540-560`），也没有 PUA 过滤 → 按键会往输入框灌不可见字符。pi 的修法是把 PUA 丢弃并映射
+> F1–F12（`packages/tui/src/keys.ts:342-360`、`:1483`）。prux 在 `handle_event` 入口加了
+> `normalize_kitty_key`：`U+E014..U+E01F` → `F(1..=12)`，其余 `U+E000..U+F8FF` 丢弃。
+
 #### 1.37 ⚠️ 退格删 paste marker 会破坏后面的短 marker
 
 **pi 1.5.1 Fixed**（#11923）：`[paste #2]` 被改坏后，提交的是 marker 文本而不是粘贴内容。
@@ -496,6 +562,13 @@ provider（`models.json` 自定义 provider 可以有），优先级低。
 **prux 现状**：编辑器把大粘贴压成 `[paste #N +M lines]`（`src/modes/tui/handlers.rs:362`、
 `:1288`），提交时展开（`:2537` 有用例）。**需核对** `editor.rs` 的删除路径是否会破坏
 marker 文本后仍按 marker 展开（即「展开失败静默当文本发出」）。
+
+
+> **第三轮：已修。** pi 把 marker 做成原子 segment（`packages/tui/src/components/editor.ts:32-75`
+> `segmentWithMarkers`），所有编辑都拆不开。prux 原先只有 `backspace` 有整段删分支；现在
+> `insert_char` / `insert_raw` 先把光标挪出 marker，`delete` / 删词 / `kill_line_start` /
+> `kill_line_end` 统走 `remove_char_range`（区间自动外扩到整个 marker 并重排存储）。
+> 用例：`paste_marker_survives_edits_atomically`。
 
 #### 1.38 ⚠️ `pageUp`/`pageDown` 被列表与自动补全忽略
 
@@ -512,8 +585,12 @@ marker 文本后仍按 marker 展开（即「展开失败静默当文本发出�
 
 **pi 1.5.0 Fixed**：`setTitle()` 会把标题里的控制字符直接写进终端（可注入转义序列）。
 
-**prux 现状**：没找到 `set_title` 的调用点（**可能本来就不设标题**）。若确实设置了，
-要先剥 C0/C1；`utils/terminal_caps.rs` 那一带适合放 `replace_control_characters` 的等价物。
+**prux 现状**：prux **确实设标题**——`src/modes/tui.rs:541` 把 cwd 的 basename 写进
+OSC 0 / OSC 2，未剥控制字符（目录名带 ESC 就能注入转义序列）。**建议**：写标题前剥掉 C0/C1。
+
+> **第三轮：已修。** `update_terminal_title` 现在剥掉目录名里的 C0/C1 再写 OSC 0/2；
+> 顺带修正了该函数上错挂的文档注释（原文写的是「进入备用屏幕 + raw mode + 键盘增强协议」，
+> 真正的事在 `setup_terminal`，属于 AGENTS.md 警告的那类张冠李戴）。
 
 ### E. MCP
 
@@ -539,6 +616,13 @@ JSON，**不校验** `authorization_endpoint` / `token_endpoint` 的 scheme；
 `streamable_http_client`），prux 自己**没有** message size 配置项。所以这些修复「随 rmcp
 版本走」：**需核对** `Cargo.toml` 里 `rmcp` 的版本是否已含上述修复，否则升级依赖即可，
 不需要在 prux 侧写代码。
+
+> **第三轮：只剩 rmcp 侧两处。** 已覆盖：stdio 行长上限（`rmcp-3.1.4/src/transport/async_rw.rs:430-437`）、
+> SSE 事件大小上限（`client_side_sse.rs:91`）、CR-only 行尾（`previous_was_cr`）、
+> 子进程 Drop 时 kill（`child_process.rs:46-52`）。仍缺：成功 JSON 走 `response.json()` 无上限、
+> 错误体 `.text()` 整段读（`transport/common/reqwest/streamable_http_client.rs:280,309`）；
+> pi 侧两处都是 `readBodyText(response, maxBytes)` + truncated 报错
+> （`packages/mcp/src/transports/streamable-http.ts:308-313`）。等 rmcp 上游修，或在 prux 侧包一层。
 
 ### F. ACP 模式（`prux acp`）
 
@@ -621,9 +705,9 @@ MCP token 刷新、会话落盘这类收尾工作有被切断的风险（退出�
 **pi 1.5.1 Changed**：新增饼图、作者自定义样式、支持超链接终端的可点击标签，且分支/压缩
 摘要里也能渲染。
 
-**prux 现状**：`src/vendor/mermaid_text` 是上游 `mermaid-text` 0.57.0 的副本，
-支持哪些图类型由该版本决定。**建议**：查上游新版本是否已带饼图/样式；有就同步 vendor
-（记得同步时重跑 `crate::` 路径改写 + `cargo fmt`，见 AGENTS.md），没有就记为不实现。
+**prux 现状**：`src/vendor/mermaid_text` 是上游 `mermaid-text` 0.57.0 的副本。
+**第三轮：饼图已有**（`vendor/mermaid_text/detect.rs` 的 `DiagramKind::Pie`，渲染成横向柱状图），
+缺的只剩「作者自定义样式」「可点击标签」「分支/压缩摘要里也渲染」三项，收益低，记为不实现。
 
 ### 2.7 🆕 语法高亮补 Dart / Nix / Groovy / Gradle
 
@@ -631,8 +715,9 @@ MCP token 刷新、会话落盘这类收尾工作有被切断的风险（退出�
 
 **prux 现状**：`src/modes/tui/render/syntax_hl.rs:33-48` 用 syntect 默认集
 （`load_defaults_nonewlines`）**外加**一张 `assets/syntaxes/Zig.sublime-syntax`。
-**需核对**这四种语言在 syntect 默认集里的覆盖情况，缺的按 Zig 的方式加进 `assets/syntaxes/`
-（注意 `embedded!` 是编译期内嵌，新增文件要同步加载清单与 `src/core/doc_sync` 之外的内嵌表）。
+**第三轮已核**：syntect 5.3 的默认集里 **Groovy 有**，`Dart` / `Nix` / `Gradle` 三个都没有
+（查 `syntect-5.3.0/assets/default_nonewlines.packdump` 里的语法名），缺的按 Zig 的方式加进
+`assets/syntaxes/`（注意 `embedded!` 是编译期内嵌，新增文件要同步加载清单）。
 GUI 侧 `src/modes/gui/code.rs:16` 只用了默认集，需要共用同一 `SyntaxSet`。
 
 ### 2.8 🆕 `compat` 新字段（协议兼容开关）
@@ -787,24 +872,24 @@ OSC 7501「等我」）；`Component.capturesViewportInput`（聚焦组件吃掉
 | Alacritty 无 `TERM_PROGRAM` 时超链接失效（#11767） | ✅ `terminal_caps.rs:184` 已按 `TERM` 含 `alacritty` 判 truecolor，超链接默认开启 |
 | Rex 终端（1.4.0 遗留） | ✅ `terminal_caps.rs:190` 已认 `TERM_PROGRAM=rex` |
 | 终端光标哨兵泄漏（#9441） | ✅ 不适用：prux 不用「光标哨兵」文本标记（编辑区走独立渲染） |
-| 全屏双击选择在 `~ . \ +` 处断词（#10980） | ⚠️ 需实测 `src/modes/tui` 的词边界表 |
-| 窗口标题控制字符 | ⚠️ 见 1.39（prux 可能不设标题） |
+| 全屏双击选择在 `~ . \ +` 处断词（#10980） | ❌ 不适用：pi 修的是 alt-screen 双击选词的字边界表（`packages/tui/src/tui-alt-screen.ts`），prux 的 TUI 没有双击选词 |
+| 窗口标题控制字符 | ✅ 已修：prux 确实设标题（`modes/tui.rs` 的 `update_terminal_title` 写 OSC 0/2），现在先剥 C0/C1 —— 与 1.39 同一条 |
 | `~2/project` 之类的错误 `~` 前缀 | ✅ 不适用：`footer.rs:99-114` 用 `Path::strip_prefix` 按组件比较，`/home/me2` 不会被当成 `/home/me` |
-| Windows 路径大小写不敏感比较（#10488） | ⚠️ 需核对 `utils/paths.rs` 的归一化是否在 Windows 上小写化（技能去重、trust 键、`--continue` 都用它） |
+| Windows 路径大小写不敏感比较（#10488） | ⚠️ 部分：pi 是 `getPathComparisonKey` = `resolve` + win32 下 `toLowerCase()`（`utils/paths.ts:46-50`）；prux 的 trust 键 / 资源去重走 `normalize_cwd` → `canonicalize`（存在的路径已归一），但 `is_outside`（`paths.rs:407-419`）是词法比较**不折叠大小写** → Windows 上包含关系可误判 |
 | `pi.exec()` 的 `maxBuffer` / UTF-8 跨 chunk / spawn 失败 stderr（#11360/#11312/#11257） | ❌ 不适用：prux 扩展是 Rust trait，无 `pi.exec()` |
 | RPC 模式的 shutdown / signal 处理（#11599） | ⚠️ 见 1.42（`prux acp` 就是 stdio JSON-RPC 服务端） |
 | `pi update --extensions` 的逐包版本变化、`git clean -fdx` Windows 失败（#11707/#11597） | ❌ 不适用：无 npm / git 包安装 |
-| OAuth 刷新在退出时丢失新 token（#11692） | ⚠️ 需核对 `core/auth.rs` 的刷新锁与「退出等待保存」 |
-| `auth.json` 权限 0600、符号链接下的锁共享（#11655） | ⚠️ 需核对 `core/auth.rs`/`utils/file_lock.rs` 是否按**解析后**路径加锁 |
-| `pi config` 忽略 `keybindings.json`（#11651） | ⚠️ 需核对 prux 的 `/settings` 与 `keybindings.json` 的合并路径 |
+| OAuth 刷新在退出时丢失新 token（#11692） | ⚠️ 部分：刷新跑在独立 task、成功即写盘（`auth.rs:628-640`），发起方取消已安全；但 pi 的 `dispose()` 会等在途刷新落盘（`runtime-credentials.ts`），prux 退出没等 —— `prux acp` 的 SHUTDOWN 闩锁也该接上这一步 |
+| `auth.json` 权限 0600、符号链接下的锁共享（#11655） | ✅ 不适用（换成一个小限制）：0600 已做（`auth.rs:239`）；prux 用进程内 RwLock + 原子写，没有跨进程锁，故没有「符号链接各拿一把锁」的问题。代价：两个 prux 实例并发 `/login` 会互相覆盖条目 |
+| `pi config` 忽略 `keybindings.json`（#11651） | ✅ 已满足：pi 修的是独立 `pi config` CLI 忘了 `setKeybindings`；prux 的 `/settings` 在 TUI 内，启动已加载（`startup.rs:159`）、`/reload` 重读并告警冲突（`commands.rs:291`） |
 | Ctrl+V 在 Windows/WSL 粘贴（#11765） | ⚠️ 需实测（`src/modes/tui/handlers.rs` 的粘贴键表） |
-| 设备码登录按 Enter 开浏览器 + 复制码（#9282） | ⚠️ 需核对 `src/core/oauth.rs` / `cli/oauth_flow.rs` 是否已有 |
+| 设备码登录按 Enter 开浏览器 + 复制码（#9282） | ❌ 未实现：pi 有 `openBrowserOnConfirm` / `copyCodeOnConfirm`（`components/login-dialog.ts:154-193`）；prux 只有 Ctrl+点击 URI 行开浏览器（`handlers/mouse.rs:344`），无 Enter 确认、无复制 `user_code` |
 | `/login` 列表把 Radius/OpenRouter 置顶（1.5.1） | ❌ 不适用：prux 无 Radius 合作身份 |
-| 模型选择器/搜索被后台刷新挪动选中项（#9109） | ⚠️ 需实测 `/model` 在目录刷新到达时的选中位置 |
+| 模型选择器/搜索被后台刷新挪动选中项（#9109） | ✅ 不适用：pi 是刷新后按模型 id 重算 selectedIndex；prux 的刷新只改状态文案、不重建列表（`handlers/events.rs:451-483`） |
 | 技能警告标签 `[Skill conflicts]` → `[Skill warnings]`（#11521） | ⚠️ prux 自研文案，按中文提示统一即可，无需照搬 |
 | 信任探针之外的 `pi install/remove` 路径问题（#11358） | ❌ 不适用 |
 | 分类器 `compat`（`imageInput`/`sendImageOptInHeader`，1.4.0 遗留） | ⚠️ 仍未做，见 `migration-v1.4.0.md` 2.1/2.2；与本轮无冲突 |
-| 图片缩放 PNG→更小编码（#11551） | ⚠️ 需核对 `utils/image.rs` 是否已按「取较小编码」决定 JPEG/PNG |
+| 图片缩放 PNG→更小编码（#11551） | ✅ 已修：`encode_within_limit` 先比 PNG 与「配置质量的 JPEG」取较小者，都不 fit 才逐档降质；用例 `prefers_the_smaller_of_png_and_jpeg` |
 | 非 BMP 字符被截半（#7121） | ✅ Rust `truncate` 按字符边界切，不会留下孤立代理项 |
 
 ---
