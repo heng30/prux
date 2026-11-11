@@ -25,9 +25,9 @@
 `prux` 是一个极简的终端编码助手。核心保持小而专注，通过扩展、技能、提示模板、主题和可定制键位来扩展能力。它是 [@earendil-works/pi-coding-agent](https://github.com/earendil-works/pi) 的 Rust 重写，大部分行为和文案上与上游保持一致。
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/heng30/prux/main/screenshot/gui.gif" alt="gui demo" width="45%">
+  <img src="https://raw.githubusercontent.com/heng30/prux/main/screenshot/tui.gif" alt="tui demo" width="45%">
   <img width="2%">
-  <img src="https://raw.githubusercontent.com/heng30/prux/main/screenshot/code.gif" alt="code demo" width="45%">
+  <img src="https://raw.githubusercontent.com/heng30/prux/main/screenshot/gui.gif" alt="gui demo" width="45%">
 </p>
 
 ## 特性
