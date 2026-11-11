@@ -24,14 +24,14 @@
       "Editor-Plugin-Version": "copilot-chat/0.35.0",
       "Copilot-Integration-Id": "vscode-chat"
     },
-    "compat": {
-      "supportsMidConvoSystemMessages": true,
-      "forceAdaptiveThinking": true
-    },
     "thinkingLevelMap": {
       "off": null,
       "xhigh": "xhigh",
       "max": "max"
+    },
+    "compat": {
+      "forceAdaptiveThinking": true,
+      "supportsMidConvoSystemMessages": true
     },
     "inputLimits": {
       "images": {
@@ -70,14 +70,14 @@
       "Editor-Plugin-Version": "copilot-chat/0.35.0",
       "Copilot-Integration-Id": "vscode-chat"
     },
-    "compat": {
-      "supportsMidConvoSystemMessages": true,
-      "forceAdaptiveThinking": true
-    },
     "thinkingLevelMap": {
       "off": null,
       "xhigh": "xhigh",
       "max": "max"
+    },
+    "compat": {
+      "forceAdaptiveThinking": true,
+      "supportsMidConvoSystemMessages": true
     },
     "inputLimits": {
       "images": {
@@ -165,14 +165,14 @@
       "Editor-Plugin-Version": "copilot-chat/0.35.0",
       "Copilot-Integration-Id": "vscode-chat"
     },
-    "compat": {
-      "supportsMidConvoSystemMessages": true,
-      "forceAdaptiveThinking": true,
-      "supportsTemperature": false
-    },
     "thinkingLevelMap": {
       "xhigh": "xhigh",
       "max": "max"
+    },
+    "compat": {
+      "forceAdaptiveThinking": true,
+      "supportsTemperature": false,
+      "supportsMidConvoSystemMessages": true
     },
     "inputLimits": {
       "images": {
@@ -211,15 +211,15 @@
       "Editor-Plugin-Version": "copilot-chat/0.35.0",
       "Copilot-Integration-Id": "vscode-chat"
     },
-    "compat": {
-      "supportsMidConvoSystemMessages": true,
-      "forceAdaptiveThinking": true,
-      "supportsTemperature": false
-    },
     "thinkingLevelMap": {
       "xhigh": "xhigh",
       "max": "max",
       "minimal": "low"
+    },
+    "compat": {
+      "forceAdaptiveThinking": true,
+      "supportsTemperature": false,
+      "supportsMidConvoSystemMessages": true
     },
     "inputLimits": {
       "images": {
@@ -258,15 +258,15 @@
       "Editor-Plugin-Version": "copilot-chat/0.35.0",
       "Copilot-Integration-Id": "vscode-chat"
     },
-    "compat": {
-      "supportsMidConvoSystemMessages": true,
-      "forceAdaptiveThinking": true,
-      "supportsTemperature": false
-    },
     "thinkingLevelMap": {
       "xhigh": "xhigh",
       "max": "max",
       "minimal": "low"
+    },
+    "compat": {
+      "forceAdaptiveThinking": true,
+      "supportsTemperature": false,
+      "supportsMidConvoSystemMessages": true
     },
     "inputLimits": {
       "images": {
@@ -305,11 +305,6 @@
       "Editor-Plugin-Version": "copilot-chat/0.35.0",
       "Copilot-Integration-Id": "vscode-chat"
     },
-    "compat": {
-      "supportsMidConvoSystemMessages": true,
-      "forceAdaptiveThinking": true,
-      "supportsTemperature": false
-    },
     "thinkingLevelMap": {
       "off": null,
       "minimal": null,
@@ -318,6 +313,11 @@
       "high": "high",
       "xhigh": "xhigh",
       "max": "max"
+    },
+    "compat": {
+      "forceAdaptiveThinking": true,
+      "supportsTemperature": false,
+      "supportsMidConvoSystemMessages": true
     },
     "inputLimits": {
       "images": {
@@ -405,7 +405,8 @@
       "max": "max"
     },
     "compat": {
-      "forceAdaptiveThinking": true
+      "forceAdaptiveThinking": true,
+      "supportsTemperature": false
     },
     "inputLimits": {
       "images": {
@@ -444,14 +445,14 @@
       "Editor-Plugin-Version": "copilot-chat/0.35.0",
       "Copilot-Integration-Id": "vscode-chat"
     },
-    "compat": {
-      "supportsMidConvoSystemMessages": true,
-      "forceAdaptiveThinking": true,
-      "supportsTemperature": false
-    },
     "thinkingLevelMap": {
       "xhigh": "xhigh",
       "max": "max"
+    },
+    "compat": {
+      "forceAdaptiveThinking": true,
+      "supportsTemperature": false,
+      "supportsMidConvoSystemMessages": true
     },
     "inputLimits": {
       "images": {
@@ -693,9 +694,9 @@
       "max": "max"
     },
     "compat": {
-      "supportsOpenAIGrammarTools": true,
       "supportsMidConvoSystemMessages": true,
-      "supportsAdditionalTools": true
+      "supportsAdditionalTools": true,
+      "supportsOpenAIGrammarTools": true
     },
     "inputLimits": {
       "images": {
@@ -753,9 +754,9 @@
       "max": "max"
     },
     "compat": {
-      "supportsOpenAIGrammarTools": true,
       "supportsMidConvoSystemMessages": true,
-      "supportsAdditionalTools": true
+      "supportsAdditionalTools": true,
+      "supportsOpenAIGrammarTools": true
     },
     "inputLimits": {
       "images": {
@@ -813,9 +814,9 @@
       "max": "max"
     },
     "compat": {
-      "supportsOpenAIGrammarTools": true,
       "supportsMidConvoSystemMessages": true,
-      "supportsAdditionalTools": true
+      "supportsAdditionalTools": true,
+      "supportsOpenAIGrammarTools": true
     },
     "inputLimits": {
       "images": {
@@ -873,9 +874,9 @@
       "max": "max"
     },
     "compat": {
-      "supportsOpenAIGrammarTools": true,
       "supportsMidConvoSystemMessages": true,
-      "supportsAdditionalTools": true
+      "supportsAdditionalTools": true,
+      "supportsOpenAIGrammarTools": true
     },
     "inputLimits": {
       "images": {
@@ -933,9 +934,9 @@
       "max": "max"
     },
     "compat": {
-      "supportsOpenAIGrammarTools": true,
       "supportsMidConvoSystemMessages": true,
-      "supportsAdditionalTools": true
+      "supportsAdditionalTools": true,
+      "supportsOpenAIGrammarTools": true
     },
     "inputLimits": {
       "images": {
@@ -993,9 +994,9 @@
       "max": "max"
     },
     "compat": {
-      "supportsOpenAIGrammarTools": true,
       "supportsMidConvoSystemMessages": true,
-      "supportsAdditionalTools": true
+      "supportsAdditionalTools": true,
+      "supportsOpenAIGrammarTools": true
     },
     "inputLimits": {
       "images": {
@@ -1053,9 +1054,69 @@
       "max": "max"
     },
     "compat": {
-      "supportsOpenAIGrammarTools": true,
       "supportsMidConvoSystemMessages": true,
-      "supportsAdditionalTools": true
+      "supportsAdditionalTools": true,
+      "supportsOpenAIGrammarTools": true
+    },
+    "inputLimits": {
+      "images": {
+        "resize": {
+          "maxWidth": 2000,
+          "maxHeight": 2000,
+          "maxBytes": 4718592,
+          "jpegQuality": 80
+        }
+      }
+    },
+    "type": "chat"
+  },
+  {
+    "id": "gpt-6.1-terra",
+    "name": "GPT-6.1 Terra",
+    "api": "openai-responses",
+    "provider": "github-copilot",
+    "baseUrl": "https://api.individual.githubcopilot.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 1,
+      "output": 5,
+      "cacheRead": 0.05,
+      "cacheWrite": 1.25,
+      "tiers": [
+        {
+          "inputTokensAbove": 272000,
+          "input": 2,
+          "output": 7.5,
+          "cacheRead": 0.1,
+          "cacheWrite": 2.5
+        }
+      ]
+    },
+    "contextWindow": 1050000,
+    "maxTokens": 128000,
+    "headers": {
+      "User-Agent": "GitHubCopilotChat/0.35.0",
+      "Editor-Version": "vscode/1.107.0",
+      "Editor-Plugin-Version": "copilot-chat/0.35.0",
+      "Copilot-Integration-Id": "vscode-chat"
+    },
+    "thinkingLevelMap": {
+      "off": "none",
+      "minimal": null,
+      "low": "low",
+      "medium": "medium",
+      "high": "high",
+      "xhigh": "xhigh",
+      "max": "max"
+    },
+    "compat": {
+      "supportsMidConvoSystemMessages": true,
+      "supportsAdditionalTools": true,
+      "supportsOpenAIGrammarTools": true
     },
     "inputLimits": {
       "images": {
@@ -1323,5 +1384,29 @@
       }
     },
     "type": "chat"
+  },
+  {
+    "type": "classifier",
+    "id": "microsoft-decision-1",
+    "name": "Microsoft-Decision-1",
+    "api": "typesafe-system-one",
+    "provider": "github-copilot",
+    "baseUrl": "https://api.individual.githubcopilot.com",
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 0.042,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0
+    },
+    "contextWindow": 32768,
+    "headers": {
+      "User-Agent": "GitHubCopilotChat/0.35.0",
+      "Editor-Version": "vscode/1.107.0",
+      "Editor-Plugin-Version": "copilot-chat/0.35.0",
+      "Copilot-Integration-Id": "vscode-chat"
+    }
   }
 ]

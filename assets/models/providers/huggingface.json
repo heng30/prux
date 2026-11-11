@@ -15,12 +15,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 1000000,
+    "maxTokens": 80000,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 1000000,
-    "maxTokens": 80000,
     "type": "chat"
   },
   "MiniMaxAI/MiniMax-M2": {
@@ -39,12 +39,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 204800,
+    "maxTokens": 131072,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 204800,
-    "maxTokens": 131072,
     "type": "chat"
   },
   "MiniMaxAI/MiniMax-M2.1": {
@@ -63,12 +63,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 204800,
+    "maxTokens": 131072,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 204800,
-    "maxTokens": 131072,
     "type": "chat"
   },
   "MiniMaxAI/MiniMax-M2.5": {
@@ -87,12 +87,12 @@
       "cacheRead": 0.03,
       "cacheWrite": 0
     },
+    "contextWindow": 204800,
+    "maxTokens": 131072,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 204800,
-    "maxTokens": 131072,
     "type": "chat"
   },
   "MiniMaxAI/MiniMax-M2.7": {
@@ -111,12 +111,12 @@
       "cacheRead": 0.06,
       "cacheWrite": 0
     },
+    "contextWindow": 204800,
+    "maxTokens": 131072,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 204800,
-    "maxTokens": 131072,
     "type": "chat"
   },
   "MiniMaxAI/MiniMax-M3": {
@@ -136,12 +136,56 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 524288,
+    "maxTokens": 512000,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 524288,
+    "inputLimits": {
+      "images": {
+        "resize": {
+          "maxWidth": 2000,
+          "maxHeight": 2000,
+          "maxBytes": 4718592,
+          "jpegQuality": 80
+        }
+      }
+    },
+    "type": "chat"
+  },
+  "MiniMaxAI/MiniMax-M3.1-Flash": {
+    "id": "MiniMaxAI/MiniMax-M3.1-Flash",
+    "name": "MiniMax-M3.1-Flash",
+    "api": "openai-completions",
+    "provider": "huggingface",
+    "baseUrl": "https://router.huggingface.co/v1",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.15,
+      "output": 0.6,
+      "cacheRead": 0,
+      "cacheWrite": 0
+    },
+    "contextWindow": 1000000,
     "maxTokens": 512000,
+    "compat": {
+      "supportsStrictMode": true,
+      "supportsDeveloperRole": false
+    },
+    "thinkingLevelMap": {
+      "off": null,
+      "minimal": null,
+      "low": "low",
+      "medium": "medium",
+      "high": "high",
+      "xhigh": "xhigh",
+      "max": "max"
+    },
     "inputLimits": {
       "images": {
         "resize": {
@@ -170,12 +214,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 131072,
+    "maxTokens": 8192,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 131072,
-    "maxTokens": 8192,
     "type": "chat"
   },
   "Qwen/Qwen3-235B-A22B": {
@@ -194,12 +238,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 40960,
+    "maxTokens": 16384,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 40960,
-    "maxTokens": 16384,
     "type": "chat"
   },
   "Qwen/Qwen3-235B-A22B-Instruct-2507": {
@@ -218,12 +262,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 262144,
+    "maxTokens": 16384,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 262144,
-    "maxTokens": 16384,
     "type": "chat"
   },
   "Qwen/Qwen3-235B-A22B-Thinking-2507": {
@@ -242,12 +286,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 262144,
+    "maxTokens": 81920,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 262144,
-    "maxTokens": 81920,
     "type": "chat"
   },
   "Qwen/Qwen3-30B-A3B": {
@@ -266,12 +310,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 40960,
+    "maxTokens": 16384,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 40960,
-    "maxTokens": 16384,
     "type": "chat"
   },
   "Qwen/Qwen3-32B": {
@@ -290,12 +334,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 131072,
+    "maxTokens": 16384,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 131072,
-    "maxTokens": 16384,
     "type": "chat"
   },
   "Qwen/Qwen3-8B": {
@@ -314,12 +358,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 40960,
+    "maxTokens": 32768,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 40960,
-    "maxTokens": 32768,
     "thinkingLevelMap": {
       "off": "none",
       "minimal": null,
@@ -347,12 +391,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 262144,
+    "maxTokens": 65536,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 262144,
-    "maxTokens": 65536,
     "type": "chat"
   },
   "Qwen/Qwen3-Coder-480B-A35B-Instruct": {
@@ -371,12 +415,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 262144,
+    "maxTokens": 65536,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 262144,
-    "maxTokens": 65536,
     "type": "chat"
   },
   "Qwen/Qwen3-Coder-Next": {
@@ -395,12 +439,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 262144,
+    "maxTokens": 65536,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 262144,
-    "maxTokens": 65536,
     "type": "chat"
   },
   "Qwen/Qwen3-Next-80B-A3B-Instruct": {
@@ -419,36 +463,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 262144,
+    "maxTokens": 32768,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 262144,
-    "maxTokens": 32768,
-    "type": "chat"
-  },
-  "Qwen/Qwen3-Next-80B-A3B-Thinking": {
-    "id": "Qwen/Qwen3-Next-80B-A3B-Thinking",
-    "name": "Qwen3-Next-80B-A3B-Thinking",
-    "api": "openai-completions",
-    "provider": "huggingface",
-    "baseUrl": "https://router.huggingface.co/v1",
-    "reasoning": true,
-    "input": [
-      "text"
-    ],
-    "cost": {
-      "input": 0.3,
-      "output": 2,
-      "cacheRead": 0,
-      "cacheWrite": 0
-    },
-    "compat": {
-      "supportsStrictMode": true,
-      "supportsDeveloperRole": false
-    },
-    "contextWindow": 262144,
-    "maxTokens": 32768,
     "type": "chat"
   },
   "Qwen/Qwen3-VL-235B-A22B-Instruct": {
@@ -468,12 +488,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 131072,
+    "maxTokens": 32768,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 131072,
-    "maxTokens": 32768,
     "inputLimits": {
       "images": {
         "resize": {
@@ -503,12 +523,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 131072,
+    "maxTokens": 32768,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 131072,
-    "maxTokens": 32768,
     "thinkingLevelMap": {
       "off": null,
       "minimal": null,
@@ -547,12 +567,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 131072,
+    "maxTokens": 32768,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 131072,
-    "maxTokens": 32768,
     "inputLimits": {
       "images": {
         "resize": {
@@ -582,12 +602,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 262144,
+    "maxTokens": 65536,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 262144,
-    "maxTokens": 65536,
     "inputLimits": {
       "images": {
         "resize": {
@@ -617,12 +637,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 262144,
+    "maxTokens": 65536,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 262144,
-    "maxTokens": 65536,
     "inputLimits": {
       "images": {
         "resize": {
@@ -652,12 +672,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 262144,
+    "maxTokens": 65536,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 262144,
-    "maxTokens": 65536,
     "inputLimits": {
       "images": {
         "resize": {
@@ -687,12 +707,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 262144,
+    "maxTokens": 32768,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 262144,
-    "maxTokens": 32768,
     "thinkingLevelMap": {
       "off": "none",
       "minimal": null,
@@ -731,12 +751,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 262144,
+    "maxTokens": 65536,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 262144,
-    "maxTokens": 65536,
     "inputLimits": {
       "images": {
         "resize": {
@@ -766,12 +786,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 262144,
+    "maxTokens": 65536,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 262144,
-    "maxTokens": 65536,
     "inputLimits": {
       "images": {
         "resize": {
@@ -801,12 +821,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 262144,
+    "maxTokens": 65536,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 262144,
-    "maxTokens": 65536,
     "inputLimits": {
       "images": {
         "resize": {
@@ -835,12 +855,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 262144,
+    "maxTokens": 131072,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 262144,
-    "maxTokens": 131072,
     "thinkingLevelMap": {
       "off": null,
       "minimal": null,
@@ -869,12 +889,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 262144,
+    "maxTokens": 32768,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 262144,
-    "maxTokens": 32768,
     "thinkingLevelMap": {
       "off": null,
       "minimal": null,
@@ -896,30 +916,6 @@
     },
     "type": "chat"
   },
-  "XiaomiMiMo/MiMo-V2-Flash": {
-    "id": "XiaomiMiMo/MiMo-V2-Flash",
-    "name": "MiMo-V2-Flash",
-    "api": "openai-completions",
-    "provider": "huggingface",
-    "baseUrl": "https://router.huggingface.co/v1",
-    "reasoning": true,
-    "input": [
-      "text"
-    ],
-    "cost": {
-      "input": 0.1,
-      "output": 0.3,
-      "cacheRead": 0,
-      "cacheWrite": 0
-    },
-    "compat": {
-      "supportsStrictMode": true,
-      "supportsDeveloperRole": false
-    },
-    "contextWindow": 262144,
-    "maxTokens": 4096,
-    "type": "chat"
-  },
   "XiaomiMiMo/MiMo-V2.5": {
     "id": "XiaomiMiMo/MiMo-V2.5",
     "name": "MiMo-V2.5",
@@ -936,12 +932,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 262144,
+    "maxTokens": 131072,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 262144,
-    "maxTokens": 131072,
     "thinkingLevelMap": {
       "off": "none",
       "minimal": null,
@@ -969,12 +965,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 1048576,
+    "maxTokens": 131072,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 1048576,
-    "maxTokens": 131072,
     "thinkingLevelMap": {
       "off": "none",
       "minimal": null,
@@ -1002,12 +998,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 64000,
+    "maxTokens": 32768,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 64000,
-    "maxTokens": 32768,
     "type": "chat"
   },
   "deepseek-ai/DeepSeek-R1-0528": {
@@ -1026,12 +1022,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 163840,
+    "maxTokens": 32768,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 163840,
-    "maxTokens": 32768,
     "type": "chat"
   },
   "deepseek-ai/DeepSeek-V3": {
@@ -1050,12 +1046,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 64000,
+    "maxTokens": 8192,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 64000,
-    "maxTokens": 8192,
     "type": "chat"
   },
   "deepseek-ai/DeepSeek-V3-0324": {
@@ -1074,12 +1070,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 163840,
+    "maxTokens": 163840,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 163840,
-    "maxTokens": 163840,
     "type": "chat"
   },
   "deepseek-ai/DeepSeek-V3.1": {
@@ -1098,12 +1094,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 131072,
+    "maxTokens": 8192,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 131072,
-    "maxTokens": 8192,
     "type": "chat"
   },
   "deepseek-ai/DeepSeek-V3.2": {
@@ -1122,12 +1118,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 163840,
+    "maxTokens": 65536,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 163840,
-    "maxTokens": 65536,
     "type": "chat"
   },
   "deepseek-ai/DeepSeek-V4-Flash": {
@@ -1146,12 +1142,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 1048576,
+    "maxTokens": 384000,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 1048576,
-    "maxTokens": 384000,
     "type": "chat"
   },
   "deepseek-ai/DeepSeek-V4-Flash-0731": {
@@ -1170,12 +1166,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 1048576,
+    "maxTokens": 384000,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 1048576,
-    "maxTokens": 384000,
     "thinkingLevelMap": {
       "off": null,
       "minimal": null,
@@ -1204,12 +1200,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 1048576,
+    "maxTokens": 384000,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 1048576,
-    "maxTokens": 384000,
     "thinkingLevelMap": {
       "off": null,
       "minimal": null,
@@ -1247,12 +1243,12 @@
       "cacheRead": 0.003625,
       "cacheWrite": 0
     },
+    "contextWindow": 1048576,
+    "maxTokens": 393216,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 1048576,
-    "maxTokens": 393216,
     "thinkingLevelMap": {
       "off": null,
       "minimal": null,
@@ -1280,12 +1276,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 1000000,
+    "maxTokens": 384000,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 1000000,
-    "maxTokens": 384000,
     "thinkingLevelMap": {
       "off": null,
       "minimal": null,
@@ -1314,12 +1310,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 1048576,
+    "maxTokens": 384000,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 1048576,
-    "maxTokens": 384000,
     "thinkingLevelMap": {
       "off": "none",
       "minimal": null,
@@ -1358,12 +1354,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 1048576,
+    "maxTokens": 384000,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 1048576,
-    "maxTokens": 384000,
     "thinkingLevelMap": {
       "off": null,
       "minimal": null,
@@ -1402,12 +1398,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 131072,
+    "maxTokens": 131072,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 131072,
-    "maxTokens": 131072,
     "inputLimits": {
       "images": {
         "resize": {
@@ -1437,12 +1433,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 131072,
+    "maxTokens": 131072,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 131072,
-    "maxTokens": 131072,
     "inputLimits": {
       "images": {
         "resize": {
@@ -1472,12 +1468,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 131072,
+    "maxTokens": 131072,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 131072,
-    "maxTokens": 131072,
     "inputLimits": {
       "images": {
         "resize": {
@@ -1507,12 +1503,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 262144,
+    "maxTokens": 32768,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 262144,
-    "maxTokens": 32768,
     "inputLimits": {
       "images": {
         "resize": {
@@ -1542,12 +1538,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 262144,
+    "maxTokens": 32768,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 262144,
-    "maxTokens": 32768,
     "inputLimits": {
       "images": {
         "resize": {
@@ -1576,12 +1572,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 131072,
+    "maxTokens": 4096,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 131072,
-    "maxTokens": 4096,
     "type": "chat"
   },
   "meta-llama/Llama-3.3-70B-Instruct": {
@@ -1600,12 +1596,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 131072,
+    "maxTokens": 4096,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 131072,
-    "maxTokens": 4096,
     "type": "chat"
   },
   "moonshotai/Kimi-K2-Instruct": {
@@ -1624,12 +1620,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 131072,
+    "maxTokens": 16384,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 131072,
-    "maxTokens": 16384,
     "type": "chat"
   },
   "moonshotai/Kimi-K2-Instruct-0905": {
@@ -1648,12 +1644,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 262144,
+    "maxTokens": 16384,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 262144,
-    "maxTokens": 16384,
     "type": "chat"
   },
   "moonshotai/Kimi-K2-Thinking": {
@@ -1672,12 +1668,12 @@
       "cacheRead": 0.15,
       "cacheWrite": 0
     },
+    "contextWindow": 262144,
+    "maxTokens": 262144,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 262144,
-    "maxTokens": 262144,
     "type": "chat"
   },
   "moonshotai/Kimi-K2.5": {
@@ -1697,12 +1693,12 @@
       "cacheRead": 0.1,
       "cacheWrite": 0
     },
+    "contextWindow": 262144,
+    "maxTokens": 262144,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 262144,
-    "maxTokens": 262144,
     "inputLimits": {
       "images": {
         "resize": {
@@ -1732,12 +1728,12 @@
       "cacheRead": 0.16,
       "cacheWrite": 0
     },
+    "contextWindow": 262144,
+    "maxTokens": 262144,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 262144,
-    "maxTokens": 262144,
     "inputLimits": {
       "images": {
         "resize": {
@@ -1767,12 +1763,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 262144,
+    "maxTokens": 262144,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 262144,
-    "maxTokens": 262144,
     "inputLimits": {
       "images": {
         "resize": {
@@ -1802,12 +1798,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 1000000,
+    "maxTokens": 131072,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 1000000,
-    "maxTokens": 131072,
     "thinkingLevelMap": {
       "off": null,
       "minimal": null,
@@ -1845,12 +1841,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 131072,
+    "maxTokens": 32768,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 131072,
-    "maxTokens": 32768,
     "thinkingLevelMap": {
       "off": null,
       "minimal": null,
@@ -1878,12 +1874,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 131072,
+    "maxTokens": 32768,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 131072,
-    "maxTokens": 32768,
     "thinkingLevelMap": {
       "off": null,
       "minimal": null,
@@ -1911,12 +1907,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 262144,
+    "maxTokens": 256000,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 262144,
-    "maxTokens": 256000,
     "type": "chat"
   },
   "stepfun-ai/Step-3.7-Flash": {
@@ -1936,12 +1932,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 262144,
+    "maxTokens": 256000,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 262144,
-    "maxTokens": 256000,
     "thinkingLevelMap": {
       "off": null,
       "minimal": null,
@@ -1979,12 +1975,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 262144,
+    "maxTokens": 128000,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 262144,
-    "maxTokens": 128000,
     "thinkingLevelMap": {
       "off": "none",
       "minimal": null,
@@ -2012,12 +2008,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 1000000,
+    "maxTokens": 64000,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 1000000,
-    "maxTokens": 64000,
     "thinkingLevelMap": {
       "off": "none",
       "minimal": null,
@@ -2046,12 +2042,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 1048576,
+    "maxTokens": 1048576,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 1048576,
-    "maxTokens": 1048576,
     "thinkingLevelMap": {
       "off": null,
       "minimal": null,
@@ -2090,12 +2086,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 524288,
+    "maxTokens": 1048576,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 524288,
-    "maxTokens": 1048576,
     "inputLimits": {
       "images": {
         "resize": {
@@ -2106,30 +2102,6 @@
         }
       }
     },
-    "type": "chat"
-  },
-  "zai-org/GLM-4.5": {
-    "id": "zai-org/GLM-4.5",
-    "name": "GLM-4.5",
-    "api": "openai-completions",
-    "provider": "huggingface",
-    "baseUrl": "https://router.huggingface.co/v1",
-    "reasoning": true,
-    "input": [
-      "text"
-    ],
-    "cost": {
-      "input": 0.6,
-      "output": 2.2,
-      "cacheRead": 0,
-      "cacheWrite": 0
-    },
-    "compat": {
-      "supportsStrictMode": true,
-      "supportsDeveloperRole": false
-    },
-    "contextWindow": 131072,
-    "maxTokens": 98304,
     "type": "chat"
   },
   "zai-org/GLM-4.5-Air": {
@@ -2148,12 +2120,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 131072,
+    "maxTokens": 98304,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 131072,
-    "maxTokens": 98304,
     "type": "chat"
   },
   "zai-org/GLM-4.5V": {
@@ -2173,12 +2145,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 65536,
+    "maxTokens": 16384,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 65536,
-    "maxTokens": 16384,
     "inputLimits": {
       "images": {
         "resize": {
@@ -2207,12 +2179,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 204800,
+    "maxTokens": 131072,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 204800,
-    "maxTokens": 131072,
     "type": "chat"
   },
   "zai-org/GLM-4.6V-Flash": {
@@ -2232,12 +2204,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 131072,
+    "maxTokens": 32768,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 131072,
-    "maxTokens": 32768,
     "inputLimits": {
       "images": {
         "resize": {
@@ -2266,12 +2238,12 @@
       "cacheRead": 0.11,
       "cacheWrite": 0
     },
+    "contextWindow": 204800,
+    "maxTokens": 131072,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 204800,
-    "maxTokens": 131072,
     "type": "chat"
   },
   "zai-org/GLM-4.7-Flash": {
@@ -2290,12 +2262,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 200000,
+    "maxTokens": 128000,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 200000,
-    "maxTokens": 128000,
     "type": "chat"
   },
   "zai-org/GLM-5": {
@@ -2314,12 +2286,12 @@
       "cacheRead": 0.2,
       "cacheWrite": 0
     },
+    "contextWindow": 202752,
+    "maxTokens": 131072,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 202752,
-    "maxTokens": 131072,
     "type": "chat"
   },
   "zai-org/GLM-5.1": {
@@ -2338,12 +2310,12 @@
       "cacheRead": 0.2,
       "cacheWrite": 0
     },
+    "contextWindow": 202752,
+    "maxTokens": 131072,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 202752,
-    "maxTokens": 131072,
     "type": "chat"
   },
   "zai-org/GLM-5.2": {
@@ -2362,12 +2334,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 262144,
+    "maxTokens": 131072,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 262144,
-    "maxTokens": 131072,
     "type": "chat"
   },
   "zai-org/GLM-5.3": {
@@ -2386,12 +2358,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 1048576,
+    "maxTokens": 131072,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 1048576,
-    "maxTokens": 131072,
     "thinkingLevelMap": {
       "off": null,
       "minimal": null,
@@ -2420,12 +2392,12 @@
       "cacheRead": 0,
       "cacheWrite": 0
     },
+    "contextWindow": 1048576,
+    "maxTokens": 131072,
     "compat": {
       "supportsStrictMode": true,
       "supportsDeveloperRole": false
     },
-    "contextWindow": 1048576,
-    "maxTokens": 131072,
     "thinkingLevelMap": {
       "off": null,
       "minimal": null,

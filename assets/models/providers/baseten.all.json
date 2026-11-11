@@ -6,15 +6,6 @@
     "provider": "baseten",
     "baseUrl": "https://inference.baseten.co/v1",
     "reasoning": true,
-    "thinkingLevelMap": {
-      "off": "none",
-      "minimal": null,
-      "low": "low",
-      "medium": null,
-      "high": "high",
-      "xhigh": null,
-      "max": "max"
-    },
     "input": [
       "text"
     ],
@@ -24,28 +15,8 @@
       "cacheRead": 0.028,
       "cacheWrite": 0
     },
-    "compat": {
-      "supportsStrictMode": true,
-      "supportsStore": false,
-      "supportsDeveloperRole": false,
-      "supportsReasoningEffort": true,
-      "supportsUsageInStreaming": true,
-      "maxTokensField": "max_tokens",
-      "sendSessionAffinityHeaders": true,
-      "supportsLongCacheRetention": false,
-      "thinkingFormat": "openai"
-    },
     "contextWindow": 1048576,
     "maxTokens": 384000,
-    "type": "chat"
-  },
-  {
-    "id": "deepseek-ai/DeepSeek-V4-Pro-0813",
-    "name": "DeepSeek V4 Pro 0813",
-    "api": "openai-completions",
-    "provider": "baseten",
-    "baseUrl": "https://inference.baseten.co/v1",
-    "reasoning": true,
     "thinkingLevelMap": {
       "off": "none",
       "minimal": null,
@@ -55,6 +26,26 @@
       "xhigh": null,
       "max": "max"
     },
+    "compat": {
+      "supportsStrictMode": true,
+      "supportsStore": false,
+      "supportsDeveloperRole": false,
+      "supportsReasoningEffort": true,
+      "supportsUsageInStreaming": true,
+      "maxTokensField": "max_tokens",
+      "sendSessionAffinityHeaders": true,
+      "supportsLongCacheRetention": false,
+      "thinkingFormat": "openai"
+    },
+    "type": "chat"
+  },
+  {
+    "id": "deepseek-ai/DeepSeek-V4-Pro-0813",
+    "name": "DeepSeek V4 Pro 0813",
+    "api": "openai-completions",
+    "provider": "baseten",
+    "baseUrl": "https://inference.baseten.co/v1",
+    "reasoning": true,
     "input": [
       "text"
     ],
@@ -63,6 +54,17 @@
       "output": 3.96,
       "cacheRead": 0.132,
       "cacheWrite": 0
+    },
+    "contextWindow": 1048576,
+    "maxTokens": 262144,
+    "thinkingLevelMap": {
+      "off": "none",
+      "minimal": null,
+      "low": "low",
+      "medium": null,
+      "high": "high",
+      "xhigh": null,
+      "max": "max"
     },
     "compat": {
       "supportsStrictMode": true,
@@ -75,8 +77,6 @@
       "supportsLongCacheRetention": false,
       "thinkingFormat": "openai"
     },
-    "contextWindow": 1048576,
-    "maxTokens": 262144,
     "type": "chat"
   },
   {
@@ -86,15 +86,6 @@
     "provider": "baseten",
     "baseUrl": "https://inference.baseten.co/v1",
     "reasoning": true,
-    "thinkingLevelMap": {
-      "off": "none",
-      "minimal": null,
-      "low": null,
-      "medium": null,
-      "high": "high",
-      "xhigh": null,
-      "max": "max"
-    },
     "input": [
       "text",
       "image"
@@ -105,6 +96,17 @@
       "cacheRead": 0.007,
       "cacheWrite": 0
     },
+    "contextWindow": 1048576,
+    "maxTokens": 32768,
+    "thinkingLevelMap": {
+      "off": "none",
+      "minimal": null,
+      "low": null,
+      "medium": null,
+      "high": "high",
+      "xhigh": null,
+      "max": "max"
+    },
     "compat": {
       "supportsStrictMode": true,
       "supportsStore": false,
@@ -116,8 +118,6 @@
       "supportsLongCacheRetention": false,
       "thinkingFormat": "openai"
     },
-    "contextWindow": 1048576,
-    "maxTokens": 32768,
     "inputLimits": {
       "images": {
         "resize": {
@@ -137,15 +137,6 @@
     "provider": "baseten",
     "baseUrl": "https://inference.baseten.co/v1",
     "reasoning": true,
-    "thinkingLevelMap": {
-      "off": "none",
-      "minimal": null,
-      "low": "low",
-      "medium": "medium",
-      "high": "high",
-      "xhigh": null,
-      "max": "max"
-    },
     "input": [
       "text",
       "image"
@@ -155,6 +146,17 @@
       "output": 1.2,
       "cacheRead": 0.007,
       "cacheWrite": 0
+    },
+    "contextWindow": 1048576,
+    "maxTokens": 262144,
+    "thinkingLevelMap": {
+      "off": "none",
+      "minimal": null,
+      "low": "low",
+      "medium": "medium",
+      "high": "high",
+      "xhigh": null,
+      "max": "max"
     },
     "compat": {
       "supportsStrictMode": true,
@@ -167,8 +169,6 @@
       "supportsLongCacheRetention": false,
       "thinkingFormat": "openai"
     },
-    "contextWindow": 1048576,
-    "maxTokens": 262144,
     "inputLimits": {
       "images": {
         "resize": {
@@ -188,15 +188,6 @@
     "provider": "baseten",
     "baseUrl": "https://inference.baseten.co/v1",
     "reasoning": true,
-    "thinkingLevelMap": {
-      "off": "none",
-      "minimal": null,
-      "low": "low",
-      "medium": "medium",
-      "high": "high",
-      "xhigh": null,
-      "max": "max"
-    },
     "input": [
       "text",
       "image"
@@ -206,6 +197,17 @@
       "output": 2.4,
       "cacheRead": 0.014,
       "cacheWrite": 0
+    },
+    "contextWindow": 1048576,
+    "maxTokens": 262144,
+    "thinkingLevelMap": {
+      "off": "none",
+      "minimal": null,
+      "low": "low",
+      "medium": "medium",
+      "high": "high",
+      "xhigh": null,
+      "max": "max"
     },
     "compat": {
       "supportsStrictMode": true,
@@ -218,8 +220,6 @@
       "supportsLongCacheRetention": false,
       "thinkingFormat": "openai"
     },
-    "contextWindow": 1048576,
-    "maxTokens": 262144,
     "inputLimits": {
       "images": {
         "resize": {
@@ -239,15 +239,6 @@
     "provider": "baseten",
     "baseUrl": "https://inference.baseten.co/v1",
     "reasoning": true,
-    "thinkingLevelMap": {
-      "off": "none",
-      "minimal": null,
-      "low": null,
-      "medium": null,
-      "high": "high",
-      "xhigh": null,
-      "max": "max"
-    },
     "input": [
       "text",
       "image"
@@ -257,6 +248,17 @@
       "output": 2.4,
       "cacheRead": 0.014,
       "cacheWrite": 0
+    },
+    "contextWindow": 1048576,
+    "maxTokens": 32768,
+    "thinkingLevelMap": {
+      "off": "none",
+      "minimal": null,
+      "low": null,
+      "medium": null,
+      "high": "high",
+      "xhigh": null,
+      "max": "max"
     },
     "compat": {
       "supportsStrictMode": true,
@@ -269,8 +271,6 @@
       "supportsLongCacheRetention": false,
       "thinkingFormat": "openai"
     },
-    "contextWindow": 1048576,
-    "maxTokens": 32768,
     "inputLimits": {
       "images": {
         "resize": {
@@ -290,15 +290,6 @@
     "provider": "baseten",
     "baseUrl": "https://inference.baseten.co/v1",
     "reasoning": true,
-    "thinkingLevelMap": {
-      "off": "none",
-      "minimal": null,
-      "low": "low",
-      "medium": null,
-      "high": "high",
-      "xhigh": null,
-      "max": "max"
-    },
     "input": [
       "text",
       "image"
@@ -308,6 +299,17 @@
       "output": 15,
       "cacheRead": 0.3,
       "cacheWrite": 0
+    },
+    "contextWindow": 1048576,
+    "maxTokens": 262144,
+    "thinkingLevelMap": {
+      "off": "none",
+      "minimal": null,
+      "low": "low",
+      "medium": null,
+      "high": "high",
+      "xhigh": null,
+      "max": "max"
     },
     "compat": {
       "supportsStrictMode": true,
@@ -320,8 +322,47 @@
       "supportsLongCacheRetention": false,
       "thinkingFormat": "openai"
     },
-    "contextWindow": 1048576,
+    "inputLimits": {
+      "images": {
+        "resize": {
+          "maxWidth": 2000,
+          "maxHeight": 2000,
+          "maxBytes": 4718592,
+          "jpegQuality": 80
+        }
+      }
+    },
+    "type": "chat"
+  },
+  {
+    "id": "moonshotai/Kimi-K3.1-Pro",
+    "name": "Kimi K3.1 Pro",
+    "api": "openai-completions",
+    "provider": "baseten",
+    "baseUrl": "https://inference.baseten.co/v1",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 2,
+      "output": 10,
+      "cacheRead": 0.2,
+      "cacheWrite": 0
+    },
+    "contextWindow": 1000000,
     "maxTokens": 262144,
+    "compat": {
+      "supportsStrictMode": true,
+      "supportsStore": false,
+      "supportsDeveloperRole": false,
+      "supportsReasoningEffort": false,
+      "supportsUsageInStreaming": true,
+      "maxTokensField": "max_tokens",
+      "sendSessionAffinityHeaders": true,
+      "supportsLongCacheRetention": false
+    },
     "inputLimits": {
       "images": {
         "resize": {
@@ -336,20 +377,11 @@
   },
   {
     "id": "nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B",
-    "name": "Nemotron Ultra",
+    "name": "Nemotron 3 Ultra",
     "api": "openai-completions",
     "provider": "baseten",
     "baseUrl": "https://inference.baseten.co/v1",
     "reasoning": true,
-    "thinkingLevelMap": {
-      "off": "none",
-      "minimal": null,
-      "low": null,
-      "medium": null,
-      "high": "high",
-      "xhigh": null,
-      "max": null
-    },
     "input": [
       "text"
     ],
@@ -359,6 +391,17 @@
       "cacheRead": 0.12,
       "cacheWrite": 0
     },
+    "contextWindow": 202800,
+    "maxTokens": 202800,
+    "thinkingLevelMap": {
+      "off": "none",
+      "minimal": null,
+      "low": null,
+      "medium": null,
+      "high": "high",
+      "xhigh": null,
+      "max": null
+    },
     "compat": {
       "supportsStrictMode": true,
       "supportsStore": false,
@@ -370,8 +413,6 @@
       "supportsLongCacheRetention": false,
       "thinkingFormat": "openai"
     },
-    "contextWindow": 202800,
-    "maxTokens": 202800,
     "type": "chat"
   },
   {
@@ -381,15 +422,6 @@
     "provider": "baseten",
     "baseUrl": "https://inference.baseten.co/v1",
     "reasoning": true,
-    "thinkingLevelMap": {
-      "off": "none",
-      "minimal": "minimal",
-      "low": "low",
-      "medium": "medium",
-      "high": "high",
-      "xhigh": "xhigh",
-      "max": "max"
-    },
     "input": [
       "text"
     ],
@@ -398,6 +430,17 @@
       "output": 0.5,
       "cacheRead": 0.1,
       "cacheWrite": 0
+    },
+    "contextWindow": 128072,
+    "maxTokens": 128072,
+    "thinkingLevelMap": {
+      "off": "none",
+      "minimal": "minimal",
+      "low": "low",
+      "medium": "medium",
+      "high": "high",
+      "xhigh": "xhigh",
+      "max": "max"
     },
     "compat": {
       "supportsStrictMode": true,
@@ -410,8 +453,6 @@
       "supportsLongCacheRetention": false,
       "thinkingFormat": "openai"
     },
-    "contextWindow": 128072,
-    "maxTokens": 128072,
     "type": "chat"
   },
   {
@@ -421,15 +462,6 @@
     "provider": "baseten",
     "baseUrl": "https://inference.baseten.co/v1",
     "reasoning": true,
-    "thinkingLevelMap": {
-      "off": "none",
-      "minimal": null,
-      "low": null,
-      "medium": null,
-      "high": "high",
-      "xhigh": null,
-      "max": "max"
-    },
     "input": [
       "text"
     ],
@@ -439,33 +471,8 @@
       "cacheRead": 0.14,
       "cacheWrite": 0
     },
-    "compat": {
-      "supportsStrictMode": true,
-      "supportsStore": false,
-      "supportsDeveloperRole": false,
-      "supportsReasoningEffort": true,
-      "supportsUsageInStreaming": true,
-      "maxTokensField": "max_tokens",
-      "sendSessionAffinityHeaders": true,
-      "supportsLongCacheRetention": false,
-      "thinkingFormat": "baseten",
-      "chatTemplateArgs": {
-        "enable_thinking": {
-          "$var": "thinking.enabled"
-        }
-      }
-    },
     "contextWindow": 1048576,
     "maxTokens": 262144,
-    "type": "chat"
-  },
-  {
-    "id": "zai-org/GLM-5.2-Fast",
-    "name": "GLM 5.2 Fast",
-    "api": "openai-completions",
-    "provider": "baseten",
-    "baseUrl": "https://inference.baseten.co/v1",
-    "reasoning": true,
     "thinkingLevelMap": {
       "off": "none",
       "minimal": null,
@@ -475,6 +482,31 @@
       "xhigh": null,
       "max": "max"
     },
+    "compat": {
+      "supportsStrictMode": true,
+      "supportsStore": false,
+      "supportsDeveloperRole": false,
+      "supportsReasoningEffort": true,
+      "supportsUsageInStreaming": true,
+      "maxTokensField": "max_tokens",
+      "sendSessionAffinityHeaders": true,
+      "supportsLongCacheRetention": false,
+      "thinkingFormat": "baseten",
+      "chatTemplateArgs": {
+        "enable_thinking": {
+          "$var": "thinking.enabled"
+        }
+      }
+    },
+    "type": "chat"
+  },
+  {
+    "id": "zai-org/GLM-5.2-Fast",
+    "name": "GLM 5.2 Fast",
+    "api": "openai-completions",
+    "provider": "baseten",
+    "baseUrl": "https://inference.baseten.co/v1",
+    "reasoning": true,
     "input": [
       "text"
     ],
@@ -483,6 +515,17 @@
       "output": 6.6,
       "cacheRead": 0.21,
       "cacheWrite": 0
+    },
+    "contextWindow": 1048576,
+    "maxTokens": 262144,
+    "thinkingLevelMap": {
+      "off": "none",
+      "minimal": null,
+      "low": null,
+      "medium": null,
+      "high": "high",
+      "xhigh": null,
+      "max": "max"
     },
     "compat": {
       "supportsStrictMode": true,
@@ -500,8 +543,6 @@
         }
       }
     },
-    "contextWindow": 1048576,
-    "maxTokens": 262144,
     "type": "chat"
   },
   {
@@ -511,15 +552,6 @@
     "provider": "baseten",
     "baseUrl": "https://inference.baseten.co/v1",
     "reasoning": true,
-    "thinkingLevelMap": {
-      "off": null,
-      "minimal": null,
-      "low": "low",
-      "medium": null,
-      "high": "high",
-      "xhigh": null,
-      "max": "max"
-    },
     "input": [
       "text",
       "image"
@@ -530,6 +562,17 @@
       "cacheRead": 0.14,
       "cacheWrite": 0
     },
+    "contextWindow": 1048576,
+    "maxTokens": 262144,
+    "thinkingLevelMap": {
+      "off": null,
+      "minimal": null,
+      "low": "low",
+      "medium": null,
+      "high": "high",
+      "xhigh": null,
+      "max": "max"
+    },
     "compat": {
       "supportsStrictMode": true,
       "supportsStore": false,
@@ -541,8 +584,6 @@
       "supportsLongCacheRetention": false,
       "thinkingFormat": "openai"
     },
-    "contextWindow": 1048576,
-    "maxTokens": 262144,
     "inputLimits": {
       "images": {
         "resize": {
@@ -562,15 +603,6 @@
     "provider": "baseten",
     "baseUrl": "https://inference.baseten.co/v1",
     "reasoning": true,
-    "thinkingLevelMap": {
-      "off": null,
-      "minimal": null,
-      "low": "low",
-      "medium": null,
-      "high": "high",
-      "xhigh": null,
-      "max": "max"
-    },
     "input": [
       "text",
       "image"
@@ -580,6 +612,17 @@
       "output": 6.6,
       "cacheRead": 0.21,
       "cacheWrite": 0
+    },
+    "contextWindow": 1048576,
+    "maxTokens": 262144,
+    "thinkingLevelMap": {
+      "off": null,
+      "minimal": null,
+      "low": "low",
+      "medium": null,
+      "high": "high",
+      "xhigh": null,
+      "max": "max"
     },
     "compat": {
       "supportsStrictMode": true,
@@ -592,8 +635,6 @@
       "supportsLongCacheRetention": false,
       "thinkingFormat": "openai"
     },
-    "contextWindow": 1048576,
-    "maxTokens": 262144,
     "inputLimits": {
       "images": {
         "resize": {
@@ -613,15 +654,6 @@
     "provider": "baseten",
     "baseUrl": "https://inference.baseten.co/v1",
     "reasoning": true,
-    "thinkingLevelMap": {
-      "off": null,
-      "minimal": null,
-      "low": "low",
-      "medium": null,
-      "high": "high",
-      "xhigh": null,
-      "max": "max"
-    },
     "input": [
       "text",
       "image"
@@ -631,6 +663,17 @@
       "output": 0.5,
       "cacheRead": 0.03,
       "cacheWrite": 0
+    },
+    "contextWindow": 1048576,
+    "maxTokens": 131072,
+    "thinkingLevelMap": {
+      "off": null,
+      "minimal": null,
+      "low": "low",
+      "medium": null,
+      "high": "high",
+      "xhigh": null,
+      "max": "max"
     },
     "compat": {
       "supportsStrictMode": true,
@@ -643,8 +686,6 @@
       "supportsLongCacheRetention": false,
       "thinkingFormat": "openai"
     },
-    "contextWindow": 1048576,
-    "maxTokens": 131072,
     "inputLimits": {
       "images": {
         "resize": {

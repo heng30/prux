@@ -18,10 +18,15 @@
     },
     "contextWindow": 1000000,
     "maxTokens": 128000,
+    "thinkingLevelMap": {
+      "off": null,
+      "xhigh": "xhigh",
+      "max": "max"
+    },
     "compat": {
+      "forceAdaptiveThinking": true,
       "supportsMidConvoSystemMessages": true,
       "supportsMidConvoToolChanges": true,
-      "forceAdaptiveThinking": true,
       "supportsStrictTools": true,
       "allowedFallbackModels": [
         {
@@ -45,11 +50,6 @@
           }
         }
       ]
-    },
-    "thinkingLevelMap": {
-      "off": null,
-      "xhigh": "xhigh",
-      "max": "max"
     },
     "promptCache": {
       "short": 300,
@@ -88,17 +88,78 @@
     },
     "contextWindow": 1000000,
     "maxTokens": 128000,
-    "compat": {
-      "supportsMidConvoEffort": true,
-      "supportsMidConvoSystemMessages": true,
-      "supportsMidConvoToolChanges": true,
-      "forceAdaptiveThinking": true,
-      "supportsStrictTools": true
-    },
     "thinkingLevelMap": {
       "off": null,
       "xhigh": "xhigh",
       "max": "max"
+    },
+    "compat": {
+      "forceAdaptiveThinking": true,
+      "supportsMidConvoEffort": true,
+      "supportsMidConvoSystemMessages": true,
+      "supportsMidConvoToolChanges": true,
+      "supportsStrictTools": true
+    },
+    "promptCache": {
+      "short": 300,
+      "long": 3600
+    },
+    "inputLimits": {
+      "maxRequestBytes": 33554432,
+      "images": {
+        "maxPerRequest": 600,
+        "resize": {
+          "maxWidth": 2000,
+          "maxHeight": 2000,
+          "maxBytes": 4718592,
+          "jpegQuality": 80
+        }
+      }
+    },
+    "type": "chat"
+  },
+  {
+    "id": "claude-fable-5-2",
+    "name": "Claude Fable 5.2",
+    "api": "anthropic-messages",
+    "provider": "anthropic",
+    "baseUrl": "https://api.anthropic.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 8,
+      "output": 40,
+      "cacheRead": 0.2,
+      "cacheWrite": 10
+    },
+    "contextWindow": 1000000,
+    "maxTokens": 128000,
+    "thinkingLevelMap": {
+      "off": null,
+      "xhigh": "xhigh",
+      "max": "max"
+    },
+    "compat": {
+      "forceAdaptiveThinking": true,
+      "supportsMidConvoEffort": true,
+      "supportsMidConvoSystemMessages": true,
+      "supportsMidConvoToolChanges": true,
+      "supportsStrictTools": true,
+      "allowedFallbackModels": [
+        {
+          "provider": "anthropic",
+          "model": "claude-opus-5",
+          "cost": {
+            "input": 5,
+            "output": 25,
+            "cacheRead": 0.5,
+            "cacheWrite": 6.25
+          }
+        }
+      ]
     },
     "promptCache": {
       "short": 300,
@@ -235,11 +296,11 @@
       "max": "max"
     },
     "compat": {
+      "forceAdaptiveThinking": true,
+      "supportsTemperature": false,
       "supportsMidConvoEffort": true,
       "supportsMidConvoSystemMessages": true,
       "supportsMidConvoToolChanges": true,
-      "forceAdaptiveThinking": true,
-      "supportsTemperature": false,
       "supportsStrictTools": true
     },
     "promptCache": {
@@ -449,16 +510,16 @@
     },
     "contextWindow": 1000000,
     "maxTokens": 128000,
-    "compat": {
-      "supportsMidConvoSystemMessages": true,
-      "supportsMidConvoToolChanges": true,
-      "forceAdaptiveThinking": true,
-      "supportsTemperature": false,
-      "supportsStrictTools": true
-    },
     "thinkingLevelMap": {
       "xhigh": "xhigh",
       "max": "max"
+    },
+    "compat": {
+      "forceAdaptiveThinking": true,
+      "supportsTemperature": false,
+      "supportsMidConvoSystemMessages": true,
+      "supportsMidConvoToolChanges": true,
+      "supportsStrictTools": true
     },
     "promptCache": {
       "short": 300,
@@ -497,17 +558,17 @@
     },
     "contextWindow": 1000000,
     "maxTokens": 128000,
-    "compat": {
-      "supportsMidConvoEffort": true,
-      "supportsMidConvoSystemMessages": true,
-      "supportsMidConvoToolChanges": true,
-      "forceAdaptiveThinking": true,
-      "supportsTemperature": false,
-      "supportsStrictTools": true
-    },
     "thinkingLevelMap": {
       "xhigh": "xhigh",
       "max": "max"
+    },
+    "compat": {
+      "forceAdaptiveThinking": true,
+      "supportsTemperature": false,
+      "supportsMidConvoEffort": true,
+      "supportsMidConvoSystemMessages": true,
+      "supportsMidConvoToolChanges": true,
+      "supportsStrictTools": true
     },
     "promptCache": {
       "short": 300,
@@ -556,11 +617,11 @@
       "max": "max"
     },
     "compat": {
+      "forceAdaptiveThinking": true,
+      "supportsTemperature": false,
       "supportsMidConvoEffort": true,
       "supportsMidConvoSystemMessages": true,
       "supportsMidConvoToolChanges": true,
-      "forceAdaptiveThinking": true,
-      "supportsTemperature": false,
       "supportsStrictTools": true
     },
     "promptCache": {
@@ -730,6 +791,7 @@
     },
     "compat": {
       "forceAdaptiveThinking": true,
+      "supportsTemperature": false,
       "supportsStrictTools": true
     },
     "promptCache": {
@@ -779,11 +841,11 @@
       "max": "max"
     },
     "compat": {
+      "forceAdaptiveThinking": true,
+      "supportsTemperature": false,
       "supportsMidConvoEffort": true,
       "supportsMidConvoSystemMessages": true,
       "supportsMidConvoToolChanges": true,
-      "forceAdaptiveThinking": true,
-      "supportsTemperature": false,
       "supportsStrictTools": true
     },
     "promptCache": {

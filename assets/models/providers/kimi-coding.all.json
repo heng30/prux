@@ -5,17 +5,6 @@
     "api": "openai-completions",
     "provider": "kimi-coding",
     "baseUrl": "https://api.kimi.com/coding/v1",
-    "compat": {
-      "supportsStrictMode": false,
-      "supportsStore": false,
-      "supportsDeveloperRole": false,
-      "supportsReasoningEffort": true,
-      "maxTokensField": "max_tokens",
-      "thinkingFormat": "openai",
-      "requiresReasoningContentOnAssistantMessages": true,
-      "supportsMidConvoSystemMessages": true,
-      "supportsMidConvoToolAdditions": true
-    },
     "reasoning": true,
     "input": [
       "text",
@@ -29,6 +18,17 @@
     },
     "contextWindow": 1048576,
     "maxTokens": 131072,
+    "compat": {
+      "supportsStrictMode": false,
+      "supportsStore": false,
+      "supportsDeveloperRole": false,
+      "supportsReasoningEffort": true,
+      "maxTokensField": "max_tokens",
+      "thinkingFormat": "openai",
+      "requiresReasoningContentOnAssistantMessages": true,
+      "supportsMidConvoSystemMessages": true,
+      "supportsMidConvoToolAdditions": true
+    },
     "thinkingLevelMap": {
       "off": null,
       "minimal": null,
@@ -56,6 +56,19 @@
     "api": "openai-completions",
     "provider": "kimi-coding",
     "baseUrl": "https://api.kimi.com/coding/v1",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 3,
+      "output": 15,
+      "cacheRead": 0.3,
+      "cacheWrite": 0
+    },
+    "contextWindow": 262144,
+    "maxTokens": 131072,
     "compat": {
       "supportsStrictMode": false,
       "supportsStore": false,
@@ -67,19 +80,108 @@
       "supportsMidConvoSystemMessages": true,
       "supportsMidConvoToolAdditions": true
     },
+    "thinkingLevelMap": {
+      "off": null,
+      "minimal": null,
+      "low": "low",
+      "medium": null,
+      "high": "high",
+      "xhigh": null,
+      "max": "max"
+    },
+    "inputLimits": {
+      "images": {
+        "resize": {
+          "maxWidth": 2000,
+          "maxHeight": 2000,
+          "maxBytes": 4718592,
+          "jpegQuality": 80
+        }
+      }
+    },
+    "type": "chat"
+  },
+  {
+    "id": "k3.1-pro",
+    "name": "Kimi K3.1 Pro",
+    "api": "openai-completions",
+    "provider": "kimi-coding",
+    "baseUrl": "https://api.kimi.com/coding/v1",
     "reasoning": true,
     "input": [
       "text",
       "image"
     ],
     "cost": {
-      "input": 0,
-      "output": 0,
-      "cacheRead": 0,
+      "input": 2,
+      "output": 10,
+      "cacheRead": 0.2,
       "cacheWrite": 0
     },
-    "contextWindow": 262144,
+    "contextWindow": 1048576,
     "maxTokens": 131072,
+    "compat": {
+      "supportsStrictMode": false,
+      "supportsStore": false,
+      "supportsDeveloperRole": false,
+      "supportsReasoningEffort": true,
+      "maxTokensField": "max_tokens",
+      "thinkingFormat": "openai",
+      "requiresReasoningContentOnAssistantMessages": true,
+      "supportsMidConvoSystemMessages": true,
+      "supportsMidConvoToolAdditions": true
+    },
+    "thinkingLevelMap": {
+      "off": null,
+      "minimal": null,
+      "low": "low",
+      "medium": null,
+      "high": "high",
+      "xhigh": null,
+      "max": "max"
+    },
+    "inputLimits": {
+      "images": {
+        "resize": {
+          "maxWidth": 2000,
+          "maxHeight": 2000,
+          "maxBytes": 4718592,
+          "jpegQuality": 80
+        }
+      }
+    },
+    "type": "chat"
+  },
+  {
+    "id": "k3.1-pro-highspeed",
+    "name": "Kimi K3.1 Pro Highspeed",
+    "api": "openai-completions",
+    "provider": "kimi-coding",
+    "baseUrl": "https://api.kimi.com/coding/v1",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 4,
+      "output": 20,
+      "cacheRead": 0.2,
+      "cacheWrite": 0
+    },
+    "contextWindow": 1048576,
+    "maxTokens": 131072,
+    "compat": {
+      "supportsStrictMode": false,
+      "supportsStore": false,
+      "supportsDeveloperRole": false,
+      "supportsReasoningEffort": true,
+      "maxTokensField": "max_tokens",
+      "thinkingFormat": "openai",
+      "requiresReasoningContentOnAssistantMessages": true,
+      "supportsMidConvoSystemMessages": true,
+      "supportsMidConvoToolAdditions": true
+    },
     "thinkingLevelMap": {
       "off": null,
       "minimal": null,
@@ -107,17 +209,6 @@
     "api": "openai-completions",
     "provider": "kimi-coding",
     "baseUrl": "https://api.kimi.com/coding/v1",
-    "compat": {
-      "supportsStrictMode": false,
-      "supportsStore": false,
-      "supportsDeveloperRole": false,
-      "supportsReasoningEffort": true,
-      "maxTokensField": "max_tokens",
-      "thinkingFormat": "openai",
-      "requiresReasoningContentOnAssistantMessages": true,
-      "supportsMidConvoSystemMessages": true,
-      "supportsMidConvoToolAdditions": true
-    },
     "reasoning": true,
     "input": [
       "text",
@@ -131,6 +222,17 @@
     },
     "contextWindow": 1048576,
     "maxTokens": 32768,
+    "compat": {
+      "supportsStrictMode": false,
+      "supportsStore": false,
+      "supportsDeveloperRole": false,
+      "supportsReasoningEffort": true,
+      "maxTokensField": "max_tokens",
+      "thinkingFormat": "openai",
+      "requiresReasoningContentOnAssistantMessages": true,
+      "supportsMidConvoSystemMessages": true,
+      "supportsMidConvoToolAdditions": true
+    },
     "thinkingLevelMap": {
       "off": null,
       "minimal": null,
@@ -158,15 +260,6 @@
     "api": "openai-completions",
     "provider": "kimi-coding",
     "baseUrl": "https://api.kimi.com/coding/v1",
-    "compat": {
-      "supportsStrictMode": false,
-      "supportsStore": false,
-      "supportsDeveloperRole": false,
-      "supportsReasoningEffort": false,
-      "maxTokensField": "max_tokens",
-      "thinkingFormat": "deepseek",
-      "supportsMidConvoSystemMessages": true
-    },
     "reasoning": true,
     "input": [
       "text",
@@ -180,6 +273,15 @@
     },
     "contextWindow": 262144,
     "maxTokens": 32768,
+    "compat": {
+      "supportsStrictMode": false,
+      "supportsStore": false,
+      "supportsDeveloperRole": false,
+      "supportsReasoningEffort": false,
+      "maxTokensField": "max_tokens",
+      "thinkingFormat": "deepseek",
+      "supportsMidConvoSystemMessages": true
+    },
     "thinkingLevelMap": {
       "off": null
     },
