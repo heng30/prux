@@ -148,6 +148,10 @@
 - **ACP could cut its own cleanup short**: stdin EOF and SIGTERM arriving together dropped the
   in-flight work, so a refreshed MCP token or a session write could be lost. The first EOF or signal
   now lets the current turn finish, and only a second one exits immediately.
+- **The GUI showed a freshly read image only after switching sessions**: the live
+  `tool_execution_end` event carried the result text alone, so an image that had just been read
+  stayed invisible until the transcript was rebuilt from history. The event now carries the
+  attachments as image blocks, in the same shape and order as the `toolResult` message.
 
 ## 中文
 
@@ -257,4 +261,6 @@
 - **设置子面板里 PageUp/PageDown 不起作用**：勾选列表原先每次只移一行。现在两个翻页键都移十行。
 - **ACP 会把自己的收尾切断**：stdin EOF 与 SIGTERM 同时到达时在途工作被直接丢弃，刷新到的 MCP token
   与会话落盘可能一起丢。现在首个 EOF/信号让当前回合跑完，第二个信号才立即退出。
+- **GUI 里刚 read 进来的图片要切会话才出现**：实时 `tool_execution_end` 事件只带结果文本，
+  刚读到的图片要等对话流按历史重建才看得见。现在事件按 `toolResult` 消息同形同序带上图片块。
 

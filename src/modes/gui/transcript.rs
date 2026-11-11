@@ -2797,6 +2797,41 @@ mod tests {
         assert!(tool.started_at.is_none());
     }
 
+    /// 实时 `tool_execution_end` 里的图片要落成缩略图：图片只在历史消息里带的话，
+    /// 第一次 read 的图不显示，要切会话（重建历史）或重新 read 才看得到。
+    #[test]
+    fn tool_end_event_renders_images() {
+        let mut transcript = Transcript::default();
+        transcript.apply(
+            &serde_json::json!({
+                "type": "tool_execution_start",
+                "toolCallId": "t1",
+                "toolName": "read",
+                "args": { "path": "a.png" },
+            }),
+            ".",
+        );
+        // 1x1 PNG 的 base64（真实可解码）
+        let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+        transcript.apply(
+            &serde_json::json!({
+                "type": "tool_execution_end",
+                "toolCallId": "t1",
+                "isError": false,
+                "result": { "content": [
+                    { "type": "image", "data": png, "mimeType": "image/png" },
+                    { "type": "text", "text": "Read image file [image/png]" },
+                ] },
+            }),
+            ".",
+        );
+        let Block::Tool(tool) = &transcript.blocks()[0] else {
+            panic!("第一块应是工具块");
+        };
+        assert_eq!(tool.images.len(), 1, "实时事件里的图片应落成缩略图");
+        assert!(tool.images[0].is_file());
+    }
+
     /// 选区底色与行内样式高亮合并后首尾相接、互不重叠（重叠段画不出底色）。
     #[test]
     fn selection_highlight_splits_inline_runs() {

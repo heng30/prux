@@ -829,10 +829,15 @@ impl FinalizedToolCall {
     /// agent 事件 payload 中的 result：完整 AgentToolResult 对象
     fn to_result_json(&self) -> Value {
         let mut m = serde_json::Map::new();
-        m.insert(
-            "content".to_string(),
-            json!([{ "type": "text", "text": self.text }]),
-        );
+        // 附件（read 图片等）排在文本之前，与 toolResult 消息的 content 同序：
+        // 实时事件与历史消息同形，界面不必分两套解析（否则只有切会话回来才看得到图）。
+        let mut content: Vec<Value> = self
+            .attachments
+            .iter()
+            .map(|a| json!({ "type": "image", "data": a.data_base64, "mimeType": a.mime_type }))
+            .collect();
+        content.push(json!({ "type": "text", "text": self.text }));
+        m.insert("content".to_string(), Value::Array(content));
         m.insert(
             "details".to_string(),
             self.details.clone().unwrap_or_else(|| json!({})),
@@ -10512,6 +10517,40 @@ mod tests {
             },
         );
         assert_eq!(fin.details.as_ref().unwrap()["structuredContent"]["a"], 1);
+    }
+
+    /// `to_result_json` 的 `content` 要带附件图片：桌面界面按实时 `tool_execution_end` 事件
+    /// 渲染工具卡片，图片只进历史消息就会表现为「切会话回来才看得到图」。
+    #[test]
+    fn result_json_carries_attachments() {
+        let call = ContentBlock::ToolCall {
+            id: "c1".to_string(),
+            name: "read".to_string(),
+            arguments: json!({}),
+            thought_signature: None,
+            namespace: None,
+            arguments_error: None,
+        };
+        let fin = FinalizedToolCall::from_tool_result(
+            &call,
+            "read",
+            &json!({}),
+            ToolResult {
+                text: "Read image file [image/png]".to_string(),
+                attachments: vec![crate::core::tools::ToolResultAttachment {
+                    data_base64: "QUJD".to_string(),
+                    mime_type: "image/png".to_string(),
+                    original_size: None,
+                    converted_from: None,
+                }],
+                ..Default::default()
+            },
+        );
+        let content = &fin.to_result_json()["content"];
+        assert_eq!(content[0]["type"], "image");
+        assert_eq!(content[0]["data"], "QUJD");
+        assert_eq!(content[0]["mimeType"], "image/png");
+        assert_eq!(content[1]["text"], "Read image file [image/png]");
     }
 
     /// `is_nested_call_event`：只有带非空 `parentToolCallId` 的才是嵌套调用事件。
