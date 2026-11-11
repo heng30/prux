@@ -4,12 +4,13 @@ use super::KeyAction;
 use crate::{
     core::{
         keybindings::{self, KeybindingsManager},
-        settings_manager,
+        session_manager, settings_manager,
     },
     modes::tui::{agent_actor::AgentCommand, app::App, line_input::InputAction, session_selector},
     utils::clipboard::read_clipboard,
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use std::path::{Path, PathBuf};
 
 impl App {
     /// 打开 /resume 会话选择器：以 cwd 与 agent 目录为范围扫描会话、标出当前会话，
@@ -176,8 +177,27 @@ impl App {
         }
     }
 
-    /// 选择会话后切换（handleResumeSession / 原 panel Session confirm）
+    /// 选择会话后切换（handleResumeSession / 原 panel Session confirm）。
+    /// 会话存储的 cwd 已消失或与当前 cwd 不同时，先弹三选确认（Continue / Fork / Cancel），
+    /// 与 `/import` 共用同一面板 —— 否则恢复出来的会话在错误目录里跑。
     fn resume_session_from_selector(&mut self, path: &str) {
+        if let Some(session_cwd) = session_manager::read_session_cwd(Path::new(path)) {
+            let cwd_missing = session_cwd.is_empty() || !Path::new(&session_cwd).exists();
+            if cwd_missing || session_cwd != self.cwd {
+                self.session_selector.close();
+                self.stage_import_cwd_confirm(
+                    PathBuf::from(path),
+                    if session_cwd.is_empty() {
+                        "<unknown>".to_string()
+                    } else {
+                        session_cwd
+                    },
+                    cwd_missing,
+                );
+                return;
+            }
+        }
+
         self.worker.send(AgentCommand::ResumeSession {
             path: path.to_string(),
         });

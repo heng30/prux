@@ -1229,6 +1229,8 @@ pub struct SessionStats {
     pub cache_write: u64,
     /// 累计成本（provider 计价口径，合计与 `cost_breakdown` 一致）
     pub cost_total: f64,
+    /// `cost_total` 里是否含供应商上报的金额（OpenRouter 这类不按目录单价算）
+    pub cost_from_provider: bool,
     /// 成本分列（成本降序；合计与 `cost_total` 一致）
     pub cost_breakdown: Vec<CostBreakdownEntry>,
     /// 提示缓存保温状态（`/session` 的 `Cache Warming` 块）

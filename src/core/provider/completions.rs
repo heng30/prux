@@ -11,7 +11,7 @@ use super::{
     },
     json_args::parse_tool_call_arguments,
     provider_extra_headers, track_stream_bytes,
-    usage::compute_cost,
+    usage::{apply_reported_cost, compute_cost},
 };
 use crate::{
     core::{
@@ -1634,7 +1634,7 @@ fn parse_usage(u: &Value) -> Option<Usage> {
         .saturating_sub(cache_read)
         .saturating_sub(cache_write);
     let total_tokens = input + output + cache_read + cache_write;
-    Some(Usage {
+    let mut usage = Usage {
         input,
         output,
         cache_read,
@@ -1643,7 +1643,10 @@ fn parse_usage(u: &Value) -> Option<Usage> {
         reasoning: (reasoning > 0).then_some(reasoning),
         total_tokens,
         cost: Cost::default(),
-    })
+    };
+    // OpenRouter 在 usage.cost 里直接给出总额（含上游加成）
+    apply_reported_cost(&mut usage, Some(u));
+    Some(usage)
 }
 
 /// 本次请求应使用的 chat/completions 端点。
@@ -2487,6 +2490,30 @@ mod tests {
             u.cost.total
         );
         assert!((res.usage.unwrap().cost.total - 0.005).abs() < 1e-12);
+    }
+
+    /// OpenRouter 上报的 `usage.cost` 直接作总额，且不被目录单价重算覆盖（pi #11178）。
+    #[test]
+    fn provider_reported_cost_overrides_estimate() {
+        let raw = json!({
+            "prompt_tokens": 1000,
+            "completion_tokens": 2000,
+            "total_tokens": 3000,
+            "cost": 0.42
+        });
+        let usage = parse_usage(&raw).expect("usage");
+        assert!(usage.cost.total_from_provider);
+        assert!((usage.cost.total - 0.42).abs() < 1e-12);
+
+        // 再走一遍目录计价：分项按单价算，合计仍保留供应商上报值
+        let mut u = usage;
+        compute_cost(
+            &mut u,
+            Some(&json!({ "input": 1.0, "output": 2.0, "cacheRead": 0.5, "cacheWrite": 0.25 })),
+        );
+        assert!((u.cost.input - 0.001).abs() < 1e-12, "分项照旧按单价");
+        assert!((u.cost.total - 0.42).abs() < 1e-12, "合计用上报值");
+        assert!(u.cost.total_from_provider);
     }
 
     /// grammar 能力开启时，带语法约束的工具下发为 `custom` 工具；关闭时仍是 function。

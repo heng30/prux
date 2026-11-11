@@ -3,13 +3,17 @@
 //! - `prux auth print-api-key [--provider <provider>] [--model <model>]`
 //! - `prux auth print-bearer-token [--provider <provider>] [--model <model>] [--min-expiry <duration>]`
 //! - `prux auth check [--provider <provider>] [--model <model>] [--json] [--credentials] [--no-refresh]`
+//! - `prux auth login <provider> [--api-key] [--no-browser]`
+//! - `prux auth logout <provider>`
 //!
 //! 凭据来源与运行时一致：`auth.json`（type=api_key / oauth，见 settings_manager）。
 //! prux 尚未实现 OAuth 刷新：oauth 凭据只读 access 令牌，不执行刷新。
 
 use crate::{
+    cli::auth_login,
     core::{
         auth::{ensure_oauth_valid, list_auth_types, read_auth_entry, read_oauth_credential},
+        login_registry::LOGIN_PROVIDERS,
         model_resolver::{find_model, is_known_provider, parse_model_arg},
     },
     utils::time::now_ms,
@@ -25,6 +29,10 @@ pub enum AuthCommandKind {
     ApiKey,
     /// `auth print-bearer-token`：打印 OAuth bearer token（可要求最小剩余有效期）
     BearerToken,
+    /// `auth login`：配置该 provider 的凭据（OAuth 流程或粘贴 API key）
+    Login,
+    /// `auth logout`：删除该 provider 已存的凭据
+    Logout,
 }
 
 impl AuthCommandKind {
@@ -34,6 +42,8 @@ impl AuthCommandKind {
             AuthCommandKind::Check => "auth check",
             AuthCommandKind::ApiKey => "auth print-api-key",
             AuthCommandKind::BearerToken => "auth print-bearer-token",
+            AuthCommandKind::Login => "auth login",
+            AuthCommandKind::Logout => "auth logout",
         }
     }
 
@@ -49,6 +59,8 @@ impl AuthCommandKind {
             AuthCommandKind::BearerToken => {
                 "prux auth print-bearer-token --provider <provider> [--model <model>] [--min-expiry <duration>]"
             }
+            AuthCommandKind::Login => "prux auth login <provider> [--api-key] [--no-browser]",
+            AuthCommandKind::Logout => "prux auth logout <provider>",
         }
     }
 }
@@ -70,12 +82,16 @@ pub struct AuthCommand {
     pub no_refresh: bool,
     /// 仅 print-bearer-token：最小剩余有效期（毫秒）
     pub min_expiry_ms: Option<u64>,
+    /// 仅 login：强制走「粘贴 API key」而不是 OAuth 账号登录
+    pub api_key: bool,
+    /// 仅 login：只打印登录 URL，不尝试启动浏览器
+    pub no_browser: bool,
 }
 
 /// auth 用法帮助
 pub fn print_auth_command_help() {
     println!(
-        "Usage:\n  prux auth print-api-key [--provider <provider>] [--model <model>]\n  prux auth print-bearer-token [--provider <provider>] [--model <model>] [--min-expiry <duration>]\n  prux auth check [--provider <provider>] [--model <model>] [--json] [--credentials] [--no-refresh]\n\nAuth commands require at least one of --provider or --model. Checks refresh expired OAuth credentials by default; --no-refresh prevents this. --credentials emits the credential, or includes it in JSON output."
+        "Usage:\n  prux auth login <provider> [--api-key] [--no-browser]\n  prux auth logout <provider>\n  prux auth print-api-key [--provider <provider>] [--model <model>]\n  prux auth print-bearer-token [--provider <provider>] [--model <model>] [--min-expiry <duration>]\n  prux auth check [--provider <provider>] [--model <model>] [--json] [--credentials] [--no-refresh]\n\nlogin/logout take the provider as an argument. The print/check commands require at least one of --provider or --model. Checks refresh expired OAuth credentials by default; --no-refresh prevents this. --credentials emits the credential, or includes it in JSON output."
     );
 }
 
@@ -87,14 +103,16 @@ pub fn parse_auth_command(args: &[String]) -> Result<AuthCommand, String> {
         Some("check") => AuthCommandKind::Check,
         Some("print-api-key") => AuthCommandKind::ApiKey,
         Some("print-bearer-token") => AuthCommandKind::BearerToken,
+        Some("login") => AuthCommandKind::Login,
+        Some("logout") => AuthCommandKind::Logout,
         Some(other) => {
             return Err(format!(
-                "Unknown auth command \"{}\". Use \"prux auth print-api-key\", \"prux auth print-bearer-token\", or \"prux auth check\".",
+                "Unknown auth command \"{}\". Use \"prux auth login\", \"prux auth logout\", \"prux auth print-api-key\", \"prux auth print-bearer-token\", or \"prux auth check\".",
                 other
             ));
         }
         None => {
-            return Err("auth requires a subcommand. Use \"prux auth print-api-key\", \"prux auth print-bearer-token\", or \"prux auth check\".".to_string());
+            return Err("auth requires a subcommand. Use \"prux auth login\", \"prux auth logout\", \"prux auth print-api-key\", \"prux auth print-bearer-token\", or \"prux auth check\".".to_string());
         }
     };
 
@@ -104,6 +122,8 @@ pub fn parse_auth_command(args: &[String]) -> Result<AuthCommand, String> {
     let mut credentials = false;
     let mut no_refresh = false;
     let mut min_expiry_ms: Option<u64> = None;
+    let mut api_key = false;
+    let mut no_browser = false;
 
     let mut i = 1;
     while i < args.len() {
@@ -139,6 +159,15 @@ pub fn parse_auth_command(args: &[String]) -> Result<AuthCommand, String> {
                     "--min-expiry must use a duration such as 30m or 1h".to_string()
                 })?);
             }
+            "--api-key" | "--no-browser" => {
+                if kind != AuthCommandKind::Login {
+                    return Err(format!("{} is only supported by auth login", arg));
+                }
+                match arg {
+                    "--api-key" => api_key = true,
+                    _ => no_browser = true,
+                }
+            }
             "--json" | "--credentials" | "--no-refresh" => {
                 if kind != AuthCommandKind::Check {
                     return Err(format!("{} is only supported by auth check", arg));
@@ -162,6 +191,18 @@ pub fn parse_auth_command(args: &[String]) -> Result<AuthCommand, String> {
                 ));
             }
             other => {
+                if matches!(kind, AuthCommandKind::Login | AuthCommandKind::Logout) {
+                    if provider.is_none() {
+                        provider = Some(other.to_string());
+                        i += 1;
+                        continue;
+                    }
+                    return Err(format!(
+                        "auth login/logout take exactly one provider (got \"{}\" after \"{}\").",
+                        other,
+                        provider.as_deref().unwrap_or_default()
+                    ));
+                }
                 return Err(format!(
                     "Unexpected argument \"{}\" for \"{}\". Use \"prux auth print-api-key\", \"prux auth print-bearer-token\", or \"prux auth check\".",
                     other,
@@ -180,6 +221,8 @@ pub fn parse_auth_command(args: &[String]) -> Result<AuthCommand, String> {
         credentials,
         no_refresh,
         min_expiry_ms,
+        api_key,
+        no_browser,
     })
 }
 
@@ -647,7 +690,41 @@ pub fn run_auth_command(args: &[String]) -> i32 {
     match cmd.kind {
         AuthCommandKind::Check => run_check(&cmd),
         AuthCommandKind::ApiKey | AuthCommandKind::BearerToken => run_print(&cmd),
+        AuthCommandKind::Login => run_login(&cmd),
+        AuthCommandKind::Logout => run_logout(&cmd),
     }
+}
+
+/// 执行 `auth login`：按 provider 形态选 OAuth 或粘贴 API key。
+/// provider 缺失或不在登录清单里时报错并返回 1。
+fn run_login(cmd: &AuthCommand) -> i32 {
+    let Some(provider) = cmd.provider.as_deref() else {
+        eprintln!("Error: {}", cmd.kind.usage());
+        return 1;
+    };
+    let Some(mode) = auth_login::pick_mode(provider, cmd.api_key) else {
+        eprintln!(
+            "Error: \"{}\" is not a provider prux can log in to. Known providers: {}.",
+            provider,
+            LOGIN_PROVIDERS
+                .iter()
+                .map(|p| p.id)
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        return 1;
+    };
+    auth_login::run_login(provider, mode, cmd.no_browser)
+}
+
+/// 执行 `auth logout`：删除该 provider 已存的凭据。
+/// provider 缺失时报错并返回 1。
+fn run_logout(cmd: &AuthCommand) -> i32 {
+    let Some(provider) = cmd.provider.as_deref() else {
+        eprintln!("Error: {}", cmd.kind.usage());
+        return 1;
+    };
+    auth_login::run_logout(provider)
 }
 
 #[cfg(test)]
@@ -685,6 +762,51 @@ mod tests {
         assert_eq!(c.kind, AuthCommandKind::ApiKey);
         assert_eq!(c.provider.as_deref(), Some("deepseek"));
         assert!(c.model.is_none());
+    }
+
+    /// `auth login/logout` 用位置参数给 provider，`--api-key` / `--no-browser` 只对 login 有效。
+    #[test]
+    fn parses_login_and_logout() {
+        let c = parse(&["login", "anthropic", "--api-key"]).unwrap();
+        assert_eq!(c.kind, AuthCommandKind::Login);
+        assert_eq!(c.provider.as_deref(), Some("anthropic"));
+        assert!(c.api_key && !c.no_browser);
+
+        let c = parse(&["login", "anthropic", "--no-browser"]).unwrap();
+        assert!(c.no_browser && !c.api_key);
+
+        let c = parse(&["logout", "deepseek"]).unwrap();
+        assert_eq!(c.kind, AuthCommandKind::Logout);
+        assert_eq!(c.provider.as_deref(), Some("deepseek"));
+
+        // 两个位置参数 / 标志用在 logout 上都要报错；缺 provider 留到运行时用 usage 报
+        assert!(parse(&["login", "a", "b"]).is_err());
+        assert!(parse(&["logout", "deepseek", "--api-key"]).is_err());
+        assert!(parse(&["login", "--api-key"]).unwrap().provider.is_none());
+    }
+
+    /// `auth login` 的运行时校验：provider 未知或缺失都必须以非零退出码报错，
+    /// 不能掉进「什么都没做但退出码 0」的洞里。
+    #[test]
+    fn login_unknown_or_missing_provider_exits_nonzero() {
+        let unknown = AuthCommand {
+            kind: AuthCommandKind::Login,
+            provider: Some("no-such-provider".to_string()),
+            model: None,
+            json: false,
+            credentials: false,
+            no_refresh: false,
+            min_expiry_ms: None,
+            api_key: false,
+            no_browser: true,
+        };
+        assert_eq!(run_login(&unknown), 1);
+
+        let missing = AuthCommand {
+            provider: None,
+            ..unknown.clone()
+        };
+        assert_eq!(run_login(&missing), 1);
     }
 
     #[test]

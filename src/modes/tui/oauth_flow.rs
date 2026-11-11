@@ -342,22 +342,15 @@ async fn device_init(st: &mut App, mut oauth: OAuthLogin) -> bool {
                 ));
                 flow.step = DeviceStep::Polling;
 
-                // device-code 流：拿到验证 URI 后复制到系统剪贴板
-                let uri = flow.verification_uri.clone();
-                let copied = write_clipboard(&uri).is_ok();
-
-                if copied {
-                    // 复制成功提示已由 push_msg 推入消息流展示，status 不重复
-                    st.push_msg(
-                        format!("Login URL copied to clipboard: {}", uri),
-                        MsgLevel::Success,
-                    );
-                } else {
-                    st.push_msg(format!(
-                            "No clipboard access — Ctrl+click the URL below to open it in your browser: {}",
-                            uri
-                        ), MsgLevel::Warning);
-                }
+                // device-code 流：把地址与码推入消息流，确认动作（Enter）才开浏览器 + 复制码，
+                // 避免登录一发起就把剪贴板里原有内容顶掉
+                st.push_msg(
+                    format!(
+                        "To sign in, open {} and enter the code {}. Press Enter to open the browser and copy the code.",
+                        flow.verification_uri, flow.user_code
+                    ),
+                    MsgLevel::Info,
+                );
                 st.dirty = true;
                 st.oauth_login = Some(oauth);
                 false

@@ -22,7 +22,7 @@ use super::{
     provider_session_headers,
     retry::{DEFAULT_MAX_RETRIES, send_with_retry},
     session_affinity_headers, track_stream_bytes,
-    usage::compute_cost,
+    usage::{apply_reported_cost, compute_cost},
 };
 use crate::{
     core::{
@@ -1080,6 +1080,8 @@ fn handle_anthropic_message_start(
             total_tokens: input + output + cache_read + cache_write,
             cost: Cost::default(),
         };
+        // OpenRouter 的 Anthropic Messages 端点也在 usage.cost 里报总额
+        apply_reported_cost(&mut parsed, Some(u));
         let fallback_cost = billing_cost(model, response_model.as_deref());
         compute_cost(&mut parsed, fallback_cost);
         *usage = Some(parsed);
@@ -1405,6 +1407,7 @@ fn handle_anthropic_message_delta(
         }
         current.total_tokens =
             current.input + current.output + current.cache_read + current.cache_write;
+        apply_reported_cost(&mut current, Some(u));
         let cost = billing_cost(model, response_model);
         compute_cost(&mut current, cost);
         *usage = Some(current);

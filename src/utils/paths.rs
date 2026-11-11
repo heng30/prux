@@ -404,18 +404,30 @@ pub fn absolutize(path: &str, base: &Path) -> PathBuf {
 ///
 /// 两侧都先做词法归一化；`cwd` 为空时一律视为外部（调用方走保守分支）。
 /// 相等（就在工作目录上）不算外部。
+/// Windows 上文件系统大小写不敏感，比较前两侧折叠成小写，
+/// 否则 `C:\Repo` 会把 `C:\repo\x` 判成外部。
 pub fn is_outside(path: &Path, cwd: &Path) -> bool {
     let joined = if path.is_absolute() {
         path.to_path_buf()
     } else {
         cwd.join(path)
     };
-    let abs = lexical_normalize(&joined);
-    let base = lexical_normalize(cwd);
+    let abs = compare_form(&lexical_normalize(&joined));
+    let base = compare_form(&lexical_normalize(cwd));
     if base.as_os_str().is_empty() {
         return true;
     }
     !(abs == base || abs.starts_with(&base))
+}
+
+/// 路径比较形式：Windows 上转小写（盘符/目录名大小写不敏感），其余平台原样。
+/// 按组件比较仍交给 `Path::starts_with`，故 `/home/me2` 不会被当成 `/home/me` 的子目录。
+fn compare_form(p: &Path) -> PathBuf {
+    if cfg!(windows) {
+        PathBuf::from(p.to_string_lossy().to_lowercase())
+    } else {
+        p.to_path_buf()
+    }
 }
 
 /// 规范化 cwd（绝对路径、折叠 . 和 ..；不做 fs realpath）
@@ -681,6 +693,17 @@ mod tests {
         assert!(is_outside(Path::new("../sibling"), cwd));
         assert!(!is_outside(Path::new("/work/proj"), cwd));
         assert!(is_outside(Path::new("/any"), Path::new("")));
+        // 前缀文本相同但不是子目录：按组件比，不得误判为内部
+        assert!(is_outside(Path::new("/work/project-x/a.rs"), cwd));
+    }
+
+    /// Windows 盘符/目录名大小写不敏感（pi #10488）：同一目录换种写法不算外部。
+    #[cfg(windows)]
+    #[test]
+    fn outside_detection_ignores_case_on_windows() {
+        let cwd = Path::new("C:\\Repo");
+        assert!(!is_outside(Path::new("c:\\repo\\src\\a.rs"), cwd));
+        assert!(is_outside(Path::new("C:\\Other\\a.rs"), cwd));
     }
 
     /// 非 Windows 平台不得动 `HOME`：那里 HOME 就是约定的 home 来源，

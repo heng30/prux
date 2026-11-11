@@ -1915,6 +1915,23 @@ pub fn encode_cwd_dir(cwd: &str) -> String {
     format!("--{}--", safe)
 }
 
+/// 只读会话文件首行（v4 header）取存储的 cwd；读不到或不是 header 返回 `None`。
+///
+/// 用于「打开会话前先判断存储目录还在不在」：完整加载会话要先过完整性修复流程，
+/// 而这里只需要一个字段。
+pub fn read_session_cwd(path: &Path) -> Option<String> {
+    let file = std::fs::File::open(path).ok()?;
+    let mut first = String::new();
+    std::io::BufReader::new(file).read_line(&mut first).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&first).ok()?;
+    (v.get("kind").and_then(|k| k.as_str()) == Some("header")).then(|| {
+        v.get("cwd")
+            .and_then(|c| c.as_str())
+            .unwrap_or_default()
+            .to_string()
+    })
+}
+
 /// 某 cwd 的默认会话目录：`<agent_dir>/sessions/--<编码路径>--`。
 pub fn default_session_dir(cwd: &str, agent_dir: &Path) -> PathBuf {
     agent_dir.join("sessions").join(encode_cwd_dir(cwd))
@@ -2193,6 +2210,24 @@ mod tests {
     fn session_at(dir: &Path) -> Session {
         let d = dir.join("sessions");
         Session::create(dir.to_str().unwrap(), Some(d.clone()), true).unwrap()
+    }
+
+    /// 首行 header 里的 cwd 能被单独读出来（/resume 判目录是否还在用），非会话文件返回 None。
+    #[test]
+    fn read_session_cwd_reads_header_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut session = session_at(tmp.path());
+        session.append_message(&user("hi"));
+        let path = session.get_session_file().unwrap().to_path_buf();
+        assert_eq!(
+            read_session_cwd(&path).as_deref(),
+            Some(tmp.path().to_str().unwrap())
+        );
+
+        let bogus = tmp.path().join("bogus.jsonl");
+        std::fs::write(&bogus, "not json\n").unwrap();
+        assert!(read_session_cwd(&bogus).is_none());
+        assert!(read_session_cwd(&tmp.path().join("missing.jsonl")).is_none());
     }
 
     /// 删除会话文件：本机装了 `trash` 走回收站，否则回退 unlink——两种情况文件都必须消失。

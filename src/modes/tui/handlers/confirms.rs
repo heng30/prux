@@ -22,6 +22,14 @@ use std::path::{Path, PathBuf};
 /// Yes/No 确认项的公共定义（/import、import cwd、/history 三族共用）
 const YES_NO: &[(&str, &str)] = &[("Yes", "yes"), ("No", "no")];
 
+/// 会话 cwd 缺失/不一致的三选：
+/// Continue 只在本次临时用当前 cwd（下次仍会问）；Fork 复制成新会话，原会话保留。
+const CWD_CONFIRM_ITEMS: &[(&str, &str)] = &[
+    ("Continue (asks again next time)", "yes"),
+    ("Fork (new session ID, original kept)", "fork"),
+    ("Cancel", "cancel"),
+];
+
 impl App {
     /// 打开一个「纯选项」确认面板（条目只含 label/value）：关旧面板 → 开新面板 → 置脏。
     pub(crate) fn open_confirm(
@@ -77,7 +85,7 @@ impl App {
     /// /import 会话 cwd 不一致：弹确认框。
     /// 原 cwd 缺失 → 标题 “Session cwd not found”（沿用 pi 文案）；
     /// 存在但不同 → 标题 “Session cwd mismatch”。
-    /// Yes = 继续在当前 cwd 恢复；No = 取消导入。
+    /// 三选：Continue（在当前 cwd 临时恢复，下次还问）/ Fork（复制成新会话）/ Cancel。
     pub(crate) fn stage_import_cwd_confirm(
         &mut self,
         destination: PathBuf,
@@ -89,7 +97,7 @@ impl App {
         } else {
             "Session cwd mismatch"
         };
-        self.open_confirm(PanelKind::ImportCwdConfirm, title, YES_NO);
+        self.open_confirm(PanelKind::ImportCwdConfirm, title, CWD_CONFIRM_ITEMS);
         self.pending_import_cwd = Some(PendingImportCwd {
             destination,
             session_cwd,
@@ -98,7 +106,8 @@ impl App {
         self.dirty = true;
     }
 
-    /// /import 会话 cwd 缺失确认：`yes` = 继续在当前 cwd 恢复；其余 = 取消。
+    /// /import 会话 cwd 缺失确认：`yes` = 继续在当前 cwd 恢复（下次还问）；
+    /// `fork` = 复制成当前 cwd 下的新会话（原会话保留）；其余 = 取消。
     pub(crate) fn resolve_import_cwd_confirm(&mut self, choice: &str) {
         let Some(pending) = self.pending_import_cwd.take() else {
             return;
@@ -108,22 +117,27 @@ impl App {
             session_cwd: _,
             cwd_missing: _,
         } = pending;
-        if choice != "yes" {
-            self.push_msg("Import cancelled".to_string(), MsgLevel::Info);
-            self.dirty = true;
-            return;
+        let path = destination.to_string_lossy().into_owned();
+        match choice {
+            "yes" => {
+                self.worker.send(AgentCommand::ResumeSession { path });
+                self.set_status_msg("Opening session...");
+            }
+            "fork" => {
+                self.worker.send(AgentCommand::ForkFrom { path, dir: None });
+                self.set_status_msg("Forking session into current cwd...");
+            }
+            _ => {
+                self.push_msg("Session left unopened".to_string(), MsgLevel::Info);
+            }
         }
-        self.worker.send(AgentCommand::ResumeSession {
-            path: destination.to_string_lossy().into_owned(),
-        });
-        self.set_status_msg("Importing session...");
         self.dirty = true;
     }
 
-    /// /import 会话 cwd 缺失确认取消（Esc/Ctrl+C）：放弃导入。
+    /// 会话 cwd 确认取消（Esc/Ctrl+C）：不打开该会话（/import 与 /resume 共用）。
     pub(crate) fn cancel_import_cwd_confirm(&mut self) {
         let had_pending = self.pending_import_cwd.take().is_some();
-        self.cancel_with(had_pending, "Import cancelled", MsgLevel::Info);
+        self.cancel_with(had_pending, "Session left unopened", MsgLevel::Info);
     }
 
     /// settings.json 损坏时弹覆写确认面板（Overwrite / Cancel，无输入框）。
@@ -374,6 +388,7 @@ mod tests {
     use crate::modes::tui::panel::PanelKind;
     use crate::{
         core::{provider::AgentMessage, session_manager::Session},
+        modes::tui::agent_actor::AgentCommand,
         modes::tui::app::{App, SessionDeleteScope},
     };
 
@@ -452,7 +467,7 @@ mod tests {
     #[test]
     fn import_cwd_missing_stages_confirm_and_cancel() {
         // 对齐 pi assertSessionCwdExists：会话存储的 cwd 与当前 cwd 不一致（含缺失）→ 弹
-        // “Session cwd not found”确认框；No/Esc 取消，Yes 后从副本恢复。
+        // “Session cwd not found”确认框；三选 Continue / Fork / Cancel，Esc 取消。
         let _ad = crate::test_support::AgentDirGuard::temp();
         let dir = tempfile::tempdir().unwrap();
         let ghost = dir.path().join("ghost-cwd"); // 不存在的 cwd
@@ -473,22 +488,59 @@ mod tests {
         );
         assert!(app.pending_import_cwd.is_some());
         let items = app.panel.filtered_items();
-        assert_eq!(items.len(), 2);
-        assert_eq!(items[0].label, "Yes");
-        assert_eq!(items[1].label, "No");
+        assert_eq!(items.len(), 3, "三选：Continue / Fork / Cancel");
+        assert_eq!(items[0].label, "Continue (asks again next time)");
+        assert_eq!(items[1].label, "Fork (new session ID, original kept)");
+        assert_eq!(items[2].label, "Cancel");
         // 缺失场景：标题沿用 pi，cwd_missing = true
         assert_eq!(
             app.panel.top().map(|l| l.title.as_str()),
             Some("Session cwd not found")
         );
         assert!(app.pending_import_cwd.as_ref().unwrap().cwd_missing);
-        // No → 取消
-        app.resolve_import_cwd_confirm("no");
+        // Cancel → 取消
+        app.resolve_import_cwd_confirm("cancel");
         assert!(app.pending_import_cwd.is_none());
         // 重新触发后 Esc 取消 → 同样清空
         app.run_import(path);
         app.cancel_import_cwd_confirm();
         assert!(app.pending_import_cwd.is_none());
+    }
+
+    /// Fork 分支：把会话复制成当前 cwd 下的新会话（ForkFrom），而不是临时 Resume。
+    #[test]
+    fn import_cwd_fork_dispatches_fork_from() {
+        let _ad = crate::test_support::AgentDirGuard::temp();
+        let dir = tempfile::tempdir().unwrap();
+        let ghost = dir.path().join("ghost-cwd");
+        let sess_dir = dir.path().join("sessions");
+        let mut s = Session::create(ghost.to_str().unwrap(), Some(sess_dir), true).unwrap();
+        s.append_message(&AgentMessage::user_text("hello"));
+        let path = s.get_session_file().unwrap().to_path_buf();
+        drop(s);
+
+        let (cmd_tx, mut cmd_rx) = crate::modes::tui::agent_actor::channels();
+        let mut app = App {
+            worker: crate::modes::tui::agent_actor::WorkerHandle::new(cmd_tx),
+            cwd: dir.path().join("current").to_string_lossy().to_string(),
+            ..App::default()
+        };
+        app.run_import(path.clone());
+        assert!(app.pending_import_cwd.is_some());
+
+        app.resolve_import_cwd_confirm("fork");
+        assert!(app.pending_import_cwd.is_none());
+        match cmd_rx.try_recv().expect("应下发命令") {
+            AgentCommand::ForkFrom { path: p, dir } => {
+                // path 是 import 复制进当前 cwd 会话目录后的副本
+                assert!(
+                    p.ends_with(path.file_name().unwrap().to_str().unwrap()),
+                    "fork 源应是复制后的副本: {p}"
+                );
+                assert!(dir.is_none(), "fork 到当前 cwd 的会话目录");
+            }
+            other => panic!("期望 ForkFrom，实际 {:?}", other),
+        }
     }
 
     #[test]

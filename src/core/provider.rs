@@ -1048,6 +1048,10 @@ pub struct Cost {
     pub cache_write: f64,
     /// 上述四项之和，单位美元。
     pub total: f64,
+    /// `total` 是否为供应商上报的账单（如 OpenRouter 响应里的 `usage.cost`）。
+    /// `false` 表示按目录单价估算。
+    #[serde(default)]
+    pub total_from_provider: bool,
 }
 
 /// 一次请求的 token 用量统计：输入输出、缓存读写、推理 token 与费用。

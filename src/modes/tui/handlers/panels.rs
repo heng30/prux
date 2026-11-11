@@ -21,7 +21,7 @@ use crate::{
         settings_manager::agent_dir,
         theme::available_theme_names,
     },
-    utils::clipboard::read_clipboard,
+    utils::clipboard::{read_clipboard, write_clipboard},
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -715,7 +715,9 @@ impl App {
         false
     }
 
-    /// 确认 OAuth 登录面板：filter 行即授权码/URL 输入框，Enter 提交交由 tick 处理
+    /// 确认 OAuth 登录面板：filter 行即授权码/URL 输入框，Enter 提交交由 tick 处理。
+    /// 设备码流下空输入的 Enter 是「帮我打开登录页并复制码」（取消走 Esc），
+    /// 否则用户想确认一下就把登录取消了。
     fn confirm_login_oauth(&mut self) {
         let input = self
             .panel
@@ -726,6 +728,13 @@ impl App {
             .oauth_login
             .as_ref()
             .is_some_and(|o| o.awaiting_input());
+
+        if input.is_empty()
+            && let Some((user_code, uri)) = self.login_oauth_device_confirm()
+        {
+            self.open_device_login(&user_code, &uri);
+            return;
+        }
 
         if input.is_empty() && !awaiting {
             oauth_flow::cancel(self);
@@ -743,6 +752,39 @@ impl App {
             layer.filter.cursor = 0;
         }
 
+        self.dirty = true;
+    }
+
+    /// 登录面板上空 Enter 的确认对象：设备码流给出 `(user_code, verification_uri)`，
+    /// 其余情况为 `None`（`None` 时走「取消登录」的旧语义）。抽出来是为了能不起浏览器就测。
+    fn login_oauth_device_confirm(&self) -> Option<(String, String)> {
+        self.oauth_login.as_ref().and_then(|o| o.device_code_info())
+    }
+
+    /// 设备码登录的确认动作：开浏览器 + 复制 `user_code`（两步都是 best-effort，
+    /// 失败只提示，不阻断登录轮询）。pi 的 `openBrowserOnConfirm` / `copyCodeOnConfirm`。
+    fn open_device_login(&mut self, user_code: &str, uri: &str) {
+        let opened = webbrowser::open(uri).is_ok();
+        let copied = write_clipboard(user_code).is_ok();
+        let msg = match (opened, copied) {
+            (true, true) => (
+                format!("Opened {uri} and copied code {user_code} to clipboard"),
+                MsgLevel::Success,
+            ),
+            (true, false) => (
+                format!("Opened {uri}. Enter the code: {user_code}"),
+                MsgLevel::Info,
+            ),
+            (false, true) => (
+                format!("Copied code {user_code}. Open {uri} manually."),
+                MsgLevel::Warning,
+            ),
+            (false, false) => (
+                format!("Open {uri} and enter the code: {user_code}"),
+                MsgLevel::Warning,
+            ),
+        };
+        self.push_msg(msg.0, msg.1);
         self.dirty = true;
     }
 
@@ -851,6 +893,37 @@ mod tests {
         let _ad = crate::test_support::AgentDirGuard::temp();
         let (cmd_tx, cmd_rx) = crate::modes::tui::agent_actor::channels();
         (WorkerHandle::new(cmd_tx), cmd_rx)
+    }
+
+    /// 设备码登录面板上，空 Enter 不能被当成「取消登录」：它给出开浏览器 + 复制码的对象。
+    #[test]
+    fn device_code_panel_enter_is_confirm_not_cancel() {
+        let _ad = crate::test_support::AgentDirGuard::temp();
+        let (agent, _cmd_rx) = test_agent_cmd();
+        let mut st = App::new();
+        st.worker = agent;
+
+        st.login_provider_id = "kimi-coding".to_string();
+        oauth_flow::start(&mut st);
+        assert!(st.oauth_login.is_some(), "设备码登录应已启动");
+
+        // 还没有设备码（Init 之前）：没有可确认对象
+        assert!(st.login_oauth_device_confirm().is_none());
+
+        // Init 完成：拿到码与地址 → Enter 的确认对象就是它们
+        if let Some(oauth) = st.oauth_login.as_mut()
+            && let crate::core::oauth::LoginKind::DeviceCode { flow, .. } = &mut oauth.kind
+        {
+            flow.user_code = "ABCD-1234".to_string();
+            flow.verification_uri = "https://example.test/device".to_string();
+        }
+        assert_eq!(
+            st.login_oauth_device_confirm(),
+            Some((
+                "ABCD-1234".to_string(),
+                "https://example.test/device".to_string()
+            ))
+        );
     }
 
     #[test]

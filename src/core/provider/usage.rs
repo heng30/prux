@@ -26,6 +26,7 @@ pub fn combine_usage(a: &Usage, b: &Usage) -> Usage {
             cache_read: a.cost.cache_read + b.cost.cache_read,
             cache_write: a.cost.cache_write + b.cost.cache_write,
             total: a.cost.total + b.cost.total,
+            total_from_provider: a.cost.total_from_provider || b.cost.total_from_provider,
         },
     }
 }
@@ -64,13 +65,27 @@ pub fn compute_cost(usage: &mut Usage, cost_cfg: Option<&Value>) {
     let o = usage.output as f64 / 1e6 * o_price;
     let cr = usage.cache_read as f64 / 1e6 * cr_price;
     let cw = (cw_price * short_write as f64 + i_price * 2.0 * long_write as f64) / 1e6;
+    let reported = usage.cost.total_from_provider.then_some(usage.cost.total);
+
     usage.cost = Cost {
         input: i,
         output: o,
         cache_read: cr,
         cache_write: cw,
-        total: i + o + cr + cw,
+        total: reported.unwrap_or(i + o + cr + cw),
+        total_from_provider: reported.is_some(),
     };
+}
+
+/// 响应里带供应商上报的总费用时，把它写进 `usage.cost`（`total_from_provider` 置真）。
+/// 只在 OpenRouter（Completions / Anthropic Messages）上拿这个值，其余供应商不发该字段，
+/// 所以按「字段存在且为数字」判别即可。单价字段仍由 [`compute_cost`] 算，展示的分项不变。
+pub fn apply_reported_cost(usage: &mut Usage, raw: Option<&Value>) {
+    let Some(total) = raw.and_then(|u| u.get("cost")).and_then(|v| v.as_f64()) else {
+        return;
+    };
+    usage.cost.total = total;
+    usage.cost.total_from_provider = true;
 }
 
 /// OpenAI 服务层级定价倍数。`fast` 是 priority 的新叫法，

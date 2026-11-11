@@ -2,6 +2,7 @@
 
 pub mod args;
 pub mod auth_command;
+pub mod auth_login;
 pub mod file_processor;
 pub mod initial_message;
 pub mod list_models;

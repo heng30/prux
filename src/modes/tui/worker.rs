@@ -1248,6 +1248,7 @@ fn accumulate_message_usage(
     cache_read: &mut u64,
     cache_write: &mut u64,
     cost: &mut f64,
+    cost_from_provider: &mut bool,
 ) {
     match m.role.as_str() {
         "user" => *user += 1,
@@ -1274,6 +1275,7 @@ fn accumulate_message_usage(
         *cache_read += u.cache_read as u64;
         *cache_write += u.cache_write as u64;
         *cost += u.cost.total;
+        *cost_from_provider |= u.cost.total_from_provider;
     }
 }
 
@@ -1288,6 +1290,7 @@ fn accumulate_session_usage(
     cache_read: &mut u64,
     cache_write: &mut u64,
     cost: &mut f64,
+    cost_from_provider: &mut bool,
 ) {
     for e in entries {
         let ty = e.get("type").and_then(|v| v.as_str()).unwrap_or("");
@@ -1303,6 +1306,7 @@ fn accumulate_session_usage(
             *cache_read += usage.cache_read as u64;
             *cache_write += usage.cache_write as u64;
             *cost += usage.cost.total;
+            *cost_from_provider |= usage.cost.total_from_provider;
         }
     }
 }
@@ -1318,6 +1322,7 @@ fn session_stats(a: &Agent) -> SessionStats {
     let mut cache_read: u64 = 0;
     let mut cache_write: u64 = 0;
     let mut cost: f64 = 0.0;
+    let mut cost_from_provider = false;
 
     for m in &a.messages {
         accumulate_message_usage(
@@ -1331,6 +1336,7 @@ fn session_stats(a: &Agent) -> SessionStats {
             &mut cache_read,
             &mut cache_write,
             &mut cost,
+            &mut cost_from_provider,
         );
     }
     if let Some(s) = a.session.as_ref() {
@@ -1341,6 +1347,7 @@ fn session_stats(a: &Agent) -> SessionStats {
             &mut cache_read,
             &mut cache_write,
             &mut cost,
+            &mut cost_from_provider,
         );
     }
 
@@ -1375,6 +1382,7 @@ fn session_stats(a: &Agent) -> SessionStats {
         cache_read,
         cache_write,
         cost_total: cost,
+        cost_from_provider,
         cost_breakdown,
         cache_warming: a.cache_warmer.status(),
     }
@@ -2492,6 +2500,7 @@ mod tests {
         let mut cache_read = 0u64;
         let mut cache_write = 0u64;
         let mut cost = 0.0f64;
+        let mut cost_from_provider = false;
         accumulate_session_usage(
             &entries,
             &mut input,
@@ -2499,6 +2508,7 @@ mod tests {
             &mut cache_read,
             &mut cache_write,
             &mut cost,
+            &mut cost_from_provider,
         );
         assert!((cost - 0.08).abs() < 1e-9, "条目侧合计: {cost}");
         assert_eq!(input, 1_400, "三条条目各 300/1000/100 tokens");

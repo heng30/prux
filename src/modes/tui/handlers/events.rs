@@ -334,10 +334,17 @@ impl App {
                 .first()
                 .is_some_and(|e| Some(&e.key) != selected.as_ref());
 
+        // 供应商上报的金额（OpenRouter 这类）要标明，避免和目录单价估算混为一谈
+        let total = if stats.cost_from_provider {
+            format!("${:.3} (provider-reported)", stats.cost_total)
+        } else {
+            format!("${:.3}", stats.cost_total)
+        };
+
         kv(
             &mut spans,
             "Total",
-            format!("${:.3}", stats.cost_total),
+            total,
             if show_breakdown { "\n" } else { "\n\n" },
         );
 
@@ -812,6 +819,7 @@ mod tests {
             cache_read: 0,
             cache_write: 0,
             cost_total: cost,
+            cost_from_provider: false,
             cost_breakdown: breakdown,
             cache_warming: crate::core::cache_warmer::WarmStatus {
                 mode: "streaming".into(),
