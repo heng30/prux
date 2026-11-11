@@ -110,9 +110,9 @@ prux 以全屏终端界面（TUI）运行，用于读写会话、执行斜杠命
 - **模型面板（`/model`）**：按 provider 分组，当前使用的模型置顶，`tab` 在 all / scoped 之间切换；选中后经 worker 切换模型并回执刷新 footer 徽标。
 - **主题面板（`/theme`）**：列出可用主题，当前主题置顶，选中即切换并持久化到 settings（见[主题](themes.md)）。
 - **思考面板（`/thinking`）**：选择思考级别。
-- **登录面板（`/login`）**：认证方式（账号 / API key）→ provider → 输入 key 或 OAuth（OAuth 面板中 `ctrl+click` 授权 URL 用浏览器打开，URL 行即手动粘贴输入框）。
+- **登录面板（`/login`）**：认证方式（账号 / API key）→ provider → 输入 key 或 OAuth（OAuth 面板中 `ctrl+click` 授权 URL 用浏览器打开，URL 行即手动粘贴输入框）。设备码登录显示验证地址与验证码，在空输入框上按 `enter` 会打开浏览器并把验证码复制到剪贴板（取消用 `esc`）。
 - **扩展面板（`/extension`）**：checkbox 列表，`space` 切换启用，`tab` 切换扩展模式，`enter` 进入详情。
-- **会话选择器（`/resume`）**：搜索过滤会话，`ctrl+n` 切换命名过滤、`ctrl+p` 切换路径、`ctrl+s` 循环排序、`ctrl+r` 重命名、`ctrl+d` 删除（二次确认）。
+- **会话选择器（`/resume`）**：搜索过滤会话，`ctrl+n` 切换命名过滤、`ctrl+p` 切换路径、`ctrl+s` 循环排序、`ctrl+r` 重命名、`ctrl+d` 删除（二次确认）。选中会话的存储目录已消失或与当前目录不同时，先弹三选：`Continue`（本次用当前目录，下次仍会问）、`Fork`（复制成当前目录下的新会话，原会话保留）、`Cancel`。
 
 ## 设置选择器（/settings）
 

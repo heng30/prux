@@ -13,7 +13,15 @@
 **状态标记**：🔧 应修/应移植　⚠️ 需对照 pi 逐项核对（口径可能已偏差或需实测）　✅ 已满足/无此问题（附理由）
 ❌ 结构性不适用（prux 无对应实现）　🆕 本区间新增的候选移植项
 
-**实施状态（第一轮 21 条 🔧、第二轮数据面与 6 条 ⚠️、第三轮对上游复核后修 4 条）**：
+**实施状态（第一轮 21 条 🔧、第二轮数据面与 6 条 ⚠️、第三轮对上游复核后修 4 条、第四轮新做 5 项）**：
+
+**第四轮（新做 + 明确不做）**：
+
+- 新做：**2.3**（`prux auth login/logout`）、**2.11**（`totalFromProvider`）、**2.13**（cwd 消失三选 + Fork，
+  覆盖 `/import` 与 `/resume`）、设备码登录 Enter 开浏览器 + 复制码（#9282）、
+  Windows `is_outside` 折叠大小写（#10488）；
+- **明确不做**：**2.6**（Mermaid 饼图已有，其余三项收益低）、**1.41**（rmcp 已覆盖主要路径，
+  剩余两处等上游修，不在 prux 侧包一层）。
 
 **第三轮（对着上游 `pi` 源码逐条复核，修了 4 条、关掉 9 条）**：
 
@@ -622,7 +630,8 @@ JSON，**不校验** `authorization_endpoint` / `token_endpoint` 的 scheme；
 > 子进程 Drop 时 kill（`child_process.rs:46-52`）。仍缺：成功 JSON 走 `response.json()` 无上限、
 > 错误体 `.text()` 整段读（`transport/common/reqwest/streamable_http_client.rs:280,309`）；
 > pi 侧两处都是 `readBodyText(response, maxBytes)` + truncated 报错
-> （`packages/mcp/src/transports/streamable-http.ts:308-313`）。等 rmcp 上游修，或在 prux 侧包一层。
+> （`packages/mcp/src/transports/streamable-http.ts:308-313`）。
+> **第四轮决定：不做。** 在 prux 侧包一层要替换 rmcp 的 HTTP 传输，等上游修。
 
 ### F. ACP 模式（`prux acp`）
 
@@ -680,9 +689,13 @@ MCP token 刷新、会话落盘这类收尾工作有被切断的风险（退出�
 **pi 1.5.1 Added**：`pi auth login <provider>`（浏览器登录、`--api-key`、`--no-browser` 设备码）
 与 `pi auth logout <provider>`。
 
-**prux 现状**：`src/cli/` 已有 `auth` 子命令（见 `cli/auth.rs` 一族的实现，
-`src/core/login_registry.rs` 提供 provider 列表）。**需核对**子命令形状是否已覆盖
-「不起会话直接登录 / 登出 / 存 API key / 无浏览器」四种，缺哪种补哪种。
+**prux 现状（第四轮已补）**：`src/cli/auth_login.rs` 新增
+`prux auth login <provider> [--api-key] [--no-browser]` 与 `prux auth logout <provider>`，
+形态与 pi 一致；走的是 `/login` 同一条 core 路径（`core::oauth::start_login` /
+`exchange_login` / `write_oauth_credential`），只是把面板 UI 换成按行读 stdin：
+设备码流打印地址 + 码并轮询，授权码流打印授权 URL 后粘回调 URL / `code#state`。
+`--api-key` 强制粘贴 key（`write_auth_key`），`logout` 走 `remove_auth`。
+provider 形态判别见 `auth_login::pick_mode`（`is_subscription` → OAuth，`supports_api_key` → key）。
 
 ### 2.4 🆕 自定义自更新命令
 
@@ -706,8 +719,9 @@ MCP token 刷新、会话落盘这类收尾工作有被切断的风险（退出�
 摘要里也能渲染。
 
 **prux 现状**：`src/vendor/mermaid_text` 是上游 `mermaid-text` 0.57.0 的副本。
-**第三轮：饼图已有**（`vendor/mermaid_text/detect.rs` 的 `DiagramKind::Pie`，渲染成横向柱状图），
-缺的只剩「作者自定义样式」「可点击标签」「分支/压缩摘要里也渲染」三项，收益低，记为不实现。
+**第三轮：饼图已有**（`vendor/mermaid_text/detect.rs` 的 `DiagramKind::Pie`，渲染成横向柱状图）。
+**第四轮决定：不做。** 缺的「作者自定义样式」「可点击标签」「分支/压缩摘要里也渲染」三项都要改内嵌
+第三方库或渲染管线，收益与成本不成比例。
 
 ### 2.7 🆕 语法高亮补 Dart / Nix / Groovy / Gradle
 
@@ -763,9 +777,11 @@ GUI 侧 `src/modes/gui/code.rs:16` 只用了默认集，需要共用同一 `Synt
 `Cost`（`provider.rs:1034`）没有「上报」标记；`service_tier_cost_multiplier` 已有配角。
 Azure 档位是数据面（已 sync）。
 
-**建议**：`Cost` 加 `total_from_provider: bool`，在 OpenRouter 解析响应的 `usage.cost`
-时置真并覆盖 `total`（`x-stats`/`usage` 字段口径按 pi 的 `openrouter` 实现核对），
-展示侧（footer / `/cost`）标注「按供应商上报」。中等收益，改动集中在 usage 一处。
+**prux 现状（第四轮已补）**：`Cost.total_from_provider` 已加；`usage::apply_reported_cost`
+读响应 `usage.cost`（Completions 的 `parse_usage` 与 Anthropic Messages 的 message_start /
+message_delta 三处），`compute_cost` 遇到已置真的标记就不再用目录单价覆盖总额（分项仍按单价算）；
+`combine_usage` 取「任一为真」；`/session` 的 Total 显示 `$x.xxx (provider-reported)`。
+用例：`provider_reported_cost_overrides_estimate`。
 
 ### 2.12 🆕 `qwen-token-plan-individual-cn` provider
 
@@ -783,12 +799,13 @@ Azure 档位是数据面（已 sync）。
 `Fork` 把会话复制到当前目录成为新会话（新 id），下次 resume 不再追问。适用于启动
 （`--session`/`--resume`）、`/resume`、`/import` 与扩展的 `switchSession()`。
 
-**prux 现状**：`--fork` 存在（`src/core/session_manager.rs`），但**没有**「目录不存在 → 三选」
-的交互；`src/cli/cwd_store.rs` 那一族是候选落点。相关修复：pi 同一 PR 修了
-`/import` 目录不存在时留下重复副本（`s.jsonl` + `s-1.jsonl`）。
-
-**建议**：先做「Ctrl 提示 + Fork 选项」，`/import` 的副本残留一并修（用同一段复制逻辑，
-失败时删掉半成品文件）。
+**prux 现状（第四轮已补）**：`/import` 与 `/resume` 在会话存储的 cwd 缺失或与当前目录不同时，
+弹三选面板（`CWD_CONFIRM_ITEMS`，与 pi 同一套措辞）：`Continue (asks again next time)` →
+临时用当前 cwd 恢复、`Fork (new session ID, original kept)` → `AgentCommand::ForkFrom` 复制成
+当前 cwd 下的新会话、`Cancel`。`/resume` 侧用新增的轻量 `session_manager::read_session_cwd`
+（只读首行 header）判断，不做完整加载。
+**仍缺**：启动参数 `--resume` / `--session` 走的是 `cli/startup.rs`，还没有这一步（pi 覆盖）；
+`/import` 的重复副本问题 prux 本来就用 `uniquify_import_destination` + `copy_no_overwrite` 规避。
 
 ### 2.14 🆕 扩展 UI 的 `blocked` / 组件焦点 / 元数据
 
@@ -875,15 +892,15 @@ OSC 7501「等我」）；`Component.capturesViewportInput`（聚焦组件吃掉
 | 全屏双击选择在 `~ . \ +` 处断词（#10980） | ❌ 不适用：pi 修的是 alt-screen 双击选词的字边界表（`packages/tui/src/tui-alt-screen.ts`），prux 的 TUI 没有双击选词 |
 | 窗口标题控制字符 | ✅ 已修：prux 确实设标题（`modes/tui.rs` 的 `update_terminal_title` 写 OSC 0/2），现在先剥 C0/C1 —— 与 1.39 同一条 |
 | `~2/project` 之类的错误 `~` 前缀 | ✅ 不适用：`footer.rs:99-114` 用 `Path::strip_prefix` 按组件比较，`/home/me2` 不会被当成 `/home/me` |
-| Windows 路径大小写不敏感比较（#10488） | ⚠️ 部分：pi 是 `getPathComparisonKey` = `resolve` + win32 下 `toLowerCase()`（`utils/paths.ts:46-50`）；prux 的 trust 键 / 资源去重走 `normalize_cwd` → `canonicalize`（存在的路径已归一），但 `is_outside`（`paths.rs:407-419`）是词法比较**不折叠大小写** → Windows 上包含关系可误判 |
+| Windows 路径大小写不敏感比较（#10488） | ✅ 已修：`is_outside` 在 Windows 上先折叠小写再按组件比较（`compare_form`，pi 的 `getPathComparisonKey`）；Linux 行为不变 |
 | `pi.exec()` 的 `maxBuffer` / UTF-8 跨 chunk / spawn 失败 stderr（#11360/#11312/#11257） | ❌ 不适用：prux 扩展是 Rust trait，无 `pi.exec()` |
 | RPC 模式的 shutdown / signal 处理（#11599） | ⚠️ 见 1.42（`prux acp` 就是 stdio JSON-RPC 服务端） |
 | `pi update --extensions` 的逐包版本变化、`git clean -fdx` Windows 失败（#11707/#11597） | ❌ 不适用：无 npm / git 包安装 |
-| OAuth 刷新在退出时丢失新 token（#11692） | ⚠️ 部分：刷新跑在独立 task、成功即写盘（`auth.rs:628-640`），发起方取消已安全；但 pi 的 `dispose()` 会等在途刷新落盘（`runtime-credentials.ts`），prux 退出没等 —— `prux acp` 的 SHUTDOWN 闩锁也该接上这一步 |
+| OAuth 刷新在退出时丢失新 token（#11692） | ⚠️ 部分（第四轮未动）：刷新跑在独立 task、成功即写盘（`auth.rs:628-640`），发起方取消已安全；但 pi 的 `dispose()` 会等在途刷新落盘（`runtime-credentials.ts`），prux 退出没等 |
 | `auth.json` 权限 0600、符号链接下的锁共享（#11655） | ✅ 不适用（换成一个小限制）：0600 已做（`auth.rs:239`）；prux 用进程内 RwLock + 原子写，没有跨进程锁，故没有「符号链接各拿一把锁」的问题。代价：两个 prux 实例并发 `/login` 会互相覆盖条目 |
 | `pi config` 忽略 `keybindings.json`（#11651） | ✅ 已满足：pi 修的是独立 `pi config` CLI 忘了 `setKeybindings`；prux 的 `/settings` 在 TUI 内，启动已加载（`startup.rs:159`）、`/reload` 重读并告警冲突（`commands.rs:291`） |
 | Ctrl+V 在 Windows/WSL 粘贴（#11765） | ⚠️ 需实测（`src/modes/tui/handlers.rs` 的粘贴键表） |
-| 设备码登录按 Enter 开浏览器 + 复制码（#9282） | ❌ 未实现：pi 有 `openBrowserOnConfirm` / `copyCodeOnConfirm`（`components/login-dialog.ts:154-193`）；prux 只有 Ctrl+点击 URI 行开浏览器（`handlers/mouse.rs:344`），无 Enter 确认、无复制 `user_code` |
+| 设备码登录按 Enter 开浏览器 + 复制码（#9282） | ✅ 已修：空输入框上 Enter 走 `open_device_login`（开浏览器 + 复制 `user_code`，两步都是 best-effort），设备码面板不再把空 Enter 当取消；`ctrl+click` URI 行仍可用 |
 | `/login` 列表把 Radius/OpenRouter 置顶（1.5.1） | ❌ 不适用：prux 无 Radius 合作身份 |
 | 模型选择器/搜索被后台刷新挪动选中项（#9109） | ✅ 不适用：pi 是刷新后按模型 id 重算 selectedIndex；prux 的刷新只改状态文案、不重建列表（`handlers/events.rs:451-483`） |
 | 技能警告标签 `[Skill conflicts]` → `[Skill warnings]`（#11521） | ⚠️ prux 自研文案，按中文提示统一即可，无需照搬 |

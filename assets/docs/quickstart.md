@@ -26,6 +26,17 @@ prux 的对话模式仅支持交互式 TUI，要求 stdin 与 stdout 都是终�
 prux 通过两种方式获取 API key：
 
 - **方式一：`/login` 子命令式登录**：在 TUI 内运行 `/login`，选择 provider 并输入 API key，key 会写入 `~/.prux/auth.json`（即 agent 目录下的 `auth.json`，agent 目录可用 `$PRUX_AGENT_DIR` 覆盖）。用 `/logout` 可移除已存 key。
+
+  不起会话也能配置凭据：
+
+  ```bash
+  prux auth login <provider>            # 订阅账号走浏览器/设备码，其余 provider 提示粘贴 API key
+  prux auth login <provider> --api-key  # 强制粘贴 API key
+  prux auth login <provider> --no-browser
+  prux auth logout <provider>
+  ```
+
+  账号登录会在终端打印授权地址：设备码流程按提示在浏览器输入验证码即可；授权码流程在同一台机器上开浏览器时回调会被自动接住，否则把最终回调 URL（或页面上的 `code#state`）粘回终端。
 - **方式二：环境变量**：在启动前设置对应 provider 的 API key 环境变量，例如：
 
 ```bash

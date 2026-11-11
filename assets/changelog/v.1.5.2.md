@@ -43,6 +43,15 @@
   skills also now land executable when installed, so this check has nothing to say about them.
   The GUI's `/skills` takes the same subcommands: `check` runs the preflight, `settings` opens the
   skills panel.
+- **Credentials can be configured without starting a session**: `prux auth login <provider>` runs
+  the same account login as `/login`, only in the terminal: the URL (and device code) is printed,
+  a local browser redirect is picked up automatically, and pasting the redirect URL or `code#state`
+  also works. `--api-key` prompts for a key instead and `--no-browser` only prints the URL.
+  `prux auth logout <provider>` removes the stored credential. Both exit non-zero with a message when
+  the provider is unknown or nothing is stored.
+- **A session whose directory is gone asks what to do instead of failing**: reopening such a session
+  (`/import`, `/resume`) now offers `Continue` (run it in the current directory this once, ask again
+  next time), `Fork` (copy it into the current directory as a new session, original kept) or `Cancel`.
 
 ### Changed
 
@@ -172,6 +181,17 @@
   built from the current directory's name and written as an OSC sequence, with nothing stripped, so a
   folder named with an embedded escape byte could reach the terminal. Control characters are removed
   before the title is written.
+- **The reported cost ignored what the provider billed**: with OpenRouter the response carries the
+  actual amount, but the total was always recomputed from catalog prices, so the number differed from
+  the invoice. A reported `usage.cost` is now kept as the total (the per-item lines still come from
+  the catalog rates) and `/session` marks it as `provider-reported`.
+- **Confirming a device-code login cancelled it**: on the login panel an empty input plus Enter meant
+  "cancel", so the natural way to say "yes, open the page" threw the login away. Enter now opens the
+  verification URL and copies the code to the clipboard (either step failing only prints a hint);
+  cancelling stays on Esc.
+- **Windows path containment was case-sensitive**: `C:\Repo` and `C:\repo\file` were treated as
+  unrelated, so a file inside the project could be reported as outside it. The comparison now folds
+  case on Windows only; component-wise matching on other platforms is unchanged.
 
 ## 中文
 
@@ -204,6 +224,13 @@
   并带上它在技能内的路径。它只报告——不改任何东西，也不拦任何技能。内置技能在安装时也会带上
   执行位，所以它对这些技能没什么可说的。桌面 GUI 的 `/skills` 收同样的子命令：`check` 跑预检，
   `settings` 打开技能面板。
+- **不起会话也能配置凭据**：`prux auth login <provider>` 跑与 `/login` 同一套账号登录，只是全在终端里：
+  打印授权地址（设备码流程还打印验证码），本机浏览器重定向会被自动接住，粘回回调 URL 或
+  `code#state` 同样可用；`--api-key` 改为提示粘贴 key，`--no-browser` 只打印地址不开浏览器。
+  `prux auth logout <provider>` 删除已存凭据。provider 未知或没有可删的凭据时以非零退出码报错。
+- **存储目录已消失的会话会先问怎么办**：重新打开这类会话（`/import`、`/resume`）现在给三选——
+  `Continue`（本次用当前目录，下次仍会问）、`Fork`（复制成当前目录下的新会话，原会话保留）、
+  `Cancel`。
 
 ### 变更
 
@@ -296,4 +323,12 @@
   残骸会被当成正文发出去。现在所有编辑操作都把 paste marker 当原子单元。
 - **目录名能往终端标题里注入转义序列**：窗口标题由当前目录名拼成、以 OSC 序列写出，没有任何过滤，
   名字里夹 ESC 就能把控制序列送进终端。现在写标题前先剥掉控制字符。
+- **计费合计没算供应商上报的金额**：用 OpenRouter 时响应里带着真实金额，但合计一律按目录单价重算，
+  于是数字和账单对不上。现在上报的 `usage.cost` 直接作合计（分项仍按目录单价算），
+  `/session` 会标成 `provider-reported`。
+- **确认设备码登录反而把登录取消了**：登录面板上空输入 + Enter 原本等于「取消」，
+  于是想「好，打开页面吧」的那一下把登录丢了。现在 Enter 打开验证地址并把验证码复制到剪贴板
+  （两步失败都只提示），取消仍是 Esc。
+- **Windows 上路径包含判断区分了大小写**：`C:\Repo` 与 `C:\repo\file` 被当成无关路径，
+  项目内的文件可能被判成「目录之外」。现在只在 Windows 上折叠大小写，其它平台仍按组件比较、行为不变。
 
