@@ -21,8 +21,10 @@ jobs:
       # libwayland: wayland-client；
       # libpipewire + libxcb: xcap 在 Linux 上的依赖；
       # libegl1-mesa-dev: 提供 egl.pc 与 libEGL，供 xcap → libwayshot-xcap → khronos-egl 链接；
-      # libgbm-dev: 提供 libgbm.so，供 libwayshot-xcap → gbm-sys 链接（缺了报 `unable to find library -lgbm`）。
-      - run: sudo apt install -y fd-find ripgrep imagemagick libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libpipewire-0.3-dev libxcb1-dev libxcb-randr0-dev libegl1-mesa-dev libgbm-dev
+      # libgbm-dev: 提供 libgbm.so，供 libwayshot-xcap → gbm-sys 链接（缺了报 `unable to find library -lgbm`）；
+      # libfontconfig1-dev: 提供 fontconfig.pc，供 font-kit → yeslogic-fontconfig-sys 构建脚本查询
+      #   （缺了报 `Package 'fontconfig' not found`）。
+      - run: sudo apt install -y fd-find ripgrep imagemagick libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libpipewire-0.3-dev libxcb1-dev libxcb-randr0-dev libegl1-mesa-dev libgbm-dev libfontconfig1-dev
 
       - run: echo "start install Rust..."
       - name: Install Rust
