@@ -112,6 +112,8 @@ async fn mock_server(
 /// 构造指向本地假服务器的测试模型配置：`base_url` 是 mock 地址，`api` 选协议（completions / responses / anthropic / google）。
 fn model_with_base(base_url: &str, api: &str) -> ModelConfig {
     ModelConfig {
+        supports_mid_convo_effort: false,
+        requires_tools_with_tool_history: false,
         model_type: Default::default(),
         image_resize: crate::utils::image::ImageResizeLimits::default(),
         allowed_fallback_models: Vec::new(),

@@ -691,6 +691,8 @@ mod tests {
     /// 构造一个最小可用的物理模型配置（测试用，无网络）。
     fn physical(provider: &str, id: &str) -> ModelConfig {
         ModelConfig {
+            supports_mid_convo_effort: false,
+            requires_tools_with_tool_history: false,
             model_type: ModelType::Chat,
             image_resize: crate::utils::image::ImageResizeLimits::default(),
             allowed_fallback_models: Vec::new(),

@@ -731,6 +731,8 @@ mod tests {
     /// 测试用模型配置（anthropic，小上下文窗口便于触发摘要裁剪）
     fn test_model() -> ModelConfig {
         ModelConfig {
+            supports_mid_convo_effort: false,
+            requires_tools_with_tool_history: false,
             model_type: Default::default(),
             provider: "anthropic".into(),
             model_id: "claude-sonnet-4-5".into(),

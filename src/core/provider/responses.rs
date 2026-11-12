@@ -18,7 +18,7 @@ use super::{
         flush_pending_system_messages, instruction_role, sanitize_surrogates,
         supports_mid_convo_system_messages, truncate_for_error,
     },
-    json_args::{parse_streaming_json, parse_tool_call_arguments, streaming_arguments},
+    json_args::{StreamingArgs, parse_streaming_json, parse_tool_call_arguments},
     retry::{DEFAULT_MAX_RETRIES, send_with_retry},
     track_stream_bytes,
     usage::{apply_service_tier_cost, compute_cost},
@@ -553,6 +553,8 @@ struct Slot {
     thinking: String,
     /// tool call 增量 JSON 缓冲
     partial_json: Option<String>,
+    /// tool call 参数的增量解析器（原文缓冲在 `partial_json`，这里只维护解析状态）
+    args: StreamingArgs,
     /// tool call 定稿 arguments
     arguments: Value,
     /// tool call 参数解析失败的说明（含原文）；解析成功或尚未定稿为 None。
@@ -771,6 +773,7 @@ fn handle_output_item_added(
                     text: String::new(),
                     thinking: String::new(),
                     partial_json: None,
+                    args: StreamingArgs::new(),
                     arguments: json!({}),
                     call_id: None,
                     item_id: None,
@@ -795,6 +798,7 @@ fn handle_output_item_added(
                     text: String::new(),
                     thinking: String::new(),
                     partial_json: None,
+                    args: StreamingArgs::new(),
                     arguments: json!({}),
                     call_id: None,
                     item_id: None,
@@ -846,6 +850,7 @@ fn handle_output_item_added(
                     text: String::new(),
                     thinking: String::new(),
                     partial_json: Some(String::new()),
+                    args: StreamingArgs::with_text(&init_args),
                     arguments: parse_streaming_json(&init_args),
                     call_id,
                     item_id,
@@ -882,6 +887,7 @@ fn handle_output_item_added(
                 text: String::new(),
                 thinking: String::new(),
                 partial_json: Some(String::new()),
+                args: StreamingArgs::new(),
                 arguments: json!({}),
                 call_id: item
                     .get("call_id")
@@ -1006,7 +1012,7 @@ fn close_grammar_input(slot: &mut Slot) {
     };
 
     slot.partial_json = Some(text.clone());
-    slot.arguments = parse_streaming_json(&text);
+    slot.arguments = slot.args.reset(&text);
 
     if let Some(grammar) = slot.grammar.as_mut() {
         grammar.closed = true;
@@ -1015,10 +1021,11 @@ fn close_grammar_input(slot: &mut Slot) {
 
 /// 按当前 JSON 缓冲刷新槽内已解析的 arguments。
 fn refresh_grammar_arguments(slot: &mut Slot) {
-    slot.arguments = streaming_arguments(
-        slot.partial_json.as_deref().unwrap_or("{}"),
-        &slot.arguments,
-    );
+    let buffer = slot
+        .partial_json
+        .clone()
+        .unwrap_or_else(|| "{}".to_string());
+    slot.arguments = slot.args.reset(&buffer);
 }
 
 /// `response.custom_tool_call_input.delta/done`：把裸源码包装成 JSON 参数并转发增量。
@@ -1142,7 +1149,7 @@ fn handle_tool_call_arguments_delta(
     {
         let d = ev.get("delta").and_then(|v| v.as_str()).unwrap_or("");
         partial.push_str(d);
-        slot.arguments = streaming_arguments(partial, &slot.arguments);
+        slot.arguments = slot.args.push(d);
         if let Some(f) = on_event.as_mut() {
             f.push(RawStreamEvent::ToolCallDelta {
                 content_index: slot.content_index,
@@ -1167,7 +1174,7 @@ fn handle_tool_call_arguments_done(
         let prev = partial.clone();
         let done_args = ev.get("arguments").and_then(|v| v.as_str()).unwrap_or("");
         *partial = done_args.to_string();
-        slot.arguments = parse_streaming_json(partial);
+        slot.arguments = slot.args.reset(done_args);
 
         if let Some(f) = on_event.as_mut()
             && done_args.starts_with(&prev)
@@ -1951,6 +1958,8 @@ mod tests {
 
     fn model(reasoning: bool) -> ModelConfig {
         ModelConfig {
+            supports_mid_convo_effort: false,
+            requires_tools_with_tool_history: false,
             model_type: Default::default(),
             image_resize: crate::utils::image::ImageResizeLimits::default(),
             allowed_fallback_models: Vec::new(),

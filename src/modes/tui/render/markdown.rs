@@ -23,7 +23,13 @@ use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
 };
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashMap,
+    fmt::Write as _,
+    hash::{DefaultHasher, Hash, Hasher},
+    rc::Rc,
+};
 use unicode_segmentation::UnicodeSegmentation;
 
 /// 一行内容经解析后的样式化片段序列，是渲染与折行的基本单位。
@@ -57,7 +63,14 @@ const MD_MATH: (&str, &str) = ("mdCodeBlock", "#b5bd68");
 /// 超限时截断并附一行提示，而不是把输出全部交给上层。
 const MAX_RENDERED_LINES: usize = 20_000;
 
+/// blockquote 的最大嵌套缩进层数。
+///
+/// 每层剥掉 2 列宽度并把内层行**再折一次**，30 层嵌套的一段长文本因此是乘法增长
+/// （宽度到 1 后不再收缩，每层仍重新折行）。超过该层数后不再缩进加边框，内容照常渲染。
+const MAX_QUOTE_DEPTH: usize = 8;
+
 /// 渲染结果行：`Wrap` 需词级折行，`Fixed` 已格式化（列表/引用/表格行）不再折行，`Code` 代码行折行时保留行首缩进
+#[derive(Clone)]
 enum OutLine {
     /// 需词级折行的普通文本行。
     Wrap(Spans),
@@ -80,10 +93,133 @@ const PARSE_CACHE_ENTRIES: usize = 64;
 /// 解析结果缓存上限：缓存文本的累计字节数（超出时从最旧条目开始淘汰）。
 const PARSE_CACHE_BYTES: usize = 4 * 1024 * 1024;
 
+/// 顶层块渲染缓存的条目上限；超出后整表清空（流式消息的块数远小于它）。
+const BLOCK_CACHE_ENTRIES: usize = 512;
+
 thread_local! {
     /// markdown 文本 → 已解析事件序列。主题与宽度变化时布局要重做，
     /// 但解析结果与二者无关，因此在这里跨渲染复用
     static PARSE_CACHE: RefCell<Vec<ParsedDocument>> = const { RefCell::new(Vec::new()) };
+
+    /// 顶层块 → 已排版的行。流式消息每帧重渲染时只有**最后一块**在变，
+    /// 其余块按（主题指纹, 宽度, 基础样式, 块内容）命中直接复用。
+    static BLOCK_CACHE: RefCell<HashMap<BlockKey, Rc<Vec<OutLine>>>> =
+        RefCell::new(HashMap::new());
+
+    /// 块级缓存的未命中次数（测试用来确认确实复用了已排版的块）。
+    #[cfg(test)]
+    static BLOCK_CACHE_MISSES: Cell<usize> = const { Cell::new(0) };
+}
+
+/// 顶层块渲染缓存的键：布局与样式全部落在里面，值即可跨帧/跨消息复用。
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct BlockKey {
+    /// 主题指纹（名称 + 颜色变量 + 高亮/图/公式开关，见 [`theme_stamp`]）。
+    theme: u64,
+    /// 排版宽度（列）。
+    width: usize,
+    /// 段落基础样式（思考斜体灰等）的前景/背景/修饰位。
+    base: (u64, u64, u16, u16),
+    /// 块事件序列的指纹（见 [`hash_events`]）。
+    events: u64,
+}
+
+/// 主题指纹：名称、颜色变量表与三个渲染开关，任一变化即视为不同主题。
+///
+/// `vars` 是 `HashMap`，逐对取哈希再异或，结果与迭代顺序无关。
+fn theme_stamp(theme: &Theme) -> u64 {
+    let mut vars = 0u64;
+    for (key, value) in &theme.vars {
+        let mut entry = DefaultHasher::new();
+        key.hash(&mut entry);
+        value.hash(&mut entry);
+        vars ^= entry.finish();
+    }
+    let mut hasher = DefaultHasher::new();
+    theme.name.hash(&mut hasher);
+    theme.syntax_highlight.hash(&mut hasher);
+    theme.mermaid.hash(&mut hasher);
+    theme.latex.hash(&mut hasher);
+    vars.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// 基础样式指纹（`ratatui::Style` 不实现 `Hash`，这里只取影响渲染的几项）。
+fn style_stamp(style: Style) -> (u64, u64, u16, u16) {
+    fn color_stamp(color: Option<ratatui::style::Color>) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        color.hash(&mut hasher);
+        hasher.finish()
+    }
+    (
+        color_stamp(style.fg),
+        color_stamp(style.bg),
+        style.add_modifier.bits(),
+        style.sub_modifier.bits(),
+    )
+}
+
+/// 一段顶层事件的指纹：把 `Debug` 表示直接写进 hasher（不分配字符串）。
+fn hash_events(events: &[Event<'static>]) -> u64 {
+    /// 把 `fmt::Write` 接到 hasher 上，避免 `format!` 为每个事件分配。
+    struct Sink<'a>(&'a mut DefaultHasher);
+    impl std::fmt::Write for Sink<'_> {
+        fn write_str(&mut self, s: &str) -> std::fmt::Result {
+            std::hash::Hasher::write(self.0, s.as_bytes());
+            Ok(())
+        }
+    }
+
+    let mut hasher = DefaultHasher::new();
+    let mut sink = Sink(&mut hasher);
+    for event in events {
+        let _ = write!(sink, "{event:?}");
+    }
+    hasher.finish()
+}
+
+/// 把事件序列切成**顶层块**（一个段落 / 列表 / 引用 / 代码块 / 表格 / 独立行内事件各一块），
+/// 返回每块在 `events` 里的下标区间。深度归零处即块边界。
+fn top_level_blocks(events: &[Event<'static>]) -> Vec<std::ops::Range<usize>> {
+    let mut blocks = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0usize;
+    for (index, event) in events.iter().enumerate() {
+        match event {
+            Event::Start(_) => {
+                if depth == 0 {
+                    start = index;
+                }
+                depth += 1;
+            }
+            Event::End(_) => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    blocks.push(start..index + 1);
+                    start = index + 1;
+                }
+            }
+            _ => {
+                if depth == 0 {
+                    blocks.push(index..index + 1);
+                    start = index + 1;
+                }
+            }
+        }
+    }
+    if start < events.len() {
+        blocks.push(start..events.len());
+    }
+    blocks
+}
+
+/// 该块是否是 mermaid 代码块（图块在 `render_blocks` 里不参与「块间补空行」）。
+fn is_mermaid_block(events: &[Event<'static>], mermaid_enabled: bool) -> bool {
+    mermaid_enabled
+        && matches!(
+            events.first(),
+            Some(Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(lang)))) if &**lang == "mermaid"
+        )
 }
 
 /// 一条缓存的解析结果。
@@ -207,6 +343,8 @@ impl<'a> EventSource<'a> for RefSource<'a> {
 pub struct MdRenderer<'a> {
     theme: &'a Theme,
     width: usize,
+    /// 当前正在渲染的 blockquote 嵌套层级，渲染期间随递归增减。
+    quote_depth: Cell<usize>,
 }
 
 /// 渲染 markdown 为样式化行（内容宽度内）。
@@ -221,7 +359,12 @@ pub fn render_markdown_styled(
     theme: &Theme,
     base: Style,
 ) -> Vec<Line<'static>> {
-    MdRenderer { theme, width }.render_with(text, base)
+    MdRenderer {
+        theme,
+        width,
+        quote_depth: Cell::new(0),
+    }
+    .render_with(text, base)
 }
 
 /// markdown 渲染结果里的一个可点击链接区域。
@@ -417,8 +560,7 @@ impl MdRenderer<'_> {
 
         // 解析结果跨主题与宽度复用（布局仍然按当前主题/宽度重做）
         let events = parsed_events(&normalized, math, options);
-        let mut source = SliceSource::whole(&events);
-        let lines = self.render_blocks(&mut source, width, 0, base);
+        let lines = self.render_cached_blocks(&events, width, base);
         let mut out: Vec<Line<'static>> = Vec::new();
 
         for line in lines {
@@ -438,6 +580,61 @@ impl MdRenderer<'_> {
             )));
         }
         out
+    }
+
+    /// 按顶层块渲染事件序列，逐块命中 [`BLOCK_CACHE`]。
+    ///
+    /// 流式消息每帧都会重渲染，但只有最后一块的内容在变；块级缓存让其余块直接复用上次排版。
+    /// 块间空行的补法与原 `render_blocks` 一致：非空块之间补一行空行，mermaid 图块不补。
+    fn render_cached_blocks(
+        &self,
+        events: &Rc<Vec<Event<'static>>>,
+        width: usize,
+        base: Style,
+    ) -> Vec<OutLine> {
+        let stamp = BlockKey {
+            theme: theme_stamp(self.theme),
+            width,
+            base: style_stamp(base),
+            events: 0,
+        };
+        let mut lines: Vec<OutLine> = Vec::new();
+
+        for range in top_level_blocks(events) {
+            let slice = &events[range];
+            let key = BlockKey {
+                events: hash_events(slice),
+                ..stamp
+            };
+            let cached = BLOCK_CACHE.with(|cache| cache.borrow().get(&key).cloned());
+            let block_lines = match cached {
+                Some(rendered) => (*rendered).clone(),
+                None => {
+                    #[cfg(test)]
+                    BLOCK_CACHE_MISSES.with(|misses| misses.set(misses.get() + 1));
+                    let mut source = SliceSource::whole(slice);
+                    let rendered = self.render_blocks(&mut source, width, 0, base);
+                    BLOCK_CACHE.with(|cache| {
+                        let mut cache = cache.borrow_mut();
+                        if cache.len() >= BLOCK_CACHE_ENTRIES {
+                            cache.clear();
+                        }
+                        cache.insert(key, Rc::new(rendered.clone()));
+                    });
+                    rendered
+                }
+            };
+
+            if block_lines.is_empty() {
+                continue;
+            }
+            if !lines.is_empty() && !is_mermaid_block(slice, self.theme.mermaid) {
+                lines.push(OutLine::Fixed(vec![Span::raw("")]));
+            }
+            lines.extend(block_lines);
+        }
+
+        lines
     }
 
     /// 按 `(类别, 变体)` 键从主题取样式，未配置时回退到主题默认值。
@@ -641,7 +838,19 @@ impl MdRenderer<'_> {
         depth: usize,
         base: Style,
     ) -> Vec<OutLine> {
-        let inner = self.render_blocks(src, width.saturating_sub(2).max(1), depth, base);
+        let nested = self.quote_depth.get() < MAX_QUOTE_DEPTH;
+        self.quote_depth.set(self.quote_depth.get() + 1);
+        let inner_width = if nested {
+            width.saturating_sub(2).max(1)
+        } else {
+            width
+        };
+        let inner = self.render_blocks(src, inner_width, depth, base);
+        self.quote_depth.set(self.quote_depth.get() - 1);
+        // 超出层数上限：不再缩进/加边框，直接交出内层行，避免逐层重复折行
+        if !nested {
+            return inner;
+        }
         let quote = self.style(MD_QUOTE).add_modifier(Modifier::ITALIC);
         let border = self.style(MD_QUOTE_BORDER);
         let mut lines: Vec<OutLine> = Vec::new();
@@ -1432,6 +1641,19 @@ fn is_cjk(c: char) -> bool {
         0xF900..=0xFAFF | 0xFF00..=0xFFEF | 0x20000..=0x3FFFD)
 }
 
+/// 清空块级缓存（测试用：主渲染路径不应在别处调用它）。
+#[cfg(test)]
+fn reset_block_cache() {
+    BLOCK_CACHE.with(|cache| cache.borrow_mut().clear());
+    BLOCK_CACHE_MISSES.with(|misses| misses.set(0));
+}
+
+/// 取走并重置块级缓存的未命中次数（测试用）。
+#[cfg(test)]
+fn take_block_cache_misses() -> usize {
+    BLOCK_CACHE_MISSES.with(|misses| misses.replace(0))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1444,6 +1666,66 @@ mod tests {
         assert_eq!(lines.len(), MAX_RENDERED_LINES + 1);
         let last = text_of(&lines).pop().unwrap();
         assert!(last.contains("more lines not rendered"), "{last:?}");
+    }
+
+    /// 块级缓存：同文本重复渲染零未命中；流式追加时只有新块重新排版，且输出不变。
+    #[test]
+    fn block_cache_reuses_unchanged_blocks_while_streaming() {
+        reset_block_cache();
+        let text = "# Title\n\nfirst paragraph\n\n- a\n- b\n";
+        let first = render_markdown(text, 40, &theme());
+        assert!(take_block_cache_misses() > 0, "首次渲染必然未命中");
+
+        let again = render_markdown(text, 40, &theme());
+        assert_eq!(text_of(&first), text_of(&again));
+        assert_eq!(take_block_cache_misses(), 0, "同文本应全部命中");
+
+        // 流式追加一段：只有新块需要排版，前面各块仍命中
+        let grown = format!("{text}\na appended paragraph\n");
+        let streamed = render_markdown(&grown, 40, &theme());
+        assert_eq!(take_block_cache_misses(), 1, "只有追加的那块重新排版");
+        reset_block_cache();
+        let uncached = render_markdown(&grown, 40, &theme());
+        assert_eq!(text_of(&streamed), text_of(&uncached), "缓存不得改变输出");
+
+        // 主题开关变化 → 指纹不同，必须重排版
+        reset_block_cache();
+        let mut dark = theme();
+        dark.name = "dark".to_string();
+        render_markdown(text, 40, &dark);
+        take_block_cache_misses();
+        dark.name = "other".to_string();
+        render_markdown(text, 40, &dark);
+        assert!(take_block_cache_misses() > 0, "主题指纹变化后不能拿旧块");
+        reset_block_cache();
+    }
+
+    /// 宽度变化同样让块缓存失效（同一段文本按不同列宽排版）。
+    #[test]
+    fn block_cache_is_width_sensitive() {
+        reset_block_cache();
+        let text = "a fairly long paragraph that certainly needs wrapping at these widths\n";
+        render_markdown(text, 40, &theme());
+        take_block_cache_misses();
+        let narrow = render_markdown(text, 12, &theme());
+        assert!(take_block_cache_misses() > 0, "宽度不同的块不能复用");
+        reset_block_cache();
+        let fresh = render_markdown(text, 12, &theme());
+        assert_eq!(text_of(&narrow), text_of(&fresh));
+    }
+
+    /// 深层嵌套引用不再逐层剥宽度重复折行：行数随内容线性增长，不会被拖到渲染上限。
+    #[test]
+    fn deeply_nested_blockquotes_stop_indenting_past_the_cap() {
+        let deep = format!("{}deep\n", "> ".repeat(30));
+        let lines = render_markdown(&deep, 40, &theme());
+        assert!(lines.len() < 40, "行数不应爆炸: {}", lines.len());
+        let all = text_of(&lines).join("\n");
+        assert!(all.contains("deep"), "内容仍应可见: {all:?}");
+        assert!(
+            all.matches('│').count() <= MAX_QUOTE_DEPTH,
+            "边框不应无限堆叠: {all:?}"
+        );
     }
 
     fn text_of(lines: &[Line<'static>]) -> Vec<String> {

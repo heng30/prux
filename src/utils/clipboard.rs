@@ -76,6 +76,11 @@ pub fn write_clipboard(text: &str) -> std::result::Result<(), String> {
     Err(clipboard_failure_hint())
 }
 
+/// 是否运行在 WSL 下：Windows 侧剪贴板只能靠 `powershell.exe` 桥接（无 WSLg 时 arboard 没有后端）。
+fn is_wsl() -> bool {
+    std::env::var_os("WSL_DISTRO_NAME").is_some() || std::env::var_os("WSL_INTEROP").is_some()
+}
+
 /// 是否运行在 Termux（Android）下。
 ///
 /// Termux 上报的平台是 `android` 而不是 `linux`，且没有 Wayland/X11，
@@ -157,6 +162,10 @@ fn clipboard_failure_hint() -> String {
             return "Clipboard unavailable: install the Termux:API app and `termux-api` package"
                 .to_string();
         }
+        if is_wsl() {
+            return "Clipboard unavailable: add Windows `powershell.exe` to PATH, or run a WSL build with WSLg"
+                .to_string();
+        }
         if std::env::var_os("WAYLAND_DISPLAY").is_some() {
             return "Clipboard unavailable: install `wl-clipboard` (`wl-copy`) or check Wayland access"
                 .to_string();
@@ -226,8 +235,47 @@ fn paste_from_clipboard() -> Result<String> {
         }
     }
 
-    let mut ctx = arboard::Clipboard::new()?;
-    Ok(ctx.get_text()?)
+    let arboard_result = arboard::Clipboard::new()
+        .and_then(|mut ctx| ctx.get_text())
+        .map_err(ClipboardError::from);
+
+    #[cfg(target_os = "linux")]
+    if arboard_result.is_err()
+        && is_wsl()
+        && let Ok(text) = paste_from_wsl_clipboard()
+    {
+        return Ok(text);
+    }
+
+    arboard_result
+}
+
+/// WSL 下经 `powershell.exe Get-Clipboard -Raw` 读 Windows 侧剪贴板。
+/// `Get-Clipboard -Raw` 会带尾部换行，去掉后再返回；powershell 不可用或退出码非 0 时返回错误。
+#[cfg(target_os = "linux")]
+fn paste_from_wsl_clipboard() -> Result<String> {
+    use std::process::Stdio;
+    let out = std::process::Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "Get-Clipboard -Raw",
+        ])
+        .hide_console()
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()?;
+
+    if !out.status.success() {
+        return Err(ClipboardError::Message(format!(
+            "powershell.exe exited with {}",
+            out.status
+        )));
+    }
+    let text = String::from_utf8(out.stdout)?;
+    Ok(text.trim_end_matches(['\r', '\n']).to_string())
 }
 
 /// 当前会话是否运行在 Wayland 下：`WAYLAND_DISPLAY` 存在，或 `XDG_SESSION_TYPE == "wayland"`。

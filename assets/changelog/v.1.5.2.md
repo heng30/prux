@@ -2,6 +2,17 @@
 
 ### Added
 
+- **Dart and Nix code blocks are highlighted**: both languages were missing from the bundled
+  syntax set and rendered as plain text. They now ship with the binary. Gradle has no grammar of its
+  own, so `gradle` fences and `*.gradle` files are highlighted as Groovy.
+- **Starting a session whose working directory is gone now asks first**: `--session`, `--session-id`,
+  `--resume` and `--continue` used to open the session with a path that no longer exists, which made
+  every tool call fail. It now offers `Continue` (use the current directory for this run, ask again
+  next time), `Fork` (copy the session into the current directory as a new session and keep the
+  original) or `Cancel`. Without a terminal on stdin the run fails with the paths spelled out.
+- **GitHub Copilot's `Microsoft-Decision-1` works as a classifier**: Copilot serves the classifier at
+  `/v1/systemone` on the account's own endpoint, so the request went to a path that does not exist.
+  It now uses `/v1/systemone` and takes the host from the Copilot token, like the chat APIs do.
 - **`/debug context` shows what is filling the context window**: the status bar reports one
   number — the tokens the provider last measured — and it says nothing before a turn has reported
   usage, when the system prompt and the tool schemas are already tens of thousands of tokens.
@@ -56,6 +67,16 @@
 
 ### Changed
 
+- **Claude models that manage effort per message now say so**: for models whose catalog entry
+  declares `supportsMidConvoEffort`, every request is sent with adaptive thinking, a fixed top-level
+  effort of `low`, and an empty system message carrying the real level before each assistant turn —
+  so a level switched mid-conversation (or capped by an organization) no longer makes the whole
+  request fail. Temperature is not sent for these models.
+- **`compat.requiresToolsWithToolHistory` keeps old gateways working**: when a `models.json` entry
+  sets it, a request that declares no tools but whose history contains tool calls now sends
+  `tools: []` instead of omitting the field.
+- **Extension overlays report themselves as blocked**: while `ctx.ui.custom()` shows a full-screen
+  overlay, the terminal status line (OSC 7501) now reports `blocked` with the overlay's title.
 - **New sessions default to each provider's current flagship model**: the built-in per-provider table
   now points at the models the catalog lists as current — `anthropic` → `claude-opus-5-5`, `openai` /
   `azure` / `github-copilot` → `gpt-6.1-sol`, `google` → `gemini-4-argon`, `moonshotai` /
@@ -66,9 +87,31 @@
   default saved in `settings.json` or a `--model` argument still wins.
 - **`qwen-token-plan-individual-cn` is a provider of its own**: the Token Plan Individual
   allowlist served from the China endpoint, authenticated with `QWEN_TOKEN_PLAN_CN_API_KEY`.
+- **`tool_search` ranks tools by name first**: a query term that hits a tool's name now counts three
+  times as much as the same term inside its description, and a query that spells out the whole name
+  (`thread read` → `thread_read`) is ranked first outright. Near-identical names such as `thread_read`
+  and `queue_read` no longer swap places because one description happens to repeat the word more.
 
 ### Fixed
 
+- **Long streaming replies re-rendered every block each frame**: a message was laid out from its
+  first character on every frame while it streamed. Markdown is now laid out block by block and each
+  block is reused until its text, width, base style or theme changes, so only the tail of a streaming
+  reply is re-rendered.
+- **Streaming tool arguments no longer re-parse the whole buffer**: every delta used to re-parse the
+  accumulated JSON from the start (plus a full copy to repair it), so a large `write` grew quadratically
+  — a 90 KB call peaked around 140 MB of heap and showed stale arguments once past the old 64 KB cut-off.
+  Arguments are now parsed incrementally, one pass over each delta, and the shown snapshot refreshes at
+  most every 4 KB.
+- **Deeply nested quotes multiplied their lines**: each level stripped two columns and re-wrapped the
+  inner lines, and below a certain width the wrapping stopped shrinking and kept multiplying — a
+  30-level quote could stall rendering. Nesting past 8 levels is now rendered flat, and the content
+  stays visible.
+- **Pasting inside WSL did nothing**: without WSLg there is no X11/Wayland clipboard, so Ctrl+V found
+  nothing. It now falls back to the Windows clipboard through `powershell.exe Get-Clipboard`.
+- **Exiting could lose a freshly rotated OAuth token**: a refresh runs in its own task and writes the
+  new token when the provider answers; quitting while one was in flight discarded it and forced another
+  `/login`. The TUI, the desktop app and ACP now wait (up to 5 s) for in-flight refreshes to land.
 - **A `ref` on Linux was not re-checked before acting**: the macOS and Windows backends re-read the
   element and refuse when its name or role changed, but the AT-SPI path acted on the recorded
   `(bus, path)` directly, so a reused path could drive a different control. Every Linux action and
@@ -199,6 +242,13 @@
 
 ### 新增
 
+- **Dart 与 Nix 代码块能高亮了**：这两种语言不在内置语法集里，此前只能当纯文本显示，现在随二进制一起内嵌。
+  Gradle 没有独立语法，`gradle` 围栏与 `*.gradle` 文件按 Groovy 高亮。
+- **恢复的会话工作目录已消失时会先问怎么办**：`--session`、`--session-id`、`--resume` 与 `-c` 以前直接拿一个
+  不存在的路径开会话，之后每个工具调用都失败。现在给三选——`Continue`（本次用当前目录，下次仍会问）、
+  `Fork`（复制成当前目录下的新会话，原会话保留）、`Cancel`。stdin 不是终端时直接报错并列出两个路径。
+- **GitHub Copilot 的 `Microsoft-Decision-1` 可以当分类器用了**：Copilot 把分类器挂在账号端点下的
+  `/v1/systemone`，此前请求打到了不存在的路径。现在用 `/v1/systemone`，域名与聊天接口一样取自 Copilot token。
 - **`/debug context` 说明上下文窗口被什么占着**：状态栏只给一个数——供应商上次实测的 token——
   而在第一轮落地 usage 之前它什么都不说，可那时系统提示词与工具 schema 已经占了几万 token。
   `/debug context` 改成按来源拆开：系统提示词（`base`、项目上下文、技能、MCP 段分别计数）、
@@ -236,6 +286,13 @@
 
 ### 变更
 
+- **按消息管理 effort 的 Claude 模型现在照实下发**：目录条目声明了 `supportsMidConvoEffort` 的模型，
+  请求改为 adaptive thinking + 固定顶层 `low`，并在每条 assistant 消息前用一条空 system 消息携带当时的真实档位——
+  会话中途换档、或被组织级限额压住时不会整条请求失败。这类模型不再发送 temperature。
+- **`compat.requiresToolsWithToolHistory` 保住老网关**：`models.json` 条目设了它时，没有工具可声明、
+  但历史里有工具调用的请求会发 `tools: []` 而不是省略该字段。
+- **扩展覆盖层会把自己报成阻塞**：`ctx.ui.custom()` 的全屏覆盖层显示期间，终端状态行（OSC 7501）
+  现在上报 `blocked` 并带上覆盖层标题。
 - **新会话默认用各 provider 当前的主力模型**：内置默认模型表改指目录里标为当前的那批——`anthropic` →
   `claude-opus-5-5`，`openai` / `azure` / `github-copilot` → `gpt-6.1-sol`，`google` →
   `gemini-4-argon`，`moonshotai` / `moonshotai-cn` / `opencode` → `kimi-k2.7-code`，`opencode-go`
@@ -245,9 +302,23 @@
   `settings.json` 里存过的默认值或 `--model` 参数仍然优先。
 - **新增 `qwen-token-plan-individual-cn` provider**：中国端点上的 Token Plan Individual 白名单，
   凭据为 `QWEN_TOKEN_PLAN_CN_API_KEY`。
+- **`tool_search` 先按工具名排序**：查询词命中工具名的权重是命中描述时的三倍，查询正好拼出整个名字
+  （`thread read` → `thread_read`）时直接置顶。`thread_read` 与 `queue_read` 这类近似名不再因为其中一个
+  描述里多重复几次关键词就换位。
 
 ### 修复
 
+- **长回复流式期间每帧重排所有块**：消息每帧都从第一个字符重新排版。现在 markdown 按顶层块排版并逐块复用，
+  只有文本、宽度、基础样式或主题变化的那块才重新排版，流式回复只重排末尾一块。
+- **流式工具参数不再整串重解析**：每个 delta 都从头的重新解析累积 JSON（必要时还要整串拷贝做修复），
+  大 `write` 调用因此是平方级增长——90 KB 的参数峰值吃掉约 140 MB 堆，越过旧的 64 KB 阈值后参数干脆不再更新。
+  现在参数走增量解析，每段只扫一遍新增字符，展示用快照最多每 4 KB 刷新一次。
+- **深层嵌套引用让行数乘法增长**：每层剥掉两列宽再把内层行重新折一次，宽度到一定程度后不再收缩、
+  于是继续成倍增长——30 层引用能把渲染卡住。超过 8 层后不再缩进加边框，内容照常显示。
+- **WSL 里粘贴没反应**：没有 WSLg 时既无 X11 也无 Wayland 剪贴板，Ctrl+V 取不到任何内容。
+  现在回退到经 `powershell.exe Get-Clipboard` 读 Windows 侧剪贴板。
+- **退出时可能丢掉刚轮转的 OAuth token**：刷新跑在独立任务里，provider 答完才写盘；此时退出会把它丢弃，
+  下次只能重新 `/login`。现在终端界面、桌面应用与 ACP 退出前都会等在途刷新落盘（最多 5 秒）。
 - **Linux 上按 `ref` 操作前不复核节点身份**：macOS 与 Windows 后端会重读元素、名称或角色变了就拒绝，
   但 AT-SPI 那条路径直接拿记录的 `(bus, path)` 动手，路径被复用时会操作到别的控件。
   现在每个 Linux 动作与读值都先复核身份，对不上就报 `[STALE_REF]`。

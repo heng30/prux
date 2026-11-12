@@ -326,7 +326,8 @@ pub async fn bootstrap() -> Startup {
         .unwrap_or_else(|| default_session_dir(&cwd, &agent_dir));
 
     // 会话选择
-    let mut session = select_session(&parsed, &cwd, &default_dir);
+    let mut session =
+        select_session(&parsed, &cwd, &default_dir).map(|s| resolve_missing_session_cwd(s, &cwd));
 
     // --name：设置会话显示名
     if let Some(name) = &parsed.name {
@@ -696,6 +697,72 @@ fn select_startup_model(
     }
 }
 
+/// 会话记录的 cwd 是否已消失：空 cwd（旧会话没有该字段）与仍然存在的目录都返回 `None`。
+fn missing_session_cwd(session: &Session) -> Option<&str> {
+    let stored = session.cwd.trim();
+    if stored.is_empty() || Path::new(stored).exists() {
+        return None;
+    }
+    Some(stored)
+}
+
+/// 启动即恢复的会话如果记录的 cwd 已经不存在，就给三选：
+/// `Continue` 本次用当前 cwd 恢复（下次仍会问）、`Fork` 复制成当前 cwd 下的新会话（原会话保留）、
+/// `Cancel` 退出。非交互（stdin 不是终端）时按 pi 的口径直接报错退出。
+///
+/// 只在 cwd **不存在**时介入：cwd 存在但与当前目录不同是正常用法（`--resume` 别人的项目）。
+fn resolve_missing_session_cwd(mut session: Session, cwd: &str) -> Session {
+    let Some(stored) = missing_session_cwd(&session).map(str::to_string) else {
+        return session;
+    };
+    let stored = stored.as_str();
+
+    let session_file = session
+        .session_file
+        .as_ref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
+
+    if !stdin_is_tty() {
+        eprintln!("Error: Stored session working directory does not exist: {stored}");
+        if !session_file.is_empty() {
+            eprintln!("Session file: {session_file}");
+        }
+        eprintln!("Current working directory: {cwd}");
+        std::process::exit(1);
+    }
+
+    eprintln!("Session cwd does not exist: {stored}");
+    eprintln!("  [c] Continue in {cwd} (asks again next time)");
+    eprintln!("  [f] Fork into {cwd} (new session ID, original kept)");
+    eprintln!("  [C] Cancel");
+    eprint!("> ");
+    let mut line = String::new();
+    _ = std::io::stdin().read_line(&mut line);
+
+    match line.trim().to_ascii_lowercase().as_str() {
+        // 本次直接用当前目录：只改内存里的 cwd，不写回会话文件，下次启动仍会问
+        "c" | "continue" => {
+            session.cwd = cwd.to_string();
+            session
+        }
+        "f" | "fork" => {
+            if session_file.is_empty() {
+                eprintln!("Error: cannot fork session: unknown session file");
+                std::process::exit(1);
+            }
+            match Session::fork_from(&session_file, cwd, Some(session.session_dir.clone())) {
+                Ok(forked) => forked,
+                Err(e) => {
+                    eprintln!("Error: cannot fork session {session_file}: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        _ => std::process::exit(0),
+    }
+}
+
 /// 会话选择：--no-session / --fork / --session / --session-id / --resume / --session-dir / -c
 fn select_session(parsed: &Args, cwd: &str, default_dir: &Path) -> Option<Session> {
     if parsed.fork.is_some()
@@ -925,4 +992,30 @@ fn confirm_fork_into_current(_found: &Path, _cwd: &str) -> bool {
     let mut line = String::new();
     _ = std::io::stdin().read_line(&mut line);
     line.trim().eq_ignore_ascii_case("y")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 只有「记录着 cwd 且该目录已不存在」才需要追问；空 cwd 与存在的目录都放过。
+    #[test]
+    fn missing_session_cwd_only_fires_for_gone_directories() {
+        let _ad = crate::test_support::AgentDirGuard::temp();
+        let tmp = std::env::temp_dir();
+        let mut session = Session::create_deferred(&tmp.to_string_lossy(), Some(tmp.clone()))
+            .expect("建内存会话");
+
+        session.cwd = tmp.to_string_lossy().into_owned();
+        assert_eq!(missing_session_cwd(&session), None);
+
+        session.cwd = String::new();
+        assert_eq!(missing_session_cwd(&session), None);
+
+        session.cwd = tmp
+            .join("prux-gone-dir-for-test")
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(missing_session_cwd(&session), Some(session.cwd.as_str()));
+    }
 }

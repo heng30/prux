@@ -28,7 +28,7 @@ use gpui::{
     App, AppContext, Bounds, TitlebarOptions, WindowBackgroundAppearance, WindowBounds,
     WindowOptions, px, size,
 };
-use std::{borrow::Cow, sync::Arc};
+use std::{borrow::Cow, sync::Arc, time::Duration};
 use theme::Theme;
 use tokio::{runtime::Handle, sync::Mutex, sync::mpsc::unbounded_channel};
 
@@ -148,4 +148,7 @@ pub fn run(startup: Startup, rt: &Handle) {
     });
 
     core::extensions::set_ui_ready(false);
+
+    // 退出前等在途 OAuth 刷新落盘（与 TUI / ACP 同一条理由）
+    rt.block_on(core::auth::flush_oauth_refreshes(Duration::from_secs(5)));
 }

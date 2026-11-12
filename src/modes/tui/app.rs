@@ -867,10 +867,16 @@ impl App {
 
     /// 当前是否有对话框在等用户（OSC 7501 的 `blocked` 状态）。
     ///
-    /// 只把**扩展对话框**（`PanelKind::Custom`）与**登录流程**算作阻塞；
-    /// 项目信任、会话修复等内置确认面板不上报。每次上报前从当前栈顶面板派生，
+    /// 把**扩展覆盖层**、**扩展对话框**（`PanelKind::Custom`）与**登录流程**算作阻塞；
+    /// 项目信任、会话修复等内置确认面板不上报。每次上报前从当前栈顶面板/覆盖层派生，
     /// 所以不需要在各面板开关处成对维护。
     pub fn program_status_blocked(&self) -> Option<BlockedStatus> {
+        if let Some(overlay) = &self.overlay {
+            return Some(BlockedStatus::new(
+                BlockedKind::Question,
+                overlay.view.title.clone(),
+            ));
+        }
         if self.ext_settings.visible {
             return Some(BlockedStatus::new(
                 BlockedKind::Question,
@@ -1278,6 +1284,23 @@ mod tests {
         let blocked = app.program_status_blocked().unwrap();
         assert_eq!(blocked.kind, BlockedKind::Question);
         assert_eq!(blocked.message, "tasks");
+    }
+
+    /// 扩展覆盖层（`ctx.ui.custom()`）显示期间同样上报 blocked，标题取覆盖层标题。
+    #[test]
+    fn extension_overlay_reports_blocked() {
+        let mut app = App::new();
+        app.ext_settings.visible = false;
+        let view = crate::core::extensions::OverlayView::inline("Diff review", Vec::new(), 5);
+        crate::modes::tui::overlay::open(&mut app, 7, view);
+        let blocked = app
+            .program_status_blocked()
+            .expect("覆盖层显示时应上报阻塞");
+        assert_eq!(blocked.kind, BlockedKind::Question);
+        assert_eq!(blocked.message, "Diff review");
+
+        crate::modes::tui::overlay::hide(&mut app, 7);
+        assert!(app.program_status_blocked().is_none());
     }
 
     #[test]

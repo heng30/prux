@@ -5001,6 +5001,8 @@ mod tests {
     fn branch_summary_max_tokens_uses_the_model_output_limit() {
         // 模型的输出上限就是摘要上限；目录里的 0 与缺省都表示“不设限”。
         let mut model = ModelConfig {
+            supports_mid_convo_effort: false,
+            requires_tools_with_tool_history: false,
             model_type: Default::default(),
             image_resize: crate::utils::image::ImageResizeLimits::default(),
             allowed_fallback_models: Vec::new(),
@@ -5678,6 +5680,8 @@ mod tests {
     /// 与 [`test_agent`] 相同，但可指定模型能力（如 `["text", "image"]`）。
     fn test_agent_with_input(base: &str, cwd: &str, input: Vec<String>) -> Agent {
         let entry = model_resolver::ModelEntry {
+            supports_mid_convo_effort: Some(false),
+            requires_tools_with_tool_history: Some(false),
             model_type: Default::default(),
             id: "test-model".into(),
             name: "Test".into(),
@@ -5733,6 +5737,8 @@ mod tests {
     /// 带工具选择策略的 Agent（对齐 pi tool selection 语义测试）
     fn test_agent_selection(selection: ToolSelection, exclude: Vec<String>) -> Agent {
         let entry = model_resolver::ModelEntry {
+            supports_mid_convo_effort: Some(false),
+            requires_tools_with_tool_history: Some(false),
             model_type: Default::default(),
             id: "test-model".into(),
             name: "Test".into(),
@@ -10617,6 +10623,8 @@ mod tests {
             let frames2 = text_frame("Read done", "cmpl_2");
             let (base, handle) = mock_server_multi(vec![frames1, frames2]).await;
             let entry = model_resolver::ModelEntry {
+                supports_mid_convo_effort: Some(false),
+                requires_tools_with_tool_history: Some(false),
                 model_type: Default::default(),
                 id: "test-model".into(),
                 name: "Test".into(),
@@ -10737,6 +10745,8 @@ mod tests {
             )])
             .await;
             let entry = model_resolver::ModelEntry {
+                supports_mid_convo_effort: Some(false),
+                requires_tools_with_tool_history: Some(false),
                 model_type: Default::default(),
                 id: "test-model".into(),
                 name: "Test".into(),

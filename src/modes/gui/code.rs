@@ -3,18 +3,8 @@
 //! 配色来自 [`super::theme::Theme::syntect`]（GUI 自己的设计令牌），
 //! 不依赖 TUI 的多彩主题体系。
 
-use crate::utils::color::Rgb;
-use std::sync::OnceLock;
-use syntect::{
-    easy::HighlightLines, highlighting::Theme as SynTheme, parsing::SyntaxSet,
-    util::LinesWithEndings,
-};
-
-/// 语法定义集（首次使用时构建一次）。
-fn syntaxes() -> &'static SyntaxSet {
-    static SET: OnceLock<SyntaxSet> = OnceLock::new();
-    SET.get_or_init(SyntaxSet::load_defaults_nonewlines)
-}
+use crate::utils::{color::Rgb, syntax};
+use syntect::{easy::HighlightLines, highlighting::Theme as SynTheme, util::LinesWithEndings};
 
 /// 代码块高亮结果：每行若干 `(颜色, 文本)`；`color` 为 None 表示用默认前景色。
 pub fn highlight(
@@ -22,12 +12,12 @@ pub fn highlight(
     lang: Option<&str>,
     theme: &SynTheme,
 ) -> Vec<Vec<(Option<Rgb>, String)>> {
-    let set = syntaxes();
-    let syntax = lang
-        .and_then(|lang| set.find_syntax_by_token(lang))
+    let set = syntax::syntax_set();
+    let found = lang
+        .and_then(syntax::find_syntax_by_token)
         .unwrap_or_else(|| set.find_syntax_plain_text());
 
-    let mut highlighter = HighlightLines::new(syntax, theme);
+    let mut highlighter = HighlightLines::new(found, theme);
     let mut out = Vec::new();
     for line in LinesWithEndings::from(code) {
         let Ok(ranges) = highlighter.highlight_line(line, set) else {

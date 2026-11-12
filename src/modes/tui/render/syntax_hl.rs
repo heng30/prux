@@ -1,65 +1,15 @@
-//! syntect 语法高亮：嵌入语法集 + 内置精简 Zig 语法。
+//! syntect 语法高亮：语法集来自 [`crate::utils::syntax`]（默认集 + 内嵌补充语法）。
 //!
-//! 嵌入式默认语法集（约 75 种，覆盖 Rust/Python/JS/Go/C/C++/Java/Bash/Shell/
-//! JSON/YAML/HTML/CSS/Markdown/Diff/SQL 等）不含 Zig/TypeScript；Zig 用内置
-//! 精简语法（`assets/syntaxes/Zig.sublime-syntax`）补齐，其余未覆盖语言回退纯文本。
 //! token 颜色映射到主题 `syntax*` 变量（对齐 VSCode Dark+ 配色语义）。
 
-use crate::{embedded, modes::tui::theme::Theme as AppTheme};
+use crate::{modes::tui::theme::Theme as AppTheme, utils::syntax};
 use ratatui::style::{Color as RtColor, Modifier, Style as RtStyle};
-use std::{str::FromStr, sync::OnceLock};
+use std::str::FromStr;
 use syntect::{
     easy::HighlightLines,
     highlighting::{Color, FontStyle, ScopeSelectors, Style, StyleModifier, Theme, ThemeItem},
-    parsing::{SyntaxDefinition, SyntaxReference, SyntaxSet},
+    parsing::SyntaxSet,
 };
-
-/// 常驻语法集（首次使用时懒加载；加载并编译约 75+ 个语法，一次性开销）
-struct Highlighter {
-    /// 已编译的语法集，含内置默认语法与精简 Zig 语法
-    set: SyntaxSet,
-}
-
-/// 进程内常驻的语法高亮器单例，首次调用时懒加载并编译语法集。
-fn highlighter() -> &'static Highlighter {
-    /// 常驻语法高亮器单例，首次使用时懒加载并编译语法集。
-    static HL: OnceLock<Highlighter> = OnceLock::new();
-    HL.get_or_init(|| Highlighter {
-        set: build_syntax_set(),
-    })
-}
-
-/// 构建语法集：默认 nonewlines 语法集 + 内置精简 Zig 语法（Zig 未包含在默认集中）。
-fn build_syntax_set() -> SyntaxSet {
-    // 渲染按行喂入（无尾部 \n），必须用 nonewlines 变体：newlines 变体里以「行尾\n」
-    // 为退栈条件的上下文（如 C++ 的 meta.preprocessor.include）永远不弹栈，
-    // 导致 include 上下文泄漏、整块代码高亮塌陷。
-    let mut builder = SyntaxSet::load_defaults_nonewlines().into_builder();
-    if let Ok(syn) =
-        SyntaxDefinition::load_from_str(embedded!("syntaxes/Zig.sublime-syntax"), false, None)
-    {
-        builder.add(syn);
-    }
-    builder.build()
-}
-
-/// 取语言的语法；`lang` 可能是 GitHub 风格 fence token（如 "rust,ignore"、
-/// "{rust,linenos}"、"python hl_lines=1"），取首个空白分隔 token 并截断到
-/// 首个分隔符（`,` `.` `;` `:` `{` `}`），避免 `,ignore` 这类后缀使查找失败。
-fn find_syntax<'a>(set: &'a SyntaxSet, lang: &str) -> Option<&'a SyntaxReference> {
-    let tok = lang
-        .split_whitespace()
-        .next()
-        .unwrap_or("")
-        .trim_start_matches('{')
-        .split([',', '.', ';', ':', '{', '}'])
-        .next()
-        .unwrap_or("");
-    if tok.is_empty() {
-        return None;
-    }
-    set.find_syntax_by_token(tok)
-}
 
 /// 单块代码高亮会话：跨行维持语法解析状态（多行注释/字符串正确着色）。
 pub struct HighlightSession<'a> {
@@ -69,22 +19,22 @@ pub struct HighlightSession<'a> {
 
 /// 为 `lang` 创建高亮会话；未知语言返回 None（调用方回退纯文本）。
 pub fn session<'a>(lang: &str, theme: &'a Theme) -> Option<HighlightSession<'a>> {
-    let hl = highlighter();
-    let syntax = find_syntax(&hl.set, lang)?;
+    let set = syntax::syntax_set();
+    let found = syntax::find_syntax_by_token(lang)?;
     Some(HighlightSession {
-        lines: HighlightLines::new(syntax, theme),
-        set: &hl.set,
+        lines: HighlightLines::new(found, theme),
+        set,
     })
 }
 
 /// 按文件名（扩展名 / 首行 shebang 由语法集自行判定）创建高亮会话；
 /// 识别不出语言时返回 None（调用方回退纯文本）。
 pub fn session_for_filename<'a>(path: &str, theme: &'a Theme) -> Option<HighlightSession<'a>> {
-    let hl = highlighter();
-    let syntax = hl.set.find_syntax_for_file(path).ok().flatten()?;
+    let set = syntax::syntax_set();
+    let found = syntax::find_syntax_for_filename(path)?;
     Some(HighlightSession {
-        lines: HighlightLines::new(syntax, theme),
-        set: &hl.set,
+        lines: HighlightLines::new(found, theme),
+        set,
     })
 }
 

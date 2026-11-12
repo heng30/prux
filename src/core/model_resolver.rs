@@ -560,6 +560,10 @@ pub struct ModelEntry {
     /// compat.sendImageOptInHeader：分类器带图请求是否发 TypeSafe 的 `TypeSafe-Danger-Zone-Images` 头；
     /// `None` 表示按 provider 探测。
     pub send_image_opt_in_header: Option<bool>,
+    /// compat.supportsMidConvoEffort：Anthropic 系逐条消息 effort 标记模式；`None` 表示目录未声明。
+    pub supports_mid_convo_effort: Option<bool>,
+    /// compat.requiresToolsWithToolHistory：历史里有工具调用时仍发 `tools: []`；`None` 表示目录未声明。
+    pub requires_tools_with_tool_history: Option<bool>,
 }
 
 /// 解析目录 `compat.allowedFallbackModels`：无 / 非数组 / 条目缺 `model` 时丢弃。
@@ -702,6 +706,8 @@ fn virtual_model_entry(definition: &VirtualModelDefinition) -> ModelEntry {
         supports_finish_reason: true,
         requires_assistant_after_tool_result: false,
         supports_strict_mode: false,
+        supports_mid_convo_effort: None,
+        requires_tools_with_tool_history: None,
         cost: definition.cost.clone(),
         supports_developer_role: false,
         requires_reasoning_content_on_assistant_messages: false,
@@ -899,6 +905,12 @@ fn find_model_impl(provider: &str, model_id: &str, kind: Option<ModelType>) -> R
                 send_image_opt_in_header: compat
                     .get("sendImageOptInHeader")
                     .and_then(|v| v.as_bool()),
+                supports_mid_convo_effort: compat
+                    .get("supportsMidConvoEffort")
+                    .and_then(|v| v.as_bool()),
+                requires_tools_with_tool_history: compat
+                    .get("requiresToolsWithToolHistory")
+                    .and_then(|v| v.as_bool()),
                 thinking_level_map: m.get("thinkingLevelMap").and_then(|v| v.as_object()).map(
                     |obj| {
                         obj.iter()
@@ -991,6 +1003,8 @@ pub fn model_config_from_entry(
         session_affinity_format: entry.session_affinity_format.clone(),
         image_input: entry.image_input.clone(),
         send_image_opt_in_header: entry.send_image_opt_in_header,
+        supports_mid_convo_effort: entry.supports_mid_convo_effort.unwrap_or(false),
+        requires_tools_with_tool_history: entry.requires_tools_with_tool_history.unwrap_or(false),
         max_retry_delay_ms: None,
         thinking_budgets: None,
     }
@@ -2825,6 +2839,8 @@ mod tests {
             supports_finish_reason: true,
             requires_assistant_after_tool_result: false,
             supports_strict_mode: false,
+            supports_mid_convo_effort: None,
+            requires_tools_with_tool_history: None,
             cost: None,
             supports_developer_role: false,
             requires_reasoning_content_on_assistant_messages: false,

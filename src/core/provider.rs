@@ -344,6 +344,14 @@ pub struct ModelConfig {
     pub requires_assistant_after_tool_result: bool,
     /// openai strict JSON schema 工具
     pub supports_strict_mode: bool,
+    /// 目录 `compat.supportsMidConvoEffort`：Anthropic 系「逐条消息 effort 标记」模式
+    /// （顶层 effort 固定 `low`，真实档位由每条 assistant 消息前的空 system 消息携带）。
+    #[serde(default)]
+    pub supports_mid_convo_effort: bool,
+    /// 目录 `compat.requiresToolsWithToolHistory`：没有工具可声明、但历史里有工具调用时
+    /// 仍发 `tools: []`（老 LiteLLM 缺这个字段会拒整段历史）。
+    #[serde(default)]
+    pub requires_tools_with_tool_history: bool,
     /// 目录 `compat.allowedFallbackModels`：Anthropic 服务端 fallback 名单
     /// （非空时请求带 `fallbacks` 与 `server-side-fallback` beta，且按返回模型计费）
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -778,6 +786,20 @@ pub(crate) fn session_affinity_headers(model: &ModelConfig) -> Vec<(&'static str
 
 /// 组装该模型请求要带的额外请求头（目录基线 + opencode 会话头 + models.json 配置），
 /// 后写入的覆盖先写入的；非法 header 名/值直接跳过。
+/// GitHub Copilot：从 token 的 `proxy-ep=` 段推导 API base（个人版 / 企业版的真实端点由 token 决定）。
+/// token 里没有该段时返回 `None`，调用方退回目录里的 `base_url`。
+pub(crate) fn copilot_api_base(api_key: &str) -> Option<String> {
+    let ep = api_key
+        .split(';')
+        .find_map(|seg| seg.strip_prefix("proxy-ep="))?;
+    let ep = ep.trim();
+    let host = match ep.strip_prefix("proxy.") {
+        Some(rest) => format!("api.{rest}"),
+        None => ep.to_string(),
+    };
+    Some(format!("https://{host}"))
+}
+
 pub(crate) fn provider_extra_headers(model: &ModelConfig) -> HeaderMap {
     let mut headers = HeaderMap::new();
     // 身份头（User-Agent + 归因头）作为基线：目录头、会话头与 models.json 配置都在其后插入，可覆盖它
@@ -1810,6 +1832,8 @@ mod tests {
             supports_finish_reason: true,
             requires_assistant_after_tool_result: false,
             supports_strict_mode: false,
+            supports_mid_convo_effort: false,
+            requires_tools_with_tool_history: false,
             send_session_affinity_headers: None,
             session_affinity_format: None,
             image_input: None,

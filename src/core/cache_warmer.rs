@@ -656,6 +656,8 @@ mod tests {
 
     fn model(api: &str, cost: Option<Value>) -> ModelConfig {
         ModelConfig {
+            supports_mid_convo_effort: false,
+            requires_tools_with_tool_history: false,
             model_type: Default::default(),
             provider: "test".into(),
             model_id: "test-model".into(),

@@ -27,6 +27,7 @@ pub mod paths;
 pub mod process;
 pub mod proxy;
 pub mod stderr_log;
+pub mod syntax;
 pub mod terminal_caps;
 pub mod terminal_colors;
 pub mod terminal_image;

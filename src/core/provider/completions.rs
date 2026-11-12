@@ -9,6 +9,7 @@ use super::{
         flush_pending_system_messages, instruction_role, sanitize_surrogates,
         supports_mid_convo_system_messages, truncate_for_error,
     },
+    copilot_api_base,
     json_args::parse_tool_call_arguments,
     provider_extra_headers, track_stream_bytes,
     usage::{apply_reported_cost, compute_cost},
@@ -831,7 +832,12 @@ fn build_chat_request(
             None
         },
         tools: if tools.is_empty() {
-            None
+            // 老 LiteLLM 这类端点：历史里有工具调用时仍要看到 `tools` 字段（哪怕是空数组）
+            if model.requires_tools_with_tool_history && history_has_tool_calls(openai_messages) {
+                Some(Vec::new())
+            } else {
+                None
+            }
         } else {
             Some(convert_tools_with_capabilities(
                 tools,
@@ -847,6 +853,14 @@ fn build_chat_request(
         temperature,
         tool_choice: None,
     }
+}
+
+/// 历史消息里是否出现过工具调用（assistant 的 `tool_calls` 或 `tool` 角色消息）。
+fn history_has_tool_calls(messages: &[Value]) -> bool {
+    messages.iter().any(|m| {
+        m.get("tool_calls").is_some_and(|v| !v.is_null())
+            || m.get("role").and_then(|r| r.as_str()) == Some("tool")
+    })
 }
 
 /// openai 兼容思考参数：按 `thinkingFormat` 构造 thinking / reasoning_effort /
@@ -1659,21 +1673,7 @@ fn model_endpoint(model: &ModelConfig) -> String {
 
     // GitHub Copilot 专用：从 Copilot token 的 proxy-ep 推导 API base
     // 覆盖目录 base_url（个人版 / 企业版实际端点由 token 决定）。
-    let base = model
-        .api_key
-        .split(';')
-        .find_map(|seg| seg.strip_prefix("proxy-ep="))
-        .map(|ep| {
-            let ep = ep.trim();
-            let host = if let Some(rest) = ep.strip_prefix("proxy.") {
-                format!("api.{}", rest)
-            } else {
-                ep.to_string()
-            };
-            format!("https://{}", host)
-        });
-
-    match base {
+    match copilot_api_base(&model.api_key) {
         Some(b) => azure::with_api_version(
             model,
             format!("{}/chat/completions", b.trim_end_matches('/')),
@@ -1688,6 +1688,8 @@ mod tests {
 
     fn copilot_model(token: &str) -> ModelConfig {
         ModelConfig {
+            supports_mid_convo_effort: false,
+            requires_tools_with_tool_history: false,
             model_type: Default::default(),
             image_resize: crate::utils::image::ImageResizeLimits::default(),
             allowed_fallback_models: Vec::new(),
@@ -2027,6 +2029,49 @@ mod tests {
         assert!(out[4]["content"].as_array().unwrap().is_empty());
     }
 
+    /// `compat.requiresToolsWithToolHistory`：没有工具可声明、但历史里有工具调用时仍发 `tools: []`；
+    /// 历史干净或未开该字段时保持不发（pi 1.5.0 #11843 的例外口径）。
+    #[test]
+    fn empty_tools_are_sent_only_when_history_has_tool_calls() {
+        let history = vec![json!({"role":"assistant","content":null,"tool_calls":[{"id":"c1"}]})];
+        let mut m = model(false, None);
+        m.requires_tools_with_tool_history = true;
+        let body =
+            serialize_request_body(&build_chat_request(&m, &history, &[], None, None), &m, None)
+                .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&body).unwrap()["tools"],
+            json!([])
+        );
+
+        // 历史里没有工具调用：不发空数组
+        let clean = vec![json!({"role":"user","content":"hi"})];
+        let body =
+            serialize_request_body(&build_chat_request(&m, &clean, &[], None, None), &m, None)
+                .unwrap();
+        assert!(
+            serde_json::from_str::<Value>(&body)
+                .unwrap()
+                .get("tools")
+                .is_none()
+        );
+
+        // 未声明该 compat 字段：即使有工具有历史也不发
+        let plain = model(false, None);
+        let body = serialize_request_body(
+            &build_chat_request(&plain, &history, &[], None, None),
+            &plain,
+            None,
+        )
+        .unwrap();
+        assert!(
+            serde_json::from_str::<Value>(&body)
+                .unwrap()
+                .get("tools")
+                .is_none()
+        );
+    }
+
     #[test]
     fn tool_choice_serialized_when_set() {
         // 对齐 pi SimpleStreamOptions.toolChoice：\"auto\" | \"none\"
@@ -2089,6 +2134,8 @@ mod tests {
 
     fn model(supports_image: bool, cost: Option<Value>) -> ModelConfig {
         ModelConfig {
+            supports_mid_convo_effort: false,
+            requires_tools_with_tool_history: false,
             model_type: Default::default(),
             image_resize: crate::utils::image::ImageResizeLimits::default(),
             allowed_fallback_models: Vec::new(),

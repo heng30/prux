@@ -419,6 +419,10 @@ pub async fn run_interactive(
     worker.send(agent_actor::AgentCommand::Shutdown);
     _ = tokio::time::timeout(Duration::from_secs(3), worker_task).await;
 
+    // 退出前等在途 OAuth 刷新落盘：provider 答完可能已轮转 refresh token，
+    // 进程直接结束会让新 token 丢掉
+    core::auth::flush_oauth_refreshes(Duration::from_secs(5)).await;
+
     // 退出前撤销 OSC 7501 状态（仅上报过的终端才写）
     if let Some(sequence) = shared.borrow().program_status.exit_sequence() {
         _ = io::stdout().write_all(sequence.as_bytes());

@@ -18,7 +18,7 @@ use super::{
         flush_pending_system_messages, sanitize_surrogates, supports_mid_convo_system_messages,
         truncate_for_error,
     },
-    json_args::{parse_tool_call_arguments, streaming_arguments},
+    json_args::{StreamingArgs, parse_tool_call_arguments},
     provider_session_headers,
     retry::{DEFAULT_MAX_RETRIES, send_with_retry},
     session_affinity_headers, track_stream_bytes,
@@ -551,10 +551,23 @@ fn apply_anthropic_cache_control(params: &mut [Value]) {
 /// 作为原生对话中途系统消息下发，否则跳过（由 [`collapse_mid_convo_system_messages`] 并入首部提示词）。
 /// 原生路径下系统消息**缓发**到「下一条 assistant 消息之前」（或序列末尾），
 /// 因为 anthropic 要求 `tool_result` 紧跟 `tool_use`，夹在中间的系统消息会被拒。
+#[cfg(test)]
 pub(crate) fn convert_anthropic_messages(
+    messages: &[AgentMessage],
+    system_prompt: &str,
+    model: &ModelConfig,
+) -> Vec<Value> {
+    convert_anthropic_messages_with_effort(messages, system_prompt, model, None)
+}
+
+/// 同 [`convert_anthropic_messages`]，`active_effort` 为 `Some` 时启用「逐条消息 effort 标记」：
+/// 每条带 `thinking_level` 的 assistant 消息前插一条空 system 消息，
+/// 末尾再插一条带当前档位的（见 pi `insertThinkingLevelMessages`）。
+pub(crate) fn convert_anthropic_messages_with_effort(
     messages: &[AgentMessage],
     _system_prompt: &str,
     model: &ModelConfig,
+    active_effort: Option<&str>,
 ) -> Vec<Value> {
     // tool call id 归一化映射：原 id → 归一化 id
     let mut tool_call_id_map: HashMap<String, String> = HashMap::new();
@@ -596,6 +609,12 @@ pub(crate) fn convert_anthropic_messages(
                     &mut tool_call_id_map,
                     &mut pending_tool_calls,
                 ) {
+                    // 逐条消息 effort 模式：把这条消息当时用的档位作为标记放在它前面
+                    if active_effort.is_some()
+                        && let Some(level) = msg.thinking_level.as_deref()
+                    {
+                        params.push(thinking_level_marker(model, level));
+                    }
                     params.push(assistant_msg);
                 }
             }
@@ -635,9 +654,27 @@ pub(crate) fn convert_anthropic_messages(
     );
     flush_error_tool_result_images(&mut params, &mut pending_error_images);
     flush_pending_system_messages(&mut params, &mut pending_system);
+    // 末条标记决定本次回复的档位
+    if let Some(effort) = active_effort {
+        params.push(json!({
+            "role": "system",
+            "content": [],
+            "output_config": { "effort": effort },
+        }));
+    }
     apply_anthropic_cache_control(&mut params);
 
     params
+}
+
+/// 一条「档位标记」消息：空 content + `output_config.effort`（pi `insertThinkingLevelMessages`）。
+/// 级别经模型的 `thinkingLevelMap` 映射成 provider 认的值。
+fn thinking_level_marker(model: &ModelConfig, level: &str) -> Value {
+    json!({
+        "role": "system",
+        "content": [],
+        "output_config": { "effort": map_thinking_level_to_effort(model, level) },
+    })
 }
 
 /// 把一条内部 `system` 消息转成 anthropic 的原生对话中途系统消息；
@@ -849,10 +886,8 @@ struct AnthropicSlot {
     thinking: String,
     /// 累积的思考签名（signature_delta），回放思考块时随块一起回传。
     thinking_signature: String,
-    /// 工具参数的分片 JSON 原文，由 input_json_delta 逐段追加。
-    partial_json: String,
-    /// 由 partial_json 实时解析出的参数对象，供流式工具调用展示。
-    arguments: Value,
+    /// 工具参数的增量解析器（原文 + 实时解析出的参数对象）。
+    args: StreamingArgs,
     /// 工具调用 id（content_block_start 的 tool_use id）。
     id: String,
     /// 被调用工具名。
@@ -907,6 +942,8 @@ struct AnthropicBuildConfig<'a> {
     eager_input_streaming: bool,
     max_tokens: Option<u32>,
     tool_choice: Option<&'a str>,
+    /// 启用「逐条消息 effort 标记」模式（`compat.supportsMidConvoEffort` 且思考未关闭）。
+    mid_convo_effort: bool,
 }
 
 /// 构建并序列化 anthropic 请求 body（system/messages/tools/thinking 等）。
@@ -962,7 +999,20 @@ fn build_anthropic_body(model: &ModelConfig, cfg: AnthropicBuildConfig<'_>) -> R
     }
 
     if model.reasoning {
-        if cfg.thinking_enabled {
+        if cfg.mid_convo_effort {
+            // 受管 effort 模型：真实档位由每条 assistant 消息前的空 system 消息携带，
+            // 顶层 effort 是缓存前缀的一部分，固定 `low`（组织级限额可能拒绝更高档位）。
+            // adaptive 让前缀不匹配时由服务端丢弃块，而不是一直 400。
+            body_map.insert(
+                "thinking".into(),
+                json!({
+                    "type": "adaptive",
+                    "display": "summarized",
+                    "block_binding": { "prefix_mismatch_behavior": "drop_block" }
+                }),
+            );
+            body_map.insert("output_config".into(), json!({ "effort": "low" }));
+        } else if cfg.thinking_enabled {
             if cfg.adaptive {
                 let effort = cfg
                     .reasoning_effort
@@ -999,6 +1049,7 @@ fn build_anthropic_body(model: &ModelConfig, cfg: AnthropicBuildConfig<'_>) -> R
     if let Some(t) = cfg.temperature
         && !cfg.thinking_enabled
         && cfg.supports_temperature
+        && !cfg.mid_convo_effort
     {
         body_map.insert("temperature".into(), json!(t));
     }
@@ -1096,8 +1147,7 @@ fn anthropic_slot_for(kind: SlotKind, content_index: usize) -> AnthropicSlot {
         text: String::new(),
         thinking: String::new(),
         thinking_signature: String::new(),
-        partial_json: String::new(),
-        arguments: json!({}),
+        args: StreamingArgs::new(),
         id: String::new(),
         name: String::new(),
     }
@@ -1213,7 +1263,7 @@ fn handle_anthropic_content_block_start(
                 .cloned()
                 .unwrap_or(json!({}));
             let mut slot = anthropic_slot_for(SlotKind::ToolCall, ci);
-            slot.arguments = input;
+            slot.args.set_value(input);
             slot.id = id;
             slot.name = name;
             slots.insert(index, slot);
@@ -1291,8 +1341,7 @@ fn handle_anthropic_content_block_delta(
                 .pointer("/delta/partial_json")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            slot.partial_json.push_str(d);
-            slot.arguments = streaming_arguments(&slot.partial_json, &slot.arguments);
+            slot.args.push(d);
             if let Some(f) = on_event.as_mut() {
                 f.push(RawStreamEvent::ToolCallDelta {
                     content_index: slot.content_index,
@@ -1334,7 +1383,7 @@ fn handle_anthropic_content_block_stop(
                 let name = slot.name.clone();
                 // 定稿：对累积的参数原文做严格解析，非法 JSON 记下原文
                 let (arguments, arguments_error) =
-                    parse_tool_call_arguments(Some(slot.partial_json.as_str()));
+                    parse_tool_call_arguments(Some(slot.args.text()));
                 finalized.insert(
                     slot.content_index,
                     AnthropicAssistBlock::ToolCall {
@@ -1529,14 +1578,26 @@ pub(crate) async fn stream(
 ) -> Result<StreamResult> {
     let reasoning_effort = normalize_reasoning_effort(model, reasoning_effort);
     let thinking_enabled = reasoning_effort.is_some();
-    let adaptive = compat_force_adaptive_thinking(model);
+    // 逐条消息 effort：只有模型声明支持、且思考没被关掉时才启用（关掉后档位无从变化）
+    let mid_convo_effort = model.supports_mid_convo_effort && thinking_enabled;
+    // 该模式固定走 adaptive thinking，beta 头也要按 adaptive 选择（不发 interleaved thinking）
+    let adaptive = compat_force_adaptive_thinking(model) || mid_convo_effort;
     let supports_temperature = compat_supports_temperature(model);
 
     let client = http::build_client()?;
     // 不支持原生对话中途系统消息的模型：这些消息并入首部系统提示词
     let effective_system_prompt =
         collapse_mid_convo_system_messages(messages, system_prompt, model);
-    let messages_wire = convert_anthropic_messages(messages, &effective_system_prompt, model);
+    let active_effort = mid_convo_effort.then(|| {
+        let level = reasoning_effort.as_deref().unwrap_or("high");
+        map_thinking_level_to_effort(model, level)
+    });
+    let messages_wire = convert_anthropic_messages_with_effort(
+        messages,
+        &effective_system_prompt,
+        model,
+        active_effort.as_deref(),
+    );
 
     // 仅当模型不支持 eager_input_streaming 时才发 fine-grained beta（opencode 网关照收）
     let eager_input_streaming = compat_supports_eager_input_streaming(model);
@@ -1556,6 +1617,7 @@ pub(crate) async fn stream(
             eager_input_streaming,
             max_tokens,
             tool_choice,
+            mid_convo_effort,
         },
     )?;
 
@@ -1827,6 +1889,8 @@ mod tests {
             requires_assistant_after_tool_result: false,
             max_tokens_field: "max_tokens".into(),
             supports_strict_mode: false,
+            supports_mid_convo_effort: false,
+            requires_tools_with_tool_history: false,
             send_session_affinity_headers: None,
             session_affinity_format: None,
             image_input: None,
@@ -1839,6 +1903,49 @@ mod tests {
             provider_routing: None,
             thinking_budgets: None,
         }
+    }
+
+    /// 逐条消息 effort 模式：assistant 消息前插档位标记，末尾一条带当前档位；
+    /// 顶层 effort 固定 `low` 且 thinking 走 adaptive（pi 1.5.0 #10063）。
+    #[test]
+    fn mid_convo_effort_inserts_per_message_markers() {
+        let mut m = model("claude-opus-5-5");
+        m.supports_mid_convo_effort = true;
+        let mut first = AgentMessage::user_text("hi");
+        first.thinking_level = None;
+        let history = AgentMessage {
+            role: "assistant".into(),
+            thinking_level: Some("low".into()),
+            ..AgentMessage::user_text("")
+        };
+        let mut history = history;
+        history.content = vec![ContentBlock::Text {
+            text: "hello".into(),
+            text_signature: None,
+        }];
+        let messages = vec![first, history, AgentMessage::user_text("again")];
+
+        let wire = convert_anthropic_messages_with_effort(&messages, "", &m, Some("high"));
+        let markers: Vec<&Value> = wire
+            .iter()
+            .filter(|msg| msg["output_config"]["effort"].is_string() && msg["content"] == json!([]))
+            .collect();
+        assert_eq!(markers.len(), 2, "历史档位 + 当前档位各一条: {wire:?}");
+        assert_eq!(markers[0]["output_config"]["effort"], "low");
+        assert_eq!(markers[1]["output_config"]["effort"], "high");
+        // 历史标记必须紧挨在那条 assistant 消息之前
+        let marker_at = wire
+            .iter()
+            .position(|msg| std::ptr::eq(msg, markers[0]))
+            .expect("找得到第一条标记");
+        assert_eq!(wire[marker_at + 1]["role"], "assistant");
+
+        // 未启用时不插任何标记
+        let plain = convert_anthropic_messages(&messages, "", &m);
+        assert!(
+            plain.iter().all(|msg| msg.get("output_config").is_none()),
+            "未启用时不该有标记: {plain:?}"
+        );
     }
 
     #[test]
@@ -2511,6 +2618,7 @@ mod tests {
             supports_temperature: true,
             eager_input_streaming: true,
             max_tokens: Some(100),
+            mid_convo_effort: false,
             tool_choice: None,
         }
     }

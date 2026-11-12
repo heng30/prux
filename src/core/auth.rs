@@ -26,8 +26,13 @@ use serde_json::{Value, json};
 use std::{
     collections::HashMap,
     path::PathBuf,
-    sync::{Mutex, OnceLock, RwLock},
+    sync::{
+        Mutex, OnceLock, RwLock,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
 };
+use tokio::sync::Notify;
 
 /// OAuth 刷新超时
 pub const OAUTH_REFRESH_TIMEOUT_MS: u64 = 15_000;
@@ -45,6 +50,12 @@ pub const ANTHROPIC_FEDERATION_OPTIONAL: [&str; 2] =
 
 /// 每个 provider 一把刷新锁（避免并发刷新同一 provider 浪费/竞争 refresh token）。
 static OAUTH_REFRESH_LOCKS: OnceLock<Mutex<HashMap<String, ()>>> = OnceLock::new();
+
+/// 在途 OAuth 刷新任务数，供退出前 [`flush_oauth_refreshes`] 等待归零。
+static OAUTH_REFRESH_INFLIGHT: AtomicUsize = AtomicUsize::new(0);
+
+/// 在途刷新数变化的唤醒源（每次任务结束时 `notify_waiters`）。
+static OAUTH_REFRESH_IDLE: OnceLock<Notify> = OnceLock::new();
 
 /// auth.json 读写锁（/login、OAuth 刷新、/logout 可能并发写同一文件）。
 static AUTH_LOCK: RwLock<()> = RwLock::new(());
@@ -631,6 +642,7 @@ pub async fn ensure_oauth_valid(provider: &str) -> Result<Option<String>> {
     // 任务结束（无论成败）自己摘掉登记，避免失败/取消把该 provider 永久锁死。
     let provider_owned = provider.to_string();
     let cred_owned = cred.clone();
+    OAUTH_REFRESH_INFLIGHT.fetch_add(1, Ordering::SeqCst);
     let handle = tokio::spawn(async move {
         let outcome = async {
             let refreshed = oauth::refresh_oauth(&provider_owned, &cred_owned)
@@ -641,6 +653,8 @@ pub async fn ensure_oauth_valid(provider: &str) -> Result<Option<String>> {
         }
         .await;
         clear_oauth_refresh_lock(&provider_owned);
+        OAUTH_REFRESH_INFLIGHT.fetch_sub(1, Ordering::SeqCst);
+        oauth_refresh_idle().notify_waiters();
         outcome
     });
 
@@ -670,6 +684,31 @@ fn clear_oauth_refresh_lock(provider: &str) {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove(provider);
+    }
+}
+
+/// 在途刷新完成时使用的唤醒源。
+fn oauth_refresh_idle() -> &'static Notify {
+    OAUTH_REFRESH_IDLE.get_or_init(Notify::new)
+}
+
+/// 等所有在途 OAuth 刷新写完 `auth.json`，最多等 `timeout`。
+///
+/// 退出流程调用：刷新任务在独立 task 里跑，provider 答完就可能已轮转 refresh token，
+/// 进程直接结束会让新 token 永久丢失（下次只能重新 `/login`）。
+pub async fn flush_oauth_refreshes(timeout: Duration) {
+    let deadline = tokio::time::Instant::now() + timeout;
+    while OAUTH_REFRESH_INFLIGHT.load(Ordering::SeqCst) > 0 {
+        // 先登记唤醒、再复查计数，避免计数归零的通知落在两者之间
+        let notified = oauth_refresh_idle().notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        if OAUTH_REFRESH_INFLIGHT.load(Ordering::SeqCst) == 0 {
+            return;
+        }
+        if tokio::time::timeout_at(deadline, notified).await.is_err() {
+            return;
+        }
     }
 }
 
@@ -851,6 +890,24 @@ mod tests {
             let none = rt.block_on(ensure_oauth_valid("deepseek")).unwrap();
             assert!(none.is_none());
             remove_auth("anthropic").ok();
+        });
+    }
+
+    /// 退出等待：最后一个在途刷新落盘后立即返回，不用等满超时。
+    #[test]
+    fn flush_oauth_refreshes_returns_once_the_last_refresh_lands() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            OAUTH_REFRESH_INFLIGHT.fetch_add(1, Ordering::SeqCst);
+            tokio::spawn(async {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                OAUTH_REFRESH_INFLIGHT.fetch_sub(1, Ordering::SeqCst);
+                oauth_refresh_idle().notify_waiters();
+            });
+            let started = std::time::Instant::now();
+            flush_oauth_refreshes(std::time::Duration::from_secs(5)).await;
+            assert!(started.elapsed() < std::time::Duration::from_secs(1));
+            assert_eq!(OAUTH_REFRESH_INFLIGHT.load(Ordering::SeqCst), 0);
         });
     }
 

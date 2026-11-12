@@ -11,7 +11,7 @@
 use super::{
     ImageContent, MAX_TIMEOUT_MS, ModelConfig, Usage,
     convert::truncate_for_error,
-    provider_extra_headers,
+    copilot_api_base, provider_extra_headers,
     retry::{DEFAULT_MAX_RETRIES, send_with_retry},
     usage::compute_cost,
 };
@@ -159,6 +159,12 @@ pub(crate) fn error_result(model: &ModelConfig, message: impl Into<String>) -> C
 
 /// 组装 `typesafe-system-one` 请求的 URL：`base_url` 去尾斜杠后补 `/systemone`。
 fn system_one_url(model: &ModelConfig) -> String {
+    // GitHub Copilot 把 System One 挂在 `/v1` 下，且登录会把目录 base_url 换成账号自己的端点
+    if model.provider == "github-copilot" {
+        let base = copilot_api_base(&model.api_key)
+            .unwrap_or_else(|| model.base_url.trim_end_matches('/').to_string());
+        return format!("{}/v1/systemone", base.trim_end_matches('/'));
+    }
     format!("{}/systemone", model.base_url.trim_end_matches('/'))
 }
 
@@ -643,6 +649,44 @@ mod tests {
             model_resolver::model_config_from_entry(&entry, Some("sk-test".into()), None);
         model.base_url = base_url.to_string();
         model
+    }
+
+    /// Copilot 的 System One 挂在 `/v1` 下，域名由 token 的 `proxy-ep` 决定（pi 1.5.1 #11679）。
+    #[test]
+    fn copilot_classifier_uses_v1_systemone_under_the_token_endpoint() {
+        let mut model = classifier_model("https://api.individual.githubcopilot.com");
+        model.provider = "github-copilot".into();
+        model.api_key = "tid=1;proxy-ep=proxy.individual.githubcopilot.com".into();
+        assert_eq!(
+            system_one_url(&model),
+            "https://api.individual.githubcopilot.com/v1/systemone"
+        );
+
+        // 企业版端点同样跟 token 走
+        model.api_key = "tid=1;proxy-ep=proxy.business.githubcopilot.com".into();
+        assert_eq!(
+            system_one_url(&model),
+            "https://api.business.githubcopilot.com/v1/systemone"
+        );
+
+        // token 里没有 proxy-ep：退回目录 base_url 加 /v1
+        model.api_key = "plain-token".into();
+        model.base_url = "https://api.individual.githubcopilot.com".into();
+        assert_eq!(
+            system_one_url(&model),
+            "https://api.individual.githubcopilot.com/v1/systemone"
+        );
+    }
+
+    /// 非 Copilot 的分类器端点保持目录 base_url 原样（opencode 就是 `/inference/systemone/v1`）。
+    #[test]
+    fn other_classifiers_keep_the_catalog_base_url() {
+        let mut model = classifier_model("https://opencode.ai/inference/systemone/v1");
+        model.provider = "opencode".into();
+        assert_eq!(
+            system_one_url(&model),
+            "https://opencode.ai/inference/systemone/v1/systemone"
+        );
     }
 
     /// 三类问题各一道：选择题、评分题、判断题。

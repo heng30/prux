@@ -17,6 +17,9 @@ use crate::core::{
 use serde_json::{Value, json};
 use std::{collections::HashMap, sync::Arc};
 
+/// （名称, 得分）按分数降序
+pub type ToolMatch = (String, f64);
+
 /// 本扩展在注册表里的名字（[`Extension::name`] 的返回值，用于把自己从遍历中排除）
 pub const EXTENSION_NAME: &str = "tool-search";
 /// 本扩展暴露的工具名（模型通过它检索延迟工具）
@@ -24,9 +27,11 @@ pub const TOOL_NAME: &str = "tool_search";
 /// 单次最多返回 / 激活的工具数；足以一次拿完一族工具（如 14 个 `computer_*`），
 /// 免得模型为了拿全而反复检索。
 pub const DEFAULT_LIMIT: usize = 15;
-/// （名称, 得分）按分数降序
-pub type ToolMatch = (String, f64);
 
+/// 工具名命中的权重倍数：名字命中比描述提及更接近「用户想找的工具」。
+const NAME_TERM_WEIGHT: f64 = 3.0;
+/// 查询词与工具名整体相等（分词后逐个相同）时的加成：`thread_read` 与 `queue_read` 这类近似名靠它分开。
+const FULL_NAME_BONUS: f64 = 5.0;
 /// 分词时丢弃的英文停用词
 const STOP_WORDS: [&str; 20] = [
     "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "in", "is", "it", "of", "on",
@@ -208,26 +213,28 @@ fn first_line(text: &str) -> String {
     text.trim().lines().next().unwrap_or("").trim().to_string()
 }
 
-/// 检索文档：工具名 + 名称分词 + 描述 + 参数 schema 的字段名/描述
+/// 检索文档：工具名（单独加权）+ 描述 + 参数 schema 的字段名/描述
 #[derive(Debug, Clone)]
 pub struct ToolDocument {
     /// 工具名（检索命中后用于激活）
     name: String,
-    /// 该工具元数据经分词/词干化后的检索词
+    /// 工具名经分词/词干化后的检索词（命中窗口窄，排序时加权）
+    name_tokens: Vec<String>,
+    /// 描述、label、参数 schema 等正文经分词/词干化后的检索词
     tokens: Vec<String>,
 }
 
 /// 把工具元数据（名称、描述、label、参数 schema 的字段名/描述）转成可检索的分词文档。
+/// 名称单独成词袋：名字命中在排序里权重更高。
 pub fn tool_document(tool: &ExtensionTool) -> ToolDocument {
+    let mut name_parts = vec![tool.name.clone(), tool.name.replace('_', " ")];
     let mut parts = vec![
-        tool.name.clone(),
-        tool.name.replace('_', " "),
         tool.description.clone(),
         tool.label.clone().unwrap_or_default(),
     ];
 
     if let Some(ns) = &tool.namespace {
-        parts.push(ns.clone());
+        name_parts.push(ns.clone());
     }
 
     schema_text(&tool.parameters, &mut parts);
@@ -239,6 +246,7 @@ pub fn tool_document(tool: &ExtensionTool) -> ToolDocument {
 
     ToolDocument {
         name: tool.name.clone(),
+        name_tokens: tokenize(&name_parts.join(" ")),
         tokens: tokenize(&parts.join(" ")),
     }
 }
@@ -274,7 +282,8 @@ fn schema_text(schema: &Value, parts: &mut Vec<String>) {
     }
 }
 
-/// Okapi BM25（k1 = 1.2，b = 0.75），并列保持文档顺序
+/// Okapi BM25（k1 = 1.2，b = 0.75）打分；名字单独计分并加权，整名命中另加成。
+/// 并列保持文档顺序。
 pub fn rank(query: &str, documents: &[ToolDocument], limit: usize) -> Vec<ToolMatch> {
     let mut query_terms: Vec<String> = Vec::new();
     for term in tokenize(query) {
@@ -297,7 +306,21 @@ pub fn rank(query: &str, documents: &[ToolDocument], limit: usize) -> Vec<ToolMa
             counts
         })
         .collect();
+    let name_counts: Vec<HashMap<String, usize>> = documents
+        .iter()
+        .map(|d| {
+            let mut counts: HashMap<String, usize> = HashMap::new();
+            for term in &d.name_tokens {
+                *counts.entry(term.clone()).or_insert(0) += 1;
+            }
+            counts
+        })
+        .collect();
     let lengths: Vec<usize> = term_counts
+        .iter()
+        .map(|counts| counts.values().sum::<usize>())
+        .collect();
+    let name_lengths: Vec<usize> = name_counts
         .iter()
         .map(|counts| counts.values().sum::<usize>())
         .collect();
@@ -307,30 +330,48 @@ pub fn rank(query: &str, documents: &[ToolDocument], limit: usize) -> Vec<ToolMa
     } else {
         total as f64 / documents.len() as f64
     };
+    let name_total: usize = name_lengths.iter().sum();
+    let average_name_length = if name_total == 0 {
+        1.0
+    } else {
+        name_total as f64 / documents.len() as f64
+    };
 
     let k1 = 1.2f64;
     let b = 0.75f64;
+    // 文档频取「名字或正文出现过」的并集：只在名字里出现的词不应拿到最大 idf 再乘权重
     let idf: Vec<(String, f64)> = query_terms
         .iter()
         .map(|term| {
-            let frequency = term_counts.iter().filter(|c| c.contains_key(term)).count();
+            let frequency = (0..documents.len())
+                .filter(|i| {
+                    term_counts[*i].contains_key(term) || name_counts[*i].contains_key(term)
+                })
+                .count();
             let value = (1.0
                 + (documents.len() as f64 - frequency as f64 + 0.5) / (frequency as f64 + 0.5))
                 .ln();
             (term.clone(), value)
         })
         .collect();
-
     let mut matches: Vec<ToolMatch> = Vec::new();
     for (index, document) in documents.iter().enumerate() {
         let mut score = 0.0f64;
         for (term, term_idf) in &idf {
-            let Some(count) = term_counts[index].get(term).copied() else {
-                continue;
-            };
-            let count = count as f64;
-            let norm = k1 * (1.0 - b + (b * lengths[index] as f64) / average_length);
-            score += term_idf * ((count * (k1 + 1.0)) / (count + norm));
+            if let Some(count) = term_counts[index].get(term).copied() {
+                let count = count as f64;
+                let norm = k1 * (1.0 - b + (b * lengths[index] as f64) / average_length);
+                score += term_idf * ((count * (k1 + 1.0)) / (count + norm));
+            }
+            if let Some(count) = name_counts[index].get(term).copied() {
+                let count = count as f64;
+                let norm = k1 * (1.0 - b + (b * name_lengths[index] as f64) / average_name_length);
+                score += NAME_TERM_WEIGHT * term_idf * ((count * (k1 + 1.0)) / (count + norm));
+            }
+        }
+        // 整名命中：查询词就是工具名（`read_thread` / `read thread`）时直接顶到前面
+        if document.name_tokens == query_terms {
+            score += FULL_NAME_BONUS;
         }
         if score > 0.0 {
             matches.push((document.name.clone(), score));
@@ -740,6 +781,28 @@ mod tests {
         assert!(rank("alpha", &docs, 0).is_empty());
         assert_eq!(rank("tool", &docs, 1).len(), 1);
         assert!(rank("nonexistent", &docs, 8).is_empty());
+    }
+
+    /// 名字命中比描述提及更重：两个工具描述都提到 read，名字里有 read 的排前面。
+    #[test]
+    fn name_hits_outrank_description_mentions() {
+        let docs = vec![
+            doc("queue_poll", "Read one item off the queue"),
+            doc("thread_read", "Fetch a discussion"),
+        ];
+        let matches = rank("read", &docs, DEFAULT_LIMIT);
+        assert_eq!(matches[0].0, "thread_read");
+    }
+
+    /// 整名命中直接置顶：`thread_read` 不能被描述更“密集”的 `queue_read` 挤下去。
+    #[test]
+    fn exact_name_match_wins() {
+        let docs = vec![
+            doc("queue_read", "read read read queue items read"),
+            doc("thread_read", "Fetch a discussion"),
+        ];
+        let matches = rank("thread read", &docs, DEFAULT_LIMIT);
+        assert_eq!(matches[0].0, "thread_read");
     }
 
     #[test]

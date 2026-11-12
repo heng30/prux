@@ -18,6 +18,7 @@
 use super::protocol::{self, Incoming};
 use crate::core::{
     agent_session::Agent,
+    auth::flush_oauth_refreshes,
     extensions::{
         self, ExtensionUiRequest, FormAnswer, FormRequest, FormResponse, OverlayEvent, SelectOption,
     },
@@ -109,6 +110,8 @@ pub(super) async fn run(agent: Agent) -> i32 {
 
     loop {
         let Some(msg) = messages.recv().await else {
+            // stdin 关闭：等在途 OAuth 刷新落盘再退出，别让轮转后的 token 丢掉
+            flush_oauth_refreshes(Duration::from_secs(5)).await;
             return 0;
         };
         let Some(method) = msg.method.clone() else {

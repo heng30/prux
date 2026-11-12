@@ -13,7 +13,34 @@
 **状态标记**：🔧 应修/应移植　⚠️ 需对照 pi 逐项核对（口径可能已偏差或需实测）　✅ 已满足/无此问题（附理由）
 ❌ 结构性不适用（prux 无对应实现）　🆕 本区间新增的候选移植项
 
-**实施状态（第一轮 21 条 🔧、第二轮数据面与 6 条 ⚠️、第三轮对上游复核后修 4 条、第四轮新做 5 项）**：
+**实施状态（第一轮 21 条 🔧、第二轮数据面与 6 条 ⚠️、第三轮对上游复核后修 4 条、第四轮新做 5 项、
+第五轮补完 1.15 / 1.31 / 2.10 与三条「需实测」项）**：
+
+**第六轮（补「完全未实现」里可落地的 6 项，2 项明确不做）**：
+
+- 已做：**1.9**（`compat.supportsMidConvoEffort` 接上：adaptive thinking + 顶层固定 `low` +
+  每条 assistant 消息前插档位标记 + 不发 temperature）、**1.34**（markdown 顶层块渲染缓存）、
+  **2.7**（内嵌 Dart / Nix 语法，Gradle 按 Groovy；语法集抽到 `utils::syntax` 供 TUI 与 GUI 共用）、
+  **2.8 的两项**（`supportsMidConvoEffort`、`requiresToolsWithToolHistory`）、
+  **2.9**（Copilot 分类器 `/v1/systemone` + token 端点）、
+  **2.13 启动侧**（`--session`/`--session-id`/`--resume`/`-c` 恢复的会话 cwd 消失时三选）、
+  **2.14**（扩展覆盖层上报 `blocked`）；
+- **明确不做**：**2.1** Anthropic message threads（依赖服务端续接契约与整包回退，本机无法验证）
+  连带的 **2.8 `supportsMessageThreads`**；**1.19 的 `gpt-6.1` tool search / `additional_tools`**
+  （服务端工具检索声明面）；**2.8 `promptCacheKeyMode`**（prux 不发 `prompt_cache_key`）与
+  **`refreshModelsAuth`**（远程目录请求本来不带凭据，没有可跳过的 token 刷新）。
+
+**第五轮（收尾「半成品」与「需实测」）**：
+
+- 已做：**1.15**（增量 JSON 解析器 `json_args::StreamingArgs` + `IncrementalJson`）、
+  **1.31**（`MAX_QUOTE_DEPTH = 8`，超限后不再缩进/重复折行）、**2.10**（`tool_search` 名字加权
+  3×、整名命中加成）、WSL 下的 Ctrl+V（`powershell.exe Get-Clipboard` 回退）、
+  退出前等在途 OAuth 刷新落盘（TUI / GUI / ACP 三处）；
+- 复核后确认本来就已满足（文档记录陈旧）：**1.16 遗留的分类器条目**（`opencode.all.json` 里
+  `jev-1.13` / `jev-1.13-free` 已在，URL 拼法与上游 `typesafe-system-one` 一致）、
+  **分类器 `compat.imageInput` / `sendImageOptInHeader`**（`model_resolver` 的 compat 已覆盖 classifier，
+  `classifier.rs` 已按 `imageInput` 三种形态拼图并带 opt-in 头）、**1.17**（K3.1 目录 compat 与
+  `reasoning_effort` 路径逐字段核对一致，只差真实请求）。
 
 **第四轮（新做 + 明确不做）**：
 
@@ -202,6 +229,14 @@ pi 现在是 **`2.1.322`**（`packages/ai/src/api/anthropic-messages.ts:109`）�
 **建议**：照 pi 的做法在请求里补一个固定 `low` 的顶层 effort（细节以 pi 的
 `anthropic-messages.ts` 为准），或至少实测一次被限额账号。
 
+> **第六轮：已实现。** `ModelConfig.supports_mid_convo_effort` 读 `compat.supportsMidConvoEffort`；
+> `anthropic::stream` 在该字段为真且思考未关闭时：`thinking = {type: adaptive, display: summarized,
+> block_binding: {prefix_mismatch_behavior: drop_block}}`、顶层 `output_config.effort = "low"`、
+> 不发 `temperature`；`convert_anthropic_messages_with_effort` 在每条 `thinking_level` 非空的 assistant
+> 消息前插一条 `{role: system, content: [], output_config: {effort: <当时档位>}}`，末尾再插当前档位
+> （pi `insertThinkingLevelMessages`）。用例：`mid_convo_effort_inserts_per_message_markers`。
+> **仍待真实请求验证**服务端对空 system 消息 + `output_config` 的接受度。
+
 
 > **第三轮（对上游复核）：重新定性为「mid-convo effort 未实现」，不是单独的 low 兜底。**
 > pi 的 `output_config: { effort: "low" }` 在 `effortMessages` 分支里
@@ -281,8 +316,11 @@ pi 现在是 **`2.1.322`**（`packages/ai/src/api/anthropic-messages.ts:109`）�
 
 #### 1.15 ⚠️ 流式工具参数每个 delta 全量重解析（O(n²)）
 
-> **第二轮**：只落地了闸门（`json_args::streaming_arguments`，超 64 KB 的中间增量不再重解析），
-> 增量解析器本身未移植。
+> **第五轮：已移植。** `src/core/provider/json_args.rs` 新增 `StreamingArgs` + `IncrementalJson`
+> （栈式状态机，只消费新增字符；非法转义按字面保留，与 `repair_json` 同口径）。正常 JSON 走增量路径，
+> 内容无法增量处理（顶层不是对象/数组等）时退回按 8 KB 步长整串重解析；快照按 4 KB 步长产出，
+> 小参数仍逐 delta 出快照。调用点：`anthropic.rs` 的工具槽、`responses.rs` 的
+> `function_call_arguments.delta` / grammar 刷新。用例见 `json_args::tests::streaming_args_*`。
 
 **pi 1.5.0 Fixed**（#9265）：新增增量容错 JSON 解析器 `StreamingJsonParser` /
 `ToolCallArgumentsStream`，每个 delta 只读一次；此前每来一段就把累积串整体重解析
@@ -311,8 +349,11 @@ System One 端点被混用；prux `src/core/provider.rs:697-712` 用
 > provider/`baseUrl` 判定，与 prux `provider.rs:690-712` 同一口径；四个协议的端点两边都由目录给
 > （prux：`/inference/openai/v1`、`/inference/anthropic`、`/inference/google/v1beta`，
 > opencode-go 全部带 `/go/`），不存在「协议端点混用」的代码路径。
-> **遗留（数据面）**：pi 还有 `typesafe-system-one` 分类器条目（`/inference/systemone/v1`），
-> prux 的 `assets/models/providers/opencode*.json` 里没有，需要查 `scripts/sync-models.py` 的过滤规则。
+> **第五轮：遗留项也确认已满足。** `assets/models/providers/opencode.all.json` 里
+> `jev-1.13` / `jev-1.13-free` 两条 classifier 条目就在（`baseUrl` = `/inference/systemone/v1`），
+> `classifier::system_one_url` 的拼法（`<baseUrl>/systemone`）与上游
+> `api/typesafe-system-one.js:20` 一致；`make sync-models-check` 幂等、0 处差异。
+> 不需要改 `scripts/sync-models.py` 的过滤规则。
 
 #### 1.17 ⚠️ Kimi K3.1 系列仍在使用 K2 的请求参数
 
@@ -329,7 +370,14 @@ System One 端点被混用；prux `src/core/provider.rs:697-712` 用
 > prux 目录逐字段一致；代码侧 `thinkingFormat: "openai"` 走默认分支发 `reasoning_effort`
 > （`completions.rs:980-992`），缺 `reasoning_content` 时补 `""`（`:279`）。
 > 「接受中途新增工具」靠 `supportsMidConvoToolAdditions`（pi 侧声明），prux 不读该字段、
-> 每轮全量声明 tools，等价于兼容做法，不是缺陷。剩真实 K3.1 请求实测（计费 / 服务端行为）。
+> 每轮全量声明 tools，等价于兼容做法，不是缺陷。
+>
+> **第五轮：代码侧复核完毕。** `kimi-k3` / `kimi-k3.1-pro` / `kimi-k3.1-pro-highspeed` 的
+> `compat`（`thinkingFormat: "openai"`、`supportsReasoningEffort`、
+> `requiresReasoningContentOnAssistantMessages`）与 `thinkingLevelMap`（只有 low/high/max，
+> `medium` → `clamp_thinking_level` 上取到 high）逐字段一致；`completions.rs` 的默认分支发
+> `reasoning_effort`、缺 `reasoning_content` 时补 `""`。
+> **仍待真实请求实测**：K3.1 的计费单价与中途新增工具的服务端行为（需要真实凭据，本机没跑）。
 
 #### 1.18 ⚠️ OpenCode DeepSeek 长缓存保留时发 `prompt_cache_retention` 被拒
 
@@ -487,7 +535,9 @@ provider（`models.json` 自定义 provider 可以有），优先级低。
 
 #### 1.31 ⚠️ 深度嵌套 blockquote 行数爆炸
 
-> **第二轮**：只做了总行数闸门（`MAX_RENDERED_LINES` = 20000，超出截断并提示），引用深度计数未加。
+> **第五轮：已修。** `render_blockquote` 用 `MdRenderer.quote_depth` 计数，超过
+> `MAX_QUOTE_DEPTH`（8）后不再剥宽度、不再加边框，把内层行原样交回——行数回到线性。
+> 用例：`deeply_nested_blockquotes_stop_indenting_past_the_cap`。
 
 **pi 1.5.0 Fixed**（#11272）：边框宽度耗尽后会指数级产出大量行，直到渲染卡死。
 
@@ -534,6 +584,13 @@ provider（`models.json` 自定义 provider 可以有），优先级低。
 **无块级缓存**。长会话 + 流式输出时 CPU 明显偏高（prux 已在别处做过缓存/差分，这里没有）。
 
 **建议**：按「顶层块」做 `Weak` 缓存，块文本 + 主题 + 宽度三者不变就复用；主题切换时整体失效。
+
+> **第六轮：已实现。** `render_with` 先把事件序列切成顶层块（`top_level_blocks`），逐块查
+> `BLOCK_CACHE`（键 = 主题指纹 + 宽度 + 基础样式 + 事件指纹）；未命中才 `render_blocks`。
+> 主题指纹覆盖名称、颜色变量表与 `syntax_highlight`/`mermaid`/`latex` 三个开关，
+> 因此换主题或切开关都会自然失效（表满 512 条时整表清空）。
+> 用例：`block_cache_reuses_unchanged_blocks_while_streaming`、`block_cache_is_width_sensitive`
+> （前者断言流式追加时只有新块重新排版）。
 
 #### 1.35 🔧 终端识别：Orca 缺位
 
@@ -671,6 +728,9 @@ MCP token 刷新、会话落盘这类收尾工作有被切断的风险（退出�
 可以按「会话结束/切换时补一次清理请求」处理。收益是长会话省下大量 prompt token，
 但**风险**在「服务端续接与本地上下文不一致」，必须有可靠的整包回退。
 
+> **第六轮：明确不做。** 服务端续接的失败形态（`thread` 不存在、上下文不一致、跨账号恢复）本机
+> 无法构造，没有回退路径就没有可交付的版本；`compat.supportsMessageThreads` 也随之不做。
+
 ### 2.2 🆕 空闲缓存保温成为默认，并合并计费行
 
 **pi 1.5.0/1.5.1 Changed**：`cacheWarming` 默认从 `streaming` 改为 `idle`（跑完还能保 30 分钟），
@@ -734,6 +794,12 @@ provider 形态判别见 `auth_login::pick_mode`（`is_subscription` → OAuth�
 `assets/syntaxes/`（注意 `embedded!` 是编译期内嵌，新增文件要同步加载清单）。
 GUI 侧 `src/modes/gui/code.rs:16` 只用了默认集，需要共用同一 `SyntaxSet`。
 
+> **第六轮：已做。** `assets/syntaxes/` 新增 `Dart.sublime-syntax` / `Nix.sublime-syntax`
+> （取自 sharkdp/bat 的 `assets/syntaxes/02_Extra/`，文件头写了来源）；语法集构建与别名解析抽到
+> `src/utils/syntax.rs`（`syntax_set()` / `find_syntax_by_token` / `find_syntax_for_filename`），
+> TUI 的 `syntax_hl` 与 GUI 的 `gui/code.rs` 共用同一份。Gradle 没有独立语法，按 Groovy 高亮
+> （`SYNTAX_ALIASES`），`build.gradle` 走扩展名别名。用例见 `utils::syntax::tests`。
+
 ### 2.8 🆕 `compat` 新字段（协议兼容开关）
 
 **pi 1.5.0/1.5.1 Added**：
@@ -749,6 +815,15 @@ GUI 侧 `src/modes/gui/code.rs:16` 只用了默认集，需要共用同一 `Synt
 **prux 现状**：`compat` 由 `src/core/model_resolver.rs:216`/`:279` 合并，字段名是驼峰、
 和 pi 一致，加字段基本是「读字段 + 用字段」两处。
 
+> **第六轮：两项已接，三项不做。**
+> - `supportsMidConvoEffort` → `ModelConfig.supports_mid_convo_effort`（见 1.9）；
+> - `requiresToolsWithToolHistory` → `ModelConfig.requires_tools_with_tool_history`，
+>   `build_chat_request` 在「没有工具可声明、历史里有工具调用」时发 `tools: []`
+>   （用例 `empty_tools_are_sent_only_when_history_has_tool_calls`）；
+> - 不做：`supportsMessageThreads`（随 2.1 一起放弃）、`promptCacheKeyMode`（prux 根本不发
+>   `prompt_cache_key`，加上也是空转）、`refreshModelsAuth`（远程目录请求是无认证的，
+>   OpenRouter 的 `/models/user` 只用现成 api key，没有「刷新 token」这一步可跳过）。
+
 ### 2.9 🆕 分类器：GitHub Copilot 的 Microsoft-Decision-1
 
 **pi 1.5.1 Added**（#11679）：经 Copilot 调 Microsoft-Decision-1（含 codemode `models.classify()`）。
@@ -758,14 +833,22 @@ GUI 侧 `src/modes/gui/code.rs:16` 只用了默认集，需要共用同一 `Synt
 目录条目已随 `make sync-models` 进来（`github-copilot` 下的 classifier 条目），
 **建议**：先看目录里有没有该条目，有就补一条协议实现（请求形状参考现有 System One）。
 
+> **第六轮：条目一直在，缺的是端点前缀。** `github-copilot.all.json` 里 `microsoft-decision-1` 的
+> `api` 就是 `typesafe-system-one`（已有实现），但它挂在账号端点下的 `/v1/systemone`
+> （pi `providers/github-copilot.js` 的 `copilotSystemOne`）。`classifier::system_one_url` 现在对
+> `github-copilot` 补 `/v1`，域名从 Copilot token 的 `proxy-ep` 推导（与聊天接口共用
+> `provider::copilot_api_base`）。用例：`copilot_classifier_uses_v1_systemone_under_the_token_endpoint`。
+
 ### 2.10 🆕 `tool_search` 排序口径统一
 
 **pi 1.5.0/1.5.1 Fixed**（#11331 / #11340 / #11625）：查询词命中「名字」权重大于描述提及、
 整名命中给大额奖励、server instructions 只作低权字段；另加 `$ref` 后的属性名/描述也能被搜到。
 
-**prux 现状**：`src/extensions/tool_search.rs` 有自己的 BM25 式打分与 `MAX_REF_EXPANSIONS`
-（`declarations.rs:8`），`$ref` 展开**已有**。排序权重是否与 pi 对齐**需实测**
-（`thread_read` vs `queue_read` 类混淆）。建议与 1.24 的分词一起改，改完补排序用例。
+**prux 现状（第五轮已改）**：`src/extensions/tool_search.rs` 的文档改为两个词袋——`name_tokens`
+（工具名 + 命名空间）与 `tokens`（描述 / label / 参数 schema）。打分 = 正文 BM25 + 名字 BM25 × 3
+（`NAME_TERM_WEIGHT`），且文档频取两者并集，避免「只在名字里出现的词」拿到最大 idf 再乘权重；
+查询分词后与 `name_tokens` 逐个相同再加 `FULL_NAME_BONUS`（整名命中）。用例：
+`name_hits_outrank_description_mentions`、`exact_name_match_wins`。
 
 ### 2.11 🆕 计费：`totalFromProvider` 与 OpenRouter 上报金额
 
@@ -807,8 +890,12 @@ message_delta 三处），`compute_cost` 遇到已置真的标记就不再用目
 桌面 GUI 同样覆盖：`/import`、`/resume`、侧栏点会话与 `/session <n>` 都走
 `open_session_with_cwd_check` / `stage_cwd_choice`（Action 为 `ImportCwdContinue` /
 `ImportCwdFork`），措辞与终端界面一致（含各自的目录）。
-**仍缺**：启动参数 `--resume` / `--session` 走的是 `cli/startup.rs`，还没有这一步（pi 覆盖）；
-`/import` 的重复副本问题 prux 本来就用 `uniquify_import_destination` + `copy_no_overwrite` 规避。
+**第六轮补齐启动侧**：`cli/startup.rs::resolve_missing_session_cwd` 在 `select_session` 之后统一处理
+（`--session` / `--session-id` / `--resume` / `-c` 全覆盖）：记录的 cwd **不存在**时按行提问
+`Continue`（只改内存里的 cwd，不写回，下次仍会问）/ `Fork`（`Session::fork_from` 复制成当前目录下的
+新会话）/ `Cancel`（退出，与 pi 一致）；stdin 不是终端时按 pi 口径直接报错退出并列出会话文件与当前目录。
+cwd 存在但与当前目录不同不介入（`--resume` 别人的项目是正常用法，pi 同样只看缺失）。
+用例：`missing_session_cwd_only_fires_for_gone_directories`。
 
 ### 2.14 🆕 扩展 UI 的 `blocked` / 组件焦点 / 元数据
 
@@ -821,6 +908,10 @@ OSC 7501「等我」）；`Component.capturesViewportInput`（聚焦组件吃掉
 （`app.overlay: Option<OverlayState>`），没有 `blocked` 概念；扩展渲染走 Rust trait，
 没有「注入函数」的需求。**建议**：只做「覆盖层上报 blocked 状态」这一条（1 小时量级），
 其余不适用。
+
+> **第六轮：已做这一条。** `App::program_status_blocked` 先看 `app.overlay`：有覆盖层就上报
+> `BlockedKind::Question` + 覆盖层标题。用例：`extension_overlay_reports_blocked`。
+> 其余三项（`capturesViewportInput` / `MarkdownTransformContext` / `keyText()` 注入）不适用。
 
 ### 2.15 数据面已同步（模型条目）
 
@@ -899,16 +990,16 @@ OSC 7501「等我」）；`Component.capturesViewportInput`（聚焦组件吃掉
 | `pi.exec()` 的 `maxBuffer` / UTF-8 跨 chunk / spawn 失败 stderr（#11360/#11312/#11257） | ❌ 不适用：prux 扩展是 Rust trait，无 `pi.exec()` |
 | RPC 模式的 shutdown / signal 处理（#11599） | ⚠️ 见 1.42（`prux acp` 就是 stdio JSON-RPC 服务端） |
 | `pi update --extensions` 的逐包版本变化、`git clean -fdx` Windows 失败（#11707/#11597） | ❌ 不适用：无 npm / git 包安装 |
-| OAuth 刷新在退出时丢失新 token（#11692） | ⚠️ 部分（第四轮未动）：刷新跑在独立 task、成功即写盘（`auth.rs:628-640`），发起方取消已安全；但 pi 的 `dispose()` 会等在途刷新落盘（`runtime-credentials.ts`），prux 退出没等 |
+| OAuth 刷新在退出时丢失新 token（#11692） | ✅ 已修（第五轮）：在途刷新计数 + 唤醒源（`auth.rs` 的 `OAUTH_REFRESH_INFLIGHT` / `flush_oauth_refreshes`），TUI、桌面 GUI、ACP 三处退出前都等它落盘（最多 5 秒）；用例 `flush_oauth_refreshes_returns_once_the_last_refresh_lands` |
 | `auth.json` 权限 0600、符号链接下的锁共享（#11655） | ✅ 不适用（换成一个小限制）：0600 已做（`auth.rs:239`）；prux 用进程内 RwLock + 原子写，没有跨进程锁，故没有「符号链接各拿一把锁」的问题。代价：两个 prux 实例并发 `/login` 会互相覆盖条目 |
 | `pi config` 忽略 `keybindings.json`（#11651） | ✅ 已满足：pi 修的是独立 `pi config` CLI 忘了 `setKeybindings`；prux 的 `/settings` 在 TUI 内，启动已加载（`startup.rs:159`）、`/reload` 重读并告警冲突（`commands.rs:291`） |
-| Ctrl+V 在 Windows/WSL 粘贴（#11765） | ⚠️ 需实测（`src/modes/tui/handlers.rs` 的粘贴键表） |
+| Ctrl+V 在 Windows/WSL 粘贴（#11765） | ✅ WSL 已修（第五轮）：无 WSLg 时 arboard 没有后端，`read_clipboard` 现在回退到 `powershell.exe Get-Clipboard -Raw`（管道 + `Stdio::null()`，不碰终端）。键表本身没问题（`app.clipboard.pasteImage` = `ctrl+v`，外加 Ctrl+Shift+V 兼容键）；Windows 原生 crossterm 会给 `Char('v')+CONTROL`，**仍待真机实测** |
 | 设备码登录按 Enter 开浏览器 + 复制码（#9282） | ✅ 已修：空输入框上 Enter 走 `open_device_login`（开浏览器 + 复制 `user_code`，两步都是 best-effort），设备码面板不再把空 Enter 当取消；`ctrl+click` URI 行仍可用 |
 | `/login` 列表把 Radius/OpenRouter 置顶（1.5.1） | ❌ 不适用：prux 无 Radius 合作身份 |
 | 模型选择器/搜索被后台刷新挪动选中项（#9109） | ✅ 不适用：pi 是刷新后按模型 id 重算 selectedIndex；prux 的刷新只改状态文案、不重建列表（`handlers/events.rs:451-483`） |
 | 技能警告标签 `[Skill conflicts]` → `[Skill warnings]`（#11521） | ⚠️ prux 自研文案，按中文提示统一即可，无需照搬 |
 | 信任探针之外的 `pi install/remove` 路径问题（#11358） | ❌ 不适用 |
-| 分类器 `compat`（`imageInput`/`sendImageOptInHeader`，1.4.0 遗留） | ⚠️ 仍未做，见 `migration-v1.4.0.md` 2.1/2.2；与本轮无冲突 |
+| 分类器 `compat`（`imageInput`/`sendImageOptInHeader`，1.4.0 遗留） | ✅ 已满足（第五轮复核，原记录陈旧）：`model_resolver.rs:200` 的 compat 合并本就覆盖 classifier 条目，`provider.rs:332` 有 `image_input` / `send_image_opt_in_header`，`classifier.rs` 按 `imageInput` 的 `assets` / `images` / `state-image-urls` 三种形态拼图并带 `typesafe-danger-zone-images` 头 |
 | 图片缩放 PNG→更小编码（#11551） | ✅ 已修：`encode_within_limit` 先比 PNG 与「配置质量的 JPEG」取较小者，都不 fit 才逐档降质；用例 `prefers_the_smaller_of_png_and_jpeg` |
 | 非 BMP 字符被截半（#7121） | ✅ Rust `truncate` 按字符边界切，不会留下孤立代理项 |
 

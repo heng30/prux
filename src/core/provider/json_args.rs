@@ -15,11 +15,16 @@ use serde_json::{Value, json};
 /// 刻意**不含** `u`：`\u` 只有后接 4 位十六进制才算合法，`\usepackage` 之类按字面文本处理。
 const VALID_ESCAPES: [char; 8] = ['"', '\\', '/', 'b', 'f', 'n', 'r', 't'];
 
-/// 流式解析中允许重新解析的最大参数长度。
+/// 增量解析产出一次快照的最小新增字符数。
 ///
-/// 超过它的工具参数（大文件 `write` 的内容）不再逐 delta 重解析：每次重解析都是从头的全量扫描，
-/// 累积串越长越吃 CPU 与内存（90 KB 的参数在流式期间能吃掉上百 MB）。
-const STREAMING_ARGS_REPARSE_LIMIT: usize = 64 * 1024;
+/// 快照要克隆整棵参数树，逐 delta 克隆在大参数上同样是 O(n²)，按实参展示的人眼精度
+/// 每 4 KB 更新一次完全够用。
+const STREAMING_SNAPSHOT_STEP: usize = 4 * 1024;
+
+/// 增量解析失败后，回退到「整串重解析」的最小新增长度。
+///
+/// 回退路径每步都是全量扫描，步长太小会退化成 O(n²)（90 KB 的参数能吃掉上百 MB 堆）。
+const STREAMING_FALLBACK_STEP: usize = 8 * 1024;
 
 /// 把字符串里的一个原始控制字符转义成合法 JSON 转义。
 fn escape_control(c: char) -> String {
@@ -179,17 +184,438 @@ fn close_incomplete_json(s: &str) -> String {
     out
 }
 
-/// 流式工具调用参数的刷新：参数超过阈值后不再重解析，沿用上一次的结果。
+/// 流式工具参数的增量解析器：原文缓冲 + 实时参数快照。
 ///
-/// shortcut: 超过 `STREAMING_ARGS_REPARSE_LIMIT` 后流式期间看不到参数继续增长，
-/// 定稿时仍由 [`parse_tool_call_arguments`] 完整解析；若将来要保留逐步展示，需换成增量解析器。
-pub(crate) fn streaming_arguments(partial: &str, previous: &Value) -> Value {
-    if previous.as_object().is_some_and(|o| !o.is_empty())
-        && partial.len() > STREAMING_ARGS_REPARSE_LIMIT
-    {
-        return previous.clone();
+/// 正常 JSON 走 [`IncrementalJson`] 状态机，每个 delta 只扫描新增字符；
+/// 内容无法增量处理（例如顶层不是对象/数组）时退化为按步长整串重解析，
+/// 保证展示不会卡死在 O(n²) 上。定稿仍由 [`parse_tool_call_arguments`] 严格解析。
+#[derive(Debug, Clone)]
+pub(crate) struct StreamingArgs {
+    /// 累积的参数原文。
+    text: String,
+    /// 增量解析状态机。
+    parser: IncrementalJson,
+    /// 当前可展示的参数快照。
+    value: Value,
+    /// 回退模式下上一次整串解析时的原文长度。
+    fallback_len: usize,
+}
+
+impl Default for StreamingArgs {
+    fn default() -> Self {
+        Self::new()
     }
-    parse_streaming_json(partial)
+}
+
+impl StreamingArgs {
+    /// 建一个空参数的解析器（模型还没给出任何参数）。
+    pub(crate) fn new() -> Self {
+        Self {
+            text: String::new(),
+            parser: IncrementalJson::new(),
+            value: json!({}),
+            fallback_len: 0,
+        }
+    }
+
+    /// 追加一段参数增量，返回新的参数快照（可能比实际进度滞后不到一个快照步长）。
+    pub(crate) fn push(&mut self, delta: &str) -> Value {
+        self.text.push_str(delta);
+        if self.parser.broken() {
+            // 小参数直接每次都解析（与增量路径同等规模），大参数按步长收敛
+            let step = if self.text.len() < STREAMING_FALLBACK_STEP {
+                0
+            } else {
+                STREAMING_FALLBACK_STEP
+            };
+            if self.text.len() - self.fallback_len >= step {
+                self.fallback_len = self.text.len();
+                self.value = parse_streaming_json(&self.text);
+            }
+        } else {
+            // 参数还小的时候每轮都出快照（成本可忽略），跨过步长后才按步长收敛
+            let force = self.text.len() < STREAMING_SNAPSHOT_STEP;
+            if let Some(snapshot) = self.parser.feed(delta, force) {
+                self.value = snapshot;
+            }
+        }
+        self.value.clone()
+    }
+
+    /// 用完整原文重置（`arguments.done`、grammar 包装这类整串覆盖），返回快照。
+    pub(crate) fn reset(&mut self, full: &str) -> Value {
+        self.text.clear();
+        self.text.push_str(full);
+        self.parser = IncrementalJson::new();
+        self.fallback_len = self.text.len();
+        self.value = match self.parser.feed(full, true) {
+            Some(snapshot) => snapshot,
+            None => parse_streaming_json(full),
+        };
+        self.value.clone()
+    }
+
+    /// 建一个已经喂过 `text` 的解析器（`function_call` 首事件里带的初始参数）。
+    pub(crate) fn with_text(text: &str) -> Self {
+        let mut args = Self::new();
+        args.reset(text);
+        args
+    }
+
+    /// 直接给定参数值（`content_block_start` 里已经是对象的 `input`）。
+    pub(crate) fn set_value(&mut self, value: Value) {
+        self.text.clear();
+        self.parser = IncrementalJson::new();
+        self.fallback_len = 0;
+        self.value = value;
+    }
+
+    /// 已累积的参数原文（定稿时交给 [`parse_tool_call_arguments`]）。
+    pub(crate) fn text(&self) -> &str {
+        &self.text
+    }
+}
+
+/// 增量 JSON 解析器的写入位置：对象键或数组下标。
+#[derive(Debug, Clone)]
+enum PathStep {
+    /// 对象成员，值为键名。
+    Key(String),
+    /// 数组元素，值为下标。
+    Index(usize),
+}
+
+/// 增量 JSON 解析器的状态。
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum JState {
+    /// 期待一个值（文档开头、冒号后、数组元素前）。
+    Value,
+    /// 对象内：期待键或 `}`。
+    Key,
+    /// 键已读，期待 `:`。
+    Colon,
+    /// 值已读完，期待 `,` 或闭合。
+    AfterValue,
+    /// 字符串内，`key` 为真表示在读对象键。
+    Str {
+        /// 是否正在读取对象键。
+        key: bool,
+    },
+    /// 数字 / `true` / `false` / `null` 等标量内。
+    Scalar,
+    /// 顶层值已结束，后续字符忽略。
+    Done,
+    /// 无法增量处理：此后由 [`StreamingArgs`] 回退到整串重解析。
+    Broken,
+}
+
+/// 栈式增量 JSON 状态机：只消费新增字符，维护「当前已可用的参数树」。
+///
+/// 只追求流式展示够用：不校验语义、遇到无法处理的输入直接 `Broken`，
+/// 由调用方回退到宽容的整串解析，因此这里任何路径都不 panic。
+#[derive(Debug, Clone)]
+struct IncrementalJson {
+    /// 当前状态。
+    state: JState,
+    /// 参数树根。
+    root: Value,
+    /// 从根到当前写入槽位的路径。
+    path: Vec<PathStep>,
+    /// 容器栈：`o` 对象、`a` 数组，与 `path` 一一对应。
+    stack: Vec<char>,
+    /// 当前对象待写的键（键字符串读完后落在这里）。
+    pending_key: Option<String>,
+    /// 字符串 / 标量的累积缓冲。
+    buf: String,
+    /// 字符串内刚读到反斜杠。
+    escaped: bool,
+    /// 未收尾的 `\uXXXX` 已收到的十六进制字符。
+    unicode: Option<String>,
+    /// 距上次产出快照新增的字符数。
+    since_snapshot: usize,
+}
+
+impl IncrementalJson {
+    /// 建一个空状态机。
+    fn new() -> Self {
+        Self {
+            state: JState::Value,
+            root: Value::Null,
+            path: Vec::new(),
+            stack: Vec::new(),
+            pending_key: None,
+            buf: String::new(),
+            escaped: false,
+            unicode: None,
+            since_snapshot: 0,
+        }
+    }
+
+    /// 是否已放弃增量解析。
+    fn broken(&self) -> bool {
+        self.state == JState::Broken
+    }
+
+    /// 消费一段增量；`force` 为真时必定产出快照。
+    ///
+    /// 返回 `None` 表示这一轮没有新快照（未到步长）或已 [`broken`](Self::broken)。
+    fn feed(&mut self, delta: &str, force: bool) -> Option<Value> {
+        for c in delta.chars() {
+            self.since_snapshot += 1;
+            self.step(c);
+            if self.state == JState::Broken {
+                return None;
+            }
+        }
+        if force || self.since_snapshot >= STREAMING_SNAPSHOT_STEP {
+            self.since_snapshot = 0;
+            return Some(self.snapshot());
+        }
+        None
+    }
+
+    /// 当前可展示的参数快照（含未读完的字符串 / 标量）。
+    fn snapshot(&mut self) -> Value {
+        match self.state {
+            JState::Str { key: false } => {
+                let text = self.buf.clone();
+                self.set_here(Value::String(text));
+            }
+            JState::Scalar => {
+                let value = scalar_value(&self.buf);
+                self.set_here(value);
+            }
+            _ => {}
+        }
+        self.root.clone()
+    }
+
+    /// 处理一个字符。
+    fn step(&mut self, c: char) {
+        match self.state {
+            JState::Value => self.begin_value(c),
+            JState::Key => match c {
+                '}' => self.close_container('o'),
+                '"' => {
+                    self.buf.clear();
+                    self.unicode = None;
+                    self.state = JState::Str { key: true };
+                }
+                _ if c.is_whitespace() => {}
+                _ => self.state = JState::Broken,
+            },
+            JState::Colon => match c {
+                ':' => self.state = JState::Value,
+                _ if c.is_whitespace() => {}
+                _ => self.state = JState::Broken,
+            },
+            JState::AfterValue => match c {
+                ',' => {
+                    self.state = if self.stack.last() == Some(&'o') {
+                        JState::Key
+                    } else {
+                        JState::Value
+                    }
+                }
+                '}' => self.close_container('o'),
+                ']' => self.close_container('a'),
+                _ if c.is_whitespace() => {}
+                _ => self.state = JState::Broken,
+            },
+            JState::Str { key } => self.string_char(c, key),
+            JState::Scalar => match c {
+                ',' | '}' | ']' => {
+                    self.finish_scalar();
+                    self.step(c);
+                }
+                _ if c.is_whitespace() => self.finish_scalar(),
+                _ => self.buf.push(c),
+            },
+            JState::Done | JState::Broken => {}
+        }
+    }
+
+    /// 开始一个值：开槽位（容器还会压栈），或进入字符串 / 标量累积。
+    fn begin_value(&mut self, c: char) {
+        if c.is_whitespace() {
+            return;
+        }
+        match c {
+            '{' | '[' => {
+                self.open_slot();
+                let kind = if c == '{' { 'o' } else { 'a' };
+                self.set_here(if kind == 'o' { json!({}) } else { json!([]) });
+                self.stack.push(kind);
+                self.state = if kind == 'o' {
+                    JState::Key
+                } else {
+                    JState::Value
+                };
+            }
+            '"' => {
+                self.open_slot();
+                self.buf.clear();
+                self.unicode = None;
+                self.state = JState::Str { key: false };
+            }
+            // 标量只可能是数字或 `true` / `false` / `null`，其它起始字符直接放弃增量解析
+            '-' | '0'..='9' | 't' | 'f' | 'n' => {
+                self.open_slot();
+                self.buf.clear();
+                self.buf.push(c);
+                self.state = JState::Scalar;
+            }
+            _ => self.state = JState::Broken,
+        }
+    }
+
+    /// 字符串内的字符：转义、`\uXXXX` 与闭合。
+    fn string_char(&mut self, c: char, key: bool) {
+        if let Some(hex) = self.unicode.as_mut() {
+            if c.is_ascii_hexdigit() {
+                hex.push(c);
+                if hex.len() == 4 {
+                    let digits = self.unicode.take().unwrap_or_default();
+                    match u32::from_str_radix(&digits, 16)
+                        .ok()
+                        .and_then(char::from_u32)
+                    {
+                        Some(decoded) => self.buf.push(decoded),
+                        // 非法码点按字面保留（与 repair_json 的处理一致）
+                        None => {
+                            self.buf.push_str("\\u");
+                            self.buf.push_str(&digits);
+                        }
+                    }
+                }
+                return;
+            }
+            // `\u` 后不是十六进制：整段按字面保留，当前字符重新按普通字符处理
+            let digits = self.unicode.take().unwrap_or_default();
+            self.buf.push_str("\\u");
+            self.buf.push_str(&digits);
+            self.string_char(c, key);
+            return;
+        }
+
+        if self.escaped {
+            self.escaped = false;
+            match c {
+                '"' => self.buf.push('"'),
+                '\\' => self.buf.push('\\'),
+                '/' => self.buf.push('/'),
+                'b' => self.buf.push('\u{8}'),
+                'f' => self.buf.push('\u{c}'),
+                'n' => self.buf.push('\n'),
+                'r' => self.buf.push('\r'),
+                't' => self.buf.push('\t'),
+                'u' => self.unicode = Some(String::new()),
+                // 非法转义按字面保留：`\usepackage` 这类内容在写文件的工具参数里很常见
+                other => {
+                    self.buf.push('\\');
+                    self.buf.push(other);
+                }
+            }
+            return;
+        }
+
+        match c {
+            '\\' => self.escaped = true,
+            '"' if key => {
+                self.pending_key = Some(std::mem::take(&mut self.buf));
+                self.state = JState::Colon;
+            }
+            '"' => self.finish_string(),
+            _ => self.buf.push(c),
+        }
+    }
+
+    /// 字符串值读完：写进槽位并回到「期待逗号或闭合」。
+    fn finish_string(&mut self) {
+        let text = std::mem::take(&mut self.buf);
+        self.set_here(Value::String(text));
+        self.path.pop();
+        self.state = JState::AfterValue;
+    }
+
+    /// 标量读完：按 JSON 标量写入槽位（解析不了写 `null`）。
+    fn finish_scalar(&mut self) {
+        let raw = std::mem::take(&mut self.buf);
+        self.set_here(scalar_value(&raw));
+        self.path.pop();
+        self.state = JState::AfterValue;
+    }
+
+    /// 闭合当前容器；类型不匹配即放弃增量解析。
+    fn close_container(&mut self, kind: char) {
+        if self.stack.last() != Some(&kind) {
+            self.state = JState::Broken;
+            return;
+        }
+        self.stack.pop();
+        if self.stack.is_empty() {
+            self.path.clear();
+            self.state = JState::Done;
+        } else {
+            self.path.pop();
+            self.state = JState::AfterValue;
+        }
+    }
+
+    /// 在当前位置占一个槽位并把 `path` 指向它（对象按 `pending_key` 插入，数组追加元素）。
+    fn open_slot(&mut self) {
+        if self.stack.is_empty() {
+            self.root = Value::Null;
+            return;
+        }
+        if self.stack.last() == Some(&'o') {
+            let key = self.pending_key.take().unwrap_or_default();
+            if let Some(map) = value_at_mut(&mut self.root, &self.path).as_object_mut() {
+                map.insert(key.clone(), Value::Null);
+            }
+            self.path.push(PathStep::Key(key));
+        } else {
+            let index = match value_at_mut(&mut self.root, &self.path).as_array_mut() {
+                Some(list) => {
+                    list.push(Value::Null);
+                    list.len() - 1
+                }
+                None => 0,
+            };
+            self.path.push(PathStep::Index(index));
+        }
+    }
+
+    /// 把值写到当前槽位。
+    fn set_here(&mut self, value: Value) {
+        *value_at_mut(&mut self.root, &self.path) = value;
+    }
+}
+
+/// 标量原文转 JSON 值：数字 / `true` / `false` / `null`，其余（含流式中的半截数字）当 `null`。
+fn scalar_value(raw: &str) -> Value {
+    serde_json::from_str::<Value>(raw.trim()).unwrap_or(Value::Null)
+}
+
+/// 沿路径取可变引用；路径与树不一致时停在最近的可用节点（不会 panic）。
+fn value_at_mut<'v>(cur: &'v mut Value, path: &[PathStep]) -> &'v mut Value {
+    let Some((step, rest)) = path.split_first() else {
+        return cur;
+    };
+    match step {
+        PathStep::Key(key) => {
+            if cur.get(key.as_str()).is_none() {
+                return cur;
+            }
+            value_at_mut(cur.get_mut(key.as_str()).expect("键已确认存在"), rest)
+        }
+        PathStep::Index(index) => {
+            if cur.get(*index).is_none() {
+                return cur;
+            }
+            value_at_mut(cur.get_mut(*index).expect("下标已确认存在"), rest)
+        }
+    }
 }
 
 /// 流式（可能不完整）JSON 解析：修复后解析 → 最长可解析前缀 → 补全未闭合结构 → 空对象。
@@ -317,19 +743,63 @@ mod tests {
         assert_eq!(parse_tool_call_arguments(Some("  ")), (json!({}), None));
     }
 
-    /// 参数超过阈值后不再重解析：沿用上次结果，避免流式期间 O(n²) 的全量扫描。
+    /// 增量解析：逐 delta 喂入，快照与最后整串解析一致，且未到快照步长时沿用上次结果。
     #[test]
-    fn streaming_arguments_stop_reparsing_past_the_limit() {
-        let previous = json!({ "path": "a.rs" });
-        let short = r#"{"path":"a.rs","content":"x"#;
-        assert_eq!(streaming_arguments(short, &previous)["content"], "x");
-
-        let huge = format!(
-            r#"{{"content":"{}"#,
-            "x".repeat(STREAMING_ARGS_REPARSE_LIMIT + 1)
+    fn streaming_args_matches_full_parse_across_deltas() {
+        let text = r#"{"path":"a.rs","content":"caf\u00e9 \url{x}","mode":"w","n":-12,"ok":true,"tags":["a","b"],"nested":{"k":null}}"#;
+        let mut args = StreamingArgs::new();
+        let mut snapshot = json!({});
+        for chunk in text.as_bytes().chunks(7) {
+            snapshot = args.push(std::str::from_utf8(chunk).expect("测试文本按字节切成 UTF-8"));
+        }
+        assert_eq!(snapshot, parse_streaming_json(text));
+        assert_eq!(args.text(), text);
+        assert_eq!(
+            parse_tool_call_arguments(Some(args.text())).0,
+            parse_streaming_json(text)
         );
-        assert_eq!(streaming_arguments(&huge, &previous), previous);
-        // 还没有解析出任何参数时不沿用空对象，免得丢掉首次出现的内容
-        assert_ne!(streaming_arguments(&huge, &json!({})), json!({}));
+    }
+
+    /// 未到快照步长的中间 delta 不再重解析：快照保持上一次的值（不是空对象）。
+    #[test]
+    fn streaming_args_keeps_the_last_snapshot_between_steps() {
+        let mut args = StreamingArgs::new();
+        let first = args.push(r#"{"path":"a.rs"}"#);
+        assert_eq!(first, json!({ "path": "a.rs" }));
+        // 只要还没跨过步长，快照就不变
+        let second = args.push(r#","#);
+        assert_eq!(second, json!({ "path": "a.rs" }));
+    }
+
+    /// 超大参数不再逐 delta 全量重解析：喂 200 KB 的单字段只有增量扫描。
+    #[test]
+    fn streaming_args_handle_large_arguments_incrementally() {
+        let body = "x".repeat(200 * 1024);
+        let mut args = StreamingArgs::new();
+        args.push(r#"{"content":""#);
+        let mut snapshot = json!({});
+        for chunk in body.as_bytes().chunks(4096) {
+            snapshot = args.push(std::str::from_utf8(chunk).expect("ASCII 切片总是合法 UTF-8"));
+        }
+        // 快照最多落后一个步长，最终定稿仍是完整内容
+        let partial = snapshot["content"].as_str().unwrap_or("");
+        assert!(body.starts_with(partial), "快照应是前缀而非空");
+        assert!(body.len() - partial.len() <= STREAMING_SNAPSHOT_STEP);
+        snapshot = args.push(r#""}"#);
+        assert_eq!(snapshot["content"].as_str().unwrap_or(""), body);
+    }
+
+    /// 增量状态机处理不了的输入退回整串重解析（顶层是数组、尾随垃圾等）。
+    #[test]
+    fn streaming_args_fall_back_when_the_stream_is_not_plain_json() {
+        let mut args = StreamingArgs::new();
+        args.push("[1,2");
+        let snapshot = args.push("]");
+        assert_eq!(snapshot, json!([1, 2]));
+
+        // 无法解析的内容不 panic，最差是空对象
+        let mut broken = StreamingArgs::new();
+        broken.push("<<<");
+        assert_eq!(broken.push(">>>"), json!({}));
     }
 }
