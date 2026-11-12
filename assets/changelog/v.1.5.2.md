@@ -262,7 +262,8 @@
 - **The reported cost ignored what the provider billed**: with OpenRouter the response carries the
   actual amount, but the total was always recomputed from catalog prices, so the number differed from
   the invoice. A reported `usage.cost` is now kept as the total (the per-item lines still come from
-  the catalog rates) and `/session` marks it as `provider-reported`.
+  the catalog rates) and `/session` marks it as `provider-reported`. A reported `0` is not trusted:
+  subscription endpoints always send `cost: 0`, and taking it would wipe an estimated total.
 - **Confirming a device-code login cancelled it**: on the login panel an empty input plus Enter meant
   "cancel", so the natural way to say "yes, open the page" threw the login away. Enter now opens the
   verification URL and copies the code to the clipboard (either step failing only prints a hint);
@@ -471,7 +472,8 @@
   名字里夹 ESC 就能把控制序列送进终端。现在写标题前先剥掉控制字符。
 - **计费合计没算供应商上报的金额**：用 OpenRouter 时响应里带着真实金额，但合计一律按目录单价重算，
   于是数字和账单对不上。现在上报的 `usage.cost` 直接作合计（分项仍按目录单价算），
-  `/session` 会标成 `provider-reported`。
+  `/session` 会标成 `provider-reported`。上报 `0` 不采信：订阅型端点恒发 `cost: 0`，
+  采信它会把按目录单价估出的合计清零。
 - **确认设备码登录反而把登录取消了**：登录面板上空输入 + Enter 原本等于「取消」，
   于是想「好，打开页面吧」的那一下把登录丢了。现在 Enter 打开验证地址并把验证码复制到剪贴板
   （两步失败都只提示），取消仍是 Esc。桌面版用点击达成同一件事：点验证码即复制，点地址即开浏览器。

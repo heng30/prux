@@ -80,8 +80,15 @@ pub fn compute_cost(usage: &mut Usage, cost_cfg: Option<&Value>) {
 /// 响应里带供应商上报的总费用时，把它写进 `usage.cost`（`total_from_provider` 置真）。
 /// 只在 OpenRouter（Completions / Anthropic Messages）上拿这个值，其余供应商不发该字段，
 /// 所以按「字段存在且为数字」判别即可。单价字段仍由 [`compute_cost`] 算，展示的分项不变。
+///
+/// 报 0 的值不采信：订阅型端点（opencode-go）恒发 `cost: 0`，真实额度走自己的字段，
+/// 采信它会让目录单价算出的估算合计被清零。
 pub fn apply_reported_cost(usage: &mut Usage, raw: Option<&Value>) {
-    let Some(total) = raw.and_then(|u| u.get("cost")).and_then(|v| v.as_f64()) else {
+    let Some(total) = raw
+        .and_then(|u| u.get("cost"))
+        .and_then(|v| v.as_f64())
+        .filter(|c| *c > 0.0)
+    else {
         return;
     };
     usage.cost.total = total;
@@ -162,6 +169,31 @@ mod tests {
         // 无 cost 配置 → 清零
         compute_cost(&mut usage, None);
         assert_eq!(usage.cost.total, 0.0);
+    }
+
+    /// 订阅型端点（opencode-go）恒发 `cost: 0`，不能让零值把估算合计清零。
+    #[test]
+    fn zero_reported_cost_keeps_estimate() {
+        let mut usage = Usage {
+            input: 1_000_000,
+            output: 0,
+            cache_read: 0,
+            cache_write: 0,
+            cache_write_1h: None,
+            total_tokens: 1_000_000,
+            cost: Cost::default(),
+            reasoning: None,
+        };
+        apply_reported_cost(&mut usage, Some(&json!({ "cost": 0 })));
+        assert!(!usage.cost.total_from_provider);
+        compute_cost(&mut usage, Some(&json!({ "input": 2.0 })));
+        assert!((usage.cost.total - 2.0).abs() < 1e-12);
+
+        // 正数上报值仍然作总额
+        apply_reported_cost(&mut usage, Some(&json!({ "cost": 0.42 })));
+        compute_cost(&mut usage, Some(&json!({ "input": 2.0 })));
+        assert!((usage.cost.total - 0.42).abs() < 1e-12);
+        assert!(usage.cost.total_from_provider);
     }
 
     /// pi #10034：GPT-6 系列返回 `service_tier: "fast"`（priority 的新叫法），
