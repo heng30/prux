@@ -72,7 +72,7 @@ pub const ICON_SIZE: f32 = 16.;
 pub const DOT_SIZE: f32 = 8.;
 /// 行内文字的垂直补偿比例（相对字号）。
 ///
-/// gpui 把行盒按字体的 ascent / descent 垂直居中，而思源黑体的 ascent（1.16em）远大于
+/// gpui 把行盒按字体的 ascent / descent 垂直居中，而 Noto Sans CJK SC 的 ascent（1.16em）远大于
 /// descent（0.29em），字形重心因此落在行中心下方约 0.12em —— 这就是固定高度的行、chip、
 /// 按钮里文字看起来偏下的原因。补偿量与字号成正比（不是拍出来的系数，是字体几何），
 /// 所以只留这一个可调参数：想让整界面文字整体抬高/放低，改它。
@@ -132,8 +132,10 @@ pub const TOAST_MAX: usize = 4;
 /// toast 停留时长
 pub const TOAST_DURATION: Duration = Duration::from_millis(3600);
 
-/// 界面默认字体族：编译期内嵌的思源黑体 CN（`assets/fonts/SourceHanSansCN.otf`）。
-pub const UI_FONT_FAMILY: &str = "Source Han Sans CN";
+/// 界面默认字体族：编译期内嵌的 Noto Sans CJK SC Regular（`assets/fonts/NotoSansCJKSC-Regular.otf`）。
+///
+/// 族名是私有名，与系统里同源的 Noto Sans CJK 区分开，避免被可变字体的 Thin 实例顶掉。
+pub const UI_FONT_FAMILY: &str = "Prux Sans SC";
 
 /// 等宽字体族：编译期内嵌的 Source Code Pro（`assets/fonts/SourceCodePro-Regular.otf`）。
 ///
@@ -325,7 +327,7 @@ impl Theme {
     }
 }
 
-/// 等宽文本用的 [`gpui::Font`]：Source Code Pro + 思源黑体作字形回退。
+/// 等宽文本用的 [`gpui::Font`]：Source Code Pro + Prux Sans SC 作字形回退。
 ///
 /// Source Code Pro 没有中文字形，不显式给回退链时中文会落到系统里随便一个中文字体
 /// （各发行版装的不一样），与界面其余部分字形不一致；Linux / Windows 的后端把

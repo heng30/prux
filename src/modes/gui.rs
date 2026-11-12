@@ -38,8 +38,11 @@ const DEFAULT_WINDOW_SIZE: (f32, f32) = (1180.0, 780.0);
 /// 窗口最小尺寸（逻辑像素）：再小侧栏与输入框会挤在一起。
 const MIN_WINDOW_SIZE: (f32, f32) = (760.0, 560.0);
 
-/// 内嵌字体：思源黑体 CN（默认界面字体，随二进制发布，不依赖系统装字体）。
-const UI_FONT_BYTES: &[u8] = embedded_bytes!("fonts/SourceHanSansCN.otf");
+/// 内嵌字体：Noto Sans CJK SC Regular（默认界面字体，随二进制发布，不依赖系统装字体）。
+///
+/// name 表里的族名改成了私有的 `Prux Sans SC`：系统装 Noto Sans CJK VF 时它的默认实例是
+/// Thin(100)，同族名会被排版器选中，整个界面笔画发灰。
+const UI_FONT_BYTES: &[u8] = embedded_bytes!("fonts/NotoSansCJKSC-Regular.otf");
 
 /// 内嵌等宽字体：Source Code Pro，与终端里渲染 TUI 的西文字体同族。
 ///

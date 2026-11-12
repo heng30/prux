@@ -20,7 +20,7 @@ const FONT_SIZE: f32 = FONT_BODY;
 /// 多行时相邻行的背景连成一片，文字也不在背景里垂直居中。
 ///
 /// 下限受字体几何约束：gpui 逐行把字形裁在自己的行盒里，行盒矮于字体的
-/// ascent + descent（思源黑体 1.16em + 0.288em = 1.448em）就会削掉行底的字尾
+/// ascent + descent（Noto Sans CJK SC 1.16em + 0.288em = 1.448em）就会削掉行底的字尾
 /// （Windows 上落笔位置更低，「g」的下伸部直接被切平）。
 const LINE_HEIGHT: f32 = 1.5;
 
@@ -42,7 +42,7 @@ const SEARCH_SCALE: f32 = 0.8;
 /// 搜索框（[`field_search`]）的固定高度：表单输入框自然高度的 0.8 倍。
 const SEARCH_FIELD_H: f32 = FIELD_H * SEARCH_SCALE;
 
-/// 光标 / 选中块的高度：字形墨迹，不取行盒高度。思源黑体的汉字在字身框里上下各留
+/// 光标 / 选中块的高度：字形墨迹，不取行盒高度。Noto Sans CJK SC 的汉字在字身框里上下各留
 /// 0.12em，墨迹正好 1em；块比墨迹高就从字底伸出去一截，看着像“光标过长”。
 const BLOCK_H: f32 = FONT_SIZE;
 
@@ -577,7 +577,7 @@ mod tests {
     /// 光标块只盖字形墨迹：块高一个字身，块顶、块底都与字的墨迹上下沿齐平。
     #[test]
     fn cursor_block_covers_the_glyph_ink_only() {
-        // 思源黑体几何：半行距 + ascent 得基线，汉字墨迹在 0.88em…-0.12em
+        // Noto Sans CJK SC 几何：半行距 + ascent 得基线，汉字墨迹在 0.88em…-0.12em
         let baseline = (LINE_HEIGHT - 1.448) / 2. + 1.16;
         let ink_top = (baseline - 0.88) * FONT_SIZE;
         let ink_bottom = (baseline + 0.12) * FONT_SIZE;

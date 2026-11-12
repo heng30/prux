@@ -2396,7 +2396,7 @@ fn render_rows(
 
 /// mono 块的一行 → 等宽网格单元。
 ///
-/// 内嵌的 Source Code Pro 半角 advance 是 0.6em，而中文 fallback 到思源黑体是 1em：
+/// 内嵌的 Source Code Pro 半角 advance 是 0.6em，而中文 fallback 到 Noto Sans CJK SC 是 1em：
 /// 直接靠空格缩进时，含中文的行每过一个汉字就少 0.2em，右边的盒线竖线随之左移。
 /// 这里把每个全角字固定占 2 个半角单元并居中，与终端里「一格一列、汉字占两列」一致。
 fn mono_line(line: &str) -> AnyElement {
