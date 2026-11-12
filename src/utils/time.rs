@@ -82,6 +82,13 @@ pub fn format_local(ms: i64, fmt: &str) -> String {
         .unwrap_or_else(|| "?".to_string())
 }
 
+/// 文件名用紧凑本地时间戳 `YYYYMMDD-HHMMSS`（归档、导出这类「一份一个文件」的命名）。
+///
+/// 与 [`format_local`] 同源，只是把时间压成可排序、无空格与冒号的一串，直接拼进文件名。
+pub fn file_stamp() -> String {
+    format_local(now_ms() as i64, "%Y%m%d-%H%M%S")
+}
+
 /// 将 Unix epoch 起的天数转为 (年, 月, 日)（Howard Hinnant 民用历算法）。
 pub fn civil_from_days(z: i64) -> (u64, u64, u64) {
     let z = z + 719468;
@@ -459,6 +466,17 @@ mod tests {
         // epoch ms → 本地 RFC3339 → 再解回来
         let iso = epoch_ms_to_local_rfc3339(ms);
         assert_eq!(parse_timestamp_ms(&iso), Some(ms), "{iso}");
+    }
+
+    #[test]
+    fn file_stamp_is_a_sortable_local_timestamp() {
+        // 15 个字符：8 位日期 + `-` + 6 位时间；能反过来按本地时间解回去。
+        let stamp = file_stamp();
+        assert_eq!(stamp.len(), 15, "{stamp}");
+        assert_eq!(stamp.as_bytes()[8], b'-', "{stamp}");
+        let parsed = chrono::NaiveDateTime::parse_from_str(&stamp, "%Y%m%d-%H%M%S").unwrap();
+        let now = Local::now().naive_local();
+        assert!((now - parsed).num_seconds().abs() <= 2, "{stamp}");
     }
 
     #[test]

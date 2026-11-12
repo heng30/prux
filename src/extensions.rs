@@ -11,6 +11,7 @@ pub(crate) mod util;
 
 pub mod acp;
 pub mod ask_user_question;
+pub mod backup;
 pub mod banner;
 pub mod browser;
 pub mod cache_usage;
@@ -181,6 +182,8 @@ pub const PRIORITY_DEBUG: u32 = 45;
 pub const PRIORITY_WORKTREE: u32 = 44;
 /// review 入站评审（拉取 PR / issue 评审，可回帖）扩展的注册优先级。
 pub const PRIORITY_REVIEW: u32 = 45;
+/// backup 用户资产打包 / 恢复扩展的注册优先级。
+pub const PRIORITY_BACKUP: u32 = 37;
 /// tool_search 延迟工具检索扩展的注册优先级。
 pub const PRIORITY_TOOL_SEARCH: u32 = 40;
 /// codemode 工具编排扩展的注册优先级。

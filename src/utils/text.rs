@@ -50,6 +50,17 @@ pub fn has_cjk(text: &str) -> bool {
     text.chars().any(is_cjk_script)
 }
 
+/// 字节串的小写十六进制串（校验和、摘要这类「按字节原样编码」的场合）。
+///
+/// 只做编码，不做反向解析；要把十六进制解成字节请在各格式的读取侧自行处理。
+pub fn hex_lower(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push_str(&format!("{byte:02x}"));
+    }
+    out
+}
+
 /// 代码围栏：比内容里最长的反引号连串再多一个，至少 3 个。
 ///
 /// 围栏必须比内容里任何反引号连串都长，否则内容会提前闭合围栏。返回的只是围栏本身，
@@ -530,6 +541,14 @@ mod tests {
             related_font_families(&families, &["Zen Hei"], &["Sarasa"]),
             vec!["Zen Hei".to_string(), "Sarasa Mono HC".to_string()]
         );
+    }
+
+    /// 每字节两位、小写、宽度固定（0x0f 不许塌成 `f`）。
+    #[test]
+    fn hex_lower_encodes_each_byte_as_two_lowercase_digits() {
+        assert_eq!(hex_lower(&[]), "");
+        assert_eq!(hex_lower(&[0x00, 0x0f, 0xff]), "000fff");
+        assert_eq!(hex_lower(b"prux"), "70727578");
     }
 
     /// 行号从 1 起；同名字符串值不算键（后面不是冒号）；缩进/紧凑写法都能定位。

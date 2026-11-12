@@ -2,6 +2,21 @@
 
 ### Added
 
+- **`/backup` snapshots and restores your prux assets**: the new `backup` extension packs
+  `agent_dir()`'s `settings.json`, `APPEND_SYSTEM.md`, `trust.json`, `themes/`, `skills/` and
+  `extensions/` (extension configs, memory, MCP configs, workflows) into one zip — by default
+  `agent_dir()/backups/prux-backup-<stamp>.zip`, or a folder you name. `manifest.json` goes in first
+  with the prux version, the source folder and every file's size and sha256. Only `agent_dir()` is
+  collected: a project's `.prux/` and `AGENTS.md` stay with the repository. Credentials never ship:
+  `auth.json`, `sessions/`, `history/`, `logs/`, `bin/`, `docs/`, the rebuildable `models-store.json`
+  and `recent-cwds.json`, the archives folder itself, and `extensions/worktrees`,
+  `extensions/permissions/logs` and `extensions/agent` are all left out; symlinks and files over
+  32 MiB are skipped and listed. `/backup list` shows the archives newest first and
+  `/backup restore [file|folder] [--force]` verifies every entry (safe path, present in the archive,
+  matching size and sha256) before writing anything — a single mismatch writes nothing. Existing
+  files are refused unless `--force`, which first renames them to `<name>.bak-<stamp>`. Path
+  arguments may start with `@` (the TUI completion prefix is dropped). The archive is written 0600
+  and carries whatever credentials your extension configs hold. Off by default (Dev/Creator modes).
 - **Dart and Nix code blocks are highlighted**: both languages were missing from the bundled
   syntax set and rendered as plain text. They now ship with the binary. Gradle has no grammar of its
   own, so `gradle` fences and `*.gradle` files are highlighted as Groovy.
@@ -292,6 +307,18 @@
 
 ### 新增
 
+- **`/backup` 快照与恢复 prux 自身资产**：新增的 `backup` 扩展把 `agent_dir()` 下的 `settings.json`、
+  `APPEND_SYSTEM.md`、`trust.json`、`themes/`、`skills/` 与 `extensions/`（扩展配置、记忆、MCP 配置、
+  workflows）打成一个 zip——默认落到 `agent_dir()/backups/prux-backup-<时间戳>.zip`，也可以指定目录。
+  归档首个条目 `manifest.json` 记录 prux 版本、来源目录与每个文件的大小与 sha256。**只收 `agent_dir()`**：
+  项目里的 `.prux/` 与 `AGENTS.md` 跟着仓库走，不进归档。凭据不进归档：`auth.json`、`sessions/`、
+  `history/`、`logs/`、`bin/`、`docs/`、可重建的 `models-store.json` 与 `recent-cwds.json`、归档目录自身，
+  以及 `extensions/worktrees`、`extensions/permissions/logs`、`extensions/agent` 全部排除，符号链接与
+  超过 32 MiB 的单文件跳过并列出。`/backup list` 按时间倒序列出归档；`/backup restore [文件|目录] [--force]`
+  先逐条校验（路径合法、条目齐全、大小与 sha256 一致）再写盘——有一条对不上就一个字节都不写。
+  目标已存在且不给 `--force` 时拒绝并点名冲突文件，`--force` 覆盖前先把原文件改名成
+  `<名字>.bak-<时间戳>`。路径参数可以 `@` 开头（TUI 补全的前缀会被去掉）。归档按 0600 写盘，
+  里面会带扩展配置持有的凭据。默认不启用（`Dev`/`Creator` 模式）。
 - **Dart 与 Nix 代码块能高亮了**：这两种语言不在内置语法集里，此前只能当纯文本显示，现在随二进制一起内嵌。
   Gradle 没有独立语法，`gradle` 围栏与 `*.gradle` 文件按 Groovy 高亮。
 - **恢复的会话工作目录已消失时会先问怎么办**：`--session`、`--session-id`、`--resume` 与 `-c` 以前直接拿一个
