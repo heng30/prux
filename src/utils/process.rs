@@ -10,6 +10,8 @@
 //! - [`drain_tail`]：持续读空管道而只保留尾部（限量，且不会因为管道写满把子进程卡死）；
 //! - [`spawn_detached`]：拉起一个**不占用终端**的长命子进程（GUI 应用等），输出落临时日志；
 //! - [`kill_process_tree`]：连同子进程一起强杀（Unix 进程组 / Windows `taskkill /T`）；
+//! - [`ProcessBirth`] / [`kill_process_tree_checked`]：把 pid 存下来稍后再杀时的身份复核
+//!   （leader 已退出并回收后，同一个 pid 可能已经是别人的进程组）；
 //! - [`blocking`]：在同步接口里安全地等一个阻塞动作；
 //! - [`spawn_blocking`]：`async fn` 里把阻塞动作丢到阻塞线程池；
 //! - [`HideConsole`]：Windows 上让子进程不分配可见控制台窗口（否则 GUI 里每跑一条外部命令闪一片黑窗口）。
@@ -28,6 +30,7 @@ use std::{
     process::{Command, Stdio},
     time::{Duration, Instant},
 };
+use sysinfo::{Pid, ProcessesToUpdate, System};
 
 /// [`run_timed`] 为 stdout / stderr 各自保留的字节上限。
 const TIMED_OUTPUT_LIMIT: usize = 64 * 1024;
@@ -349,9 +352,68 @@ pub fn run_stdout(mut cmd: Command, what: &str) -> Result<Vec<u8>, String> {
 /// 强杀进程树：Unix 用 `killpg`（子进程需以 `process_group(0)` 起），
 /// Windows 用 `taskkill /F /T` 连同子进程一起终止，其它平台只杀直接子进程。
 ///
-/// 调用方仍应同时 `Child::kill()`：本函数按 pid 定位进程组，若子进程已经退出、
-/// pid 被复用，单靠它可能落空。
+/// 只给「子进程还挂在 `Child` 上、尚未 `wait` 回收」的调用点用：那时 pid 还占着、进程组
+/// 一定没被复用。pid 是从表里翻出来的旧记录（后台 job、`abort_bash` 的中止表）时，
+/// 先用 [`ProcessBirth`] 复核再走 [`kill_process_tree_checked`]。
 pub fn kill_process_tree(pid: u32) {
+    signal_tree(pid);
+}
+
+/// 进程「这一次化身」的身份：机器启动时刻 + 进程启动时刻（均为秒）。
+///
+/// 只用于回答一个问题：`pid` 还是当初那个进程吗？进程退出并被回收后 pid 会被复用，
+/// 而那之后 `killpg(pid)` 杀掉的是别人的进程组。两个时间戳一起比才够：只看 pid 没有意义，
+/// 只看 start_time 则重启后会被旧记录蒙混过（reboot 前 pid 7 的启动时刻可能恰好相等）。
+///
+/// 精度是秒：同一秒内 pid 被复用的概率在实践中可以忽略（且要复用成**新的进程组组长**，
+/// 还得同样落在同一秒）；要让检查更强就换 Linux 的 `/proc/<pid>/stat` 第 22 字段。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProcessBirth {
+    /// 机器启动时刻（Unix 秒），区分「重启前后的同一个 pid」。
+    boot_time: u64,
+    /// 进程启动时刻（Unix 秒，sysinfo 语义：相对 boot 的秒数）。
+    start_time: u64,
+}
+
+impl ProcessBirth {
+    /// 读 `pid` 当前化身的身份；进程不存在（含僵尸之外的已退出进程）或读不到时返回 `None`。
+    ///
+    /// 读不到就返回 `None` 而不是猜：调用方据此退化成「不校验」（见
+    /// [`kill_process_tree_checked`]），比拿一个假身份去比较更安全。
+    pub fn of(pid: u32) -> Option<Self> {
+        let mut sys = System::new().ok()?;
+        let target = Pid::from_u32(pid);
+        sys.refresh_processes(ProcessesToUpdate::Some(&[target]), true);
+        let process = sys.process(target)?;
+        Some(Self {
+            boot_time: System::boot_time().ok()?,
+            start_time: process.start_time(),
+        })
+    }
+
+    /// `pid` 是否仍是当初那个进程（没被回收、pid 没被复用）。
+    pub fn is_same(&self, pid: u32) -> bool {
+        Self::of(pid) == Some(*self)
+    }
+}
+
+/// 复核身份后再强杀进程树：`pid` 已经不是 [`ProcessBirth`] 记下的那个进程时**不发信号**，返回 `false`。
+///
+/// 与 [`kill_process_tree`] 的分工很清楚：子进程还挂在 `Child` 上（尚未 `wait` 回收）时，
+/// pid 一定还占着、进程组一定没被复用，直接调 [`kill_process_tree`]；只有把 pid 单独存进
+/// 表里、过一阵子才杀（后台 job 表、`abort_bash` 的中止表）才需要先复核。
+///
+/// `birth` 为 `None` 表示记录 pid 时就没取到身份，此时不校验、照杀（与旧行为一致）。
+pub fn kill_process_tree_checked(pid: u32, birth: Option<ProcessBirth>) -> bool {
+    if birth.is_some_and(|b| !b.is_same(pid)) {
+        return false;
+    }
+    signal_tree(pid);
+    true
+}
+
+/// 真正发信号的那一步（Unix `killpg` / Windows `taskkill /T`），不做任何身份判断。
+fn signal_tree(pid: u32) {
     #[cfg(unix)]
     {
         _ = nix::sys::signal::killpg(
@@ -647,6 +709,52 @@ mod tests {
         assert!(
             started.elapsed() < Duration::from_secs(5),
             "进程组应被强杀，而不是等满 30s"
+        );
+    }
+
+    /// 身份复核：pid 已被复用（这里用一个假的 start_time 冒充）时不发信号，
+    /// 相符时才杀掉整棵进程树。
+    #[cfg(unix)]
+    #[test]
+    fn checked_kill_refuses_a_recycled_pid() {
+        use std::{
+            os::unix::process::CommandExt as _,
+            process::Stdio,
+            time::{Duration, Instant},
+        };
+
+        let mut cmd = Command::new("sleep");
+        cmd.arg("30").stdout(Stdio::null()).stderr(Stdio::null());
+        cmd.process_group(0);
+        let mut child = cmd.spawn().unwrap();
+        let pid = child.id();
+
+        let birth = ProcessBirth::of(pid).expect("刚起来的进程必须读得到身份");
+        assert!(birth.is_same(pid));
+
+        let mut wrong = birth;
+        wrong.start_time = wrong.start_time.wrapping_add(1);
+        assert!(
+            !kill_process_tree_checked(pid, Some(wrong)),
+            "身份不符时必须拒绝发信号"
+        );
+        assert!(
+            child.try_wait().unwrap().is_none(),
+            "被拒绝的那一次不该杀掉任何进程"
+        );
+
+        let started = Instant::now();
+        assert!(
+            kill_process_tree_checked(pid, Some(birth)),
+            "身份相符应照杀"
+        );
+        _ = child.kill();
+        _ = child.wait();
+        assert!(started.elapsed() < Duration::from_secs(5), "应立刻被强杀");
+
+        assert!(
+            !ProcessBirth::of(pid).is_some_and(|now| now == birth),
+            "回收后的 pid 不该再报同一个身份"
         );
     }
 

@@ -7,7 +7,7 @@ use crate::{
     },
     utils::{
         output_files,
-        process::{HideConsole, kill_process_tree},
+        process::{HideConsole, ProcessBirth, kill_process_tree, kill_process_tree_checked},
         truncate::{
             self, DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, TruncatedBy, head_bytes, tail_bytes,
         },
@@ -26,8 +26,11 @@ use std::{
 };
 use tokio::{io::AsyncReadExt, sync::Mutex};
 
-/// 运行中 bash 进程的登记项：进程 pid 与用于中止它的标志位。
-type BashProcEntry = (i32, Arc<AtomicBool>);
+/// 运行中 bash 进程的登记项：进程 pid、pid 化身的身份与用于中止它的标志位。
+///
+/// 身份是给中止路径用的：命令可能已经跑完并被回收，那时同一个 pid 可能已经是别人的进程组，
+/// 复核身份后再发信号才不会误杀（见 [`kill_process_tree_checked`]）。
+type BashProcEntry = (i32, Option<ProcessBirth>, Arc<AtomicBool>);
 
 /// 流式输出回调（带锁，多生产端共写）
 pub type OnChunkCallback = Arc<Mutex<Box<dyn FnMut(&str) + Send>>>;
@@ -171,17 +174,17 @@ fn fail_outcome(text: String) -> BashOutcome {
     }
 }
 
-/// 运行中 bash 进程表（全局单例）：中止 id → (pid, 取消标志)。
-fn bash_procs_registry() -> &'static StdMutex<HashMap<String, (i32, Arc<AtomicBool>)>> {
+/// 运行中 bash 进程表（全局单例）：中止 id → [`BashProcEntry`]。
+fn bash_procs_registry() -> &'static StdMutex<HashMap<String, BashProcEntry>> {
     BASH_PROCS.get_or_init(|| StdMutex::new(HashMap::new()))
 }
 
 /// 中止指定 id 的运行中 bash 进程（abort_bash）。返回是否找到并中止。
 pub fn abort_bash(id: &str) -> bool {
     match bash_procs_registry().lock().unwrap().remove(id) {
-        Some((pid, flag)) => {
+        Some((pid, birth, flag)) => {
             flag.store(true, Ordering::SeqCst);
-            kill_process_tree(pid as u32);
+            kill_process_tree_checked(pid as u32, birth);
             true
         }
         None => false,
@@ -191,14 +194,14 @@ pub fn abort_bash(id: &str) -> bool {
 /// 中止所有运行中的 bash 进程（abort_all_bash：中止 agent 工具运行的 bash）。
 /// 返回被中止的进程数。
 pub fn abort_all_bash() -> usize {
-    let entries: Vec<(i32, Arc<AtomicBool>)> = {
+    let entries: Vec<BashProcEntry> = {
         let mut reg = bash_procs_registry().lock().unwrap();
         reg.drain().map(|(_, e)| e).collect()
     };
     let count = entries.len();
-    for (pid, flag) in entries {
+    for (pid, birth, flag) in entries {
         flag.store(true, Ordering::SeqCst);
-        kill_process_tree(pid as u32);
+        kill_process_tree_checked(pid as u32, birth);
     }
     count
 }
@@ -378,10 +381,11 @@ pub async fn execute_bash_with_env(
 
     let cancel_flag = Arc::new(AtomicBool::new(false));
     if let Some(id) = id {
+        let birth = ProcessBirth::of(pid as u32);
         bash_procs_registry()
             .lock()
             .unwrap()
-            .insert(id.to_string(), (pid, cancel_flag.clone()));
+            .insert(id.to_string(), (pid, birth, cancel_flag.clone()));
     }
 
     let mut readers: Vec<Box<dyn tokio::io::AsyncRead + Unpin + Send>> = Vec::new();

@@ -13,6 +13,13 @@
 //!
 //! **进程组**：Unix 上子进程自成进程组，停止时连同它派生的子进程一起杀，不留孤儿。
 //!
+//! **不误杀**：pid 是记在 job 表里的旧值，命令可能早已跑完并被回收，那时同一个 pid 可能已经
+//! 是别人的进程组；停止前先用 [`ProcessBirth`] 复核身份，不符就不发信号（见
+//! [`kill_process_tree_checked`]）。
+//!
+//! **资源**：`/ps` 面板显示每棵进程树的 CPU% 与常驻内存，按 [`SAMPLE_INTERVAL`] 节流采样
+//! （CPU% 靠两次刷新的差值算，采密了没意义，也白烧 CPU）。
+//!
 //! **生命周期**：job 不随回合结束消失；扩展被禁用时停掉所有运行中的 job（否则工具面消失后
 //! 用户再也停不了它们）。prux 退出后仍在跑的 job 保持运行（与「拉起长命应用」同语义），
 //! 日志路径留在 `/ps` 面板里可查。
@@ -34,16 +41,18 @@ use crate::{
     },
     modes::tui::handlers::register_host_command,
     utils::{
+        display::format_bytes,
         glyphs::DEF_DOT_FILLED,
         output_files::create_output_file_stream,
         paths,
-        process::{HideConsole, kill_process_tree, shell_command},
+        process::{HideConsole, ProcessBirth, kill_process_tree_checked, shell_command},
         time::format_duration,
     },
 };
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 use std::{
+    collections::HashMap,
     fs::File,
     io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
@@ -51,6 +60,7 @@ use std::{
     sync::{Arc, Mutex, MutexGuard, OnceLock},
     time::{Duration, Instant},
 };
+use sysinfo::{Pid, ProcessesToUpdate, System};
 
 /// 扩展名（也是 `/extension` 面板中的标识）。
 const EXT: &str = "processes";
@@ -81,6 +91,9 @@ const MAX_SNAPSHOT_LINES: usize = 2000;
 
 /// 输出快照最多从日志尾部读的字节数（更大的日志只给最后一截）。
 const MAX_SNAPSHOT_BYTES: u64 = 256 * 1024;
+
+/// 进程树资源采样间隔：面板每帧都读，但真正扫进程表按这个间隔节流。
+const SAMPLE_INTERVAL: Duration = Duration::from_secs(2);
 
 /// `/ps` 子命令（顺序 = 输入框候选顺序）。
 const SUBCOMMANDS: &[SubcommandDef] = &[
@@ -121,6 +134,8 @@ struct Job {
     command: String,
     /// 子进程 pid（Unix 上同时是进程组 id）。
     pid: u32,
+    /// 启动时记下的 pid 化身身份；`None` = 当时没读到（停止时不校验）。
+    birth: Option<ProcessBirth>,
     /// stdout/stderr 的日志文件路径。
     log: PathBuf,
     /// 启动时刻（算耗时用）。
@@ -140,11 +155,108 @@ struct State {
     jobs: Vec<Job>,
     /// 停靠面板的显隐（内存态，不持久化）。
     dock_shown: bool,
+    /// 进程树资源采样的缓存与 sysinfo 进程表（CPU% 要靠前后两次刷新的差值）。
+    metrics: Metrics,
     /// job 刚结束、面板还没重画过：置位后至少再要一帧，好让已完成的行消失。
     ///
     /// 空闲时 TUI 只在 80ms tick 里轮询 [`Extension::wants_redraw`]，最后一个运行中 job
     /// 结束的那一刻计数已归零，没有这个标志就再也等不到重绘。
     refresh_pending: bool,
+}
+
+/// 一棵进程树（组长 + 全部后代）的资源占用。
+#[derive(Debug, Clone, Copy)]
+struct Usage {
+    /// CPU 占用百分比（sysinfo 语义：单核满载 = 100，多核可超过 100）。
+    cpu: f32,
+    /// 常驻内存字节数（各进程 `memory()` 之和）。
+    rss: u64,
+}
+
+/// `/ps` 面板用的进程树资源采样。
+#[derive(Default)]
+struct Metrics {
+    /// 上次采样时刻；`None` = 还没采过。
+    sampled_at: Option<Instant>,
+    /// 组长 pid → 该进程树的占用；采不到（sysinfo 里还没有该 pid）时不入表。
+    rows: HashMap<u32, Usage>,
+    /// 跨采样复用的进程表：CPU% 是两次刷新之间的差值，换一个 `System` 就永远是 0。
+    /// `None` = 进程表建不起来（受限平台），此时面板只显示占位符。
+    sys: Option<System>,
+}
+
+/// 采一次运行中 job 的进程树占用（调用方持锁）；距上次采样不足 [`SAMPLE_INTERVAL`] 时什么都不做。
+///
+/// 只算 job 自己的进程树而不是「整个系统的进程」：`sh -c cargo build` 的组长是 shell，
+/// 真正吃 CPU 的是它的后代，只报组长等于报 0。首次采样时 CPU% 必然是 0（差值需要前一次
+/// 刷新），两秒后才是真实值。
+fn sample_metrics(st: &mut State) {
+    let now = Instant::now();
+    if st
+        .metrics
+        .sampled_at
+        .is_some_and(|at| now.duration_since(at) < SAMPLE_INTERVAL)
+    {
+        return;
+    }
+    st.metrics.sampled_at = Some(now);
+
+    let targets: Vec<Pid> = st
+        .jobs
+        .iter()
+        .filter(|j| j.finished.is_none())
+        .map(|j| Pid::from_u32(j.pid))
+        .collect();
+    if targets.is_empty() {
+        st.metrics.rows.clear();
+        return;
+    }
+
+    // 进程表建不起来（受限平台 / 内核不给看）：保留空表，面板显示占位符，不假装 0。
+    if st.metrics.sys.is_none() {
+        st.metrics.sys = System::new().ok();
+    }
+    let rows = match st.metrics.sys.as_mut() {
+        Some(sys) => collect_usage(sys, &targets),
+        None => HashMap::new(),
+    };
+    st.metrics.rows = rows;
+}
+
+/// 从已可用的进程表里摊平出每棵目标进程树的 `(pid → 占用)`。
+///
+/// 全表只摊一次：按 job 反复扫进程表是 O(job × 进程数)，几十个后台任务下每两秒白烧一次。
+fn collect_usage(sys: &mut System, targets: &[Pid]) -> HashMap<u32, Usage> {
+    sys.refresh_processes(ProcessesToUpdate::All, true);
+
+    // pid → 子进程列表，从组长往下摊平用。
+    let mut children: HashMap<Pid, Vec<Pid>> = HashMap::new();
+    for (pid, process) in sys.processes() {
+        if let Some(parent) = process.parent() {
+            children.entry(parent).or_default().push(*pid);
+        }
+    }
+
+    let mut rows = HashMap::new();
+    for root in targets {
+        let mut total = Usage { cpu: 0.0, rss: 0 };
+        let mut seen = false;
+        let mut stack = vec![*root];
+        while let Some(pid) = stack.pop() {
+            if let Some(process) = sys.process(pid) {
+                seen = true;
+                total.cpu += process.cpu_usage();
+                total.rss += process.memory();
+            }
+            if let Some(down) = children.get(&pid) {
+                stack.extend(down.iter().copied());
+            }
+        }
+        if seen {
+            rows.insert(root.as_u32(), total);
+        }
+    }
+    rows
 }
 
 /// job 表。
@@ -230,13 +342,13 @@ impl Extension for Processes {
         if enabled {
             return;
         }
-        let pids = {
+        let jobs = {
             let mut st = lock();
             st.dock_shown = false;
             drain_all_running(&mut st)
         };
-        for pid in pids {
-            kill_process_tree(pid);
+        for (pid, birth) in jobs {
+            kill_process_tree_checked(pid, birth);
         }
     }
 
@@ -258,12 +370,12 @@ impl Extension for Processes {
     }
 }
 
-/// 取出全部运行中 job 的 pid 并清空 job 表（禁用时用）。
-fn drain_all_running(st: &mut State) -> Vec<u32> {
+/// 取出全部运行中 job 的 `(pid, 化身身份)` 并清空 job 表（禁用时用）。
+fn drain_all_running(st: &mut State) -> Vec<(u32, Option<ProcessBirth>)> {
     let jobs = std::mem::take(&mut st.jobs);
     jobs.into_iter()
         .filter(|j| j.finished.is_none())
-        .map(|j| j.pid)
+        .map(|j| (j.pid, j.birth))
         .collect()
 }
 
@@ -429,12 +541,15 @@ fn start_job(command: &str, cwd: &str) -> Result<String, ToolError> {
             id: id.clone(),
             command: command.to_string(),
             pid,
+            birth: ProcessBirth::of(pid),
             log: log.clone(),
             started: Instant::now(),
             finished: None,
             stop_requested: false,
         });
         st.dock_shown = true;
+        // 作废采样节流：新 job 的下一帧就该有一行真实占用，而不是先显示两秒占位符。
+        st.metrics.sampled_at = None;
         reap(child, pid);
         (id, pid, log)
     };
@@ -555,7 +670,7 @@ fn normalize_id(raw: &str) -> String {
 /// `stop_process`：杀整个进程组并回报。
 fn stop(args: &Value) -> Result<ToolResult, ToolError> {
     let id = normalize_id(&req_str(args, "id")?);
-    let pid = {
+    let (pid, birth) = {
         let mut st = lock();
         let idx = st
             .jobs
@@ -571,10 +686,15 @@ fn stop(args: &Value) -> Result<ToolResult, ToolError> {
             )));
         }
         job.stop_requested = true;
-        job.pid
+        (job.pid, job.birth)
     };
 
-    kill_process_tree(pid);
+    // 复核不过 = 进程已退出并被回收、pid 已被别人复用：这时发信号杀的是无关进程组。
+    if !kill_process_tree_checked(pid, birth) {
+        return Err(ToolError(format!(
+            "{id} had already exited: pid {pid} now belongs to another process, so nothing was killed"
+        )));
+    }
     Ok(ToolResult::text(format!(
         "Stopped {id} (pid {pid}); its process group was killed."
     )))
@@ -664,11 +784,13 @@ fn dock_lines() -> Vec<DockLine> {
         return Vec::new();
     }
 
-    let running: Vec<&Job> = st.jobs.iter().filter(|j| j.finished.is_none()).collect();
-    if running.is_empty() {
+    if !st.jobs.iter().any(|j| j.finished.is_none()) {
         st.dock_shown = false;
         return Vec::new();
     }
+    sample_metrics(&mut st);
+    let usage = &st.metrics.rows;
+    let running: Vec<&Job> = st.jobs.iter().filter(|j| j.finished.is_none()).collect();
 
     let mut lines = vec![vec![
         DockSpan::new("accent", "#8abeb7", "Processes"),
@@ -688,6 +810,7 @@ fn dock_lines() -> Vec<DockLine> {
                     format_duration(job.started.elapsed().as_millis() as u64)
                 ),
             ),
+            DockSpan::new("dim", "#666666", usage_text(usage.get(&job.pid))),
             DockSpan::new(
                 "muted",
                 "#999999",
@@ -696,6 +819,14 @@ fn dock_lines() -> Vec<DockLine> {
         ]);
     }
     lines
+}
+
+/// 面板里的资源列：`  12.3%  48.0 MiB`；这一轮没采到该进程树时给占位符，不假装是 0。
+fn usage_text(usage: Option<&Usage>) -> String {
+    match usage {
+        Some(u) => format!("  {:.1}%  {}", u.cpu, format_bytes(u.rss)),
+        None => "  --  --".to_string(),
+    }
 }
 
 /// 把命令压成一行并截断（面板一行放不下多行命令）。
@@ -788,10 +919,12 @@ mod tests {
             st.dock_shown = false;
             st.refresh_pending = false;
             st.next = 0;
+            st.metrics.sampled_at = None;
+            st.metrics.rows.clear();
             drain_all_running(&mut st)
         };
-        for pid in pids {
-            kill_process_tree(pid);
+        for (pid, birth) in pids {
+            kill_process_tree_checked(pid, birth);
         }
     }
 
@@ -958,6 +1091,45 @@ mod tests {
         assert!(dock_lines().is_empty());
         assert!(!Processes.wants_redraw(), "渲染过一帧后不再持续重绘");
 
+        reset();
+    }
+
+    /// 面板上的运行中 job 要带进程树资源列（内存是真实值；CPU% 首次采样必为 0），
+    /// 且采样按 [`SAMPLE_INTERVAL`] 节流——面板每帧都读，不能每帧都扫进程表。
+    #[test]
+    fn dock_shows_resource_usage_and_throttles_sampling() {
+        let _g = lock_test();
+        reset();
+
+        start_job("sleep 30", "/tmp").unwrap();
+        let pid = lock().jobs[0].pid;
+        lock().dock_shown = true;
+
+        let text = dock_lines()
+            .iter()
+            .map(|line| line.iter().map(|s| s.text.as_str()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains('%'), "面板应有 CPU 列: {text}");
+        assert!(
+            text.contains("KiB") || text.contains("MiB"),
+            "面板应有内存列: {text}"
+        );
+        assert!(
+            lock().metrics.rows.get(&pid).is_some_and(|u| u.rss > 0),
+            "运行中的进程树要采到内存占用"
+        );
+
+        let sampled = lock().metrics.sampled_at;
+        dock_lines();
+        assert_eq!(
+            lock().metrics.sampled_at,
+            sampled,
+            "间隔内的第二帧不该重扫进程表"
+        );
+
+        stop(&json!({ "id": "job-1" })).unwrap();
+        wait_finished("job-1").expect("job 应结束");
         reset();
     }
 

@@ -114,9 +114,19 @@
   unchanged. Each `(entry, updated_at)` is delivered once per session, at most `toolRecallLimit`
   (default 3) cards per call, capped by the injection budget and 1500 characters; `off` in the
   settings panel disables the second path.
+- **The `/ps` panel shows CPU and memory per background job**: each running row now carries the CPU
+  percentage and resident memory of the job's whole process tree — a `sh -c cargo build` job does its
+  work in descendants, so the leader alone would read as idle. Sampling runs every two seconds, the
+  first sample reports `0.0%` (a percentage needs two refreshes to difference) and an unreadable tree
+  shows `--` instead of a fake zero.
 
 ### Fixed
 
+- **Stopping a background job can no longer kill an unrelated process group**: a job's pid is kept in
+  a table and killed later, but a command that had already exited and been reaped may have had its
+  pid reused — `killpg` would then hit whoever owns it now. Stopping (and `abort_bash`) now re-reads
+  the pid's identity (machine boot time plus process start time) and sends nothing when it no longer
+  matches, reporting `had already exited` instead.
 - **Long streaming replies re-rendered every block each frame**: a message was laid out from its
   first character on every frame while it streamed. Markdown is now laid out block by block and each
   block is reused until its text, width, base style or theme changes, so only the tail of a streaming
@@ -361,9 +371,15 @@
   （普通小写单词不算），命中条目带 `[memory:tool]` 标题**追加在工具结果后面**，结果正文逐字不动。
   同一 `(条目, 更新时间)` 每个会话只投一次，单次至多 `toolRecallLimit`（缺省 3）条、且不超过注入预算与
   1500 字符；设置面板里选 `off` 可关掉。
+- **`/ps` 面板显示每个后台 job 的 CPU 与内存占用**：运行中的每一行带上整棵进程树的 CPU 百分比与
+  常驻内存（`sh -c cargo build` 的活是后代在干，只报组长会显示成空转）。每两秒采样一次，首次采样
+  CPU 报 `0.0%`（百分比要靠两次刷新的差值），采不到时显示 `--`，不假装 0。
 
 ### 修复
 
+- **停后台 job 不会再误杀无关的进程组**：job 的 pid 是记在表里的旧值、过一阵才用，而命令可能早已退出
+  并被回收、同一个 pid 已经被复用——那时 `killpg` 杀掉的是别人的进程组。停止（含 `abort_bash`）现在会
+  重新读一次 pid 的身份（机器启动时刻 + 进程启动时刻），对不上就一个信号都不发，改报「already exited」。
 - **长回复流式期间每帧重排所有块**：消息每帧都从第一个字符重新排版。现在 markdown 按顶层块排版并逐块复用，
   只有文本、宽度、基础样式或主题变化的那块才重新排版，流式回复只重排末尾一块。
 - **流式工具参数不再整串重解析**：每个 delta 都从头的重新解析累积 JSON（必要时还要整串拷贝做修复），
