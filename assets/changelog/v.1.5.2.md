@@ -68,6 +68,17 @@
   `Continue` (run it in the current directory this once, ask again next time), `Fork` (copy it into
   the current directory as a new session, original kept) or `Cancel`.
 
+- **Inbound review of an existing PR or issue**: `/review <URL> [--comment]` (the `review` extension,
+  off by default) fetches the PR or issue with `gh`, checks out `refs/pull/<n>/head` into a read-only
+  copy under `agent_dir()` with `git init` + `git fetch --depth 1` — the user's checkout, remote refs
+  and branches stay untouched — saves GitHub's own three-dot diff next to it, and hands the agent a
+  brief: absolute checkout path, diff, changed files and `file:line` reporting rules. With `--comment`
+  the last answer of that turn is posted back as a comment once the turn settles: the body starts with
+  a `<!-- prux-review:v1:<hash> -->` marker (hash = target + session), existing comments are scanned
+  for it first (a hit reuses that link and posts nothing), and a post that a re-read cannot find is
+  reported as `unconfirmed` and never retried. `/review status` shows the target, its checkout and the
+  published comments; `/review clean` deletes every copy.
+
 ### Changed
 
 - **Claude models that manage effort per message now say so**: for models whose catalog entry
@@ -94,6 +105,15 @@
   times as much as the same term inside its description, and a query that spells out the whole name
   (`thread read` → `thread_read`) is ranked first outright. Near-identical names such as `thread_read`
   and `queue_read` no longer swap places because one description happens to repeat the word more.
+
+- **Memory recall also fires at the tool boundary**: the `memory` extension used to recall only from
+  the user's own sentence, which never names the file being edited. Every tool call now contributes a
+  second recall keyed on what that call touches — paths, file names with extensions, snake_case and
+  camelCase identifiers from the arguments (plain lowercase words are ignored) — and the hit cards are
+  appended after the tool result under a `[memory:tool]` header, leaving the result text byte for byte
+  unchanged. Each `(entry, updated_at)` is delivered once per session, at most `toolRecallLimit`
+  (default 3) cards per call, capped by the injection budget and 1500 characters; `off` in the
+  settings panel disables the second path.
 
 ### Fixed
 
@@ -238,6 +258,21 @@
   verification URL and copies the code to the clipboard (either step failing only prints a hint);
   cancelling stays on Esc. The desktop interface offers the same by click: the code copies itself and
   the URL opens the browser.
+- **Display formulas lost their alignment**: the TUI dropped the leading spaces on every line when
+  wrapping, so a stacked formula's numerators, denominators and sum limits collapsed against the left
+  edge while the fraction rule stayed where it was. Leading spaces that come from the source are kept
+  now; only the spaces a wrap introduces are dropped.
+- **A batch of small math-rendering defects**: `\partial t` rendered as `∂ t` because of the space in
+  the source, a leading minus merged into the fraction rule, every stacked fraction carried a trailing
+  space (`── ,`), `90^\circ` came out as `90^∘`, and a symbol with only a subscript took two lines.
+  Spaces after a control word are now eaten as TeX does, a minus is U+2212, a stacked fraction no
+  longer pads its right side, `\circ` as a superscript gives `°`, and a script on one side only stays
+  inline (`x_c`, `x^n`) while a sub- and superscript pair still stacks. One unknown command throws
+  away the whole formula, so `\ulcorner` / `\urcorner` alone kept `G \leftrightarrow
+  \neg\mathbb{Provable}(\ulcorner G\urcorner)` from rendering at all; the corner brackets, the
+  card suits, `\lnot`, `\surd`, `\boxplus`/`\boxtimes`, `\lesssim`/`\gtrsim`, `\nleq`/`\ngeq`
+  and a handful of other common symbols are in the table now. `\mathbb` also stops half-converting a
+  word it has no glyphs for (`\mathbb{Provable}` gave `ℙrovable`, it stays `Provable`).
 - **Windows path containment was case-sensitive**: `C:\Repo` and `C:\repo\file` were treated as
   unrelated, so a file inside the project could be reported as outside it. The comparison now folds
   case on Windows only; component-wise matching on other platforms is unchanged.
@@ -290,6 +325,15 @@
   会话选择器）现在给三选——`Continue`（本次用当前目录，下次仍会问）、`Fork`（复制成当前目录下的
   新会话，原会话保留）、`Cancel`。
 
+- **把别人的 PR / issue 拉进来评审**：`/review <URL> [--comment]`（`review` 扩展，默认关闭）用 `gh` 取
+  元数据与 GitHub 自己的三点 diff，在 `agent_dir()` 下用 `git init` + `git fetch --depth 1` 把
+  `refs/pull/<n>/head` 检出一份只读副本（不动用户仓库、不建 worktree、不写远端引用、不切分支），
+  再把评审简报交给 agent：副本绝对路径、diff、改动清单与 `file:line` 报点口径。带 `--comment` 时
+  这一轮的最后一条回答会在结算时作为评论发回去——正文首行是 `<!-- prux-review:v1:<hash> -->`
+  marker（哈希 = 目标 + 会话 id），投递前先按 marker 扫已有评论（命中就复用那条链接、不重复发），
+  发完复核、扫不到就报 `unconfirmed` 且不再重试。`/review status` 看目标 / 副本 / 已发布评论，
+  `/review clean` 删掉全部副本。
+
 ### 变更
 
 - **按消息管理 effort 的 Claude 模型现在照实下发**：目录条目声明了 `supportsMidConvoEffort` 的模型，
@@ -311,6 +355,12 @@
 - **`tool_search` 先按工具名排序**：查询词命中工具名的权重是命中描述时的三倍，查询正好拼出整个名字
   （`thread read` → `thread_read`）时直接置顶。`thread_read` 与 `queue_read` 这类近似名不再因为其中一个
   描述里多重复几次关键词就换位。
+
+- **记忆召回也发生在工具边界**：`memory` 扩展原先只在用户那句话上召回，而那句话里从来不会出现正在改的
+  文件名。现在每次工具调用都会再召回一次，查询取自这次调用碰到的路径、带扩展名的文件名、蛇形 / 驼峰标识符
+  （普通小写单词不算），命中条目带 `[memory:tool]` 标题**追加在工具结果后面**，结果正文逐字不动。
+  同一 `(条目, 更新时间)` 每个会话只投一次，单次至多 `toolRecallLimit`（缺省 3）条、且不超过注入预算与
+  1500 字符；设置面板里选 `off` 可关掉。
 
 ### 修复
 
@@ -409,6 +459,18 @@
 - **确认设备码登录反而把登录取消了**：登录面板上空输入 + Enter 原本等于「取消」，
   于是想「好，打开页面吧」的那一下把登录丢了。现在 Enter 打开验证地址并把验证码复制到剪贴板
   （两步失败都只提示），取消仍是 Esc。桌面版用点击达成同一件事：点验证码即复制，点地址即开浏览器。
+- **块级公式的分子分母塌到最左边**：终端界面折行时把每行的行首空格当成断行残留丢掉，靠空格对齐的分子、
+  分母与求和上下限因此全部贴着左边，和分数线完全对不上。现在源码里显式给出的行首空格保留，
+  只有自动换行产生的才丢。
+- **数学公式排版的一批小毛病**：`\partial t` 因源码里的空格渲染成 `∂ t`，负号和分数线连成一条长横线，
+  每处分式右侧都缀一个空格（`── ,`），`90^\circ` 写成 `90^∘`，只带下标的符号独占两行。
+  现在控制词后的空格按 TeX 规则吞掉，减号改用 U+2212，堆叠分式右侧不再留空隙，
+  `\circ` 上标给 `°`，单侧上下标走行内（`x_c`、`x^n`），上下标同时存在时才垂直堆叠。
+  另外，一个不认识的命令就会让整条公式退回原文，所以缺个 `\ulcorner` / `\urcorner` 就足以让
+  `G \leftrightarrow \neg\mathbb{Provable}(\ulcorner G\urcorner)` 完全渲染不出来——现在补上了
+  直角引号、四种花色、`\lnot`、`\surd`、`\boxplus`/`\boxtimes`、`\lesssim`/`\gtrsim`、
+  `\nleq`/`\ngeq` 等常见符号；`\mathbb` 也不会把没有黑板字形的词改一半
+  （`\mathbb{Provable}` 原先是 `ℙrovable`，现在是 `Provable`）。
 - **Windows 上路径包含判断区分了大小写**：`C:\Repo` 与 `C:\repo\file` 被当成无关路径，
   项目内的文件可能被判成「目录之外」。现在只在 Windows 上折叠大小写，其它平台仍按组件比较、行为不变。
 

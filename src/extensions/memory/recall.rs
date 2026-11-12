@@ -26,6 +26,9 @@ const BM25_B: f64 = 0.75;
 /// 注入块的标题行（同时充当「这是自动注入」的标记）。
 const BLOCK_HEADER: &str = "[memory] Durable notes recalled from earlier sessions. They may be stale — verify before trusting.";
 
+/// 工具边界注入块的标题行：与逐请求那条区分开，模型才知道它是由「这次工具调用」触发的。
+const TOOL_BLOCK_HEADER: &str = "[memory:tool] Durable notes recalled for the file or symbol this call touched. They may be stale — verify before trusting.";
+
 /// 注入块里分类小节的顺序与标题。
 const SECTION_ORDER: &[(MemoryCategory, &str)] = &[
     (MemoryCategory::Correction, "Corrections"),
@@ -156,12 +159,23 @@ fn count_hits(haystack: &str, term: &str) -> usize {
 /// 块内容是**确定性**的：同样的条目序列必得同样的字符串。超出 `budget_chars` 时按
 /// 顺序截断（整条丢弃，不切半句）。
 pub(super) fn format_block(items: &[Ranked], budget_chars: usize) -> Option<String> {
+    format_block_with(BLOCK_HEADER, items, budget_chars)
+}
+
+/// 拼**工具边界**注入块（无命中返回 `None`）：与 [`format_block`] 同一套排版，
+/// 只换标题，让模型分得清这次注入来自工具调用而不是用户那句话。
+pub(super) fn format_tool_block(items: &[Ranked], budget_chars: usize) -> Option<String> {
+    format_block_with(TOOL_BLOCK_HEADER, items, budget_chars)
+}
+
+/// 按给定标题拼注入块；超出 `budget_chars` 时整条丢弃。
+fn format_block_with(header: &str, items: &[Ranked], budget_chars: usize) -> Option<String> {
     if items.is_empty() || budget_chars == 0 {
         return None;
     }
 
     let mut body = String::new();
-    let mut used = BLOCK_HEADER.chars().count();
+    let mut used = header.chars().count();
 
     for (category, title) in SECTION_ORDER {
         let mut section = String::new();
@@ -185,7 +199,7 @@ pub(super) fn format_block(items: &[Ranked], budget_chars: usize) -> Option<Stri
     if body.is_empty() {
         return None;
     }
-    Some(format!("{BLOCK_HEADER}\n{body}"))
+    Some(format!("{header}\n{body}"))
 }
 
 /// 把正文压成一行（注入块里每条只占一行，换行会打乱列表结构）。
@@ -295,6 +309,22 @@ mod tests {
         assert_eq!(format_block(&[], 8000), None);
         let tiny = format_block(&ranked, 20);
         assert!(tiny.is_none(), "放不下任何一条时返回 None: {tiny:?}");
+    }
+
+    #[test]
+    fn tool_block_uses_its_own_header_and_same_layout() {
+        let a = entry(MemoryCategory::Fact, "cargo test is slow, use make check").1;
+        let ranked = vec![Ranked {
+            entry: a,
+            scope: MemoryScope::Project,
+            score: 1.0,
+        }];
+        let block = format_tool_block(&ranked, 8000).unwrap();
+        assert!(block.starts_with("[memory:tool]"), "{block}");
+        assert!(block.contains("## Facts"), "{block}");
+        assert!(block.contains("- cargo test is slow, use make check"));
+        assert_eq!(format_tool_block(&[], 8000), None);
+        assert_eq!(format_tool_block(&ranked, 0), None);
     }
 
     #[test]

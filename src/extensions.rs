@@ -45,6 +45,7 @@ pub mod pr;
 pub mod processes;
 pub mod proxy;
 pub mod recap_btw;
+pub mod review;
 pub mod rewind;
 pub mod rollback;
 pub mod rtk;
@@ -178,6 +179,8 @@ pub const PRIORITY_PAPERS: u32 = 47;
 pub const PRIORITY_DEBUG: u32 = 45;
 /// worktree 工作副本扩展的注册优先级。
 pub const PRIORITY_WORKTREE: u32 = 44;
+/// review 入站评审（拉取 PR / issue 评审，可回帖）扩展的注册优先级。
+pub const PRIORITY_REVIEW: u32 = 45;
 /// tool_search 延迟工具检索扩展的注册优先级。
 pub const PRIORITY_TOOL_SEARCH: u32 = 40;
 /// codemode 工具编排扩展的注册优先级。

@@ -8,6 +8,7 @@
 //! | `extractInterval` | 每多少次 `turn_end` 触发一次抽取 | 12 | 关闭自动抽取 |
 //! | `injectBudgetChars` | 注入块的字符预算 | 8000 | 关闭注入（等价于关闭自动召回） |
 //! | `maintainEvery` | 每成功抽取几次后跑一轮维护（reconcile） | 4 | 关闭自动维护 |
+//! | `toolRecallLimit` | 每次工具调用后按该调用的文件/符号召回的记忆条数 | 3 | 关闭工具边界召回 |
 //!
 //! 记忆**存储**不在这个文件里：条目分别在
 //! `agent_dir()/extensions/memory/global.json` 与 `.../projects/<project-key>.json`。
@@ -69,6 +70,11 @@ const BUDGET_TABLE: &[(f64, &str)] = &[
 /// `maintainEvery` 的面板档位（单位：成功抽取次数，`0` = 关闭）。
 const MAINTAIN_TABLE: &[(f64, &str)] = &[(0.0, "off"), (2.0, "2"), (4.0, "4"), (8.0, "8")];
 
+/// `toolRecallLimit` 的面板档位（单位：条/次工具调用，`0` = 关闭工具边界召回）。
+///
+/// 上限给到 5：工具边界的注入直接追加在工具结果后面，条数再多就是在占工具输出的位置。
+const TOOL_RECALL_TABLE: &[(f64, &str)] = &[(0.0, "off"), (2.0, "2"), (3.0, "3"), (5.0, "5")];
+
 /// 面板档位的键 → 配置键。
 const RECALL_KEY: &str = "recallLimit";
 /// 抽取间隔在配置里的键。
@@ -77,6 +83,8 @@ const EXTRACT_KEY: &str = "extractInterval";
 const BUDGET_KEY: &str = "injectBudgetChars";
 /// 维护间隔在配置里的键。
 const MAINTAIN_KEY: &str = "maintainEvery";
+/// 工具边界召回条数在配置里的键。
+const TOOL_RECALL_KEY: &str = "toolRecallLimit";
 
 /// 数值缺省（`0` 的语义见模块文档）。
 pub(super) const NUMERIC_DEFAULTS: &[(&str, f64)] = &[
@@ -84,6 +92,7 @@ pub(super) const NUMERIC_DEFAULTS: &[(&str, f64)] = &[
     (EXTRACT_KEY, 12.0),
     (BUDGET_KEY, 8000.0),
     (MAINTAIN_KEY, 4.0),
+    (TOOL_RECALL_KEY, 3.0),
 ];
 
 /// memory.json 的读写锁（面板应用设置与读配置可能并发）。
@@ -134,6 +143,11 @@ impl Config {
     pub(super) fn maintain_every(&self) -> usize {
         self.uint(MAINTAIN_KEY)
     }
+
+    /// 每次工具调用后按该调用的文件/符号召回的记忆条数；`0` = 关闭工具边界召回。
+    pub(super) fn tool_recall_limit(&self) -> usize {
+        self.uint(TOOL_RECALL_KEY)
+    }
 }
 
 /// 全部缺省键（用于回填判断）。
@@ -175,6 +189,13 @@ pub(super) fn panel_settings(cfg: &Config) -> Vec<ExtensionSetting> {
             label_for(cfg, MAINTAIN_KEY, MAINTAIN_TABLE),
             &["off", "2", "4", "8"],
         ),
+        cycle_setting(
+            "tool-recall",
+            "Tool recall",
+            "Recall memories for the file or symbol a tool call touches, appended to its result",
+            label_for(cfg, TOOL_RECALL_KEY, TOOL_RECALL_TABLE),
+            &["off", "2", "3", "5"],
+        ),
     ]
 }
 
@@ -199,6 +220,7 @@ pub(super) fn apply_setting(
         "extract" => set_numeric(cfg, EXTRACT_KEY, choice_num(EXTRACT_TABLE, value)?),
         "budget" => set_numeric(cfg, BUDGET_KEY, choice_num(BUDGET_TABLE, value)?),
         "maintain" => set_numeric(cfg, MAINTAIN_KEY, choice_num(MAINTAIN_TABLE, value)?),
+        "tool-recall" => set_numeric(cfg, TOOL_RECALL_KEY, choice_num(TOOL_RECALL_TABLE, value)?),
         other => return Err(format!("unknown setting: {other}")),
     }
     Ok(())
@@ -286,6 +308,7 @@ mod tests {
         assert_eq!(cfg.extract_interval(), 12);
         assert_eq!(cfg.inject_budget(), 8000);
         assert_eq!(cfg.maintain_every(), 4);
+        assert_eq!(cfg.tool_recall_limit(), 3);
         assert_eq!(cfg.values["configVersion"], json!(CONFIG_VERSION));
 
         let cfg = merge_config(Some(&json!({
@@ -305,9 +328,11 @@ mod tests {
             "recallLimit": 0,
             "extractInterval": 0,
             "injectBudgetChars": 0,
+            "toolRecallLimit": 0,
             "configVersion": 1
         })));
         assert_eq!(cfg.recall_limit(), 0);
+        assert_eq!(cfg.tool_recall_limit(), 0);
         assert_eq!(cfg.extract_interval(), 0);
         assert_eq!(cfg.inject_budget(), 0);
     }
@@ -316,16 +341,19 @@ mod tests {
     fn panel_settings_cycle_through_all_choices() {
         let mut cfg = merge_config(None);
         let items = panel_settings(&cfg);
-        assert_eq!(items.len(), 4);
+        assert_eq!(items.len(), 5);
         assert_eq!(items[0].value, "5");
         assert_eq!(items[1].value, "12 turns");
         assert_eq!(items[2].value, "8k");
         assert_eq!(items[3].value, "4");
+        assert_eq!(items[4].value, "3");
 
         apply_setting(&mut cfg, "recall", "off").unwrap();
         apply_setting(&mut cfg, "extract", "6 turns").unwrap();
         apply_setting(&mut cfg, "budget", "2k").unwrap();
         apply_setting(&mut cfg, "maintain", "off").unwrap();
+        apply_setting(&mut cfg, "tool-recall", "off").unwrap();
+        assert_eq!(cfg.tool_recall_limit(), 0);
         assert_eq!(cfg.recall_limit(), 0);
         assert_eq!(cfg.extract_interval(), 6);
         assert_eq!(cfg.inject_budget(), 2000);

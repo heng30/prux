@@ -6,6 +6,10 @@
 //!    请求，把最近一段对话摘录抽成结构化条目（事实 / 偏好 / 实体 / 纠正），写进记忆图；
 //! 2. **召回**：每次请求前按当前用户消息做**词法** BM25 召回（prux 没有 embedding 栈），
 //!    把命中条目拼成一段稳定文本追加进本次请求的上下文。它**不进会话历史**，也不改系统提示；
+//!    另有**工具边界召回**：每次工具调用后，按这次调用碰到的文件 / 符号名再召回一次，
+//!    追加在**工具结果后面**（`[memory:tool]` 标记）。用户那句话里通常没有文件名，
+//!    所以「正在改 `src/core/x.rs` 时要提醒的事」只有这条路径触发得到；
+//!    同一 `(条目, 更新时间)` 在每个进程里只投一次，避免每次 `read` 都复读同一段；
 //! 3. **工具**：给模型一个 `memory` 工具（`remember` / `recall` / `search` / `list` /
 //!    `forget` / `tag` / `link` / `related`），让用户可以显式要求「记住这件事」或「忘掉它」。
 //!
@@ -33,9 +37,9 @@ use crate::{
     core::{
         auth,
         extensions::{
-            self, BoundaryOutcome, Extension, ExtensionCommand, ExtensionHook, ExtensionMode,
-            ExtensionSetting, ExtensionTool, ExtensionUiRequest, ForkProjectInfo, SubcommandDef,
-            ToolAnnotations, ToolExecCtx, ToolExposure,
+            self, AfterToolCallOutcome, BoundaryOutcome, Extension, ExtensionCommand,
+            ExtensionHook, ExtensionMode, ExtensionSetting, ExtensionTool, ExtensionUiRequest,
+            ForkProjectInfo, SubcommandDef, ToolAnnotations, ToolExecCtx, ToolExposure,
         },
         model_resolver,
         provider::{self, AgentMessage},
@@ -63,6 +67,7 @@ use recall::Ranked;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
+    collections::HashMap,
     path::Path,
     sync::{Arc, Mutex, MutexGuard, OnceLock},
 };
@@ -118,6 +123,30 @@ const KNOWN_PREVIEW_CHARS: usize = 160;
 /// 召回用的查询文本上限（字符）：超长输入只取前段。
 const QUERY_MAX_CHARS: usize = 2000;
 
+/// 单次工具边界注入的字符上限（实际取它与注入预算的较小值）。
+///
+/// 这段文本直接追加在工具结果后面，占的是工具输出的位置；给到 1500 是「够看清、
+/// 又不会把一次 `read` 的输出挤到看不见」的量级。
+const TOOL_RECALL_BUDGET: usize = 1500;
+
+/// 工具边界召回一次最多取几条候选（过滤掉已投递的，再按配置条数截断）。
+const TOOL_RECALL_CANDIDATES: usize = 20;
+
+/// 从一次工具调用里最多抽多少个信号词（按出现顺序截断）。
+const TOOL_SIGNAL_MAX: usize = 24;
+
+/// 信号词查询的总字符上限。
+const TOOL_SIGNAL_CHARS: usize = 400;
+
+/// 抽信号词时递归遍历入参 JSON 的深度上限（`{"edits":[{"oldText":…}]}` 这类形状要够用）。
+const ARG_WALK_DEPTH: usize = 4;
+
+/// 抽信号词时最多收集多少个字符串叶子。
+const ARG_STRINGS_MAX: usize = 32;
+
+/// 已投递记录的上界：超过就整体清空（宁可重投一次，也不无限占内存）。
+const TOOL_SEEN_MAX: usize = 512;
+
 /// 自声明工厂：linkme 分布式切片。
 #[linkme::distributed_slice(EXTENSION_FACTORIES)]
 static MEMORY_FACTORY: ExtensionFactory = ExtensionFactory {
@@ -163,6 +192,8 @@ struct State {
     model: Option<(String, String)>,
     /// 召回缓存：`(查询文本, 注入块)`；块为 `None` 表示「这一轮没有可注入的内容」。
     recall_cache: Option<(String, Option<String>)>,
+    /// 工具边界已投递过的条目：`id → updated_at`；条目被改写（时间戳变）后可再投一次。
+    tool_seen: HashMap<String, String>,
     /// 距上次抽取累计的 `turn_end` 次数。
     turns_since_extract: usize,
     /// 是否已到抽取时机（等待结算时执行）。
@@ -186,6 +217,7 @@ impl Default for State {
             session_id: None,
             model: None,
             recall_cache: None,
+            tool_seen: HashMap::new(),
             turns_since_extract: 0,
             extract_pending: false,
             extracting: false,
@@ -263,9 +295,13 @@ impl Extension for Memory {
         }]
     }
 
-    /// 订阅系统提示注入与边界（抽取节奏）两类钩子。
+    /// 订阅系统提示注入、边界（抽取节奏）与工具结果后处理（工具边界召回）三类钩子。
     fn hooks(&self) -> Vec<ExtensionHook> {
-        vec![ExtensionHook::ContextWithSystem, ExtensionHook::Boundary]
+        vec![
+            ExtensionHook::ContextWithSystem,
+            ExtensionHook::Boundary,
+            ExtensionHook::AfterToolCall,
+        ]
     }
 
     /// 面板设置项：召回条数、抽取间隔、注入预算。
@@ -297,6 +333,7 @@ impl Extension for Memory {
             st.cfg = config::load_config();
         }
         st.recall_cache = None;
+        st.tool_seen.clear();
         st.turns_since_extract = 0;
         st.extract_pending = false;
         st.extracting = false;
@@ -307,6 +344,7 @@ impl Extension for Memory {
         let mut st = lock();
         st.session_id = session.map(|s| s.session_id.clone());
         st.recall_cache = None;
+        st.tool_seen.clear();
         st.turns_since_extract = 0;
         st.extract_pending = false;
     }
@@ -316,6 +354,7 @@ impl Extension for Memory {
         let mut st = lock();
         st.session_id = session_id_of(session_path);
         st.recall_cache = None;
+        st.tool_seen.clear();
         st.turns_since_extract = 0;
         st.extract_pending = false;
     }
@@ -379,6 +418,46 @@ impl Extension for Memory {
             }
             _ => None,
         }
+    }
+
+    /// 工具结果后处理：按这次调用碰到的文件 / 符号召回一次，把命中块追加在结果后面。
+    ///
+    /// 追加而不是替换 text、也不碰 content：工具结果本体（尤其 diff / 代码块）必须逐字保留，
+    /// 注入块只往后贴一段。已投递过的 `(条目, 更新时间)` 不再重复，所以反复 `read` 同一个文件
+    /// 不会每次都多出一模一样的段落。
+    fn after_tool_call_ext(
+        &self,
+        name: &str,
+        args: &Value,
+        result_text: &str,
+        _is_error: bool,
+    ) -> std::result::Result<AfterToolCallOutcome, ToolError> {
+        /// 原样返回（不改写结果）；注入时才在末尾追加一段。
+        fn unchanged(text: &str) -> AfterToolCallOutcome {
+            AfterToolCallOutcome {
+                text: text.to_string(),
+                content: None,
+                details: None,
+                is_error: None,
+                usage: None,
+                terminate: None,
+            }
+        }
+
+        let cfg = lock().cfg.clone();
+        if cfg.tool_recall_limit() == 0 || cfg.inject_budget() == 0 {
+            return Ok(unchanged(result_text));
+        }
+        let Some(query) = tool_signal_query(name, args) else {
+            return Ok(unchanged(result_text));
+        };
+        let Some(block) = build_tool_recall_block(&cfg, &session_cwd(), &query) else {
+            return Ok(unchanged(result_text));
+        };
+
+        let mut out = unchanged(result_text.trim_end());
+        out.text = format!("{}\n\n{block}", out.text);
+        Ok(out)
     }
 
     /// 按工具名分发；未知工具名返回 `ToolError`。
@@ -1050,6 +1129,131 @@ fn build_recall_block(cfg: &Config, cwd: Option<&str>, query: &str) -> Option<St
     let scoped = store::read_scoped(scope, cwd).ok()?;
     let ranked = recall::rank(&scoped.active_entries(), query, limit);
     recall::format_block(&ranked, budget)
+}
+
+/// 工具边界召回：按本次工具调用的信号词召回，返回要追加在工具结果后的块。
+///
+/// 已投递过的条目（同 `id` 且 `updated_at` 未变）不再返回，并在返回前记账；
+/// 没有新命中时返回 `None`。
+fn build_tool_recall_block(cfg: &Config, cwd: &str, query: &str) -> Option<String> {
+    let limit = cfg.tool_recall_limit();
+    let budget = cfg.inject_budget().min(TOOL_RECALL_BUDGET);
+    if limit == 0 || budget == 0 {
+        return None;
+    }
+
+    let scoped = store::read_scoped(MemoryScope::All, Some(cwd)).ok()?;
+    let candidates = recall::rank(
+        &scoped.active_entries(),
+        query,
+        TOOL_RECALL_CANDIDATES.max(limit),
+    );
+
+    let seen = lock().tool_seen.clone();
+    let fresh: Vec<Ranked> = candidates
+        .into_iter()
+        .filter(|item| seen.get(&item.entry.id) != Some(&item.entry.updated_at))
+        .collect();
+
+    let picked = &fresh[..fresh.len().min(limit)];
+    let block = recall::format_tool_block(picked, budget)?;
+
+    let mut st = lock();
+    if st.tool_seen.len() + picked.len() > TOOL_SEEN_MAX {
+        st.tool_seen.clear();
+    }
+    for item in picked {
+        st.tool_seen
+            .insert(item.entry.id.clone(), item.entry.updated_at.clone());
+    }
+    Some(block)
+}
+
+/// 从一次工具调用里抽出「这次碰的是哪些文件 / 符号」的信号词，拼成召回查询。
+///
+/// 取值只来自入参 JSON 的字符串叶子（深挖 [`ARG_WALK_DEPTH`] 层、最多
+/// [`ARG_STRINGS_MAX`] 条），再按空白切成候选、按 [`is_signal_token`] 过滤。
+/// 整段路径原样保留：`terms` 会自己按非字母数字切开，因此 `src/core/x.rs`
+/// 既能命中 `x` 也能命中 `x.rs`。没有可用信号时返回 `None`（这次调用没什么可召回的）。
+fn tool_signal_query(name: &str, args: &Value) -> Option<String> {
+    if name == TOOL_MEMORY {
+        // 读写记忆的调用不反过来触发召回：那会把刚写的条目立刻复读一遍。
+        return None;
+    }
+
+    let mut raw: Vec<String> = Vec::new();
+    collect_arg_strings(args, ARG_WALK_DEPTH, &mut raw);
+    if raw.is_empty() {
+        return None;
+    }
+
+    let mut signals: Vec<&str> = Vec::new();
+    'outer: for text in &raw {
+        for chunk in text.split_whitespace() {
+            let token = chunk.trim_matches(|c: char| {
+                !c.is_alphanumeric() && !matches!(c, '_' | '-' | '.' | '/' | '@' | ':')
+            });
+            if !is_signal_token(token) || signals.contains(&token) {
+                continue;
+            }
+            signals.push(token);
+            if signals.len() >= TOOL_SIGNAL_MAX {
+                break 'outer;
+            }
+        }
+    }
+
+    if signals.is_empty() {
+        return None;
+    }
+    Some(truncate_chars(
+        &signals.join(" "),
+        TOOL_SIGNAL_CHARS,
+        None,
+        true,
+    ))
+}
+
+/// 递归收集入参 JSON 里的字符串叶子（跳过数字 / 布尔 / null）。
+fn collect_arg_strings(value: &Value, depth: usize, out: &mut Vec<String>) {
+    if depth == 0 || out.len() >= ARG_STRINGS_MAX {
+        return;
+    }
+    match value {
+        Value::String(text) => {
+            if !text.trim().is_empty() {
+                out.push(text.clone());
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                collect_arg_strings(item, depth - 1, out);
+            }
+        }
+        Value::Object(map) => {
+            for value in map.values() {
+                collect_arg_strings(value, depth - 1, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// 一个候选词是否值得当召回信号：路径 / 带扩展名的文件名 / 蛇形或驼峰标识符。
+///
+/// 普通小写单词（`cargo` / `make`）刻意不收：它们几乎出现在每条记忆里，
+/// 只会把 BM25 的 idf 拉平，让真正的文件名信号失去区分度。
+fn is_signal_token(token: &str) -> bool {
+    let chars = token.chars().count();
+    if !(3..=120).contains(&chars) {
+        return false;
+    }
+    if token.contains('/') || token.contains('.') {
+        return true;
+    }
+    chars >= 4
+        && token.chars().all(|c| c.is_alphanumeric() || c == '_')
+        && (token.contains('_') || token.chars().any(|c| c.is_uppercase()))
 }
 
 /// 记录「这些条目被用到了」：累加访问次数并落盘。
@@ -1981,6 +2185,74 @@ mod tests {
         assert_eq!(last_user_query(&messages).as_deref(), Some("real question"));
         assert!(last_user_query(&[]).is_none());
         assert!(last_user_query(&[AgentMessage::user_text("   ")]).is_none());
+    }
+
+    #[test]
+    fn tool_signals_come_from_paths_and_identifiers_only() {
+        let args = json!({
+            "path": "src/core/agent_session.rs",
+            "command": "cargo test --nocapture",
+            "limit": 10,
+            "nested": {"files": ["docs/sessions.md"], "identifier": "run_loop"}
+        });
+        let query = tool_signal_query("read", &args).unwrap();
+        assert!(query.contains("src/core/agent_session.rs"), "{query}");
+        assert!(query.contains("docs/sessions.md"), "{query}");
+        assert!(query.contains("run_loop"), "{query}");
+        assert!(!query.contains("cargo"), "普通小写单词不当信号: {query}");
+        assert!(!query.contains("nocapture"), "{query}");
+        assert_eq!(
+            tool_signal_query(TOOL_MEMORY, &args),
+            None,
+            "记忆工具自身不触发召回"
+        );
+        assert_eq!(tool_signal_query("read", &json!({"limit": 3})), None);
+        assert_eq!(tool_signal_query("read", &json!({"path": ""})), None);
+    }
+
+    #[test]
+    fn after_tool_call_appends_recalled_block_once() {
+        let _serial = cadence_guard();
+        restore_state_config();
+        let fixture = Fixture::new();
+        let _cwd = crate::test_support::CwdGuard::set(&fixture.cwd);
+        lock().tool_seen.clear();
+
+        call(
+            &fixture,
+            json!({
+                "action":"remember",
+                "content":"src/core/agent_session.rs 的 run_loop 里不要持锁回调扩展",
+                "category":"fact"
+            }),
+        )
+        .unwrap();
+
+        let ext = Memory;
+        let args = json!({"path": "src/core/agent_session.rs"});
+        let out = ext
+            .after_tool_call_ext("read", &args, "file contents", false)
+            .unwrap();
+        assert!(out.text.starts_with("file contents"), "原结果原样保留");
+        assert!(out.text.contains("[memory:tool]"), "{}", out.text);
+        assert!(out.text.contains("run_loop"), "{}", out.text);
+
+        let again = ext
+            .after_tool_call_ext("read", &args, "file contents", false)
+            .unwrap();
+        assert_eq!(
+            again.text, "file contents",
+            "同一 (条目, 更新时间) 只投一次"
+        );
+
+        lock().cfg = merge_config(Some(&json!({"toolRecallLimit": 0})));
+        let off = ext
+            .after_tool_call_ext("read", &args, "file contents", false)
+            .unwrap();
+        assert_eq!(off.text, "file contents", "档位 off 时不注入");
+
+        lock().cfg = merge_config(None);
+        lock().tool_seen.clear();
     }
 
     #[test]
