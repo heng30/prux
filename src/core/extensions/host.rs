@@ -102,6 +102,9 @@ pub trait CommandHost {
     /// 输出当前系统提示词原文（`/debug system-prompt`）。
     fn debug_system_prompt(&mut self);
 
+    /// 输出当前声明的工具声明（`/debug tools`）。
+    fn debug_tools(&mut self);
+
     /// 输出上下文窗口的来源拆分（`/debug context`）。
     fn debug_context_breakdown(&mut self);
 
@@ -227,6 +230,8 @@ mod tests {
         fn debug_info(&mut self) {}
 
         fn debug_system_prompt(&mut self) {}
+
+        fn debug_tools(&mut self) {}
 
         fn debug_context_breakdown(&mut self) {}
 

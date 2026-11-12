@@ -50,7 +50,7 @@ prux --export <sess> [out] # 把会话导出为 HTML
 - **header**：`kind=header`、`version=4`，记录会话 `id`、`cwd`、`createdAt`；fork 出的会话还会带 `parentSessionId` 指向源会话。
 - **entry**：消息（`type=message`）、模型切换（`model_change`）、思考级别（`thinking_level_change`）、活动工具（`active_tools_change`）、压缩（`compaction`）、分支摘要（`branch_summary`）、自定义条目（`custom`）、上下文编辑（`context_edit`）等。每个 entry 有 `id`/`seq`/`timestamp`/`parentId`（根节点省略该键），靠 `parentId` 形成树；`main` lane 的 `leaf` 指针标记当前活动位置。
 - **context_edit**（append-only 上下文编辑）：`{"type":"context_edit","targetId":"<条目 id>","replacement":null}` 表示在**模型上下文**中省略该条目，`replacement={"content":[…块…]}` 表示只替换其内容；**不改写历史**，原始 transcript 仍可被 UI / `/bug` / fork 完整看到。恢复重试、溢出恢复会自动为被放弃的 attempt 追加省略；扩展也可在 `turn_end` / `agent_before_settle` 边界追加（含 retain-none 压缩：只留摘要、不保留前置条目）。
-- **fact**：会话名（`fact=name`）与标签（`fact=label`）等元数据，不进入消息树。
+- **fact**：会话名（`fact=name`）、标签（`fact=label`）与 HTML 导出快照（`fact=export_extras`，带 `value={"systemPrompt","tools"}`，供 `--export` 这类无运行期状态的导出路径使用）等元数据，不进入消息树。
 - **record**：记录运行/步骤的 lane record，供 `/session` 统计与审计，不参与会话树。
 
 恢复会话时，prux 沿 `parentId` 链从当前 leaf 回溯构建上下文消息；压缩后的上下文以「压缩摘要 + 保留尾部」开头。

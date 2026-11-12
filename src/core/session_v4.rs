@@ -650,11 +650,12 @@ pub enum SessionMutation {
         #[serde(rename = "leafId")]
         leaf_id: Option<String>,
     },
-    /// 元数据层：写会话级事实（会话名 / 条目 label）。
+    /// 元数据层：写会话级事实（会话名 / 条目 label / 导出快照）。
     Fact {
         /// 全局序号。
         seq: u64,
-        /// 事实类型："name"（会话名）或 "label"（条目标签）。
+        /// 事实类型："name"（会话名）、"label"（条目标签）或
+        /// "export_extras"（HTML 导出的系统提示词与工具声明快照）。
         fact: String,
         /// 类型为 "name" 时：会话名（可清空）。
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -665,6 +666,9 @@ pub enum SessionMutation {
         /// 类型为 "label" 时：标签文本（可清除）。
         #[serde(default, skip_serializing_if = "Option::is_none")]
         label: Option<String>,
+        /// 类型为 "export_extras" 时：`{"systemPrompt", "tools"}` 快照，本层不解释。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        value: Option<Value>,
     },
 }
 
@@ -739,7 +743,7 @@ pub fn parse_mutation(line: &str) -> Result<SessionMutation, RecordLogError> {
             let SessionMutation::Fact { fact, .. } = &m else {
                 unreachable!()
             };
-            if fact != "name" && fact != "label" {
+            if fact != "name" && fact != "label" && fact != "export_extras" {
                 return Err(RecordLogError::UnknownFactType {
                     message: format!("has unknown fact type {fact}"),
                 });
@@ -2465,6 +2469,8 @@ pub struct SessionState {
     name: Option<String>,
     /// entry_id → label
     labels: HashMap<String, String>,
+    /// HTML 导出附带的系统提示词与工具声明快照（最后一条事实为准）。
+    export_extras: Option<Value>,
 }
 
 impl SessionState {
@@ -2538,6 +2544,11 @@ impl SessionState {
     /// 返回会话名；从未设置或被清除时为 `None`。
     pub fn get_name(&self) -> Option<&str> {
         self.name.as_deref()
+    }
+
+    /// 上一次写入的 HTML 导出快照（系统提示词 + 工具声明）；从未写入时为 `None`。
+    pub fn get_export_extras(&self) -> Option<&Value> {
+        self.export_extras.as_ref()
     }
 
     /// 返回指定条目的 label；该条目没有标签时为 `None`。
@@ -2693,6 +2704,7 @@ impl SessionState {
                 name,
                 target_id,
                 label,
+                value,
             } => {
                 // label 目标必须存在
                 if fact == "label"
@@ -2728,6 +2740,7 @@ impl SessionState {
                             });
                         }
                     }
+                    "export_extras" => self.export_extras = value.clone(),
                     _ => {}
                 }
             }
@@ -2883,6 +2896,17 @@ impl SessionState {
                 name: Some(name.clone()),
                 target_id: None,
                 label: None,
+                value: None,
+            });
+        }
+        if let Some(extras) = &self.export_extras {
+            fact_mutations.push(SessionMutation::Fact {
+                seq: 0,
+                fact: "export_extras".to_string(),
+                name: None,
+                target_id: None,
+                label: None,
+                value: Some(extras.clone()),
             });
         }
 
@@ -2895,6 +2919,7 @@ impl SessionState {
                     name: None,
                     target_id: Some(entry.id().to_string()),
                     label: Some(label.clone()),
+                    value: None,
                 });
             }
         }
@@ -2969,6 +2994,7 @@ impl SessionState {
                 name: None,
                 target_id: Some(target_id),
                 label: Some(label),
+                value: None,
             });
             sequence += 1;
         }
@@ -4012,6 +4038,7 @@ mod tests {
             name: Some("n".into()),
             target_id: None,
             label: None,
+            value: None,
         })
         .unwrap();
         let ms = st.create_fork_mutations(&ForkScope::Tree).unwrap();

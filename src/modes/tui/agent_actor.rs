@@ -74,6 +74,8 @@ pub enum AgentCommand {
     DebugInfo,
     /// 当前系统提示词原文（`/debug system-prompt`；回执走 command_notice）
     SystemPrompt,
+    /// 当前声明的工具声明（`/debug tools`；回执走 command_notice）
+    DebugTools,
     /// 上下文占用拆分（`/debug context`；回执走 command_notice）
     ContextBreakdown,
     /// 分享会话（theme 为当前 TUI 主题名，None 时回退 dark）

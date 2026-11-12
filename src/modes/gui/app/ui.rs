@@ -133,6 +133,11 @@ impl CommandHost for GuiApp {
         _ = self.cmd_tx.send(AgentCommand::SystemPrompt);
     }
 
+    /// 请 worker 回执当前声明的工具。
+    fn debug_tools(&mut self) {
+        _ = self.cmd_tx.send(AgentCommand::DebugTools);
+    }
+
     /// 请 worker 回执上下文占用拆分。
     fn debug_context_breakdown(&mut self) {
         _ = self.cmd_tx.send(AgentCommand::ContextBreakdown);

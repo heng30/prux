@@ -21,7 +21,7 @@ use crate::{
         },
         crash_log::install_panic_hook,
         doc_sync::ensure_docs,
-        export_html::export_session,
+        export_html::export_session_extra,
         model_resolver::{find_model, provider_explicitly_configured, resolve_provider_model},
         model_scope::{self, AvailableModel, ScopedModel},
         prompt_templates::{PromptTemplate, load_prompt_templates},
@@ -185,7 +185,12 @@ pub async fn bootstrap() -> Startup {
             .or_else(|| parsed.theme.first().cloned());
         let theme = theme.as_deref().map(theme_name_from_arg);
         match Session::open(session_path) {
-            Ok(sess) => match export_session(&sess, parsed.export_out(), theme.as_deref()) {
+            Ok(sess) => match export_session_extra(
+                &sess,
+                parsed.export_out(),
+                theme.as_deref(),
+                sess.export_extras_snapshot().cloned(),
+            ) {
                 Ok(p) => {
                     println!("Exported session to {}", p);
                     std::process::exit(0);

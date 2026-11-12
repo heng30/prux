@@ -120,6 +120,11 @@ impl CommandHost for App {
         self.worker.send(AgentCommand::SystemPrompt);
     }
 
+    /// 请 worker 回执当前声明的工具。
+    fn debug_tools(&mut self) {
+        self.worker.send(AgentCommand::DebugTools);
+    }
+
     /// 请 worker 回执上下文占用拆分。
     fn debug_context_breakdown(&mut self) {
         self.worker.send(AgentCommand::ContextBreakdown);

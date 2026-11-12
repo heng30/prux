@@ -534,6 +534,7 @@ mod tests {
         }
         fn debug_info(&mut self) {}
         fn debug_system_prompt(&mut self) {}
+        fn debug_tools(&mut self) {}
         fn debug_context_breakdown(&mut self) {}
         fn session_path(&self) -> Option<String> {
             None

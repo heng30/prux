@@ -7,6 +7,8 @@
 //!   （provider/model/api + 捕获条数 + 事件摘要），并把整份事件载荷落成会话自定义条目
 //!   （供导出与排查）；
 //! - `system-prompt`：打印当前系统提示词原文，经 worker 回执；
+//! - `tools`：打印本次请求真正声明的工具提示词（名称 + 描述 + 参数 schema，与 HTML 导出的
+//!   `tools` 同一口径），经 worker 回执；
 //! - `context`：上下文占用拆分（系统提示词各段 / 工具 schema / 会话消息），经 worker 回执；
 //! - `receipts`：会话回执——按时间序排出本会话改了哪些文件、跑了哪些命令、MCP / 子代理调用、
 //!   被 permissions 拦下的调用、回合级失败，顶部给汇总（见 [`receipts`]）；
@@ -53,6 +55,10 @@ const SUBCOMMANDS: &[SubcommandDef] = &[
         description: "Print the current system prompt",
     },
     SubcommandDef {
+        name: "tools",
+        description: "Print the declared tool prompts (name, description, parameters)",
+    },
+    SubcommandDef {
         name: "context",
         description: "Split the context window by source (system prompt, tools, messages)",
     },
@@ -84,7 +90,7 @@ impl Extension for Debug {
 
     /// 返回 `/extension` 面板展示的一句话描述。
     fn description(&self) -> &str {
-        "Debug helpers: agent status, raw provider stream events, system prompt, context breakdown, receipts"
+        "Debug helpers: agent status, raw provider stream events, system prompt, tool prompts, context breakdown, receipts"
     }
 
     /// 默认关闭：高频的 provider 订阅按需开启（/extension 面板空格）
@@ -107,7 +113,7 @@ impl Extension for Debug {
         vec![ExtensionCommand {
             name: CMD.to_string(),
             description:
-                "/debug <info|provider|system-prompt|context|receipts|settings-key> - debug helpers"
+                "/debug <info|provider|system-prompt|tools|context|receipts|settings-key> - debug helpers"
                     .to_string(),
             busy_safe: true, // handler 只碰扩展自身状态、App 消息与命令入队，不锁 agent
             subcommands: SUBCOMMANDS.to_vec(),
@@ -143,7 +149,7 @@ impl Extension for Debug {
     }
 }
 
-/// `/debug <info|provider|system-prompt|context|receipts|settings-key> [args]`：按子命令分派，未知子命令打印用法。
+/// `/debug <info|provider|system-prompt|tools|context|receipts|settings-key> [args]`：按子命令分派，未知子命令打印用法。
 ///
 /// 参数原文经 [`command_arg`] 去掉命令名后，再按首个空白切成「子命令 + 其余参数」。
 fn command_debug(host: &mut dyn CommandHost, raw: &str) -> bool {
@@ -157,6 +163,7 @@ fn command_debug(host: &mut dyn CommandHost, raw: &str) -> bool {
         "info" => host.debug_info(),
         "provider" => provider::command(host, rest),
         "system-prompt" => host.debug_system_prompt(),
+        "tools" => host.debug_tools(),
         "context" => host.debug_context_breakdown(),
         "receipts" => _ = receipts::command(host, rest),
         "settings-key" => _ = settings_key::command(host, rest),
@@ -167,7 +174,7 @@ fn command_debug(host: &mut dyn CommandHost, raw: &str) -> bool {
 
 /// 未知子命令（或未给子命令）时的用法提示；`arg` 非空时一并回显，便于定位敲错的词。
 fn usage(arg: &str) -> String {
-    let head = "Usage: /debug <info|provider|system-prompt|context|receipts|settings-key>";
+    let head = "Usage: /debug <info|provider|system-prompt|tools|context|receipts|settings-key>";
     if arg.is_empty() {
         head.to_string()
     } else {
@@ -238,6 +245,7 @@ mod tests {
                 "info",
                 "provider",
                 "system-prompt",
+                "tools",
                 "context",
                 "receipts",
                 "settings-key"
@@ -260,7 +268,7 @@ mod tests {
     }
 
     #[test]
-    fn info_and_system_prompt_ask_the_worker() {
+    fn info_system_prompt_and_tools_ask_the_worker() {
         let _g = lock();
 
         let (mut st, mut rx) = app_with_channel();
@@ -275,6 +283,13 @@ mod tests {
         assert!(
             matches!(rx.try_recv(), Ok(AgentCommand::SystemPrompt)),
             "system-prompt 应下发 SystemPrompt 给 worker"
+        );
+
+        let (mut st, mut rx) = app_with_channel();
+        command_debug(&mut st, "debug tools");
+        assert!(
+            matches!(rx.try_recv(), Ok(AgentCommand::DebugTools)),
+            "tools 应下发 DebugTools 给 worker"
         );
 
         let (mut st, mut rx) = app_with_channel();

@@ -1183,12 +1183,18 @@ impl Agent {
         self.tools = tools;
         self.hidden_declarations = hidden;
 
+        // 快照给 `--export` 这类无 Agent 的导出路径用（它读不出运行期状态）
+        let extras = self.export_extras(None);
         if let Some(s) = self.session.as_mut() {
             let names: Vec<String> = self.tools.iter().map(|t| t.0.clone()).collect();
 
             // 工具集未变化时不追加 ActiveToolsChange 条目，避免配置条目顶到 lane 叶子导致 /clone 目标非 message
             if !same_tool_names(s.last_active_tools().as_deref(), &names) {
                 s.append_active_tools_change(&names);
+            }
+
+            if s.export_extras_snapshot() != Some(&extras) {
+                s.set_export_extras(extras);
             }
         }
     }
@@ -6197,6 +6203,54 @@ mod tests {
     }
 
     /// 会话恢复：装回会话记录的 active tools，`--tools +name`/`-name` 作用在其上（pi #10785）。
+    #[test]
+    fn rebuild_tools_writes_export_extras_snapshot_once() {
+        let _g = crate::test_support::AUTH_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _ad = crate::test_support::AgentDirGuard::temp();
+        let dir = tempfile::tempdir().unwrap();
+
+        let mut agent = test_agent_selection(ToolSelection::tools(vec!["read".into()]), vec![]);
+        let session = crate::core::session_manager::Session::create(
+            ".",
+            Some(dir.path().to_path_buf()),
+            true,
+        )
+        .unwrap();
+        let path = session.get_session_file().unwrap().to_path_buf();
+        agent.session = Some(session);
+
+        agent.rebuild_tools();
+        let extras = agent
+            .session
+            .as_ref()
+            .unwrap()
+            .export_extras_snapshot()
+            .cloned();
+        let extras = extras.expect("rebuild_tools 应写下导出快照");
+        assert_eq!(
+            extras["systemPrompt"],
+            serde_json::json!(agent.system_prompt)
+        );
+        assert!(
+            extras["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|t| t["name"] == serde_json::json!("read")),
+            "{extras}"
+        );
+
+        agent.rebuild_tools();
+        let lines = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            lines.matches("\"export_extras\"").count(),
+            1,
+            "快照未变化时不应重复写"
+        );
+    }
+
     #[test]
     fn restore_session_tools_restores_recorded_tools() {
         let _g = crate::test_support::AUTH_TEST_LOCK

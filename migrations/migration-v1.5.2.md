@@ -16,6 +16,10 @@
 **实施状态（第一轮 21 条 🔧、第二轮数据面与 6 条 ⚠️、第三轮对上游复核后修 4 条、第四轮新做 5 项、
 第五轮补完 1.15 / 1.31 / 2.10 与三条「需实测」项）**：
 
+**第七轮（收口 1.27 最后一处，见该条下方的第七轮记录）**：`--export` 改读会话里记下的
+`fact=export_extras` 快照（`Agent::rebuild_tools` 写入，变化才写），至此 1.27 的三条导出路径全部
+带上系统提示词与工具声明。会话格式新增一条可选 fact，旧文件与旧版读者不受影响。
+
 **第六轮（补「完全未实现」里可落地的 6 项，2 项明确不做）**：
 
 - 已做：**1.9**（`compat.supportsMidConvoEffort` 接上：adaptive thinking + 顶层固定 `low` +
@@ -500,6 +504,18 @@ MCP / 子代理 / agent-memory 全部按已信任处理。
 **建议**：把三处切到 `export_session_extra` 并传当前会话的 system prompt 与工具声明。
 顺带确认 `assets/export-html/template.js` 已能渲染这两块（模板里的 `systemPrompt`/`tools`
 分支若缺失要一起补）。
+
+> **第七轮：已收口。** TUI 两条路径与 GUI 早已走 `export_session_extra`；`--export`
+> （`cli/startup.rs`）是冷启动、拿不到运行期 Agent，改为读会话里记下的快照：
+> `Agent::rebuild_tools` 在系统提示词 / 工具变化时追加一条 `fact: "export_extras"`
+> （`value = {systemPrompt, tools}`，与既有快照相同则不写），`Session::open` 归约时落到
+> `SessionState`，`--export` 用 `sess.export_extras_snapshot()` 交给 `export_session_extra`。
+> 老会话没有该 fact → 仍只有两节缺失，不报错。逐条链：解析白名单（`session_v4` 的
+> `parse_mutation`）、归约、fork 复制（`create_fork_mutations`）、`/bug` 的分支导出不带快照。
+> 用例：`export_extras_snapshot_survives_reopen`、`rebuild_tools_writes_export_extras_snapshot_once`、
+> `fork_tree_copies_entries_and_facts_not_records`（含快照断言）、
+> `export_session_extra_renders_system_prompt_and_tools_snapshot`。
+> 模板的 `systemPrompt`/`tools` 分支本来就在。
 
 #### 1.28 ⚠️ steering / follow-up 消息里的图片没走缩放
 

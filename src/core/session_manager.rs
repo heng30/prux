@@ -1419,6 +1419,24 @@ impl Session {
             name: Some(name.to_string()),
             target_id: None,
             label: None,
+            value: None,
+        });
+    }
+
+    /// 本会话最近一次记下的 HTML 导出快照（`{"systemPrompt", "tools"}`）；无快照时 `None`。
+    pub fn export_extras_snapshot(&self) -> Option<&Value> {
+        self.state.get_export_extras()
+    }
+
+    /// 追加一条 HTML 导出快照（系统提示词 + 工具声明），供 `--export` 等冷启动路径使用。
+    pub fn set_export_extras(&mut self, extras: Value) {
+        self.commit_fact(SessionMutation::Fact {
+            seq: 0,
+            fact: "export_extras".to_string(),
+            name: None,
+            target_id: None,
+            label: None,
+            value: Some(extras),
         });
     }
 
@@ -1433,6 +1451,7 @@ impl Session {
             name: None,
             target_id: Some(target_id.to_string()),
             label: label.map(|s| s.to_string()),
+            value: None,
         });
         Ok(())
     }
@@ -2714,6 +2733,23 @@ mod tests {
     }
 
     #[test]
+    fn export_extras_snapshot_survives_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut s = session_at(dir.path());
+        s.append_message(&user("hi"));
+        let extras = serde_json::json!({
+            "systemPrompt": "you are prux",
+            "tools": [{"name": "read", "description": "read a file", "parameters": {}}],
+        });
+        s.set_export_extras(extras.clone());
+        let path = s.get_session_file().unwrap().to_path_buf();
+        drop(s);
+
+        let reopened = Session::open(&path.to_string_lossy()).unwrap();
+        assert_eq!(reopened.export_extras_snapshot(), Some(&extras));
+    }
+
+    #[test]
     fn open_roundtrip_restores_messages_and_name() {
         let dir = tempfile::tempdir().unwrap();
         let mut s = session_at(dir.path());
@@ -3598,6 +3634,7 @@ mod tests {
         });
         s.append_label_change(&id1, Some("keep")).unwrap();
         s.append_session_info("name of source");
+        s.set_export_extras(serde_json::json!({"systemPrompt": "sp", "tools": []}));
         let path = s.get_session_file().unwrap().to_string_lossy().to_string();
         drop(s);
 
@@ -3605,6 +3642,13 @@ mod tests {
         // entries + facts 复制；records 不复制
         assert_eq!(forked.state.records().len(), 0, "fork 不复制 records");
         assert_eq!(forked.name.as_deref(), Some("name of source"));
+        assert_eq!(
+            forked
+                .export_extras_snapshot()
+                .and_then(|e| e.get("systemPrompt")),
+            Some(&serde_json::json!("sp")),
+            "fork 应带着导出快照"
+        );
         let tree = forked.get_tree();
         let found = find_label_in_tree(&tree, &id1);
         assert_eq!(found.as_deref(), Some("keep"));

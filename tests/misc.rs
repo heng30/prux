@@ -126,6 +126,45 @@ fn export_session_writes_html() {
 }
 
 #[test]
+fn export_session_extra_renders_system_prompt_and_tools_snapshot() {
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path().to_str().unwrap();
+    let mut s = prux::core::session_manager::Session::create(cwd, Some(dir.path().join("s")), true)
+        .unwrap();
+    s.append_message(&AgentMessage::user_text("hello"));
+    s.set_export_extras(serde_json::json!({
+        "systemPrompt": "you are prux",
+        "tools": [{"name": "snapshot-tool", "description": "d", "parameters": {}}],
+    }));
+
+    let out = dir.path().join("out.html");
+    prux::core::export_html::export_session_extra(
+        &s,
+        Some(out.to_str().unwrap()),
+        Some("dark"),
+        s.export_extras_snapshot().cloned(),
+    )
+    .unwrap();
+    let html = std::fs::read_to_string(&out).unwrap();
+    // 会话数据 base64 内嵌在 `id="session-data"` 里，解开才能看到快照字段
+    let start = html
+        .find("id=\"session-data\"")
+        .expect("缺少 session-data 节点");
+    let open = html[start..].find('>').map(|i| start + i + 1).unwrap();
+    let close = html[open..].find("</").map(|i| open + i).unwrap();
+    let data = String::from_utf8(
+        base64::Engine::decode(
+            &base64::engine::general_purpose::STANDARD,
+            html[open..close].trim(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(data.contains("you are prux"), "缺少系统提示词快照");
+    assert!(data.contains("snapshot-tool"), "缺少工具声明快照");
+}
+
+#[test]
 fn export_html_ships_hidden_custom_message_toggle() {
     // pi #10020：display:false 的自定义消息默认隐藏，导出页 H 键/头部按钮可切换显示。
     // 模板资源必须自带该开关的样式与脚本（污染成只渲染 display 为真的条目会让它们彻底消失）

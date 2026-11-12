@@ -266,7 +266,7 @@ prux-gui -c         # 接着最近一个会话
 | `changelog` | 当前版本的更新日志（Markdown 渲染，可滚动） |
 | `hotkeys` | 键位摘要 |
 | `bug` | 收集诊断信息并打包成 zip |
-| `debug` | 输出诊断信息（provider / model / 消息数 / 自动压缩与重试 / 工作目录 / 会话）；`/debug info`、`/debug provider`、`/debug system-prompt`、`/debug context`、`/debug settings-key` 由 `debug` 扩展提供（需在 Dev 模式下启用） |
+| `debug` | 输出诊断信息（provider / model / 消息数 / 自动压缩与重试 / 工作目录 / 会话）；`/debug info`、`/debug provider`、`/debug system-prompt`、`/debug tools`、`/debug context`、`/debug settings-key` 由 `debug` 扩展提供（需在 Dev 模式下启用） |
 | `usage` | 打开 `usage` 扩展的配额面板（该扩展启用时） |
 | `dock` / `sidebar` | 停靠面板 / 侧栏显隐 |
 | `quit` | 退出 |

@@ -25,7 +25,10 @@ use crate::{
         tui::{
             agent_actor::{AgentCommand, CommandRx},
             app::ReloadCtx,
-            worker::{debug_info_text, drain_cache_warm, session_tree_text, share_via_gist},
+            worker::{
+                debug_info_text, debug_tools_text, drain_cache_warm, session_tree_text,
+                share_via_gist,
+            },
         },
     },
     utils::paths::home_dir,
@@ -191,162 +194,223 @@ async fn apply(
             provider,
             model_id,
             persist,
-        } => {
-            if let Err(e) = agent.switch_model(&provider, &model_id, persist) {
-                _ = events.send(GuiEvent::Error(e.to_string()));
-            }
-        }
-        AgentCommand::SetThinking { level, persist } => {
-            agent.set_thinking_level_silent(&level, persist);
-        }
-        AgentCommand::SetSessionName { name } => {
-            agent.set_session_name(&name);
-        }
-        AgentCommand::SwitchCwd { path } => switch_cwd(agent, &path, events),
-        AgentCommand::SetCwd { path } => set_cwd(agent, &path, events),
-        AgentCommand::Reload { .. } => reload_assets(agent, events, reload_ctx, prompt_templates),
-        AgentCommand::Tree => {
-            let message = match agent.session.as_ref() {
-                Some(session) => session_tree_text(session),
-                None => "No current session".to_string(),
-            };
-            _ = events.send(GuiEvent::Notice(message));
-        }
-        AgentCommand::SystemPrompt => {
-            let prompt = agent.system_prompt.trim();
-            let message = if prompt.is_empty() {
-                "system prompt is empty".to_string()
-            } else {
-                prompt.to_string()
-            };
-            _ = events.send(GuiEvent::Notice(message));
-        }
-        AgentCommand::DebugInfo => {
-            let message = debug_info_text(agent);
-            _ = events.send(GuiEvent::Notice(message));
-        }
-        AgentCommand::ContextBreakdown => {
-            let tools: Vec<(String, String, serde_json::Value)> = agent
-                .tools
-                .iter()
-                .filter(|(name, _, _)| !agent.hidden_declarations.contains(name))
-                .cloned()
-                .collect();
-            let window = agent
-                .routed_model
-                .as_ref()
-                .unwrap_or(&agent.model)
-                .context_window;
-            let breakdown =
-                context_breakdown::breakdown(&agent.system_prompt, &tools, &agent.messages, window);
-            _ = events.send(GuiEvent::Notice(context_breakdown::render(&breakdown)));
-        }
+        } => switch_model(agent, &provider, &model_id, persist, events),
         AgentCommand::BugReport {
             hint,
             include_session,
             include_summary,
         } => write_bug_report(agent, hint, include_session, include_summary, events),
-        AgentCommand::Label { entry_id, label } => match agent.session.as_mut() {
-            Some(session) => match session.append_label_change(&entry_id, label.as_deref()) {
-                Ok(_) => {
-                    let message = match label {
-                        Some(text) => format!("Labeled {entry_id}: {text}"),
-                        None => format!("Cleared label on {entry_id}"),
-                    };
-                    _ = events.send(GuiEvent::Notice(message));
-                }
-                Err(error) => {
-                    _ = events.send(GuiEvent::Notice(format!("Label failed: {error}")));
-                }
-            },
-            None => {
-                _ = events.send(GuiEvent::Notice("No current session".into()));
-            }
-        },
+        AgentCommand::AppendCustomEntry { custom_type, data } => {
+            append_custom_entry(agent, &custom_type, data)
+        }
+        AgentCommand::SetThinking { level, persist } => set_thinking(agent, &level, persist),
+        AgentCommand::SetSessionName { name } => set_session_name(agent, &name),
+        AgentCommand::SwitchCwd { path } => switch_cwd(agent, &path, events),
+        AgentCommand::SetCwd { path } => set_cwd(agent, &path, events),
+        AgentCommand::Reload { .. } => reload_assets(agent, events, reload_ctx, prompt_templates),
+        AgentCommand::Tree => show_tree(agent, events),
+        AgentCommand::SystemPrompt => show_system_prompt(agent, events),
+        AgentCommand::DebugInfo => show_debug_info(agent, events),
+        AgentCommand::DebugTools => show_debug_tools(agent, events),
+        AgentCommand::ContextBreakdown => show_context_breakdown(agent, events),
+        AgentCommand::Label { entry_id, label } => set_label(agent, &entry_id, label, events),
         AgentCommand::ForkClone => clone_session(agent, events),
         AgentCommand::ForkFrom { path, .. } => fork_session(agent, &path, events),
-        AgentCommand::Share { theme } => {
-            let message = match agent.session.as_ref() {
-                Some(session) => {
-                    match settings_manager::read_settings_session_share_destination() {
-                        settings_manager::SessionShareDestination::Radius => {
-                            "Share failed: Radius upload is not supported; set sessionShareDestination to \"gist\"".to_string()
-                        }
-                        _ => {
-                            let session_file = session
-                                .get_session_file()
-                                .map(|p| p.to_string_lossy().to_string());
-                            share_via_gist(
-                                session,
-                                theme.as_deref(),
-                                agent.export_extras(session_file.as_deref()),
-                            )
-                        }
-                    }
-                }
-                None => "Share failed: no current session".to_string(),
-            };
-            _ = events.send(GuiEvent::Notice(message));
-        }
-        AgentCommand::Export { out, theme } => {
-            let message = match agent.session.as_ref() {
-                Some(session) => {
-                    let extras = agent.export_extras(None);
-                    match export_html::export_session_extra(
-                        session,
-                        out.as_deref(),
-                        theme.as_deref(),
-                        Some(extras),
-                    ) {
-                        Ok(path) => format!("Exported: {path}"),
-                        Err(error) => format!("Export failed: {error}"),
-                    }
-                }
-                None => "No current session to export".to_string(),
-            };
-            _ = events.send(GuiEvent::Notice(message));
-        }
+        AgentCommand::Share { theme } => share_session(agent, theme, events),
+        AgentCommand::Export { out, theme } => export_session(agent, out, theme, events),
         AgentCommand::ResumeZombie { path, action } => resume_zombie(agent, &path, &action, events),
         AgentCommand::NewSession => new_session(agent, events),
         AgentCommand::ResumeSession { path } => resume_session(agent, &path, events),
-        // 登录后立刻用新 key（同 TUI）：当前模型就是这个 provider 时直接换 key
-        AgentCommand::ApplyKey { provider, key } => {
-            if agent.model.provider == provider {
-                agent.model.api_key = key;
-            }
-        }
-        // 扩展 / 信任决策变了要重建工具，否则下一轮还是旧工具集
-        AgentCommand::RebuildTools => agent.rebuild_tools(),
-        // 扩展持久化（`PersistSessionEntry`）：追加自定义条目并回执，扩展据此知道写盘成功
-        AgentCommand::AppendCustomEntry { custom_type, data } => {
-            let id = agent
-                .session
-                .as_mut()
-                .map(|session| session.append_custom_entry(&custom_type, data))
-                .unwrap_or_default();
-            agent.emit(serde_json::json!({
-                "type": "extension:entry_persisted",
-                "customType": custom_type,
-                "entryId": id
-            }));
-        }
-        // 回退会改 agent.messages：不推 Rewound，界面上的最后一条输入与它的输出会继续挂着
-        AgentCommand::Rewind => match agent.rewind_last_user_input() {
-            Ok(Some(removed_input)) => {
-                _ = events.send(GuiEvent::Rewound {
-                    messages: agent.messages.clone(),
-                    removed_input,
-                });
-            }
-            Ok(None) => {
-                _ = events.send(GuiEvent::Notice(
-                    "Nothing to rewind: no user input in the current session.".to_string(),
-                ));
-            }
-            Err(e) => _ = events.send(GuiEvent::Error(e.to_string())),
+        AgentCommand::ApplyKey { provider, key } => apply_key(agent, &provider, key),
+        AgentCommand::RebuildTools => rebuild_tools(agent),
+        AgentCommand::Rewind => rewind(agent, events),
+        _ => {} // 其余命令尚未在 GUI 侧接线
+    }
+}
+
+/// `/model <provider>/<id>`：切换模型，失败时回执错误。
+fn switch_model(
+    agent: &mut Agent,
+    provider: &str,
+    model_id: &str,
+    persist: bool,
+    events: &UnboundedSender<GuiEvent>,
+) {
+    if let Err(e) = agent.switch_model(provider, model_id, persist) {
+        _ = events.send(GuiEvent::Error(e.to_string()));
+    }
+}
+
+/// `/thinking <level>`：设置思考级别（不刷提示消息，按键切换与面板走同一入口）。
+fn set_thinking(agent: &mut Agent, level: &str, persist: bool) {
+    agent.set_thinking_level_silent(level, persist);
+}
+
+/// `/name <name>`：设置会话显示名。
+fn set_session_name(agent: &mut Agent, name: &str) {
+    agent.set_session_name(name);
+}
+
+/// `/tree`：把会话树排成文本回执（无会话时给一行提示）。
+fn show_tree(agent: &Agent, events: &UnboundedSender<GuiEvent>) {
+    let message = match agent.session.as_ref() {
+        Some(session) => session_tree_text(session),
+        None => "No current session".to_string(),
+    };
+    _ = events.send(GuiEvent::Notice(message));
+}
+
+/// `/debug system-prompt`：回执当前系统提示词原文。
+fn show_system_prompt(agent: &Agent, events: &UnboundedSender<GuiEvent>) {
+    let prompt = agent.system_prompt.trim();
+    let message = if prompt.is_empty() {
+        "system prompt is empty".to_string()
+    } else {
+        prompt.to_string()
+    };
+    _ = events.send(GuiEvent::Notice(message));
+}
+
+/// `/debug info`：回执 agent 运行状态汇总。
+fn show_debug_info(agent: &Agent, events: &UnboundedSender<GuiEvent>) {
+    _ = events.send(GuiEvent::Notice(debug_info_text(agent)));
+}
+
+/// `/debug tools`：回执本次请求真正声明的工具提示词。
+fn show_debug_tools(agent: &Agent, events: &UnboundedSender<GuiEvent>) {
+    _ = events.send(GuiEvent::Notice(debug_tools_text(agent)));
+}
+
+/// `/debug context`：按来源拆开上下文窗口占用后回执。
+fn show_context_breakdown(agent: &Agent, events: &UnboundedSender<GuiEvent>) {
+    let tools: Vec<(String, String, serde_json::Value)> = agent
+        .tools
+        .iter()
+        .filter(|(name, _, _)| !agent.hidden_declarations.contains(name))
+        .cloned()
+        .collect();
+    let window = agent
+        .routed_model
+        .as_ref()
+        .unwrap_or(&agent.model)
+        .context_window;
+    let breakdown =
+        context_breakdown::breakdown(&agent.system_prompt, &tools, &agent.messages, window);
+    _ = events.send(GuiEvent::Notice(context_breakdown::render(&breakdown)));
+}
+
+/// 设置/清除条目标签并回执结果（无会话时给一行提示）。
+fn set_label(
+    agent: &mut Agent,
+    entry_id: &str,
+    label: Option<String>,
+    events: &UnboundedSender<GuiEvent>,
+) {
+    let message = match agent.session.as_mut() {
+        Some(session) => match session.append_label_change(entry_id, label.as_deref()) {
+            Ok(_) => match label {
+                Some(text) => format!("Labeled {entry_id}: {text}"),
+                None => format!("Cleared label on {entry_id}"),
+            },
+            Err(error) => format!("Label failed: {error}"),
         },
-        // 其余命令（登录、导出、分享、bug report、fork、reload…）尚未在 GUI 侧接线
-        _ => {}
+        None => "No current session".to_string(),
+    };
+    _ = events.send(GuiEvent::Notice(message));
+}
+
+/// `/share`：导出当前会话并上传成私密 gist，回执结果或失败原因。
+fn share_session(agent: &Agent, theme: Option<String>, events: &UnboundedSender<GuiEvent>) {
+    let message = match agent.session.as_ref() {
+        Some(session) => match settings_manager::read_settings_session_share_destination() {
+            settings_manager::SessionShareDestination::Radius => {
+                "Share failed: Radius upload is not supported; set sessionShareDestination to \"gist\"".to_string()
+            }
+            _ => {
+                let session_file = session
+                    .get_session_file()
+                    .map(|p| p.to_string_lossy().to_string());
+                share_via_gist(
+                    session,
+                    theme.as_deref(),
+                    agent.export_extras(session_file.as_deref()),
+                )
+            }
+        },
+        None => "Share failed: no current session".to_string(),
+    };
+    _ = events.send(GuiEvent::Notice(message));
+}
+
+/// `/export [out]`：把当前会话导出成 HTML（含系统提示词与工具声明），回执结果。
+fn export_session(
+    agent: &Agent,
+    out: Option<String>,
+    theme: Option<String>,
+    events: &UnboundedSender<GuiEvent>,
+) {
+    let message = match agent.session.as_ref() {
+        Some(session) => {
+            let extras = agent.export_extras(None);
+            match export_html::export_session_extra(
+                session,
+                out.as_deref(),
+                theme.as_deref(),
+                Some(extras),
+            ) {
+                Ok(path) => format!("Exported: {path}"),
+                Err(error) => format!("Export failed: {error}"),
+            }
+        }
+        None => "No current session to export".to_string(),
+    };
+    _ = events.send(GuiEvent::Notice(message));
+}
+
+/// 登录后立刻用新 key（同 TUI）：当前模型就是这个 provider 时直接换 key。
+fn apply_key(agent: &mut Agent, provider: &str, key: String) {
+    if agent.model.provider == provider {
+        agent.model.api_key = key;
+    }
+}
+
+/// 扩展 / 信任决策变了要重建工具，否则下一轮还是旧工具集。
+fn rebuild_tools(agent: &mut Agent) {
+    agent.rebuild_tools();
+}
+
+/// 扩展持久化（`PersistSessionEntry`）：追加自定义条目并回执，扩展据此知道写盘成功。
+fn append_custom_entry(agent: &mut Agent, custom_type: &str, data: Option<serde_json::Value>) {
+    let id = agent
+        .session
+        .as_mut()
+        .map(|session| session.append_custom_entry(custom_type, data))
+        .unwrap_or_default();
+    agent.emit(serde_json::json!({
+        "type": "extension:entry_persisted",
+        "customType": custom_type,
+        "entryId": id
+    }));
+}
+
+/// `/rewind`：回退最后一条用户输入。
+///
+/// 回退会改 `agent.messages`，所以推 [`GuiEvent::Rewound`]（界面据此重建），
+/// 否则界面上最后一条输入与它的输出会继续挂着。
+fn rewind(agent: &mut Agent, events: &UnboundedSender<GuiEvent>) {
+    match agent.rewind_last_user_input() {
+        Ok(Some(removed_input)) => {
+            _ = events.send(GuiEvent::Rewound {
+                messages: agent.messages.clone(),
+                removed_input,
+            });
+        }
+        Ok(None) => {
+            _ = events.send(GuiEvent::Notice(
+                "Nothing to rewind: no user input in the current session.".to_string(),
+            ));
+        }
+        Err(e) => _ = events.send(GuiEvent::Error(e.to_string())),
     }
 }
 

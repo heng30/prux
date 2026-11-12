@@ -23,6 +23,9 @@
   conversation; before the first turn all three parts are estimates and the total is their sum, so
   it never reads 0. The rest of the window prints as `free`. Part of the `debug` extension, which
   stays off by default (Dev mode).
+- **`/debug tools` prints the tool prompts**: the declarations actually sent for this request — name,
+  description and parameter JSON, with hidden ones excluded — from the same source as the exported
+  HTML's tool list. Part of the `debug` extension (off by default, Dev mode).
 - **Desktop actions say whether they landed**: `computer_ui_action` now reads the target before
   acting and refuses with a reason when it is minimized, still settling, disabled, or does not
   advertise a matching action — the refusal says whether waiting can help. It then reads the target
@@ -171,9 +174,10 @@
 - **`bash` could wait forever when a background process held the pipe**: the timeout covered only the
   shell's exit, so `cmd & exit 0` with the background job still writing hung the tool. The timeout now
   covers the output drain too, and the error reports the shell's real exit code and when it exited.
-- **Exported HTML did not show the system prompt and tools**: `/export` and sharing wrote the entries
-  only, so the two sections that explain what the session ran with stayed empty. Both now carry the
-  system prompt and the tool declarations actually sent for this request (hidden ones excluded).
+- **Exported HTML did not show the system prompt and tools**: `/export`, sharing and `--export` wrote the
+  entries only, so the two sections that explain what the session ran with stayed empty. All of them now
+  carry the system prompt and the tool declarations actually sent for this request (hidden ones excluded);
+  `--export` reads the snapshot the session records while running.
 - **HTML comments in Markdown showed up as text**: `<!-- ... -->` was rendered as visible text in the
   TUI and the GUI. Comments are dropped; other inline HTML is unchanged.
 - **Orca fell back to text for images and lost true color**: Orca is now recognised as a true-color
@@ -255,6 +259,8 @@
   本次请求真正声明的工具 schema（名字 + 描述 + 参数 JSON，被隐藏的不算）、以及会话本身。
   有实测 usage 时已知部分按词表数出来、差额归会话；第一轮之前三块都是估算、总额取三块之和，
   因此不会再显示 0。窗口剩下的部分打成 `free`。属于 `debug` 扩展，仍然默认不启用（Dev 模式）。
+- **`/debug tools` 打印工具提示词**：本次请求真正声明的工具——名字、描述、参数 JSON，被隐藏不声明的
+  不算——与导出 HTML 的工具有同一份来源。属于 `debug` 扩展（默认不启用，Dev 模式）。
 - **桌面动作会告诉你到底生效没生效**：`computer_ui_action` 执行前先读一次目标，被最小化、还在动、
   已禁用或没声明对应能力就带着原因拒绝，并说清「等一等有没有用」；执行后再读一次，回执最后一行是
   `delivery:` 判定（`not-delivered` = 重试安全、`delivered-unverified`、`delivered-verified`），
@@ -361,8 +367,9 @@
   按行区间流式读取，在多 GB 文件末尾 `offset` 也不花代价。
 - **`bash` 在后台进程占着管道时会一直等**：超时只管「shell 退出」，`cmd & exit 0` 而后台作业还在写时
   工具会挂住。现在超时也覆盖输出收尾，错误里还会带上 shell 的真实退出码与退出时间。
-- **导出的 HTML 看不到系统提示词与工具**：`/export` 与分享只写会话条目，解释这次会话用什么跑起来的
-  两节一直是空的。现在两者都带上系统提示词与本次真正声明的工具（被隐藏的不算）。
+- **导出的 HTML 看不到系统提示词与工具**：`/export`、分享与 `--export` 只写会话条目，解释这次会话
+  用什么跑起来的两节一直是空的。现在三者都带上系统提示词与本次真正声明的工具（被隐藏的不算）；
+  `--export` 读的是会话运行时记下的快照。
 - **Markdown 里的 HTML 注释被当正文显示**：`<!-- ... -->` 在 TUI 与 GUI 里都会被画出来。现在注释被丢弃，
   其余内联 HTML 行为不变。
 - **Orca 终端的图片退化成文本、也没有 truecolor**：现在 Orca 被识别为支持 truecolor，

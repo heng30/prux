@@ -256,6 +256,7 @@ async fn dispatch_cmd(
         AgentCommand::Tree => dispatch_tree(agent).await,
         AgentCommand::DebugInfo => dispatch_debug_info(agent).await,
         AgentCommand::SystemPrompt => dispatch_system_prompt(agent).await,
+        AgentCommand::DebugTools => dispatch_debug_tools(agent).await,
         AgentCommand::ContextBreakdown => dispatch_context_breakdown(agent).await,
         AgentCommand::Share { theme } => dispatch_share(agent, theme).await,
         AgentCommand::BugReport {
@@ -573,6 +574,28 @@ async fn dispatch_system_prompt(agent: &Arc<Mutex<Agent>>) -> Option<RoundFuture
     } else {
         prompt.to_string()
     };
+    _ = run_in_event_loop(move |ui| ui.on_command_notice(true, msg));
+    None
+}
+
+/// `/debug tools` 条目文本：本次请求真正声明的工具（隐藏不发包的不算），
+/// 与 HTML 导出 extras 同一口径（`Agent::export_extras`）。
+///
+/// 输出是工具声明的 pretty JSON（`name` / `description` / `parameters`），
+/// 即模型看到的工具提示词原文。
+pub(crate) fn debug_tools_text(a: &Agent) -> String {
+    let extras = a.export_extras(None);
+    let tools = extras.get("tools").cloned().unwrap_or(Value::Null);
+    if tools.as_array().is_some_and(|list| list.is_empty()) {
+        return "no tools declared".to_string();
+    }
+    serde_json::to_string_pretty(&tools)
+        .unwrap_or_else(|e| format!("failed to render tool declarations: {e}"))
+}
+
+/// 处理 AgentCommand::DebugTools：把当前声明的工具回执到聊天区。
+async fn dispatch_debug_tools(agent: &Arc<Mutex<Agent>>) -> Option<RoundFuture> {
+    let msg = debug_tools_text(&*agent.lock().await);
     _ = run_in_event_loop(move |ui| ui.on_command_notice(true, msg));
     None
 }
@@ -1934,6 +1957,55 @@ mod tests {
         })
         .await
         .expect("SystemPrompt 应回 notice 含系统提示词原文");
+
+        shutdown(worker, cmd_tx, handle).await;
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn debug_tools_replies_with_the_declared_tool_prompts() {
+        let _g = crate::test_support::AUTH_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let agent = test_agent_arc();
+        {
+            let mut a = agent.lock().await;
+            a.tools = vec![
+                (
+                    "read".to_string(),
+                    "SENTINEL TOOL DESCRIPTION".to_string(),
+                    serde_json::json!({"type": "object"}),
+                ),
+                (
+                    "hidden-one".to_string(),
+                    "HIDDEN TOOL DESCRIPTION".to_string(),
+                    serde_json::json!({}),
+                ),
+            ];
+            a.hidden_declarations = vec!["hidden-one".to_string()];
+        }
+
+        let (cmd_tx, cmd_rx) = channels();
+        let worker = WorkerHandle::new(cmd_tx.clone());
+        let (handle, mut ui_rx) = start_worker_with_agent(agent, cmd_rx);
+        let mut app = App::new();
+
+        worker.send(AgentCommand::DebugTools);
+        apply_until(&mut ui_rx, &mut app, |a| {
+            a.system_messages
+                .iter()
+                .any(|(_, m)| sys_msg_text(m).contains("SENTINEL TOOL DESCRIPTION"))
+        })
+        .await
+        .expect("DebugTools 应回 notice 含工具声明");
+        let text = app
+            .system_messages
+            .iter()
+            .map(|(_, m)| sys_msg_text(m))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("\"name\": \"read\""), "{text}");
+        assert!(!text.contains("HIDDEN TOOL DESCRIPTION"), "{text}");
 
         shutdown(worker, cmd_tx, handle).await;
     }
