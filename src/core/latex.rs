@@ -238,6 +238,29 @@ const SYMBOLS: &[(&str, &str)] = &[
     ("rfloor", "⌋"),
     ("lceil", "⌈"),
     ("rceil", "⌉"),
+    ("ulcorner", "⌜"),
+    ("urcorner", "⌝"),
+    ("llcorner", "⌞"),
+    ("lrcorner", "⌟"),
+    ("lnot", "¬"),
+    ("surd", "√"),
+    ("boxplus", "⊞"),
+    ("boxtimes", "⊠"),
+    ("lesssim", "≲"),
+    ("gtrsim", "≳"),
+    ("nleq", "≰"),
+    ("ngeq", "≱"),
+    ("bigtriangleup", "△"),
+    ("bigtriangledown", "▽"),
+    ("diamond", "⋄"),
+    ("flat", "♭"),
+    ("natural", "♮"),
+    ("sharp", "♯"),
+    ("clubsuit", "♣"),
+    ("diamondsuit", "♦"),
+    ("heartsuit", "♥"),
+    ("spadesuit", "♠"),
+    ("Box", "□"),
     ("colon", ":"),
 ];
 
@@ -342,6 +365,10 @@ const RELATION_COMMANDS: &[&str] = &[
     "sqsubseteq",
     "sqsupset",
     "sqsupseteq",
+    "gtrsim",
+    "lesssim",
+    "ngeq",
+    "nleq",
     "subset",
     "subseteq",
     "succ",
@@ -356,6 +383,14 @@ const RELATION_COMMANDS: &[&str] = &[
     "twoheadrightarrow",
     "uparrow",
     "vdash",
+];
+
+/// 二元运算符命令表：两侧按 TeX 惯例各补一个空格（`a \pm b` → `a ± b`）。
+/// 关系符（`\le` 等）另见 [`RELATION_COMMANDS`]，两者同样补空格。
+const BINARY_OPERATOR_COMMANDS: &[&str] = &[
+    "amalg", "ast", "bigcirc", "boxplus", "boxtimes", "bullet", "cap", "cdot", "circ", "cup",
+    "div", "mp", "odot", "ominus", "oplus", "oslash", "otimes", "pm", "setminus", "sqcap", "sqcup",
+    "star", "times", "uplus", "vee", "wedge", "wr",
 ];
 
 /// `\not` 取反后的符号映射表（如 ∈ → ∉、= → ≠）。
@@ -624,6 +659,10 @@ fn replace_characters(value: &str, replacements: &[(char, &str)]) -> Option<Stri
 /// 直接写成 `^x`/`_x`，多字符加括号如 `^(x+1)`。`kind` 为 `"sub"` 表示下标，其余按上标。
 fn format_script(value: &str, kind: &str) -> String {
     let value = normalize_script_value(value);
+    // `90^\circ` 用度数符号，不写成 `90^∘`
+    if kind == "sup" && value == "∘" {
+        return "°".to_string();
+    }
     if let Some(unicode) = format_unicode_script(&value, kind) {
         return unicode;
     }
@@ -831,7 +870,8 @@ enum LayoutNode {
         /// 作为对齐基准的行号（从 0 起）。
         baseline: usize,
     },
-    /// 嵌套/不支持 Unicode 上下标时的垂直堆叠脚本（上标在上、下标在下）
+    /// 嵌套/不支持 Unicode 上下标时的垂直堆叠脚本（上标在上、下标在下）；
+    /// 仅在上下标同时存在时使用，单侧脚本走行内 `_x`/`^x`
     Script {
         /// 下标文本，无下标时为 `None`。
         lower: Option<String>,
@@ -985,18 +1025,19 @@ fn render_layout_node(node: &LayoutNode, nodes: &[LayoutNode]) -> Layout {
             let numerator_layout = render_layout(numerator, nodes);
             let denominator_layout = render_layout(denominator, nodes);
             let content_width = numerator_layout.width.max(denominator_layout.width).max(1);
-            let width = content_width + 2;
+            // 只在左侧留 1 空格与前面内容分开；右侧不留空隙，否则分数线后会紧跟一个空格（`── ,`）
+            let width = content_width + 1;
             let mut lines: Vec<String> = numerator_layout
                 .lines
                 .iter()
-                .map(|l| pad_layout_line(l, width, true))
+                .map(|l| format!(" {}", pad_layout_line(l, content_width, true)))
                 .collect();
-            lines.push(format!(" {} ", "─".repeat(content_width)));
+            lines.push(format!(" {}", "─".repeat(content_width)));
             lines.extend(
                 denominator_layout
                     .lines
                     .iter()
-                    .map(|l| pad_layout_line(l, width, true)),
+                    .map(|l| format!(" {}", pad_layout_line(l, content_width, true))),
             );
             Layout {
                 lines,
@@ -1014,18 +1055,18 @@ fn render_layout_node(node: &LayoutNode, nodes: &[LayoutNode]) -> Layout {
                 .max(upper.as_ref().map(|s| display_width(s)).unwrap_or(0));
             let mut lines: Vec<String> = Vec::new();
             if let Some(upper) = upper {
-                lines.push(format!("{} ", pad_layout_line(upper, content_width, true)));
+                lines.push(format!(" {} ", pad_layout_line(upper, content_width, true)));
             }
             lines.push(format!(
-                "{} ",
+                " {} ",
                 pad_layout_line(operator, content_width, true)
             ));
             if let Some(lower) = lower {
-                lines.push(format!("{} ", pad_layout_line(lower, content_width, true)));
+                lines.push(format!(" {} ", pad_layout_line(lower, content_width, true)));
             }
             Layout {
                 lines,
-                width: content_width + 1,
+                width: content_width + 2,
                 baseline: if upper.is_some() { 1 } else { 0 },
             }
         }
@@ -1088,13 +1129,18 @@ fn leading_text_layout(
         sliced.as_str()
     }
     .trim_end();
-    let preserve_leading = matches!(previous_node, Some(LayoutNode::Matrix { .. }))
+    // 节点与后续文本之间源码里的空格要留一个：分数线自占一格后，`= `/`+ ` 不靠它就和前一个符号黏在一起。
+    // 运算符节点自带右侧空格（`∫ e`），不再额外补。
+    let preserve_leading = previous_node.is_some_and(|n| !matches!(n, LayoutNode::Operator { .. }))
         && sliced.chars().next().is_some_and(|c| c.is_whitespace());
-    let preserve_trailing = matches!(node, LayoutNode::Matrix { .. })
-        && sliced
-            .chars()
-            .next_back()
-            .is_some_and(|c| c.is_whitespace());
+    // 分式与运算符布局自带左右空格，其余节点靠源码里的空格与前面文本分开
+    let preserve_trailing = !matches!(
+        node,
+        LayoutNode::Fraction { .. } | LayoutNode::Operator { .. }
+    ) && sliced
+        .chars()
+        .next_back()
+        .is_some_and(|c| c.is_whitespace());
     let text = if !trimmed.is_empty() {
         format!(
             "{}{}{}",
@@ -1127,7 +1173,7 @@ fn trailing_text_layout(
     } else {
         sliced.as_str()
     };
-    let text = if matches!(previous_node, Some(LayoutNode::Matrix { .. }))
+    let text = if previous_node.is_some_and(|n| !matches!(n, LayoutNode::Operator { .. }))
         && sliced.chars().next().is_some_and(|c| c.is_whitespace())
     {
         format!(" {}", trimmed)
@@ -1328,11 +1374,13 @@ impl LatexParser {
             }
         };
         let can_use_layout = !(blocks_layout(&sub) || blocks_layout(&sup));
+        // 只有上下标同时存在才堆叠：单侧脚本堆叠会让符号独占一行，
+        // 而行内 `_x`/`^x` 已经能把单侧脚本写在符号右侧。
         let needs_layout = self.display
             && can_use_layout
-            && (self.script_depth > 0
-                || (sub.is_some() && sub_unicode.is_none())
-                || (sup.is_some() && sup_unicode.is_none()));
+            && sub.is_some()
+            && sup.is_some()
+            && (self.script_depth > 0 || sub_unicode.is_none() || sup_unicode.is_none());
 
         if !needs_layout {
             return order
@@ -1416,6 +1464,10 @@ impl LatexParser {
                 self.position += 1;
             }
             command = self.chars[start..self.position].iter().collect();
+            // TeX 词法把控制词后的空白当分隔符吞掉：`\partial t` → `∂t`，`\sin x` → `sin x`
+            while self.position < self.chars.len() && self.chars[self.position].is_whitespace() {
+                self.position += 1;
+            }
         } else {
             command = first.to_string();
             self.position += 1;
@@ -1525,7 +1577,7 @@ impl LatexParser {
                 return Some(self.parse_operator(symbol, "script", true, false));
             }
             return Some(
-                if command == "cdot" || command == "times" || in_set(RELATION_COMMANDS, command) {
+                if in_set(RELATION_COMMANDS, command) || in_set(BINARY_OPERATOR_COMMANDS, command) {
                     format!(" {} ", symbol)
                 } else {
                     symbol.to_string()
@@ -1637,14 +1689,12 @@ impl LatexParser {
     /// 处理黑板体命令（mathbb）
     fn parse_command_mathbb(&mut self) -> String {
         let value = self.parse_required_argument(true);
-        let mut out = String::new();
-        for c in value.chars() {
-            match find_char(BLACKBOARD, c) {
-                Some(bb) => out.push_str(bb),
-                None => out.push(c),
-            }
+        // 只有整串都有黑板体字形才替换，否则 `\mathbb{Provable}` 会变成半个粗体的 `ℙrovable`
+        let mapped: Option<Vec<&str>> = value.chars().map(|c| find_char(BLACKBOARD, c)).collect();
+        match mapped {
+            Some(parts) => parts.concat(),
+            None => value,
         }
-        out
     }
 
     /// 处理自定义运算符命令（operatorname）
@@ -2170,10 +2220,18 @@ fn starts_with_case_word(condition: &str) -> bool {
 pub fn render_latex(source: &str, display: bool) -> Option<String> {
     let nodes: NodeRef = Rc::new(RefCell::new(Vec::new()));
     let rendered = LatexParser::new(source, nodes.clone(), display).render()?;
-    if nodes.borrow().is_empty() {
-        return Some(rendered.replace(PROTECTED_SPACE, " "));
-    }
-    let layout = render_layout(&rendered, &nodes.borrow());
+    let text = if nodes.borrow().is_empty() {
+        rendered.replace(PROTECTED_SPACE, " ")
+    } else {
+        layout_rendered(&rendered, &nodes.borrow())
+    };
+    // ASCII 连字符在数学里一律换成真正的减号（U+2212）：避免与分数线/连字符混成一串横线
+    Some(text.replace('-', "−"))
+}
+
+/// 把带布局标记的解析结果按行渲染成多行文本，并削去公共左侧缩进。
+fn layout_rendered(rendered: &str, nodes: &[LayoutNode]) -> String {
+    let layout = render_layout(rendered, nodes);
     let indentation = layout
         .lines
         .iter()
@@ -2190,13 +2248,11 @@ pub fn render_latex(source: &str, display: bool) -> Option<String> {
             .unwrap_or(l.len());
         out_lines.push(l[idx..].trim_end().to_string());
     }
-    Some(
-        out_lines
-            .join("\n")
-            .trim_end()
-            .to_string()
-            .replace(PROTECTED_SPACE, " "),
-    )
+    out_lines
+        .join("\n")
+        .trim_end()
+        .to_string()
+        .replace(PROTECTED_SPACE, " ")
 }
 
 #[cfg(test)]
@@ -2210,7 +2266,7 @@ mod tests {
             Some("a² + b² = c²")
         );
         assert_eq!(render_latex("x_n", false).as_deref(), Some("xₙ"));
-        assert_eq!(render_latex("\\pi r^2", false).as_deref(), Some("π r²"));
+        assert_eq!(render_latex("\\pi r^2", false).as_deref(), Some("πr²"));
         assert_eq!(
             render_latex("e^{i\\pi} + 1 = 0", false).as_deref(),
             Some("e^(iπ) + 1 = 0")
@@ -2230,7 +2286,7 @@ mod tests {
         // 对齐 pi latex.test.ts：inline 分式 `a/b`，± 前无空格
         assert_eq!(
             render_latex("x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}", false).as_deref(),
-            Some("x = (-b ± √(b² - 4ac))/(2a)")
+            Some("x = (−b ± √(b² − 4ac))/(2a)")
         );
     }
 
@@ -2259,7 +2315,7 @@ mod tests {
                 false
             )
             .as_deref(),
-            Some("f(x) = 1/(σ√2π) e^(-((x-μ)²)/(2σ²))")
+            Some("f(x) = 1/(σ√2π) e^(−((x−μ)²)/(2σ²))")
         );
     }
 
@@ -2271,7 +2327,7 @@ mod tests {
                 false
             )
             .as_deref(),
-            Some("n! ≈ √(2π n) (n/e)ⁿ")
+            Some("n! ≈ √2πn (n/e)ⁿ")
         );
     }
 
@@ -2283,7 +2339,7 @@ mod tests {
                 false
             )
             .as_deref(),
-            Some("∑ₙ₌₀^∞ arⁿ = a/(1-r), |r| < 1")
+            Some("∑ₙ₌₀^∞ arⁿ = a/(1−r), |r| < 1")
         );
     }
 
@@ -2324,6 +2380,26 @@ mod tests {
     fn unsupported_falls_back_none() {
         assert_eq!(render_latex("\\unknowncommand{x}", false), None);
         assert_eq!(render_latex("\\begin{unknown}", false), None);
+    }
+
+    #[test]
+    fn control_word_spacing_and_typography() {
+        // 控制词后的空格是词法分隔符（TeX 会吞掉），`\partial t` 不该渲染成 `∂ t`
+        assert_eq!(
+            render_latex(r"\frac{\partial B}{\partial t}", false).as_deref(),
+            Some("(∂B)/(∂t)")
+        );
+        // 二元运算符两侧补空格，减号是 U+2212 而不是 ASCII 连字符
+        assert_eq!(
+            render_latex(r"a \pm b - c", false).as_deref(),
+            Some("a ± b − c")
+        );
+        assert_eq!(render_latex(r"90^\circ", false).as_deref(), Some("90°"));
+        // 堆叠分式右侧不留空隙，分数线后紧跟标点
+        assert_eq!(
+            render_latex(r"E = -\frac{\partial B}{\partial t},", true).as_deref(),
+            Some("      ∂B\nE = − ──,\n      ∂t")
+        );
     }
 
     #[test]
@@ -2397,22 +2473,29 @@ mod tests {
                 false,
             )
             .as_deref(),
-            Some("       ⎧ x² if x ≥ 0\nf(x) = ⎨\n       ⎩ -x if x < 0")
+            Some("       ⎧ x² if x ≥ 0\nf(x) = ⎨\n       ⎩ −x if x < 0")
         );
     }
 
     #[test]
-    fn nested_and_unsupported_display_scripts_stack() {
-        // 嵌套脚本与无法转 Unicode 的 display 脚本垂直堆叠（pi #7929）
+    fn single_sided_display_scripts_stay_inline() {
+        // 单侧脚本不堆叠：否则一个符号会占掉两行（符号一行、下标一行）
+        assert_eq!(render_latex(r"x_{c}", true).as_deref(), Some("x_c"));
+        assert_eq!(render_latex(r"\sigma_{c}", true).as_deref(), Some("σ_c"));
+        assert_eq!(render_latex(r"x^{n^2}", true).as_deref(), Some("x^(n²)"));
+        assert_eq!(render_latex(r"x_{i_j}", true).as_deref(), Some("x_(iⱼ)"));
         assert_eq!(
             render_latex(
                 r"\partial_tU_2(t,0)=Aj_*(1-t)^{-A-1}.\qquad x^{n^2}+x_{i_j}",
                 true,
             )
             .as_deref(),
-            Some(
-                "                            2\n                    -A-1   n\n∂ₜU₂(t,0) = Aj (1-t)    . x  +x\n              *                i\n                                j"
-            )
+            Some("∂ₜU₂(t,0) = Aj_*(1−t)^(−A−1). x^(n²)+x_(iⱼ)")
+        );
+        // 上下标同时存在且无法转 Unicode 时仍垂直堆叠（pi #7929）
+        assert_eq!(
+            render_latex("a_{b}^{c}", true).as_deref(),
+            Some(" c\na\n b")
         );
         // 脚本内的分式保持线性
         assert_eq!(

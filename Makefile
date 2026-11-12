@@ -33,6 +33,8 @@ install-linux-gui: release-gui
 	cp -f ~/.local/bin/${app-name-gui} ~/.local/bin/${app-name-gui}.bak 2>/dev/null || true
 	cp -f ./target/release/${app-name-gui} ~/.local/bin/
 
+install-linux-all: install-linux install-linux-gui
+
 check:
 	$(build-env) cargo check
 

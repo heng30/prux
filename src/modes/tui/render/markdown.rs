@@ -1561,7 +1561,8 @@ fn tokenize_spans(spans: Spans) -> Vec<Tok> {
 
 /// 把带样式的文本按显示宽度折行为多行。
 ///
-/// `keep_indent` 为 true 时保留行首空格（代码块缩进），否则丢弃断行后的行首空格；
+/// `keep_indent` 为 true 时保留行首空格（代码块缩进），否则丢弃折行产生的行首空格；
+/// 但源码里的显式换行（块级公式的对齐缩进）后面的行首空格属于内容，两个模式下都保留。
 /// 超过整行宽度的超长词按字符强制断开。
 fn wrap_spans(spans: Spans, width: usize, keep_indent: bool) -> Vec<Line<'static>> {
     if width == 0 {
@@ -1576,6 +1577,8 @@ fn wrap_spans(spans: Spans, width: usize, keep_indent: bool) -> Vec<Line<'static
     let mut out: Vec<Line<'static>> = Vec::new();
     let mut cur: Vec<(Style, String)> = Vec::new();
     let mut cur_w = 0usize;
+    // 行首空格：源码显式给出的保留（如块级公式的对齐缩进），只有折行产生的才丢弃
+    let mut keep_leading = true;
     let push_line = |cur: &mut Vec<(Style, String)>, out: &mut Vec<Line<'static>>| {
         let spans: Spans = cur
             .iter()
@@ -1590,6 +1593,7 @@ fn wrap_spans(spans: Spans, width: usize, keep_indent: bool) -> Vec<Line<'static
             // 换行：结束当前行（空行也保留）
             push_line(&mut cur, &mut out);
             cur_w = 0;
+            keep_leading = true;
             continue;
         }
 
@@ -1597,8 +1601,9 @@ fn wrap_spans(spans: Spans, width: usize, keep_indent: bool) -> Vec<Line<'static
         if cur_w > 0 && cur_w + w > width {
             push_line(&mut cur, &mut out);
             cur_w = 0;
+            keep_leading = false;
             if tok.space {
-                continue; // 行首不保留空格
+                continue; // 折行产生的行首不保留空格
             }
         }
 
@@ -1617,14 +1622,16 @@ fn wrap_spans(spans: Spans, width: usize, keep_indent: bool) -> Vec<Line<'static
                 cur.push((tok.style, acc));
                 cur_w = display_width(cur.last().unwrap().1.as_str());
             }
+            keep_leading = false;
             continue;
         }
 
-        if !keep_indent && tok.space && cur_w == 0 {
-            continue; // 行首空格（出现在断行后）；代码行需保留缩进，跳过
+        if !keep_indent && tok.space && cur_w == 0 && !keep_leading {
+            continue; // 折行落在行首的空格；代码行需保留缩进，跳过
         }
         cur.push((tok.style, tok.text));
         cur_w += w;
+        keep_leading = false;
     }
 
     if !cur.is_empty() || out.is_empty() {
@@ -1895,14 +1902,14 @@ mod tests {
         for expected in [
             "a² + b² = c²",
             "e^(iπ) + 1 = 0",
-            "√(b² - 4ac)",
-            "A = π r²",
+            "√(b² − 4ac)",
+            "A = πr²",
             "∑ₙ₌₀^∞",
             "aᵖ⁻¹ ≡ 1 (mod p)",
             "F = ma",
             "1/(σ√2π)",
-            "√(2π n)",
-            "arⁿ = a/(1-r)",
+            "√2πn",
+            "arⁿ = a/(1−r)",
         ] {
             assert!(joined.contains(expected), "缺少 {expected:?}: {:?}", t);
         }
@@ -2354,6 +2361,13 @@ mod code_block_tests {
             "深层缩进保留: {:?}",
             t
         );
+    }
+
+    #[test]
+    fn display_math_keeps_line_alignment() {
+        // 回归：折行曾丢弃每行行首空格，块级公式的上下限与分子分母全塌到最左侧
+        let lines = render_markdown("$$\\sum_{i=0}^{n}$$", 40, &theme());
+        assert_eq!(text_of(&lines), vec![" n", " ∑", "i=0"]);
     }
 
     #[test]
