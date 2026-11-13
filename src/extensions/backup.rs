@@ -7,7 +7,7 @@
 //! **不收什么**：`auth.json`（凭据）、`sessions/`、`history/`、`logs/`、`bin/`、`docs/`、
 //! `models-store.json` 与 `recent-cwds.json`（可重建的缓存）、`backups/`（归档自己），
 //! 以及 `extensions/` 下的 `worktrees/`（git 副本）、`permissions/logs/`（审计日志）、
-//! `agent/`（运行态）。符号链接与超过 [`MAX_FILE_BYTES`] 的单个文件跳过并记在报告里。
+//! `agent/`（运行态）、`memory/projects/`（按项目分文件的记忆）与 `schedules/`（定时任务）。符号链接与超过 [`MAX_FILE_BYTES`] 的单个文件跳过并记在报告里。
 //!
 //! 归档的第一个条目是 `manifest.json`：prux 版本、时间、来源目录，以及每个文件的
 //! size 与 sha256。恢复先整份校验（路径合法 + 条目齐全 + 校验和一致）再写盘——
@@ -76,7 +76,9 @@ const SKIP_TOP: &[&str] = &[
 /// 递归时不收的子树（以归档内路径判定，`/` 分隔）。
 const SKIP_TREES: &[&str] = &[
     "extensions/agent",
+    "extensions/memory/projects",
     "extensions/permissions/logs",
+    "extensions/schedules",
     "extensions/worktrees",
 ];
 
@@ -799,6 +801,8 @@ mod tests {
         std::fs::create_dir_all(agent.join("extensions/mcp")).unwrap();
         std::fs::create_dir_all(agent.join("sessions")).unwrap();
         std::fs::create_dir_all(agent.join("extensions/permissions/logs")).unwrap();
+        std::fs::create_dir_all(agent.join("extensions/memory/projects")).unwrap();
+        std::fs::create_dir_all(agent.join("extensions/schedules")).unwrap();
 
         std::fs::write(agent.join("settings.json"), b"{\"theme\":\"x\"}").unwrap();
         std::fs::write(agent.join("skills/demo/SKILL.md"), b"# demo").unwrap();
@@ -810,6 +814,8 @@ mod tests {
         std::fs::write(agent.join("auth.json"), b"secret").unwrap();
         std::fs::write(agent.join("sessions/s1.json"), b"huge history").unwrap();
         std::fs::write(agent.join("extensions/permissions/logs/a.log"), b"audit").unwrap();
+        std::fs::write(agent.join("extensions/memory/projects/p.json"), b"{}").unwrap();
+        std::fs::write(agent.join("extensions/schedules/s.json"), b"{}").unwrap();
     }
 
     /// `@` 只剥一层，其它原样。
@@ -873,6 +879,8 @@ mod tests {
         assert!(!names.iter().any(|n| n.contains("auth.json")));
         assert!(!names.iter().any(|n| n.contains("sessions")));
         assert!(!names.iter().any(|n| n.contains("permissions/logs")));
+        assert!(!names.iter().any(|n| n.contains("memory/projects")));
+        assert!(!names.iter().any(|n| n.contains("schedules")));
 
         // 把带进归档的资产全删掉，恢复时目标必须一个都不剩。
         std::fs::remove_dir_all(agent.join("skills")).unwrap();

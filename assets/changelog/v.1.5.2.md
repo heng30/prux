@@ -10,7 +10,8 @@
   collected: a project's `.prux/` and `AGENTS.md` stay with the repository. Credentials never ship:
   `auth.json`, `sessions/`, `history/`, `logs/`, `bin/`, `docs/`, the rebuildable `models-store.json`
   and `recent-cwds.json`, the archives folder itself, and `extensions/worktrees`,
-  `extensions/permissions/logs` and `extensions/agent` are all left out; symlinks and files over
+  `extensions/permissions/logs`, `extensions/agent`, `extensions/memory/projects` and
+  `extensions/schedules` are all left out; symlinks and files over
   32 MiB are skipped and listed. `/backup list` shows the archives newest first and
   `/backup restore [file|folder] [--force]` verifies every entry (safe path, present in the archive,
   matching size and sha256) before writing anything — a single mismatch writes nothing. Existing
@@ -334,7 +335,8 @@
   归档首个条目 `manifest.json` 记录 prux 版本、来源目录与每个文件的大小与 sha256。**只收 `agent_dir()`**：
   项目里的 `.prux/` 与 `AGENTS.md` 跟着仓库走，不进归档。凭据不进归档：`auth.json`、`sessions/`、
   `history/`、`logs/`、`bin/`、`docs/`、可重建的 `models-store.json` 与 `recent-cwds.json`、归档目录自身，
-  以及 `extensions/worktrees`、`extensions/permissions/logs`、`extensions/agent` 全部排除，符号链接与
+  以及 `extensions/worktrees`、`extensions/permissions/logs`、`extensions/agent`、
+  `extensions/memory/projects`、`extensions/schedules` 全部排除，符号链接与
   超过 32 MiB 的单文件跳过并列出。`/backup list` 按时间倒序列出归档；`/backup restore [文件|目录] [--force]`
   先逐条校验（路径合法、条目齐全、大小与 sha256 一致）再写盘——有一条对不上就一个字节都不写。
   目标已存在且不给 `--force` 时拒绝并点名冲突文件，`--force` 覆盖前先把原文件改名成
