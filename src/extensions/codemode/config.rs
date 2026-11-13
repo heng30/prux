@@ -13,12 +13,10 @@ use super::description::{self, Mode};
 use crate::{
     core::{config_cache::ConfigCache, extensions::ExtensionSetting, settings_manager::agent_dir},
     extensions::util::{choice_num, cycle_setting},
-    utils::paths::write_json_file,
 };
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
-    fs,
     path::{Path, PathBuf},
     sync::RwLock,
 };
@@ -145,7 +143,7 @@ pub(super) fn merge_config(from_file: Option<&Value>) -> Config {
 /// 从磁盘加载配置；文件缺失 / 缺键 / 版本戳不符时回写（损坏文件不覆盖）
 pub(super) fn load_config() -> Config {
     let path = config_path();
-    let from_file = read_file_value(&path);
+    let from_file = CONFIG_CACHE.read_object(&CONFIG_LOCK, &path);
     let cfg = merge_config(from_file.as_ref());
 
     let should_write = match &from_file {
@@ -219,38 +217,22 @@ pub(super) fn apply_panel_choice(key: &str, value: &str) -> std::result::Result<
 /// 读-改-写：`f` 在磁盘现值上施加改动，返回写回后的配置
 fn modify(f: impl FnOnce(&mut Config)) -> Config {
     let path = config_path();
-    let mut cfg = merge_config(read_file_value(&path).as_ref());
+    let mut cfg = merge_config(CONFIG_CACHE.read_object(&CONFIG_LOCK, &path).as_ref());
     f(&mut cfg);
     write_config(&path, &cfg);
     cfg
 }
 
-/// 读配置文件的 JSON 对象（不存在/非法/非对象 → `None`）。走 [`CONFIG_CACHE`]。
-fn read_file_value(path: &Path) -> Option<Value> {
-    let _guard = CONFIG_LOCK.read().unwrap_or_else(|e| e.into_inner());
-    let value = CONFIG_CACHE.read(path, || {
-        fs::read_to_string(path)
-            .ok()
-            .and_then(|s| serde_json::from_str::<Value>(&s).ok())
-            .filter(|v| v.is_object())
-            .unwrap_or(Value::Null)
-    });
-    (!value.is_null()).then_some(value)
-}
-
 /// 写盘（camelCase 键）。成功后回填 [`CONFIG_CACHE`]。
 fn write_config(path: &Path, cfg: &Config) {
-    let _guard = CONFIG_LOCK.write().unwrap_or_else(|e| e.into_inner());
-
     let value = Value::Object(cfg.values.clone().into_iter().collect());
-    if write_json_file(path, &value).is_ok() {
-        CONFIG_CACHE.store(path, value);
-    }
+    _ = CONFIG_CACHE.write_object(&CONFIG_LOCK, path, value);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     /// 取临时 agent_dir 并加全局锁（配置读写走 agent_dir 单例）。
     fn setup() -> (

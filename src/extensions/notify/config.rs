@@ -7,14 +7,10 @@
 //! 与其它扩展一致：文件缺失 / 升级后缺键 / 版本戳不符时自动回写缺省值，
 //! 损坏或非对象文件不覆盖（读回缺省）。
 
-use crate::{
-    core::{config_cache::ConfigCache, settings_manager::agent_dir},
-    utils::paths::write_json_file,
-};
+use crate::core::{config_cache::ConfigCache, settings_manager::agent_dir};
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
-    fs,
     path::{Path, PathBuf},
     sync::RwLock,
 };
@@ -80,7 +76,7 @@ pub(super) fn merge_config(from_file: Option<&Value>) -> Config {
 /// 覆盖写入一个字符串键（保留其它键）。
 fn write_key(key: &str, value: &str) {
     let path = config_path();
-    let from_file = read_file_value(&path);
+    let from_file = CONFIG_CACHE.read_object(&CONFIG_LOCK, &path);
     let mut cfg = merge_config(from_file.as_ref());
     cfg.values.insert(key.to_string(), json!(value));
     write_config(&path, &cfg);
@@ -101,7 +97,7 @@ pub(super) fn reset_settled_command() {
 /// 按 [`STRING_DEFAULTS`] 遍历，后续新增命令键会自动纳入 `all` 的清理范围。
 pub(super) fn reset_all() {
     let path = config_path();
-    let from_file = read_file_value(&path);
+    let from_file = CONFIG_CACHE.read_object(&CONFIG_LOCK, &path);
     let mut cfg = merge_config(from_file.as_ref());
 
     for (key, default) in STRING_DEFAULTS {
@@ -119,7 +115,7 @@ pub(super) fn config_path() -> PathBuf {
 /// 从磁盘加载配置；文件缺失 / 缺键 / 版本戳不符时回写（损坏文件不覆盖）。
 pub(super) fn load_config() -> Config {
     let path = config_path();
-    let from_file = read_file_value(&path);
+    let from_file = CONFIG_CACHE.read_object(&CONFIG_LOCK, &path);
     let cfg = merge_config(from_file.as_ref());
 
     let should_write = match &from_file {
@@ -137,32 +133,16 @@ pub(super) fn load_config() -> Config {
     cfg
 }
 
-/// 读配置文件的 JSON 对象（不存在/非法/非对象 → `None`）。走 [`CONFIG_CACHE`]。
-fn read_file_value(path: &Path) -> Option<Value> {
-    let _guard = CONFIG_LOCK.read().unwrap_or_else(|e| e.into_inner());
-    let value = CONFIG_CACHE.read(path, || {
-        fs::read_to_string(path)
-            .ok()
-            .and_then(|s| serde_json::from_str::<Value>(&s).ok())
-            .filter(|v| v.is_object())
-            .unwrap_or(Value::Null)
-    });
-    (!value.is_null()).then_some(value)
-}
-
 /// 写盘（camelCase 键）。成功后回填 [`CONFIG_CACHE`]。
 fn write_config(path: &Path, cfg: &Config) {
-    let _guard = CONFIG_LOCK.write().unwrap_or_else(|e| e.into_inner());
-
     let value = Value::Object(cfg.values.clone().into_iter().collect());
-    if write_json_file(path, &value).is_ok() {
-        CONFIG_CACHE.store(path, value);
-    }
+    _ = CONFIG_CACHE.write_object(&CONFIG_LOCK, path, value);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn merge_fills_defaults_and_version() {

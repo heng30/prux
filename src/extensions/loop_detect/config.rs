@@ -7,12 +7,10 @@
 use crate::{
     core::{config_cache::ConfigCache, extensions::ExtensionSetting, settings_manager::agent_dir},
     extensions::util::{choice_num, cycle_setting},
-    utils::paths::write_json_file,
 };
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
-    fs,
     path::{Path, PathBuf},
     sync::RwLock,
 };
@@ -296,7 +294,7 @@ static CONFIG_CACHE: ConfigCache = ConfigCache::new();
 /// 从磁盘加载配置；文件缺失/升级后缺键/版本戳不符时回写（损坏文件不覆盖）。
 pub(super) fn load_config() -> Config {
     let path = config_path();
-    let from_file = read_file_value(&path);
+    let from_file = CONFIG_CACHE.read_object(&CONFIG_LOCK, &path);
     let cfg = merge_config(from_file.as_ref());
 
     let should_write = match &from_file {
@@ -314,28 +312,11 @@ pub(super) fn load_config() -> Config {
     cfg
 }
 
-/// 读配置文件的 JSON 对象（不存在/非法/非对象 → `None`）。走 [`CONFIG_CACHE`]。
-fn read_file_value(path: &Path) -> Option<Value> {
-    let _guard = CONFIG_LOCK.read().unwrap_or_else(|e| e.into_inner());
-    let value = CONFIG_CACHE.read(path, || {
-        fs::read_to_string(path)
-            .ok()
-            .and_then(|s| serde_json::from_str::<Value>(&s).ok())
-            .filter(|v| v.is_object())
-            .unwrap_or(Value::Null)
-    });
-    (!value.is_null()).then_some(value)
-}
-
 /// 写盘：键名一律 camelCase（如 `thinkingWindow`、`stagnationThreshold`）。
 ///
 /// 落盘成功后回填 [`CONFIG_CACHE`]（取写盘后的元数据），下次读取直接命中。
 pub(super) fn write_config(path: &Path, cfg: &Config) {
-    let _guard = CONFIG_LOCK.write().unwrap_or_else(|e| e.into_inner());
-
     // 缓存值就是落盘值（`configVersion` 也在 `values` 里）。
     let value = Value::Object(cfg.values.clone().into_iter().collect());
-    if write_json_file(path, &value).is_ok() {
-        CONFIG_CACHE.store(path, value);
-    }
+    _ = CONFIG_CACHE.write_object(&CONFIG_LOCK, path, value);
 }

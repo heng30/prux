@@ -193,6 +193,24 @@ ModelRoute { provider: "anthropic".into(), model_id: model_id.into(),
 
 完整语义、配置 schema 与命令清单见 [extensions.md](extensions.md) 的 `jet` 一节。
 
+## 另一个开箱用例：`image-route` 扩展
+
+`image-route` 是第二个内置的虚拟模型消费者（**默认不启用**），解决“会话跑在不收图的模型上，
+偶尔贴张截图”的麻烦：
+
+- 注册 `image-route/auto`（provider `image-route`），按**本次请求里有没有图片块**选档：
+  有图走 `image` 档，没图走 `base` 档。
+- 判定看的是整份请求（含历史）：图片留在历史里时，后续每次请求都还要把它发给
+  provider，基础模型一样收不了，所以只要上下文里有图，这一轮就交给能看图的模型。
+- 两档各带 provider + 模型 id，可以来自不同 provider；`image` 可缺（缺了就等于 `base`）。
+- 无状态：档位完全由请求内容决定，不往会话分支写状态条目。
+- 顺序：`/image-route base <provider> <model-id>` →（可选）
+  `/image-route image <provider> <model-id>` → 在 `/model` 面板选中 `image-route/auto`。
+- 配置不完整或目标解析不到时**不注册**，`image-route/auto` 不会出现在 `/model` 里。
+- 首次响应前展示的窗口 / 输出上限取两档中较小者；thinking 档位取两档能力的交集。
+
+完整语义与配置 schema 见 [extensions.md](extensions.md) 的 `image-route` 一节。
+
 ## 使用约束
 
 - `unregisterVirtualModel(provider, id)` 不单独暴露：虚拟模型随扩展整体注册/注销

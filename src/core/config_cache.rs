@@ -13,11 +13,11 @@
 //! **锁序**：本类型只持有内层 `Mutex`。调用方必须已持该配置文件的 `RwLock`（读锁或写锁均可），
 //! 使锁序恒为「RwLock → 缓存 `Mutex`」。绝不可在持有缓存 `Mutex` 时再去取 `RwLock`，否则可能自死锁。
 
-use crate::utils::paths::file_stamp;
+use crate::utils::paths::{file_stamp, write_json_file};
 use serde_json::Value;
 use std::{
     path::{Path, PathBuf},
-    sync::{Mutex, OnceLock},
+    sync::{Mutex, OnceLock, RwLock},
     time::SystemTime,
 };
 
@@ -119,6 +119,37 @@ impl ConfigCache {
             });
         }
         value
+    }
+
+    /// 读一个 JSON 对象配置：文件不存在 / 非法 JSON / 不是对象都返回 `None`。
+    ///
+    /// `lock` 是该配置文件的模块级 `RwLock`（本类型只持有内层 `Mutex`，锁的归属在调用模块），
+    /// 锁序恒为「`lock` → 缓存 `Mutex`」。写盘后仍由调用方用 [`Self::store`] 回填。
+    pub(crate) fn read_object(&self, lock: &RwLock<()>, path: &Path) -> Option<Value> {
+        let _guard = lock.read().unwrap_or_else(|e| e.into_inner());
+        let value = self.read(path, || {
+            std::fs::read_to_string(path)
+                .ok()
+                .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+                .filter(Value::is_object)
+                .unwrap_or(Value::Null)
+        });
+        (!value.is_null()).then_some(value)
+    }
+
+    /// 写盘并回填缓存：`lock` 取写锁，**落盘成功才**回填（失败的写不能留在缓存里）。
+    ///
+    /// 返回写盘结果；配置补全与命令路径可 `_ =` 掉（落不了盘只影响下次读取）。
+    pub(crate) fn write_object(
+        &self,
+        lock: &RwLock<()>,
+        path: &Path,
+        value: Value,
+    ) -> std::io::Result<()> {
+        let _guard = lock.write().unwrap_or_else(|e| e.into_inner());
+        write_json_file(path, &value)?;
+        self.store(path, value);
+        Ok(())
     }
 
     /// 主动失效：丢弃缓存项，下次读取重新走磁盘。

@@ -3,8 +3,10 @@ use crate::{
         extensions::{
             self, DockLine, DockSpan, ExtensionSetting, ExtensionUiRequest, RichSpan, UiNotifyLevel,
         },
-        provider::AgentMessage,
+        model_resolver::{self, ModelEntry},
+        provider::{AgentMessage, ModelType},
         tools::{ToolError, ToolResultAttachment},
+        virtual_models,
     },
     modes::tui::app::{App, MsgLevel},
     utils::{
@@ -476,6 +478,63 @@ pub fn tighter_u32(a: u32, b: u32) -> u32 {
         (0, other) | (other, 0) => other,
         (a, b) => a.min(b),
     }
+}
+
+/// 目标模型的 thinking 档位（与 [`crate::core::provider::ModelConfig::supported_thinking_levels`] 同口径）。
+pub fn supported_levels(entry: &ModelEntry) -> Vec<String> {
+    model_resolver::model_config_from_entry(entry, None, None)
+        .supported_thinking_levels()
+        .into_iter()
+        .map(str::to_string)
+        .collect()
+}
+
+/// 多个目标都支持的 thinking 档位（交集，保持目录顺序；空交集由虚拟模型定义归一化为 `off`）。
+pub fn thinking_intersection(entries: &[&ModelEntry]) -> Vec<String> {
+    let Some((first, rest)) = entries.split_first() else {
+        return Vec::new();
+    };
+
+    let mut levels = supported_levels(first);
+    for entry in rest {
+        let supported = supported_levels(entry);
+        levels.retain(|level| supported.contains(level));
+    }
+    levels
+}
+
+/// 校验一个物理模型位：provider / 模型 id 非空、不是虚拟条目、能在目录里按 `kind` 解析到。
+///
+/// `label` 是报错里指代这个位子的名字（如 `base`、`jet classifier`）；`own_virtual` 是本扩展
+/// 自己的 `(provider, id)`，指到它时要单独拒——虚拟模型未注册时
+/// [`virtual_models::is_active_virtual`] 查不出来。
+pub fn check_physical(
+    provider: &str,
+    id: &str,
+    kind: ModelType,
+    label: &str,
+    own_virtual: (&str, &str),
+) -> Result<ModelEntry, String> {
+    let provider = provider.trim();
+    let id = id.trim();
+    if provider.is_empty() || id.is_empty() {
+        return Err(format!("{label} needs a provider and a model id"));
+    }
+
+    let (own_provider, own_id) = own_virtual;
+    if provider == own_provider && id == own_id {
+        return Err(format!(
+            "{label} must not be the virtual model {own_provider}/{own_id}"
+        ));
+    }
+
+    if virtual_models::is_active_virtual(provider, id) {
+        return Err(format!(
+            "{label} must be a physical model, got the virtual model {provider}/{id}"
+        ));
+    }
+
+    model_resolver::find_model_of_type(provider, id, kind).map_err(|e| format!("{label}: {e}"))
 }
 
 /// Markdown 标题级别转层级数字（`#` → 1 … `######` → 6），供按标题层级排版类调用方使用。

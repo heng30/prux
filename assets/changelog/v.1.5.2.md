@@ -94,6 +94,21 @@
   reported as `unconfirmed` and never retried. `/review status` shows the target, its checkout and the
   published comments; `/review clean` deletes every copy.
 
+- **The `image-route` extension picks the model per request**: it registers the virtual model
+  `image-route/auto`, which sends a turn to the `image` target when the request (history included)
+  carries an image block and to the `base` target otherwise — handy when the session runs on a cheap
+  model that cannot read images and you paste a screenshot once. The check looks at the whole
+  request, not the last user message: an image left in the history is resent on every later request,
+  so the base model would fail or silently drop it. Both targets carry a provider and a model id and
+  may come from different providers; `image` is optional and falls back to `base`. The router keeps
+  no state. Configure with `/image-route base <provider> <model-id>`,
+  `/image-route image <provider> <model-id>` or `/image-route reset` (the bare command prints both
+  targets and the registration status); the config lives in
+  `agent_dir()/extensions/image-route.json`. An incomplete config or an unresolvable target
+  registers nothing, so `/model` never lists a half-configured entry. Window and output limits take
+  the smaller of the two targets, thinking levels their intersection. Off by default
+  (Dev/Creator modes).
+
 ### Changed
 
 - **Claude models that manage effort per message now say so**: for models whose catalog entry
@@ -134,6 +149,12 @@
   work in descendants, so the leader alone would read as idle. Sampling runs every two seconds, the
   first sample reports `0.0%` (a percentage needs two refreshes to difference) and an unreadable tree
   shows `--` instead of a fake zero.
+
+- **A finished background job now wakes the agent**: when a `processes` job ends, the session also
+  gets a `[bash-done] job-N …` notice — status, duration, command line and log path — so the model no
+  longer has to poll `read_process_output` to learn that the command finished. An idle session starts
+  a new turn right away; a busy one keeps the notice until that turn settles, and each notice is
+  delivered once.
 
 ### Fixed
 
@@ -372,6 +393,16 @@
   发完复核、扫不到就报 `unconfirmed` 且不再重试。`/review status` 看目标 / 副本 / 已发布评论，
   `/review clean` 删掉全部副本。
 
+- **`image-route` 扩展按请求换模型**：注册虚拟模型 `image-route/auto`——请求（含历史）里出现图片块
+  就走 `image` 档，否则走 `base` 档；会话跑在不收图的便宜模型上、偶尔贴张截图时，不必手动 `/model`
+  换过去再换回来。判定看整份请求而不是「最后一条用户消息」：图片留在历史里时后续每次请求仍要把它发给
+  provider，基础模型一样失败或被静默丢图。两档各带 provider + 模型 id、可以来自不同 provider，
+  `image` 可省（等同 `base`），路由器无状态。用 `/image-route base|image <provider> <model-id>` 配置、
+  `/image-route reset` 清空（裸命令打印两档与注册状态），配置写在
+  `agent_dir()/extensions/image-route.json`；配置不完整或目标解析不到就不注册，`/model` 里不会出现
+  半成品条目。首次响应前展示的窗口 / 输出上限取两档较小者，thinking 档位取两档交集。
+  **默认不启用**（`Dev`/`Creator` 模式可用）。
+
 ### 变更
 
 - **按消息管理 effort 的 Claude 模型现在照实下发**：目录条目声明了 `supportsMidConvoEffort` 的模型，
@@ -402,6 +433,10 @@
 - **`/ps` 面板显示每个后台 job 的 CPU 与内存占用**：运行中的每一行带上整棵进程树的 CPU 百分比与
   常驻内存（`sh -c cargo build` 的活是后代在干，只报组长会显示成空转）。每两秒采样一次，首次采样
   CPU 报 `0.0%`（百分比要靠两次刷新的差值），采不到时显示 `--`，不假装 0。
+
+- **后台 job 跑完会唤醒 agent**：`processes` 扩展的 job 结束时，除写回 job 表外还给会话投一条
+  `[bash-done] job-N …` 通知（状态、耗时、命令行、日志路径），模型不必轮询 `read_process_output`
+  才知道命令跑完了。空闲时直接起一轮，忙碌时留到本轮结算边界补投，同一条通知只投一次。
 
 ### 修复
 

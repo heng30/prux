@@ -28,6 +28,7 @@ pub mod goal;
 pub mod hang_detect;
 pub mod hardware;
 pub mod hooks;
+pub mod image_route;
 pub mod injection_guard;
 pub mod jet;
 pub mod leak_guard;
@@ -190,6 +191,8 @@ pub const PRIORITY_TOOL_SEARCH: u32 = 40;
 pub const PRIORITY_CODEMODE: u32 = 39;
 /// jet 规划/实现双模型路由扩展的注册优先级。
 pub const PRIORITY_JET: u32 = 38;
+/// image-route 按请求里有无图片切换模型扩展的注册优先级。
+pub const PRIORITY_IMAGE_ROUTE: u32 = 37;
 /// banner（静态 art）启动横幅扩展的注册优先级。
 pub const PRIORITY_BANNER: u32 = 30;
 /// bouncyballs-banner 启动横幅扩展的注册优先级：比静态版小一档，后注册故默认生效。

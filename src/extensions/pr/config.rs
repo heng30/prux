@@ -17,17 +17,9 @@
 //! `(path, mtime, len)` 判定有效性，手改文件仍即时生效。
 //! 锁序恒为「[`CONFIG_LOCK`] → 缓存 `Mutex`」（见 `core::config_cache` 的模块文档）。
 
-use crate::{
-    core::{config_cache::ConfigCache, settings_manager::agent_dir},
-    utils::paths::write_json_file,
-};
+use crate::core::{config_cache::ConfigCache, settings_manager::agent_dir};
 use serde_json::{Value, json};
-use std::{
-    fs,
-    path::{Path, PathBuf},
-    sync::RwLock,
-    time::Duration,
-};
+use std::{path::PathBuf, sync::RwLock, time::Duration};
 
 /// 扩展名（注册名，也是 `/extension` 面板里的名字）。
 pub(super) const EXT: &str = "pr";
@@ -100,23 +92,10 @@ fn to_value(cfg: &Config) -> Value {
     })
 }
 
-/// 读配置文件的 JSON 对象（不存在 / 非法 / 非对象都返回 `None`）。
-fn read_file_value(path: &Path) -> Option<Value> {
-    let _guard = CONFIG_LOCK.read().unwrap_or_else(|e| e.into_inner());
-    let value = CONFIG_CACHE.read(path, || {
-        fs::read_to_string(path)
-            .ok()
-            .and_then(|text| serde_json::from_str::<Value>(&text).ok())
-            .filter(Value::is_object)
-            .unwrap_or(Value::Null)
-    });
-    (!value.is_null()).then_some(value)
-}
-
 /// 加载配置：缺键或文件不存在时回写；文件损坏时**不覆盖**。
 pub(super) fn load() -> Config {
     let path = config_path();
-    let from_file = read_file_value(&path);
+    let from_file = CONFIG_CACHE.read_object(&CONFIG_LOCK, &path);
     let cfg = merge(from_file.as_ref());
     let needs_write = match &from_file {
         None => !path.exists(),
@@ -131,20 +110,14 @@ pub(super) fn load() -> Config {
 
 /// 写配置并回填缓存（落盘失败时不回填，不留「只在内存」的值）。
 pub(super) fn write(cfg: &Config) -> std::io::Result<()> {
-    let path = config_path();
-    let value = to_value(cfg);
-    let _guard = CONFIG_LOCK.write().unwrap_or_else(|e| e.into_inner());
-    let result = write_json_file(&path, &value);
-    if result.is_ok() {
-        CONFIG_CACHE.store(&path, value);
-    }
-    result
+    CONFIG_CACHE.write_object(&CONFIG_LOCK, &config_path(), to_value(cfg))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_support::AgentDirGuard;
+    use std::fs;
 
     #[test]
     fn defaults_are_the_documented_ones() {

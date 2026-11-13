@@ -8,6 +8,11 @@
 //! - [`TOOL_STOP`]：杀整个进程组（Unix `killpg`，Windows `taskkill /T`）；
 //! - `/ps`：打开停靠面板看运行中的 job，`/ps stop <id>` 停止，`/ps clear` 清掉已完成记录。
 //!
+//! **完成唤醒**：job 结束时除了写回 job 表，还给会话投一条 `[bash-done] job-N …` 通知——
+//! 空闲时直接起一轮（`Continuation`），忙碌时（TUI 会丢掉 `Continuation`）留到本轮
+//! `agent_before_settle` 边界补投。模型不必轮询 `read_process_output` 才知道命令跑完了；
+//! 同一条通知只投一次（通知标记已在上下文里就不再重复）。
+//!
 //! **输出去处**：子进程的 stdout/stderr 全部写进 `agent_dir()` 外的临时日志文件（0600），
 //! 绝不继承终端——继承会把子进程的横幅与告警糊在 TUI 上。命令 stdin 接 null。
 //!
@@ -30,9 +35,11 @@ use crate::{
     core::{
         self,
         extensions::{
-            CommandHost, DockLine, DockSpan, Extension, ExtensionCommand, ExtensionHook,
-            ExtensionMode, ExtensionTool, SubcommandDef, ToolExecCtx, UiNotifyLevel,
+            BoundaryOutcome, CommandHost, DockLine, DockSpan, Extension, ExtensionCommand,
+            ExtensionHook, ExtensionMode, ExtensionTool, ExtensionUiRequest, SubcommandDef,
+            ToolExecCtx, UiNotifyLevel, request_ui, ui_ready,
         },
+        provider::AgentMessage,
         tools::{self, ToolError, ToolResult},
     },
     extensions::{
@@ -76,6 +83,9 @@ const TOOL_READ: &str = "read_process_output";
 
 /// 停止 job 的工具名。
 const TOOL_STOP: &str = "stop_process";
+
+/// 完成通知的标记前缀（通知正文以 `[bash-done] job-N` 开头，兼作去重标记）。
+const DONE_MARKER: &str = "bash-done";
 
 /// 同时运行的后台 job 上限（超出的启动请求直接报错，先停一个再开）。
 const MAX_RUNNING: usize = 64;
@@ -126,6 +136,15 @@ struct Finished {
     elapsed: Duration,
 }
 
+/// 一条待投递的后台 job 完成通知。
+#[derive(Clone)]
+struct Notice {
+    /// 去重标记：会话上下文里出现它即说明这条通知已经送到模型。
+    marker: String,
+    /// 投给模型的正文。
+    text: String,
+}
+
 /// 一个后台 job。
 struct Job {
     /// job id（`job-N`，进程内自增，不复用）。
@@ -153,6 +172,8 @@ struct State {
     next: u64,
     /// 全部 job，按启动顺序（面板与列表都按此顺序展示）。
     jobs: Vec<Job>,
+    /// 已结束、还没送到模型的完成通知。
+    notices: Vec<Notice>,
     /// 停靠面板的显隐（内存态，不持久化）。
     dock_shown: bool,
     /// 进程树资源采样的缓存与 sysinfo 进程表（CPU% 要靠前后两次刷新的差值）。
@@ -311,13 +332,37 @@ impl Extension for Processes {
         }]
     }
 
-    /// 只有面板显示时才订阅 Dock（否则框架每帧空转）。
+    /// 只有面板显示时才订阅 Dock（否则框架每帧空转）；有待投递的完成通知时订阅 Boundary
+    /// （忙碌时被丢弃的唤醒靠它在结算边界补投）。
     fn hooks(&self) -> Vec<ExtensionHook> {
-        if lock().dock_shown {
-            vec![ExtensionHook::Dock]
-        } else {
-            Vec::new()
+        let st = lock();
+        let mut hooks = Vec::new();
+        if st.dock_shown {
+            hooks.push(ExtensionHook::Dock);
         }
+        if !st.notices.is_empty() {
+            hooks.push(ExtensionHook::Boundary);
+        }
+        hooks
+    }
+
+    /// 结算边界：把还没送到的完成通知补投出去。
+    ///
+    /// 只认 `agent_before_settle`（`turn_end` 不消费追加消息）与主 agent（完成通知不看子代理）；
+    /// 用户中断或输入排队时让位，留到下一次自然结算。
+    fn on_boundary(&self, event: &Value) -> Option<BoundaryOutcome> {
+        if !should_flush(event) {
+            return None;
+        }
+
+        let ctx = event
+            .get("contextMessages")
+            .map(Value::to_string)
+            .unwrap_or_default();
+        let text = flush_notices(&mut lock(), &ctx)?;
+        Some(BoundaryOutcome::continue_with(vec![
+            AgentMessage::user_text(&text),
+        ]))
     }
 
     /// 注册 `/ps` 的命令处理器。
@@ -345,6 +390,7 @@ impl Extension for Processes {
         let jobs = {
             let mut st = lock();
             st.dock_shown = false;
+            st.notices.clear();
             drain_all_running(&mut st)
         };
         for (pid, birth) in jobs {
@@ -596,22 +642,96 @@ fn spawn(
     Ok((pid, child))
 }
 
-/// 回收线程：等子进程退出后把结局写回 job 表（job 已被清掉时静默丢弃）。
+/// 回收线程：等子进程退出后把结局写回 job 表（job 已被清掉时静默丢弃），并投一条完成通知。
 ///
 /// 按 **pid** 定位而不是 job id：测试与「清空后重开」会让同一个 `job-N` 换个进程，
 /// 只认 id 会把旧进程的结局写到新 job 上。
 fn reap(mut child: std::process::Child, pid: u32) {
     std::thread::spawn(move || {
         let exit_code = child.wait().ok().and_then(|s| s.code());
-        let mut st = lock();
-        if let Some(job) = st.jobs.iter_mut().find(|j| j.pid == pid) {
-            job.finished = Some(Finished {
+        let notice = {
+            let mut st = lock();
+            let Some(job) = st.jobs.iter_mut().find(|j| j.pid == pid) else {
+                return;
+            };
+            let finished = Finished {
                 exit_code,
                 elapsed: job.started.elapsed(),
-            });
+            };
+            let notice = completion_notice(
+                &job.id,
+                &finished,
+                job.stop_requested,
+                &job.command,
+                &job.log,
+            );
+            job.finished = Some(finished);
             st.refresh_pending = true;
+            st.notices.push(notice.clone());
+            notice
+        };
+
+        // 空闲时这就起一轮（TUI 把 `Continuation` 入队）；忙碌时 TUI 会丢弃它，
+        // 留在 `notices` 里由 `on_boundary` 在本轮结算边界补投。
+        // 无事件循环（headless / `-p` / 测试）时没人消费这条请求：不入队，只靠边界补投。
+        if ui_ready() {
+            request_ui(ExtensionUiRequest::Continuation {
+                message: Box::new(AgentMessage::user_text(&notice.text)),
+            });
         }
     });
+}
+
+/// 一条完成通知：标记行 + 命令 + 日志路径，够模型判断要不要读输出。
+fn completion_notice(
+    id: &str,
+    finished: &Finished,
+    stop_requested: bool,
+    command: &str,
+    log: &Path,
+) -> Notice {
+    let marker = format!("[{DONE_MARKER}] {id}");
+    let text = format!(
+        "{marker} {outcome} · {elapsed}\n$ {command}\nLog: {log}\n\nNothing is polling this job. \
+         Read its output with {TOOL_READ} (id: \"{id}\") if you still need it, or carry on \
+         with the next step.",
+        outcome = outcome_text(finished, stop_requested),
+        elapsed = format_duration(finished.elapsed.as_millis() as u64),
+        log = log.display(),
+    );
+    Notice { marker, text }
+}
+
+/// 结算边界是否该由本扩展补投：只认主 agent 的自然收尾。
+///
+/// 用户中断（`aborted`）与输入排队时让位，留到下一次自然结算再投；`turn_end` 不消费追加消息。
+fn should_flush(event: &Value) -> bool {
+    event.get("type").and_then(Value::as_str) == Some("agent_before_settle")
+        && event.get("agentScope").and_then(Value::as_str) == Some("main")
+        && event.get("outcome").and_then(Value::as_str) != Some("aborted")
+        && !event
+            .get("hasQueuedMessages")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+}
+
+/// 拼出待补投的通知正文（调用方持锁），并把已送到的通知丢掉。
+/// `ctx` 是结算时的完整上下文 JSON：里面已有某条通知的标记 = 它是由上一轮的 `Continuation`
+/// 带进来的，不再重复投（同一件事只说一次）。无剩余通知时返回 `None`。
+fn flush_notices(st: &mut State, ctx: &str) -> Option<String> {
+    st.notices.retain(|n| !ctx.contains(&n.marker));
+    if st.notices.is_empty() {
+        return None;
+    }
+
+    let text = st
+        .notices
+        .iter()
+        .map(|n| n.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    st.notices.clear();
+    Some(text)
 }
 
 /// `read_process_output`：省略 id 时列全部 job，否则给该 job 的输出快照。
@@ -1145,5 +1265,97 @@ mod tests {
         _ = std::fs::remove_file(&log);
 
         reset();
+    }
+
+    /// 完成通知：标记行取 job id；上下文里已有标记就不再投（同一件事只说一次）。
+    ///
+    /// 用独立的 [`State`] 而不是全局表：真实 job 的回收线程会在任意时刻入队。
+    #[test]
+    fn notices_are_flushed_once() {
+        let notice = completion_notice(
+            "job-7",
+            &Finished {
+                exit_code: Some(0),
+                elapsed: Duration::from_millis(1200),
+            },
+            false,
+            "cargo build",
+            Path::new("/tmp/job.log"),
+        );
+        assert_eq!(notice.marker, "[bash-done] job-7");
+        assert!(notice.text.contains("exit 0"), "{}", notice.text);
+        assert!(notice.text.contains("cargo build"), "{}", notice.text);
+
+        // 标记已在上下文里 → 已由 Continuation 那一轮送到，不重复投
+        let mut st = State {
+            notices: vec![notice.clone()],
+            ..Default::default()
+        };
+        assert!(
+            flush_notices(&mut st, "\"[bash-done] job-7 exit 0\"").is_none(),
+            "已送到的通知不该重复投"
+        );
+        assert!(st.notices.is_empty(), "已送到的通知应被丢掉");
+
+        // 没送到（上下文里没有标记）→ 补投并清空
+        st.notices.push(notice);
+        let text = flush_notices(&mut st, "[]").expect("应当补投");
+        assert!(text.contains("[bash-done] job-7"));
+        assert!(st.notices.is_empty(), "补投后应清空队列");
+    }
+
+    /// 结算边界只认主 agent 的自然收尾：子代理 / 中断 / 用户输入排队 / 非结算边界都让位。
+    #[test]
+    fn settle_boundary_yields_to_subagent_abort_queue_and_turn_end() {
+        /// 带着覆写字段的 `agent_before_settle` 事件（默认：主 agent 自然收尾）。
+        fn settle(overrides: Value) -> bool {
+            let mut event = json!({
+                "type": "agent_before_settle",
+                "agentScope": "main",
+                "outcome": "completed",
+                "hasQueuedMessages": false,
+                "contextMessages": [],
+            });
+            if let (Some(obj), Some(overrides)) = (event.as_object_mut(), overrides.as_object()) {
+                for (k, v) in overrides {
+                    obj.insert(k.clone(), v.clone());
+                }
+            }
+            should_flush(&event)
+        }
+
+        assert!(settle(json!({})), "主 agent 自然收尾应补投");
+        assert!(
+            !settle(json!({ "agentScope": "subagent" })),
+            "子代理结算不唤醒"
+        );
+        assert!(
+            !settle(json!({ "outcome": "aborted" })),
+            "被中断的回合不补投"
+        );
+        assert!(
+            !settle(json!({ "hasQueuedMessages": true })),
+            "用户输入排队时让位"
+        );
+        assert!(
+            !should_flush(&json!({ "type": "turn_end" })),
+            "turn_end 不消费追加消息"
+        );
+    }
+
+    /// Boundary 钩子与「有无待投递通知」同生同死（无通知时不参与每次结算）。
+    #[test]
+    fn boundary_hook_tracks_pending_notices() {
+        let _g = lock_test();
+        lock().notices.clear();
+        assert!(!Processes.hooks().contains(&ExtensionHook::Boundary));
+
+        lock().notices.push(Notice {
+            marker: "[bash-done] job-999".to_string(),
+            text: "[bash-done] job-999 exit 0".to_string(),
+        });
+        assert!(Processes.hooks().contains(&ExtensionHook::Boundary));
+
+        lock().notices.clear();
     }
 }

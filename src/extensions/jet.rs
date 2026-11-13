@@ -34,7 +34,7 @@
 
 mod config;
 
-use super::{EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_JET, command_arg, util::tighter_u32};
+use super::{EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_JET, command_arg};
 use crate::{
     core::{
         extensions::{CommandHost, UiNotifyLevel},
@@ -51,7 +51,7 @@ use crate::{
         settings_manager, virtual_models,
     },
     error::Result,
-    extensions::util::truncate_chars_with_postfix,
+    extensions::util::{thinking_intersection, tighter_u32, truncate_chars_with_postfix},
     modes::tui::handlers::{register_host_command, tui_host},
 };
 use config::{ClassifierConfig, JetConfig, RouterConfig, Target};
@@ -430,63 +430,14 @@ async fn classify_complexity(
     }
 }
 
-/// 校验一个物理模型位：provider 已知、条目存在、类型匹配，且不是虚拟条目本身。
+/// 校验一个物理模型位（见 [`super::util::check_physical`]），绑定本扩展自己的虚拟模型对。
 fn check_physical(
     provider: &str,
     id: &str,
     kind: ModelType,
     label: &str,
 ) -> std::result::Result<ModelEntry, String> {
-    let provider = provider.trim();
-    if provider.is_empty() {
-        return Err(format!(
-            "{label} needs a provider (/jet set <provider> <model-id> first)"
-        ));
-    }
-
-    let id = id.trim();
-    if id.is_empty() {
-        return Err(format!(
-            "{label} needs a model id (/jet set <provider> <model-id> first)"
-        ));
-    }
-
-    if provider == VIRTUAL_PROVIDER && id == VIRTUAL_ID {
-        return Err(format!(
-            "{label} must not be the virtual model {VIRTUAL_PROVIDER}/{VIRTUAL_ID}"
-        ));
-    }
-
-    if virtual_models::is_active_virtual(provider, id) {
-        return Err(format!(
-            "{label} must be a physical model, got the virtual model {provider}/{id}"
-        ));
-    }
-
-    model_resolver::find_model_of_type(provider, id, kind).map_err(|e| format!("{label}: {e}"))
-}
-
-/// 目标模型的 thinking 档位（与 [`crate::core::provider::ModelConfig::supported_thinking_levels`] 同口径）。
-fn supported_levels(entry: &ModelEntry) -> Vec<String> {
-    model_resolver::model_config_from_entry(entry, None, None)
-        .supported_thinking_levels()
-        .into_iter()
-        .map(str::to_string)
-        .collect()
-}
-
-/// 全部目标模型都支持的 thinking 档位（交集，保持目录顺序；空交集由定义归一化为 `off`）。
-fn thinking_intersection(entries: &[&ModelEntry]) -> Vec<String> {
-    let Some((first, rest)) = entries.split_first() else {
-        return Vec::new();
-    };
-
-    let mut levels = supported_levels(first);
-    for entry in rest {
-        let supported = supported_levels(entry);
-        levels.retain(|level| supported.contains(level));
-    }
-    levels
+    super::util::check_physical(provider, id, kind, label, (VIRTUAL_PROVIDER, VIRTUAL_ID))
 }
 
 /// 由配置组装虚拟模型定义；配置不完整或目标解析不到时返回原因（此时**不注册**）。
