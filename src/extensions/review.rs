@@ -10,6 +10,7 @@
 //! | `/review <PR 或 issue URL>` | 取元数据 + 在 `agent_dir()` 下开一份只读副本 + 把评审简报交给 agent |
 //! | `/review --comment <URL>` | 同上，并在评审结束时把**最后一条回答**作为评论发到 PR / issue |
 //! | `/review status` / `/review clean` | 看当前目标与已发布的评论 / 删掉所有副本 |
+//! | `/review prs <仓库> [N-M]` | 列仓库 open 的 PR（markdown 表格，不建副本、不设目标） |
 //!
 //! 三条硬口径：
 //!
@@ -41,7 +42,14 @@ use crate::{
         util::{notify_text, session_id_of},
     },
     modes::tui::handlers::register_host_command,
-    utils::{gh::GH_TIMEOUT, git, glyphs::DEF_ELLIPSIS, time::now_iso, truncate::truncate_chars},
+    utils::{
+        gh::{self, GH_TIMEOUT},
+        git,
+        glyphs::DEF_ELLIPSIS,
+        text::parse_range,
+        time::now_iso,
+        truncate::truncate_chars,
+    },
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -88,6 +96,10 @@ const COMMENT_MAX_CHARS: usize = 60_000;
 
 /// `/review` 的子命令（顺序 = 输入框候选顺序）。
 const SUBCOMMANDS: &[SubcommandDef] = &[
+    SubcommandDef {
+        name: "prs",
+        description: "List open PRs of a repository: /review prs <owner/repo|URL> [N-M]",
+    },
     SubcommandDef {
         name: "status",
         description: "Show the current review target, its checkout and the published comment",
@@ -274,6 +286,70 @@ fn parse_target(raw: &str) -> Result<Target, String> {
     })
 }
 
+/// `/review prs <repo> [N-M]`：把仓库里 open 的 PR 列成 markdown 表格。
+///
+/// 失败也以一段文本返回（调用方直接塞进聊天区），不返回 `Result`。
+fn open_prs(cwd: &Path, arg: &str) -> String {
+    let mut words = arg.split_whitespace();
+    let Some(repo) = words.next() else {
+        return "review: usage — /review prs <owner/repo or URL> [N-M]".to_string();
+    };
+    let range = match words.next().map(parse_range) {
+        Some(Ok(range)) => Some(range),
+        Some(Err(err)) => return format!("review: {err}"),
+        None => None,
+    };
+    let repo = match gh::parse_repo(repo) {
+        Ok(repo) => repo,
+        Err(err) => return format!("review: {err}"),
+    };
+    let slug = repo.slug();
+
+    // shortcut: 同步跑 gh（网络请求），慢网时会卡住 TUI；要挪到后台得先加一条能投 markdown 的 UI 请求。
+    let out = match git::run(
+        cwd,
+        "gh",
+        &[
+            "pr",
+            "list",
+            "--repo",
+            &slug,
+            "--state",
+            "open",
+            "--limit",
+            "1000",
+            "--json",
+            "number,title",
+        ],
+        GH_TIMEOUT,
+    ) {
+        Ok(out) if out.ok => out.stdout,
+        Ok(out) => return format!("review: {}", out.failure("gh pr list")),
+        Err(err) => return format!("review: {err}"),
+    };
+    let prs: Vec<Value> = match serde_json::from_str(&out) {
+        Ok(prs) => prs,
+        Err(err) => return format!("review: gh pr list: malformed JSON: {err}"),
+    };
+
+    let rows: Vec<&Value> = match range {
+        Some((start, end)) => prs.iter().skip(start - 1).take(end + 1 - start).collect(),
+        None => prs.iter().collect(),
+    };
+    if rows.is_empty() {
+        return format!("review: {slug} has no open PR here");
+    }
+
+    let prefix = format!("{}/{}#", repo.owner, repo.repo);
+    let mut table = String::from("| PR | PR Title |\n| --- | --- |\n");
+    for pr in rows {
+        let number = pr.get("number").and_then(Value::as_u64).unwrap_or(0);
+        let title = field(pr, "title").replace('|', "\\|");
+        let _ = writeln!(table, "| {prefix}{number} | {title} |");
+    }
+    table
+}
+
 /// 一次评审的运行态（每个会话一份）。
 #[derive(Debug, Clone)]
 struct Active {
@@ -452,8 +528,9 @@ fn command_review(host: &mut dyn CommandHost, raw: &str) -> bool {
     let arg = command_arg(raw).trim();
     let (comment, rest) = split_comment_flag(arg);
     let rest = rest.trim();
+    let (head, tail) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
 
-    match rest {
+    match head {
         "" if comment => {
             host.push_message(
                 "review: --comment needs a target — /review --comment <PR or issue URL>",
@@ -462,7 +539,8 @@ fn command_review(host: &mut dyn CommandHost, raw: &str) -> bool {
         }
         "" | "status" => host.push_message(&status_text(), UiNotifyLevel::Info),
         "clean" => host.push_message(&clean_checkouts(), UiNotifyLevel::Info),
-        other => match parse_target(other) {
+        "prs" => host.push_markdown(&open_prs(&host.cwd(), tail.trim()), UiNotifyLevel::Info),
+        _ => match parse_target(rest) {
             Ok(target) => start(host, target, comment),
             Err(err) => host.push_message(&format!("review: {err}"), UiNotifyLevel::Warning),
         },

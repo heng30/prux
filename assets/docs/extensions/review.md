@@ -47,6 +47,13 @@
 | `/review --comment <URL>` | 同上，并且这一轮回结时把**最后一条回答**作为评论发回去 |
 | `/review status`（或裸 `/review`） | 打印当前目标、副本路径、回帖状态、marker 与已发布的评论记录 |
 | `/review clean` | 删掉 `agent_dir()` 下的所有副本（保留发布记录） |
+| `/review prs <仓库> [N-M]` | 列出该仓库 open 的 PR，输出 markdown 表格（`PR 地址` + `PR Title`，地址形如 `owner/repo#12`） |
+
+`/review prs` 的仓库参数接受完整链接（`https://github.com/owner/repo`）、`github.com/owner/repo`
+与短形式 `owner/repo`；企业版主机写成 `https://<host>/owner/repo`，表格里的地址仍只写
+`owner/repo#<n>`。可选范围 `N-M` 是 **1-based 的第 N 到第 M 条**（含两端，顺序与 `gh pr list`
+一致，也可写成 `2-10`），不给就是全部（最多 1000 条）。列表来自 `gh pr list --state open`，
+只读、不建副本、不设评审目标。该命令同步跑 `gh`，网络慢时界面会等一下。
 
 `/review` 忙碌时按普通文本入队（它会发起一轮 prompt）。
 

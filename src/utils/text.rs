@@ -4,8 +4,8 @@
 //! 围绕命中点取一段可读摘录。不含打分策略——词元上限、加权系数、停用词之外的过滤
 //! 都由调用方决定。另带几个与检索无关的通用小工具：[`has_cjk`]（按语种换字体之类的判定）、
 //! [`code_fence`]（按内容定代码围栏长度）与 [`escape_special`]（按字符集合做反斜杠转义），
-//! 外加按候选表匹配字体族的 [`pick_font_family`] / [`related_font_families`] 与在原文里
-//! 定位键所在行的 [`find_key_line`]。
+//! 外加按候选表匹配字体族的 [`pick_font_family`] / [`related_font_families`]、在原文里
+//! 定位键所在行的 [`find_key_line`] 与解析 `N-M` 范围的 [`parse_range`]。
 
 /// 停用词表：只由这些词构成的查询没有检索价值。
 ///
@@ -355,12 +355,42 @@ pub fn find_key_line(text: &str, key: &str) -> Option<usize> {
         .map(|index| index + 1)
 }
 
+/// 解析 `N-M` 范围（1-based，含两端）：`"2-10"` → `(2, 10)`。
+///
+/// 只接受带连字符的写法，不解析单个数字（那是值而不是范围）；`start == 0` 与 `start > end`
+/// 都按空范围报错。错误信息里带上原文，调用方直接展示即可。
+pub fn parse_range(raw: &str) -> Result<(usize, usize), String> {
+    let (start, end) = raw
+        .split_once('-')
+        .ok_or_else(|| format!("not a range: {raw} — expected N-M, e.g. 2-10"))?;
+    let parse = |text: &str| -> Result<usize, String> {
+        text.trim()
+            .parse()
+            .map_err(|_| format!("not a range: {raw} — expected N-M, e.g. 2-10"))
+    };
+    let (start, end) = (parse(start)?, parse(end)?);
+    if start == 0 || end < start {
+        return Err(format!("empty range: {raw}"));
+    }
+    Ok((start, end))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     /// 测试用词元上限（与 `session_search` 的默认值一致）。
     const MAX_TERMS: usize = 16;
+
+    /// 范围含两端，倒序与 0 起都算空范围。
+    #[test]
+    fn parse_range_takes_an_inclusive_bounded_span() {
+        assert_eq!(parse_range("2-10").unwrap(), (2, 10));
+        assert_eq!(parse_range(" 3 - 3 ").unwrap(), (3, 3));
+        assert!(parse_range("10-2").is_err());
+        assert!(parse_range("0-2").is_err());
+        assert!(parse_range("2").is_err());
+    }
 
     /// 围栏要比内容里最长的反引号连串长，最短 3 个。
     #[test]

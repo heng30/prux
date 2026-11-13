@@ -98,7 +98,8 @@
   a `<!-- prux-review:v1:<hash> -->` marker (hash = target + session), existing comments are scanned
   for it first (a hit reuses that link and posts nothing), and a post that a re-read cannot find is
   reported as `unconfirmed` and never retried. `/review status` shows the target, its checkout and the
-  published comments; `/review clean` deletes every copy.
+  published comments; `/review clean` deletes every copy, and `/review prs <repo> [N-M]` lists the open
+  PRs of a repository as a markdown table (`owner/repo#12` + title, `N-M` keeping the Nth to Mth entry).
 
 - **The `image-route` extension picks the model per request**: it registers the virtual model
   `image-route/auto`, which sends a turn to the `image` target when the request (history included)
@@ -401,7 +402,8 @@
   这一轮的最后一条回答会在结算时作为评论发回去——正文首行是 `<!-- prux-review:v1:<hash> -->`
   marker（哈希 = 目标 + 会话 id），投递前先按 marker 扫已有评论（命中就复用那条链接、不重复发），
   发完复核、扫不到就报 `unconfirmed` 且不再重试。`/review status` 看目标 / 副本 / 已发布评论，
-  `/review clean` 删掉全部副本。
+  `/review clean` 删掉全部副本，`/review prs <仓库> [N-M]` 把仓库 open 的 PR 列成 markdown 表格
+  （`owner/repo#12` + 标题，`N-M` 只留第 N 到第 M 条）。
 
 - **`image-route` 扩展按请求换模型**：注册虚拟模型 `image-route/auto`——请求（含历史）里出现图片块
   就走 `image` 档，否则走 `base` 档；会话跑在不收图的便宜模型上、偶尔贴张截图时，不必手动 `/model`

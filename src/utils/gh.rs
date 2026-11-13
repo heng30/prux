@@ -302,6 +302,53 @@ pub fn status_from_json(value: &Value) -> Status {
     }
 }
 
+/// 一个远程仓库：整条 URL、`github.com/o/r` 与 `o/r` 都归到这里。
+#[derive(Debug, Clone)]
+pub struct Repo {
+    /// 主机名（`github.com` 或自建实例的主机）。
+    pub host: String,
+    /// 仓库所属账号 / 组织。
+    pub owner: String,
+    /// 仓库名。
+    pub repo: String,
+}
+
+impl Repo {
+    /// `gh --repo` 接受的 `[HOST/]OWNER/REPO`（`github.com` 省略主机）。
+    pub fn slug(&self) -> String {
+        if self.host.eq_ignore_ascii_case("github.com") {
+            format!("{}/{}", self.owner, self.repo)
+        } else {
+            format!("{}/{}/{}", self.host, self.owner, self.repo)
+        }
+    }
+}
+
+/// 解析仓库参数：`https://github.com/o/r`、`github.com/o/r`、`o/r` 都接受。
+///
+/// 首段带点就当主机（`github.com/o/r`），否则是短形式 `o/r`（主机补 `github.com`）；
+/// URL 里的 `www.` 前缀与末尾斜杠忽略，`/pull/<n>` 这类尾巴不影响结果。
+pub fn parse_repo(raw: &str) -> Result<Repo, String> {
+    let text = raw.trim();
+    let rest = text
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(text)
+        .trim_start_matches("www.")
+        .trim_end_matches('/');
+    let parts: Vec<&str> = rest.split('/').filter(|part| !part.is_empty()).collect();
+    let (host, owner, repo) = match parts.as_slice() {
+        [owner, repo, ..] if !owner.contains('.') => ("github.com", *owner, *repo),
+        [host, owner, repo, ..] => (*host, *owner, *repo),
+        _ => return Err(format!("not a repository: {text}")),
+    };
+    Ok(Repo {
+        host: host.to_string(),
+        owner: owner.to_string(),
+        repo: repo.to_string(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -384,6 +431,24 @@ mod tests {
                 "{state} 不该当成开着的 PR"
             );
         }
+    }
+
+    #[test]
+    fn parse_repo_accepts_urls_and_short_forms() {
+        let slug = |raw: &str| parse_repo(raw).map(|repo| repo.slug());
+        assert_eq!(slug("heng30/foo").unwrap(), "heng30/foo");
+        assert_eq!(slug("https://github.com/heng30/foo").unwrap(), "heng30/foo");
+        assert_eq!(
+            slug("https://github.com/heng30/foo/").unwrap(),
+            "heng30/foo"
+        );
+        assert_eq!(slug("github.com/heng30/foo").unwrap(), "heng30/foo");
+        assert_eq!(slug("https://github.com/o/r/pull/12").unwrap(), "o/r");
+        assert_eq!(
+            slug("https://ghe.corp/heng30/foo").unwrap(),
+            "ghe.corp/heng30/foo"
+        );
+        assert!(slug("heng30").is_err());
     }
 
     #[test]
