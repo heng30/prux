@@ -204,7 +204,7 @@ async fn apply(
             append_custom_entry(agent, &custom_type, data)
         }
         AgentCommand::SetThinking { level, persist } => set_thinking(agent, &level, persist),
-        AgentCommand::SetSessionName { name } => set_session_name(agent, &name),
+        AgentCommand::SetSessionName { name } => set_session_name(agent, &name, events),
         AgentCommand::SwitchCwd { path } => switch_cwd(agent, &path, events),
         AgentCommand::SetCwd { path } => set_cwd(agent, &path, events),
         AgentCommand::Reload { .. } => reload_assets(agent, events, reload_ctx, prompt_templates),
@@ -247,8 +247,13 @@ fn set_thinking(agent: &mut Agent, level: &str, persist: bool) {
 }
 
 /// `/name <name>`：设置会话显示名。
-fn set_session_name(agent: &mut Agent, name: &str) {
+/// `/name` 与扩展起名：写会话名后回推快照。
+///
+/// GUI 的侧栏靠快照里 `session_name` 的前后差异重读会话列表（见 `on_snapshot`），
+/// 不推快照就只有会话文件改了、侧栏还是旧标题。
+fn set_session_name(agent: &mut Agent, name: &str, events: &UnboundedSender<GuiEvent>) {
     agent.set_session_name(name);
+    _ = events.send(GuiEvent::Snapshot(Box::new(snapshot(agent))));
 }
 
 /// `/tree`：把会话树排成文本回执（无会话时给一行提示）。

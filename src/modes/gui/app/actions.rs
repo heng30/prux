@@ -1301,6 +1301,9 @@ impl GuiApp {
         );
         let text = slash::expand_user_text(&text, &self.skills, &self.prompt_templates);
 
+        // 与 TUI 的提交路径同源：扩展靠这条广播收素材（auto-title 的首条输入）。
+        core::extensions::dispatch_user_submit(&text, self.busy);
+
         // `@图片` 展开成图片附件（同 TUI 的提交路径）；follow-up 只带文本，与 TUI 的排队路径一致
         let (text, images) = if follow_up {
             (text, Vec::new())
