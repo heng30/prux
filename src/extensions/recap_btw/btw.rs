@@ -173,6 +173,11 @@ impl Extension for Btw {
         shared::remember_session(session.map(|s| s.session_id.clone()));
     }
 
+    /// 会话 id 已知（`/new` 尚未落盘也有）：一次性请求带上它，缺了 opencode 会回 400。
+    fn on_session_id(&self, session_id: &str) {
+        shared::remember_session(Some(session_id.to_string()));
+    }
+
     /// 会话切换：记住新会话 id，并收掉上一条会话留下的面板。
     fn on_session_switched(&self, session_path: Option<&str>, _messages: &[AgentMessage]) {
         shared::remember_session(session_id_of(session_path));
@@ -555,6 +560,18 @@ mod tests {
             "每行都不该超出面板宽度：{lines:?}"
         );
         assert!(lines.iter().any(|l| l.contains('✗')), "首行带错误标记");
+    }
+
+    #[test]
+    fn session_id_hook_fills_the_slot_even_before_the_file_lands() {
+        let _g = lock_global();
+        shared::remember_session(None);
+        Btw.on_session_id("0193f1b2-1111-2222-3333-444455556666");
+        assert_eq!(
+            shared::remembered_session().as_deref(),
+            Some("0193f1b2-1111-2222-3333-444455556666"),
+            "`/new` 尚未落盘时也拿得到 id（否则 opencode 回 400）"
+        );
     }
 
     #[test]

@@ -50,16 +50,17 @@ const EXT: &str = "auto-title";
 const CMD: &str = "title";
 
 /// 系统提示：一行短标题、语言跟首条用户输入走。
-const SYSTEM: &str = "Name this coding session with a title of at most 40 characters, \
+const SYSTEM: &str = "Name this coding session with a title of at most 20 characters, \
                       in the language of the user's first message. Say what is being worked \
-                      on, not what was asked. Answer with the title alone: no quotes, \
+                      on, not what was asked. Never put file paths, `@` references or URLs \
+                      in the title. Answer with the title alone: no quotes, \
                       no 'Title:' prefix, no trailing period.";
 
 /// 回复的 token 上限（标题很短；关不掉思考的模型由 `shared` 抬到下限）。
 const MAX_TOKENS: u32 = 48;
 
 /// 会话名的字符上限（超出按字符硬截断，省略号占配额）。
-const MAX_CHARS: usize = 40;
+const MAX_CHARS: usize = 20;
 
 /// 命名素材里用户输入的字符上限。
 const PROMPT_CHARS: usize = 600;
@@ -286,6 +287,11 @@ impl Extension for AutoTitle {
                 .and_then(|p| Session::open(p).ok())
                 .is_some_and(|s| s.name.is_some());
         reset(named || !messages.is_empty());
+    }
+
+    /// 会话 id 已知（`/new` 尚未落盘也有）：命名请求带上它，缺了 opencode 会回 400。
+    fn on_session_id(&self, session_id: &str) {
+        shared::remember_session(Some(session_id.to_string()));
     }
 
     /// 缓存当前型号（命名请求要用；子代理上下文不覆盖）。
@@ -559,12 +565,39 @@ fn normalize_title(text: &str) -> String {
     let cleaned = cleaned
         .trim_end_matches(|c: char| quoted(c) || trailing(c))
         .trim_end();
-    truncate_chars_within(cleaned, MAX_CHARS, "…")
+    truncate_chars_within(&drop_path_tokens(cleaned), MAX_CHARS, "…")
 }
 
-/// 兜底标题：素材的前几个词（压成单行后按字符上限截断）。
+/// 该词是否像路径：`@` 文件引用、`./` / `../` / `~/` 相对路径、多段 `/` 路径、反斜杠路径。
+///
+/// 只认形状不看磁盘；单段 `/new` 这类斜杠命令不算（名字里带它是有意义的）。
+fn is_path_token(token: &str) -> bool {
+    token.starts_with('@')
+        || token.starts_with("./")
+        || token.starts_with("../")
+        || token.starts_with("~/")
+        || token.matches('/').count() >= 2
+        || token.contains('\\')
+}
+
+/// 从一行里剔掉路径词：会话名只有 [`MAX_CHARS`] 的预算，路径一进来就把它吃光。
+///
+/// 全被剔空时原样返回，免得名字变成空串。
+fn drop_path_tokens(line: &str) -> String {
+    let kept: Vec<&str> = line
+        .split_whitespace()
+        .filter(|token| !is_path_token(token))
+        .collect();
+    if kept.is_empty() {
+        line.to_string()
+    } else {
+        kept.join(" ")
+    }
+}
+
+/// 兜底标题：素材的前几个词（剔掉路径，压成单行后按字符上限截断）。
 fn fallback_title(source: &str) -> String {
-    let line = flatten_line(source);
+    let line = drop_path_tokens(&flatten_line(source));
     if line.is_empty() {
         return EXT.to_string();
     }
@@ -619,9 +652,19 @@ mod tests {
     fn fallback_title_uses_first_words() {
         assert_eq!(
             fallback_title("fix the parser\n\nand stuff"),
-            "fix the parser and stuff"
+            "fix the parser and …"
         );
         assert_eq!(fallback_title("   "), EXT, "没有素材时退回扩展名");
+        assert_eq!(
+            fallback_title("@tmp/agent/repos/ 选定一个项目"),
+            "选定一个项目",
+            "@ 文件引用不得抢占名字预算"
+        );
+        assert_eq!(
+            fallback_title("sweep /new path"),
+            "sweep /new path",
+            "斜杠命令不是路径"
+        );
         let long = fallback_title(&"word ".repeat(100));
         assert!(long.chars().count() <= MAX_CHARS);
     }

@@ -624,6 +624,11 @@ fn dispatch_session_switched(agent: &Agent) {
         .and_then(|session| session.get_session_file())
         .map(|file| file.to_string_lossy().to_string());
     core::extensions::dispatch_session_switched(path.as_deref(), &agent.messages);
+
+    // `/new` 的新会话尚未落盘：路径为空，但 id 已在会话里（见 `Extension::on_session_id`）。
+    if let Some(session) = &agent.session {
+        core::extensions::dispatch_session_id(&session.session_id);
+    }
 }
 
 fn adopt_session(

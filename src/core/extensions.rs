@@ -603,6 +603,13 @@ pub trait Extension: Send + Sync {
     /// 自定义条目）。路径 None = 全新会话（无文件）。默认空实现。
     fn on_session_switched(&self, _session_path: Option<&str>, _messages: &[AgentMessage]) {}
 
+    /// 会话标识钩子：TUI 在每次会话切换汇合处（[`dispatch_session_switched`] 之后）调用。
+    ///
+    /// 与路径不同，会话 id 在 `/new` 这种"文件尚未落盘"的时刻也已经存在；发一次性请求、
+    /// 需要向 provider 自报会话身份（opencode 缺 `x-opencode-session` 回 400）的扩展靠它拿到 id。
+    /// 默认空实现。
+    fn on_session_id(&self, _session_id: &str) {}
+
     /// 注册钩子：`register_extension` 时锁外调用一次。扩展在此接线需要
     /// TUI 状态执行入口的注册（斜杠命令 handler、快捷键 handler 等）。
     fn on_registered(&self) {}
@@ -1449,6 +1456,17 @@ pub fn dispatch_session_switched(path: Option<&str>, messages: &[AgentMessage]) 
     }
 
     dispatch_footer_session(path, messages);
+}
+
+/// 会话标识分发：TUI 在会话切换汇合处调用，**晚于** [`dispatch_session_switched`]
+/// （后者会按路径把 id 推导成 `None`，这里用真实 id 覆盖回来）。
+///
+/// `/new` 的新会话尚未落盘，路径为空但 id 已经存在；需要会话标识发 provider 私有头的扩展
+/// （见 [`Extension::on_session_id`]）靠它拿到 id。
+pub fn dispatch_session_id(session_id: &str) {
+    for ext in registered() {
+        ext.on_session_id(session_id);
+    }
 }
 
 /// footer 扩展的会话历史分发：TUI 启动（`main` 在会话就绪后调用一次）与会话切换

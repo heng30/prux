@@ -127,6 +127,8 @@ impl App {
                 self.program_status.reset();
 
                 core::extensions::dispatch_session_switched(s.file.as_deref(), &self.messages);
+                // `/new` 的新会话还没落盘：路径为空，但 id 已在回执里。
+                core::extensions::dispatch_session_id(&s.session_id);
 
                 let has_file = s.file.as_deref().map(|f| !f.is_empty()).unwrap_or(false);
                 if has_file {

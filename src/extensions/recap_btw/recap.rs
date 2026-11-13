@@ -103,6 +103,11 @@ impl Extension for Recap {
         shared::remember_session(session.map(|s| s.session_id.clone()));
     }
 
+    /// 会话 id 已知（`/new` 尚未落盘也有）：一次性请求带上它，缺了 opencode 会回 400。
+    fn on_session_id(&self, session_id: &str) {
+        shared::remember_session(Some(session_id.to_string()));
+    }
+
     /// 会话切换：记住新会话 id。
     fn on_session_switched(&self, session_path: Option<&str>, _messages: &[AgentMessage]) {
         shared::remember_session(session_id_of(session_path));
