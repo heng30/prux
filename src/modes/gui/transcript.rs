@@ -64,6 +64,9 @@ const IMAGE_THUMB: f32 = 360.0;
 const OVERLAY_COLS: usize = 100;
 /// 等宽块的行高（相对字号）：mermaid 盒图的横线靠行距对齐，每行必须等高。
 const MONO_LINE_HEIGHT: f32 = 1.55;
+/// 等宽块左右内边距 + 边框折算的排版列数（`(SPACE_SM * 2 + 2) / (FONT_SMALL * MONO_ADVANCE)`）：
+/// mermaid 图按外层内容宽排版时要先扣掉它，否则图恒比块宽一截。
+const MONO_BLOCK_INSET_COLS: usize = 3;
 /// 代码卡底部横向滚动条的高度：滑块只有几像素，上下留出余量才好按住拖。
 const CODE_SCROLLBAR_H: f32 = 10.;
 
@@ -155,6 +158,10 @@ enum Row {
     Mono {
         /// 各行文本
         lines: Vec<String>,
+        /// 正文的横向滚动状态（图比块宽时靠它左右滚）
+        scroll: ScrollHandle,
+        /// 上一帧是否画了底部横向滚动条：内容溢出状态一变就再画一帧
+        bar: Rc<Cell<bool>>,
     },
     /// 分隔线
     Rule,
@@ -388,10 +395,10 @@ fn block_line(
         .into_any_element()
 }
 
-/// 代码卡底部的横向滚动条：轨道整条可拖（滑块太细直接抓不住）。
+/// 可横向滚动块（代码卡 / mermaid 图）底部的滚动条：轨道整条可拖（滑块太细直接抓不住）。
 ///
 /// 视口/上限/偏移都取自上一帧的实测值（物理像素），滑块位置原样按物理像素摆。
-fn code_scrollbar(
+fn h_scrollbar(
     theme: &Theme,
     namespace: usize,
     id: usize,
@@ -410,7 +417,7 @@ fn code_scrollbar(
     let handle = scroll.clone();
     let press_app = app.clone();
     div()
-        .id(row_element_id("code-scrollbar", namespace, id))
+        .id(row_element_id("h-scrollbar", namespace, id))
         .relative()
         .w_full()
         .h(px(CODE_SCROLLBAR_H))
@@ -437,6 +444,29 @@ fn code_scrollbar(
                 .bg(theme.text_ghost),
         )
         .into_any_element()
+}
+
+/// 把内容盒改造成横向滚动容器：溢出状态一变就补一帧（滚动条占高度，布局会变）。
+///
+/// 侦听器只能挂在 `Div` 上（赋 id 后就不是了），所以这里先把侦听器挂上再赋 id。
+fn h_scroll_body(
+    body: gpui::Div,
+    scroll: &ScrollHandle,
+    bar: &Rc<Cell<bool>>,
+    id: ElementId,
+) -> gpui::Stateful<gpui::Div> {
+    let probe = scroll.clone();
+    let shown = bar.clone();
+    body.min_w_0()
+        .on_children_prepainted(move |_, window, _| {
+            let want = probe.max_offset().x > px(0.);
+            if shown.replace(want) != want {
+                window.request_animation_frame();
+            }
+        })
+        .id(id)
+        .overflow_x_scroll()
+        .track_scroll(scroll)
 }
 
 /// 渲染对话流的版式上下文：内容可用宽度 + 选区/行登记 + 所属实体。
@@ -2102,10 +2132,15 @@ fn parse_rows(text: &str, theme: &Theme, cols: usize) -> Vec<Row> {
                 // mermaid 图渲染成等宽盒图；超宽/解析失败时回退为源码高亮
                 if render_mermaid
                     && lang.as_deref() == Some("mermaid")
-                    && let Some(figure) = mermaid::render_mermaid(&code, Some(cols))
+                    && let Some(figure) = mermaid::render_mermaid(
+                        &code,
+                        Some(cols.saturating_sub(MONO_BLOCK_INSET_COLS)),
+                    )
                 {
                     return Row::Mono {
                         lines: figure.lines().map(str::to_string).collect(),
+                        scroll: ScrollHandle::new(),
+                        bar: Rc::new(Cell::new(false)),
                     };
                 }
                 Row::Code {
@@ -2117,7 +2152,11 @@ fn parse_rows(text: &str, theme: &Theme, cols: usize) -> Vec<Row> {
                 }
             }
             markdown::Block::Table(table) => Row::Table(table),
-            markdown::Block::Math { lines } => Row::Mono { lines },
+            markdown::Block::Math { lines } => Row::Mono {
+                lines,
+                scroll: ScrollHandle::new(),
+                bar: Rc::new(Cell::new(false)),
+            },
             markdown::Block::Rule => Row::Rule,
         })
         .collect()
@@ -2272,29 +2311,21 @@ fn render_rows(
                 );
 
                 // 正文横向滚动：行不折行、按内容宽度排，长行向右溢出。
-                // 侦听器只能挂在 `Div` 上（赋 id 后就不是了），所以先挂再赋 id。
-                let probe = scroll.clone();
-                let shown = bar.clone();
-                let mut body = div()
-                    .flex()
-                    .flex_col()
-                    .items_start()
-                    // 滚动容器不写 min_w_0 就会把长行当成最小宽度往上传，整列被撑出窗口
-                    .min_w_0()
-                    .whitespace_nowrap()
-                    .px(px(SPACE_SM))
-                    .py(px(SPACE_SM))
-                    .font(mono_font())
-                    .on_children_prepainted(move |_, window, _| {
-                        // 溢出了才画底部滚动条；状态一变就补一帧（滚动条占高度，布局会变）
-                        let want = probe.max_offset().x > px(0.);
-                        if shown.replace(want) != want {
-                            window.request_animation_frame();
-                        }
-                    })
-                    .id(row_element_id("code-body", namespace, copy_id))
-                    .overflow_x_scroll()
-                    .track_scroll(scroll);
+                let mut body = h_scroll_body(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .items_start()
+                        // 滚动容器不写 min_w_0 就会把长行当成最小宽度往上传，整列被撑出窗口
+                        .min_w_0()
+                        .whitespace_nowrap()
+                        .px(px(SPACE_SM))
+                        .py(px(SPACE_SM))
+                        .font(mono_font()),
+                    scroll,
+                    bar,
+                    row_element_id("code-body", namespace, copy_id),
+                );
                 for line in code {
                     let text: String = line.iter().map(|(_, part)| part.as_str()).collect();
                     let mut element = div()
@@ -2326,13 +2357,7 @@ fn render_rows(
                 child_lines.push(None);
                 card = card.child(body);
                 if bar.get() {
-                    card = card.child(code_scrollbar(
-                        theme,
-                        namespace,
-                        copy_id,
-                        scroll,
-                        app.clone(),
-                    ));
+                    card = card.child(h_scrollbar(theme, namespace, copy_id, scroll, app.clone()));
                 }
                 card.into_any_element()
             }
@@ -2340,15 +2365,16 @@ fn render_rows(
                 child_lines.push(None);
                 table_body(table, theme, lines, &mut link_id, namespace)
             }
-            Row::Mono { lines: mono } => {
-                child_lines.push(None);
-                let mut body = div()
+            Row::Mono {
+                lines: mono,
+                scroll,
+                bar,
+            } => {
+                let mono_id = link_id;
+                link_id += 1;
+                let mut card = div()
                     .w_full()
-                    .flex()
-                    .flex_col()
                     .my(px(SPACE_XS))
-                    .px(px(SPACE_SM))
-                    .py(px(SPACE_SM))
                     .rounded(px(RADIUS_MD))
                     .border_1()
                     .border_color(theme.border)
@@ -2357,6 +2383,18 @@ fn render_rows(
                     .font(mono_font())
                     .text_size(px(FONT_SMALL))
                     .text_color(theme.code_text);
+                // 图比块宽时横向滚动：行按内容宽排，向右溢出
+                let mut body = h_scroll_body(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .items_start()
+                        .px(px(SPACE_SM))
+                        .py(px(SPACE_SM)),
+                    scroll,
+                    bar,
+                    row_element_id("mono-body", namespace, mono_id),
+                );
                 for line in mono {
                     body = body.child(block_line(
                         lines,
@@ -2364,10 +2402,15 @@ fn render_rows(
                         line,
                         FONT_SMALL,
                         mono_line(line),
-                        true,
+                        false,
                     ));
                 }
-                body.into_any_element()
+                child_lines.push(None);
+                card = card.child(body);
+                if bar.get() {
+                    card = card.child(h_scrollbar(theme, namespace, mono_id, scroll, app.clone()));
+                }
+                card.into_any_element()
             }
             Row::Rule => {
                 child_lines.push(None);
@@ -2401,7 +2444,8 @@ fn render_rows(
 /// 这里把每个全角字固定占 2 个半角单元并居中，与终端里「一格一列、汉字占两列」一致。
 fn mono_line(line: &str) -> AnyElement {
     let height = px(FONT_SMALL * MONO_LINE_HEIGHT);
-    let mut row = div().w_full().flex().h(height);
+    // flex_none：行宽取内容宽，图比块宽时才能溢出滚动容器
+    let mut row = div().flex_none().flex().h(height);
     let mut run = String::new();
     for ch in line.chars() {
         if char_width(ch) == 1 && ch != ' ' {
@@ -2714,6 +2758,15 @@ fn span_highlight(style: &markdown::SpanStyle, theme: &Theme) -> HighlightStyle 
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    /// 等宽块的排版列扣除量必须盖住内边距 + 边框，否则 mermaid 图恒比块宽、恒出滚动条。
+    #[test]
+    fn mono_inset_covers_block_padding() {
+        let inset = (SPACE_SM * 2. + 2.) / (FONT_SMALL * MONO_ADVANCE);
+        assert_eq!(inset.ceil() as usize, MONO_BLOCK_INSET_COLS);
+    }
+
     /// 气泡可用宽必须经得起布局的设备像素吸附：吸附后不能再比逐字累加的自然宽窄。
     ///
     /// 回归：9 个汉字 27.3px（界面缩放 2.1）+ 屏幕缩放 1.25 时自然宽 245.7，
@@ -2955,8 +3008,6 @@ mod tests {
         assert_eq!(shown.len(), 2);
         assert_eq!(hidden, 0);
     }
-
-    use super::*;
 
     /// 行登记：行号按渲染顺序递增，选区按字符（不是字节）切片。
     #[test]

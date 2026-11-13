@@ -342,6 +342,10 @@
 - **Windows path containment was case-sensitive**: `C:\Repo` and `C:\repo\file` were treated as
   unrelated, so a file inside the project could be reported as outside it. The comparison now folds
   case on Windows only; component-wise matching on other platforms is unchanged.
+- **A diagram wider than its block was cut off in the desktop app**: a Mermaid figure was laid out to
+  the block's outer width, so its own padding and border pushed it past the edge and the right side
+  was clipped. Monospace blocks now lay the figure out to the inner width, and view it through the
+  same draggable horizontal scrollbar as code cards when it still does not fit.
 
 ## 中文
 
@@ -585,4 +589,6 @@
   （`\mathbb{Provable}` 原先是 `ℙrovable`，现在是 `Provable`）。
 - **Windows 上路径包含判断区分了大小写**：`C:\Repo` 与 `C:\repo\file` 被当成无关路径，
   项目内的文件可能被判成「目录之外」。现在只在 Windows 上折叠大小写，其它平台仍按组件比较、行为不变。
+- **桌面应用里比块宽的图被裁掉**：mermaid 图按块的外宽排版，块自己的内边距与边框把它顶出边界，
+  右侧就那么被切掉了。等宽块现在按内宽排版，仍放不下时和代码卡一样出现一条可拖的横向滚动条。
 
