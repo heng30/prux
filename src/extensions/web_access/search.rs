@@ -15,7 +15,10 @@ use super::{
     super::util::default_user_agent,
     config::{self, Config, LoadedConfig},
 };
-use crate::{core::tools::ToolError, utils::http};
+use crate::{
+    core::tools::ToolError,
+    utils::{display::flatten_line, http},
+};
 use futures_util::StreamExt;
 use regex::Regex;
 use serde_json::Value;
@@ -907,7 +910,7 @@ async fn jina(
         let snippet = item
             .get("description")
             .and_then(|v| v.as_str())
-            .map(|s| s.split_whitespace().collect::<Vec<_>>().join(" "))
+            .map(flatten_line)
             .unwrap_or_default();
         results.push(SearchResult {
             title,
@@ -1085,7 +1088,7 @@ fn parse_duckduckgo_html(html: &str) -> Vec<SearchResult> {
         .captures_iter(html)
         .map(|caps| {
             let raw = tags.replace_all(&caps[1], "");
-            collapse_ws(&super::fetch::decode_entities(&raw))
+            flatten_line(&super::fetch::decode_entities(&raw))
         })
         .collect();
 
@@ -1093,7 +1096,7 @@ fn parse_duckduckgo_html(html: &str) -> Vec<SearchResult> {
     for (index, caps) in anchor.captures_iter(html).enumerate() {
         let href = caps.get(1).map(|m| m.as_str()).unwrap_or("");
         let title_raw = tags.replace_all(&caps[2], "");
-        let title = collapse_ws(&super::fetch::decode_entities(&title_raw));
+        let title = flatten_line(&super::fetch::decode_entities(&title_raw));
         let Some(url) = decode_duckduckgo_url(href) else {
             continue;
         };
@@ -1107,11 +1110,6 @@ fn parse_duckduckgo_html(html: &str) -> Vec<SearchResult> {
         });
     }
     results
-}
-
-/// 把任意空白序列压缩为单个空格并去掉首尾空白。
-fn collapse_ws(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// 解出 DuckDuckGo 跳转链接的真实目标（`uddg` 参数）；非 http(s) 或解析失败返回 None。
@@ -1298,7 +1296,7 @@ fn map_generic_results(
         } else {
             item.get(snippet_key)
                 .and_then(|v| v.as_str())
-                .map(|s| s.split_whitespace().collect::<Vec<_>>().join(" "))
+                .map(flatten_line)
                 .unwrap_or_default()
         };
         results.push(SearchResult {

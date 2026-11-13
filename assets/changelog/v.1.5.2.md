@@ -2,6 +2,18 @@
 
 ### Added
 
+- **Sessions get a name automatically**: the new `auto-title` extension names a session once its
+  first turn finishes, using a single short request over the first user message plus the start of the
+  assistant's reply, and writes it as the session name so the sidebar and the status bar show what a
+  session is about instead of the first line of its prompt. It only ever touches the main agent's
+  first turn: a resumed session that already has messages, or one the user renamed with `/name`, is
+  left alone, and a failed request falls back to the first few words of the prompt instead of leaving
+  a session unnamed. `/title` names the current session on demand — use it for sessions that
+  already exist — and `/title set --provider <p> --model <m>` points naming at a cheaper model of
+  your choice, kept in `agent_dir()/extensions/auto-title.json` and validated against the catalog when
+  you set it. `/title unset` drops it and naming goes back to the session's own model; `set` with
+  no flags only prints the usage instead of clearing anything. Off by default (enable it in
+  `/extension`).
 - **`/backup` snapshots and restores your prux assets**: the new `backup` extension packs
   `agent_dir()`'s `settings.json`, `APPEND_SYSTEM.md`, `trust.json`, `themes/`, `skills/` and
   `extensions/` (extension configs, memory, MCP configs, workflows) into one zip — by default
@@ -335,6 +347,13 @@
 
 ### 新增
 
+- **会话自动命名**：新增 `auto-title` 扩展，在首轮结束后用一次短请求（首条用户输入 + assistant 开头一段正文）
+  给会话起名，写入会话名，侧栏与状态栏因此显示"这个会话在干什么"而不是提示词的第一行。它只碰主 agent 的首轮：
+  已带消息恢复的旧会话、以及用 `/name` 改过名的会话一律不动；请求失败时退回用户输入的前几个词，不留下无名会话。
+  `/title` 可按需给当前会话起名（已存在的旧会话用它补名字）；`/title set --provider <p>
+  --model <m>` 可把命名改用你挑的便宜模型（存 `agent_dir()/extensions/auto-title.json`，写入时按目录校验），
+  `/title unset` 清除后回到会话自己的模型；`set` 不带参数只打用法，不会误清配置。
+  **默认不启用**，需在 `/extension` 面板开启。
 - **`/backup` 快照与恢复 prux 自身资产**：新增的 `backup` 扩展把 `agent_dir()` 下的 `settings.json`、
   `APPEND_SYSTEM.md`、`trust.json`、`themes/`、`skills/` 与 `extensions/`（扩展配置、记忆、MCP 配置、
   workflows）打成一个 zip——默认落到 `agent_dir()/backups/prux-backup-<时间戳>.zip`，也可以指定目录。

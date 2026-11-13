@@ -10,7 +10,7 @@
 use super::graph::{MemoryCategory, MemoryScope, TrustLevel};
 use crate::{
     core::provider::{AgentMessage, ModelConfig},
-    utils::{glyphs::DEF_ELLIPSIS, truncate::truncate_chars},
+    utils::{display::flatten_line, glyphs::DEF_ELLIPSIS, truncate::truncate_chars},
 };
 use serde::Deserialize;
 
@@ -113,7 +113,7 @@ pub(super) fn build_prompt(excerpt: &str, known: &[String]) -> String {
         prompt.push_str("\nAlready known (do not repeat):\n");
         for item in known.iter().take(MAX_KNOWN) {
             prompt.push_str("- ");
-            prompt.push_str(&super::recall::single_line(item));
+            prompt.push_str(&flatten_line(item));
             prompt.push('\n');
         }
     }
@@ -186,7 +186,7 @@ pub(super) fn parse_response(text: &str) -> Vec<ExtractedMemory> {
             continue;
         }
         let evidence = truncate_chars(
-            &super::recall::single_line(evidence),
+            &flatten_line(evidence),
             MAX_EVIDENCE_CHARS,
             Some(DEF_ELLIPSIS),
             true,

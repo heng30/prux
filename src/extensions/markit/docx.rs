@@ -4,7 +4,8 @@
 //! `w:tbl` 变 Markdown 表格。图表、脚注、批注、图片与页眉页脚都不读
 //! （它们要么是别的 part，要么没有文本价值）。
 
-use super::{collapse_blank_lines, escape_cell, ooxml, squash};
+use super::{collapse_blank_lines, escape_cell, ooxml};
+use crate::utils::display::flatten_line;
 use quick_xml::events::{BytesStart, Event};
 
 /// 正文所在的 ZIP 成员。
@@ -116,7 +117,7 @@ impl Renderer {
 
     /// 收口当前段落：表格内的进当前单元格，其它按标题 / 列表项 / 普通段落落块。
     fn flush_para(&mut self) {
-        let text = squash(&std::mem::take(&mut self.para));
+        let text = flatten_line(&std::mem::take(&mut self.para));
         let heading = self.heading.take();
         let list_item = std::mem::take(&mut self.list_item);
         if text.is_empty() {
@@ -144,7 +145,7 @@ impl Renderer {
     /// 收口当前单元格。
     fn flush_cell(&mut self) {
         let cell = std::mem::take(&mut self.cell);
-        self.row.push(squash(&cell));
+        self.row.push(flatten_line(&cell));
     }
 
     /// 收口当前行（空行留到渲染时统一丢弃）。

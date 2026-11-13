@@ -21,6 +21,7 @@ use crate::{
         opt_string, opt_string_array, req_str, truncate_chars_with_postfix, value_text,
     },
     utils::{
+        display::flatten_line,
         image::{ImageResizeLimits, prepare_image},
         output_files,
         truncate::format_size,
@@ -1151,7 +1152,7 @@ fn save_screenshot(bytes: &[u8]) -> String {
 
 /// 压成一行并截断（标题 / URL 展示用）。
 fn one_line(text: &str, max: usize) -> String {
-    let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let collapsed = flatten_line(text);
     truncate_chars_with_postfix(&collapsed, max, "…")
 }
 

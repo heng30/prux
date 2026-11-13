@@ -6,7 +6,10 @@
 
 use crate::{
     extensions::util::default_user_agent,
-    utils::http::{self, ClientOptions},
+    utils::{
+        display::flatten_line,
+        http::{self, ClientOptions},
+    },
 };
 use quick_xml::{
     Reader, XmlVersion,
@@ -100,7 +103,7 @@ impl Paper {
     /// 用标题建一个空条目；其余字段由各源的解析函数填。
     fn new(title: &str) -> Self {
         Self {
-            title: squash(title),
+            title: flatten_line(title),
             ..Self::default()
         }
     }
@@ -521,7 +524,7 @@ pub fn parse_alphaxiv(value: &Value) -> Result<Vec<Paper>, String> {
             paper.summary = item
                 .get("abstract")
                 .and_then(|v| v.as_str())
-                .map(squash)
+                .map(flatten_line)
                 .unwrap_or_default();
             paper.published = item
                 .get("publicationDate")
@@ -664,7 +667,7 @@ pub fn parse_pubmed(xml: &str) -> Result<Vec<Paper>, String> {
             }
             Event::End(_) => {
                 let name = path.pop().unwrap_or_default();
-                let value = squash(&text);
+                let value = flatten_line(&text);
                 let in_date = path.last().is_some_and(|parent| parent == "PubDate");
                 if let Some(paper) = current.as_mut() {
                     match name.as_str() {
@@ -754,7 +757,7 @@ pub fn parse_arxiv_atom(xml: &str) -> Result<Vec<Paper>, String> {
             }
             Event::End(_) => {
                 let name = path.pop().unwrap_or_default();
-                let value = squash(&text);
+                let value = flatten_line(&text);
                 if let Some(paper) = current.as_mut() {
                     match name.as_str() {
                         "id" => {
@@ -806,11 +809,6 @@ fn arxiv_from_doi(doi: &str) -> Option<String> {
         .strip_prefix("10.48550/arXiv.")
         .or_else(|| doi.strip_prefix("10.48550/arxiv."))?;
     Some(rest.split('v').next().unwrap_or(rest).to_string())
-}
-
-/// 把连续空白压成单个空格并去首尾空白。
-fn squash(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// 三字母英文月份 → 两位数字；已是数字或无法识别时原样返回。

@@ -40,6 +40,7 @@ use crate::{
     },
     extensions::{EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_MARKIT, tool_search},
     utils::{
+        display::flatten_line,
         paths::resolve_path,
         truncate::{format_size, truncate_head},
     },
@@ -397,14 +398,9 @@ fn collapse_blank_lines(text: &str) -> String {
     out
 }
 
-/// 把一段文本里的连续空白压成单个空格（表格单元格、段落文本都靠它归一）。
-fn squash(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
 /// 把 `|` 与换行转义掉，使其能安全放进 Markdown 表格单元格。
 fn escape_cell(text: &str) -> String {
-    squash(text).replace('|', "\\|")
+    flatten_line(text).replace('|', "\\|")
 }
 
 #[cfg(test)]

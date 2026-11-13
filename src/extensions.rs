@@ -11,6 +11,7 @@ pub(crate) mod util;
 
 pub mod acp;
 pub mod ask_user_question;
+pub mod auto_title;
 pub mod backup;
 pub mod banner;
 pub mod browser;
@@ -123,6 +124,8 @@ pub const PRIORITY_ROLLBACK: u32 = 70;
 pub const PRIORITY_SHAKE: u32 = 70;
 /// pr 交付闭环（提交 / 推 / PR / 跟 CI）扩展的注册优先级。
 pub const PRIORITY_PR: u32 = 43;
+/// auto-title 会话首轮自动命名扩展的注册优先级。
+pub const PRIORITY_AUTO_TITLE: u32 = 42;
 /// vet 收工前项目检查闭环扩展的注册优先级。
 pub const PRIORITY_VET: u32 = 76;
 /// web-access 联网搜索与抓取扩展的注册优先级。

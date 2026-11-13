@@ -53,6 +53,7 @@ use crate::{
     },
     modes::tui::handlers::register_host_command,
     utils::{
+        display::flatten_line,
         glyphs::DEF_ELLIPSIS,
         paths,
         time::{now_iso, short_date},
@@ -1070,7 +1071,7 @@ fn scope_of_path(path: &Path) -> MemoryScope {
 /// 渲染一条记忆（两行：标题 + 元信息）。
 fn render_entry(scope: MemoryScope, entry: &MemoryEntry) -> String {
     let content = truncate_chars(
-        &recall::single_line(&entry.content),
+        &flatten_line(&entry.content),
         CONTENT_PREVIEW_CHARS,
         Some(DEF_ELLIPSIS),
         true,
@@ -1406,7 +1407,7 @@ fn known_contents(cwd: Option<&str>) -> Vec<String> {
         .take(extract::MAX_EXTRACTED * 8)
         .map(|(_, entry)| {
             truncate_chars(
-                &recall::single_line(&entry.content),
+                &flatten_line(&entry.content),
                 KNOWN_PREVIEW_CHARS,
                 Some(DEF_ELLIPSIS),
                 true,

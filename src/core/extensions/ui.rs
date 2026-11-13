@@ -196,6 +196,14 @@ pub enum ExtensionUiRequest {
     /// 完成后由 worker 发 `extension:entry_persisted` 事件回执）。
     /// 供无 `App` 访问的扩展路径（on_agent_event / 工具执行）使用。
     PersistSessionEntry { custom_type: String, data: Value },
+    /// 设置当前会话名（写会话文件的 `name` fact，侧栏与状态栏随之更新）。
+    ///
+    /// 供**没有宿主访问权**的钩子路径使用（`on_boundary` / `on_agent_event`），比如自动
+    /// 命名扩展；用户显式改名仍走 `/name` 命令。名字由调用方规整好（非空、已截断）。
+    SetSessionName {
+        /// 新的会话名。
+        name: String,
+    },
 }
 
 /// 进程内常驻的扩展 UI 请求队列，首次调用时懒加载。

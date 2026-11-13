@@ -3,7 +3,8 @@
 //! 只读 `ppt/slides/slideN.xml`（按**数字**排序，不是字典序）：标题占位符的段落作本节标题，
 //! 其余段落按 `a:pPr lvl` 缩进成列表项。演讲者备注、动画、图表数据与图片不读。
 
-use super::{collapse_blank_lines, ooxml, squash};
+use super::{collapse_blank_lines, ooxml};
+use crate::utils::display::flatten_line;
 use quick_xml::events::{BytesStart, Event};
 use std::io::Cursor;
 use zip::ZipArchive;
@@ -130,7 +131,7 @@ impl Slide {
 
     /// 收口当前段落：标题占位符的第一个非空段落作标题，其余进正文。
     fn flush_para(&mut self) {
-        let text = squash(&std::mem::take(&mut self.para));
+        let text = flatten_line(&std::mem::take(&mut self.para));
         if text.is_empty() {
             return;
         }

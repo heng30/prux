@@ -48,7 +48,7 @@ use crate::{
     },
     modes::tui::handlers::register_host_command,
     utils::{
-        display::format_bytes,
+        display::{flatten_line, format_bytes},
         glyphs::DEF_DOT_FILLED,
         output_files::create_output_file_stream,
         paths,
@@ -951,7 +951,7 @@ fn usage_text(usage: Option<&Usage>) -> String {
 
 /// 把命令压成一行并截断（面板一行放不下多行命令）。
 fn one_line(command: &str, max_chars: usize) -> String {
-    let flat = command.split_whitespace().collect::<Vec<_>>().join(" ");
+    let flat = flatten_line(command);
     truncate_chars(&flat, max_chars)
 }
 

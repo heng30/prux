@@ -54,6 +54,7 @@ core::extensions::register_banner_extension(extensions::banner::Banner::new());
 | `doctor` | 扩展 | provider 网络可达性诊断：`/doctor [summary]` 对目录里每个 provider 的第一个 chat 模型发一个**不带凭据**的 `HEAD`（并发上限 16、单请求 10s），判定链路是否通——**有 HTTP 响应就算网络可达**（探的是 base URL，`404` / `405` 这类「路径没处理器」的响应同样证明连接与 TLS 都通：`2xx` / `401` / `403` / `405` 是预期结果，其它状态码标 `status not OK`），只有请求本身失败才记 `timeout` / `dns error` / `connect error`；`/doctor summary` 只给可达/失败计数与失败清单。面板末尾的 environment 段给出版本、`agent_dir()`、探测目标数与 `http_proxy` / `https_proxy` / `all_proxy` / `no_proxy` 的 set/unset（大小写不敏感，**不回显值**）。`--offline` / `PRUX_OFFLINE` 不发请求，只显示 environment 段。**默认不启用**（`Dev` / `Creator` 模式） |
 | `btw` | 扩展 | 只读旁问：`/btw <问题>` 打开 `BTW` 面板（占据输入区、主页输入框隐藏），面板自带一行 `btw>` 输入框、打开即聚焦，可直接回车连续追问（Esc / 空回车关闭），**不进会话、不改上下文**——送给模型的只有最近 4 条 / 4000 字以内的摘录、此前的旁问轮次加一段只读系统提示（一次性请求，不带工具、不写会话；答案晚到时若面板已关或换了问题就丢弃）。**默认不启用**（`Dev` / `Creator` 模式） |
 | `recap` | 扩展 | 一行会话小结：`/recap` 把最近 12 条 / 12000 字摘录交给一次独立的一次性请求，结果规整到 ≤120 字（去前缀/引号后硬截断）作为**系统消息**推到聊天区。**不进会话、不改上下文**；没有后台任务/开关/落盘，只在显式执行时花一次模型请求。**默认不启用**（`Dev` / `Creator` 模式） |
+| `auto-title` | 扩展 | 会话自动命名：首轮结束后用一次短请求（首条用户输入 + assistant 开头一段正文）生成一行会话名，写入会话名 fact，侧栏与状态栏随之显示「这个会话在干什么」。只碰主 agent 的首轮——已带消息恢复的旧会话、以及 `/name` 改过名的会话一律不动；请求失败退回用户输入的前几个词。`/title [<名字>]` 给当前会话起名（不带参数让模型起，带参数直接用它当名字），`/title set --provider <p> --model <m>` 可改用命名专用模型（存 `agent_dir()/extensions/auto-title.json`，`/title unset` 清除）。**默认不启用**，需在 `/extension` 面板开启 |
 | `doc-helper` | 扩展 | 精简系统提示词：启用后从默认系统提示词移除整段 prux 文档描述（README/docs/examples 指针 + 主题映射），改用 `/help <question>` 按需提问——把**同一段**文档描述当作一条普通 user 消息投出（不动系统提示词，保护缓存命中率）；无参 `/help` 只列出文档主题。**默认不启用**，需在 `/extension` 面板开启 |
 | `hooks` | 扩展 | 外部命令生命周期钩子：`agent_dir()/extensions/hooks.json`（键 = 事件名，`PreToolUse` / `PostToolUse` / `UserPromptSubmit` / `Stop`）驱动你的 shell 命令，JSON 信封走 stdin，按退出码与 stdout JSON 决定继续 / 拒绝 / 要求确认 / 改写入参 / 覆盖工具结果 / 续跑一轮。配置了才生效，一条坏钩子只会被跳过并在 `/hooks` 里报原因。**默认不启用**（`Dev`/`Creator` 模式可用）。详见 [extensions/hooks.md](extensions/hooks.md) |
 | `permissions` | 扩展 | 工具调用的集中式权限门控：五层策略（`path` 横切路径 / `external_directory` 工作目录边界 / `domain` 主机 / 按工具 / `bash` 命令模式）按 **most-restrictive-wins** 组合，值为 `allow` / `ask` / `deny` 或 `{action, reason}`，一张 pattern 表内 last-match-wins。策略在 `agent_dir()/extensions/permissions/config.json`（项目配置 `<cwd>/.prux/extensions/permissions/config.json` 仅在项目受信任时加载）。命中 `ask` 时弹确认面板（`Approve once` / `Approve for this session` / `Deny`），走的是扩展**等待式提问** `ask_prompt`（异步工具前钩子）；面板拿不到答复（Esc / 超时 / 非交互运行 / 已有别的确认在等）一律按拒绝处理，`/permissions allow <surface> <pattern>` 作为非交互兜底，且放行**不会**覆盖 `deny`。bash 命令按语句切分逐条判定（含 `$(…)` / 反引号 / 子 shell 里的命令、字面 `cd` 之后的路径、重定向目标），`bash -c` / `eval` / `sudo` / `xargs` / `find -exec` / 解释器 `-c` 这类看不透的包装一律按 `ask` 处理。`domain` 层只看 `http://` / `https://` 绝对 URL 的主机名（bash 的每条语句各抽一次，其它工具递归遍历入参 JSON），按小写主机名匹配，有端口时也可写 `host:port`；裸域名与其它协议不参与判定。`/permissions show\|allow\|drop\|allowlist\|init\|log\|reset`。**默认不启用**（`Dev`/`Creator` 模式可用）。详见 [extensions/permissions.md](extensions/permissions.md) |
@@ -319,6 +320,30 @@ prompt cache 命中率（读会话文件、可离线），这个查 **provider �
 旁问要一个可连续追问的面板，小结只推一条系统消息。摘录、折行与一次性请求由两者共用的实现提供；其中一次性请求在**关不掉思考**的模型（目录里 `thinkingLevelMap.off = null`，
 如 deepseek 系）上会把输出上限抬到 4096，否则思考 token 会吃光额度、正文被截断
 （`stop_reason = "length"` 直接报错）。
+
+### auto-title
+
+**自动命名**：主 agent 的**首轮**结束后，扩展把「首条用户输入 + assistant 的首段正文」交给一次
+独立的一次性请求（与 `/recap` 同一套：主模型、刷新 OAuth、关不掉思考的模型抬输出下限），
+结果经 `normalize_title` 去掉 `Title:` 前缀、引号、反引号与结尾标点，归一空白后截到 40 字，
+作为**会话名**写回（侧栏与状态栏都读它）。
+
+- 只在**主 agent** 触发：子代理与后续轮次不参与，每个会话最多起一次名。中断 / 出错的回合不拿来
+  起名（素材是半截的），留给下一轮；请求本身失败也算一次，此时退回用户输入的前几个词，不重试、不报错。
+- 已经有名字的会话**不覆盖**（`/name` 改过的名字永远优先），带消息恢复的旧会话也不动。
+- `/title` 是显式通道：不带参数时**强制让模型起名**（不看旧名字、不限轮次，把最近 12 条 /
+  12000 字以内的摘录交给同一个请求），成功后写回会话名，失败在聊天区报一条警告。
+- `/title <名字>` 是**手动**起名：一个请求都不发，把参数压成一行、截到 40 字后直接写成会话名
+  （与 `/name` 同效，只是共用这个入口）。
+
+**命名专用模型**：起名只值一句话，不必动用当前会话那个贵的模型。`/title set --provider <p>
+--model <m>`（也吃 `--provider=<p>` 形式）把它写进 `agent_dir()/extensions/auto-title.json` 的
+`provider` / `model` 两键，写入前会按目录校验该 provider 与 chat 模型确实存在（配错在写入那一刻
+就报，不留到起名时再炸）。设置了之后**自动命名与 `/title` 都用它**；没设置就用当前会话模型。
+
+- `set` 两个 flag 缺一不发，**裸 `set` 只打一行用法**——清配置是 `unset` 的事，免得手滑把配好的模型抹掉。
+- `/title unset` 清掉这两个键，回到"用当前会话模型"。
+- 配置文件只追加/删除这两个键，其它内容原样保留。
 
 ### loop-detect
 

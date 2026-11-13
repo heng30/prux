@@ -26,6 +26,7 @@ use crate::{
         EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_REWIND, command_arg, util::choice_key,
     },
     modes::tui::handlers::register_host_command,
+    utils::display::flatten_line,
 };
 use std::sync::{Mutex, OnceLock};
 
@@ -184,7 +185,7 @@ fn command_rewind(host: &mut dyn CommandHost, raw: &str) -> bool {
 /// 面板标题回显它，让用户确认即将回退的是哪一条输入（避免与最近一次提交错位）。
 fn last_user_preview(host: &dyn CommandHost) -> Option<String> {
     let text = host.last_user_message()?;
-    let one_line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let one_line = flatten_line(&text);
     if one_line.is_empty() {
         return Some("(empty message)".to_string());
     }

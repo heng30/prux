@@ -1323,6 +1323,11 @@ fn maybe_handle_extension_ui(shared: &Rc<RefCell<App>>) {
             // 扩展持久化：转 worker 空闲追加到当前会话（经 extension:entry_persisted 回执）。
             st.worker.append_custom_entry(&custom_type, Some(data));
         }
+        core::extensions::ExtensionUiRequest::SetSessionName { name } => {
+            // 扩展起名（auto-title）：转 worker 写会话名，状态栏随 session_info_changed 更新。
+            st.worker
+                .send(agent_actor::AgentCommand::SetSessionName { name });
+        }
     }
     st.dirty = true;
 }

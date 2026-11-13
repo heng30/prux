@@ -8,7 +8,7 @@
 //! [`super`] 的钩子里。
 
 use super::graph::{MemoryCategory, MemoryEntry, MemoryScope};
-use crate::utils::text;
+use crate::utils::{display::flatten_line, text};
 use std::collections::HashMap;
 
 /// 查询最多取用的词元个数（防止超长查询把打分拖慢）。
@@ -180,7 +180,7 @@ fn format_block_with(header: &str, items: &[Ranked], budget_chars: usize) -> Opt
     for (category, title) in SECTION_ORDER {
         let mut section = String::new();
         for item in items.iter().filter(|item| item.entry.category == *category) {
-            let line = format!("- {}\n", single_line(&item.entry.content));
+            let line = format!("- {}\n", flatten_line(&item.entry.content));
             let cost = line.chars().count() + title.len() + 4;
             if used + cost > budget_chars {
                 break;
@@ -200,11 +200,6 @@ fn format_block_with(header: &str, items: &[Ranked], budget_chars: usize) -> Opt
         return None;
     }
     Some(format!("{header}\n{body}"))
-}
-
-/// 把正文压成一行（注入块里每条只占一行，换行会打乱列表结构）。
-pub(super) fn single_line(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 #[cfg(test)]

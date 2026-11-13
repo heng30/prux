@@ -23,7 +23,7 @@ use crate::{
         util::{notify_text, session_id_of},
     },
     modes::tui::handlers::register_host_command,
-    utils::{glyphs::DEF_RECAP, truncate::truncate_chars},
+    utils::{display::flatten_line, glyphs::DEF_RECAP, truncate::truncate_chars},
 };
 use std::sync::Arc;
 
@@ -168,7 +168,7 @@ fn normalize_recap(text: &str) -> String {
         .trim_matches(|c| c == '"' || c == '\'' || c == '“' || c == '”')
         .trim()
         .to_string();
-    cleaned = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+    cleaned = flatten_line(&cleaned);
     truncate_chars(&cleaned, MAX_CHARS, None, false)
 }
 

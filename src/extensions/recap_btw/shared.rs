@@ -35,7 +35,7 @@ fn lock_session() -> MutexGuard<'static, Option<String>> {
 /// 记住当前会话 id（两个扩展的会话建立 / 切换钩子都会写同一个槽）。
 ///
 /// 它会作为 `session_id` 传给 provider 层，用于会话亲和头与提示缓存路由。
-pub(super) fn remember_session(session_id: Option<String>) {
+pub(crate) fn remember_session(session_id: Option<String>) {
     *lock_session() = session_id;
 }
 
@@ -47,7 +47,7 @@ pub(super) fn remember_session(session_id: Option<String>) {
 ///
 /// 没有 tokio 运行时（同步单测）时直接返回 `Err`，由调用方写进自己的 UI 状态——
 /// 不 panic、也不假装请求成功了。
-pub(super) fn spawn_one_shot(
+pub(crate) fn spawn_one_shot(
     provider: String,
     model_id: String,
     system: &'static str,

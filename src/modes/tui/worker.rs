@@ -513,12 +513,9 @@ async fn dispatch_append_custom_entry(
 /// 处理 AgentCommand::SetSessionName。
 async fn dispatch_set_session_name(agent: &Arc<Mutex<Agent>>, name: String) -> Option<RoundFuture> {
     let mut a = agent.lock().await;
-    let (ok, msg) = match a.session.as_mut() {
-        Some(s) => {
-            s.append_session_info(&name);
-            (true, format!("session renamed: {}", name))
-        }
-        None => (false, "no current session".to_string()),
+    let (ok, msg) = match a.set_session_name(&name) {
+        true => (true, format!("session renamed: {}", name)),
+        false => (false, "no current session".to_string()),
     };
     _ = run_in_event_loop(move |ui| ui.on_command_notice(ok, msg));
     None

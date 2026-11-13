@@ -6,6 +6,7 @@
 //!   去首尾 `-` → 截断 64 → 再去尾 `-`；全空回退 `agent`。
 //! - 冲突编号 `base`、`base-2`、…；`main` 为保留句柄（永不分配、也不解析到类型）。
 
+use crate::utils::display::flatten_line;
 use std::collections::HashSet;
 
 /// 句柄长度上限
@@ -99,13 +100,7 @@ pub(super) fn strip_agent_prefix(handle: &str) -> Option<String> {
 
 /// 用消息首行作代理的短描述（折叠空白，超 40 字符截断加省略号）。
 pub(super) fn describe_mention(message: &str) -> String {
-    let one_line = message
-        .split('\n')
-        .next()
-        .unwrap_or("")
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
+    let one_line = flatten_line(message.split('\n').next().unwrap_or(""));
 
     if one_line.chars().count() > 40 {
         let truncated: String = one_line.chars().take(39).collect();

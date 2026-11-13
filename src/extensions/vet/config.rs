@@ -23,7 +23,7 @@ use crate::{
         settings_manager::agent_dir,
     },
     extensions::util::{choice_num, cycle_setting},
-    utils::truncate::truncate_chars_within,
+    utils::{display::flatten_line, truncate::truncate_chars_within},
 };
 use serde_json::{Value, json};
 use std::{
@@ -693,15 +693,7 @@ fn mentions(cwd: &Path, file: &str, needle: &str) -> bool {
 
 /// 检查项命令的展示串：折叠成单行并限长。
 pub(super) fn describe_check(check: &Check) -> String {
-    let command = truncate_chars_within(
-        &check
-            .command
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" "),
-        MAX_COMMAND_CHARS,
-        "…",
-    );
+    let command = truncate_chars_within(&flatten_line(&check.command), MAX_COMMAND_CHARS, "…");
     if check.optional {
         format!("{} (optional) · `{command}`", truncate_name(&check.name))
     } else {

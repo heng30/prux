@@ -352,6 +352,10 @@ impl GuiApp {
                     data: Some(data),
                 });
             }
+            // 扩展起名（auto-title）：写会话名，侧栏与状态栏随事件更新
+            ExtensionUiRequest::SetSessionName { name } => {
+                _ = self.cmd_tx.send(AgentCommand::SetSessionName { name });
+            }
             // 扩展请求展示停靠内容（subagent / tasks 等的实时进度）
             ExtensionUiRequest::ShowDock => self.dock_visible = true,
             // 只显示该扩展自己的设置项（TUI 的扩展设置面板同语义）

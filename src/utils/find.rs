@@ -3,7 +3,7 @@
 //! 在给定文本中按 [`FindMode`] 查找一个或多个查询串，输出带上下文的可读片段与命中统计。
 //! 不区分大小写模式下的偏移换算走 [`case_insensitive_matches`]。
 
-use super::text::case_insensitive_matches;
+use super::{display::flatten_line, text::case_insensitive_matches};
 use strum_macros::{EnumString, IntoStaticStr};
 use unicode_normalization::UnicodeNormalization;
 
@@ -124,10 +124,7 @@ pub fn find_content(
         let prefix = if range.start > 0 { "…" } else { "" };
         let suffix = if range.end < text.len() { "…" } else { "" };
         let slice = char_slice(text, range.start, range.end);
-        let snippet = format!(
-            "{prefix}{}{suffix}",
-            slice.split_whitespace().collect::<Vec<_>>().join(" ")
-        );
+        let snippet = format!("{prefix}{}{suffix}", flatten_line(&slice));
         let mut counts: Vec<String> = Vec::new();
         for query in unique_queries(&range.matches) {
             let count = range.matches.iter().filter(|m| m.query == query).count();

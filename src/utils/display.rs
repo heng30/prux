@@ -373,21 +373,10 @@ pub fn fit_display(text: &str, width: usize) -> String {
 /// 必须压平：多行 prompt 里的 `\n` 若留在 `Line` 里会把面板行数与高度算错；
 /// 控制字符则会让显示宽度失真、截断位置偏移。
 pub fn flatten_line(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut pending_space = false;
-    for c in text.chars() {
-        if c.is_whitespace() || c.is_control() {
-            pending_space = !out.is_empty();
-            continue;
-        }
-
-        if pending_space {
-            out.push(' ');
-            pending_space = false;
-        }
-        out.push(c);
-    }
-    out
+    text.split(|c: char| c.is_whitespace() || c.is_control())
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// 生成随机 UUID v4（版本位与 RFC 4122 变体位已置位）。
@@ -447,6 +436,16 @@ pub fn fmt_count(n: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 压平：连续空白/换行/控制字符都变一个空格、首尾不留空白，正文原样保留。
+    #[test]
+    fn flatten_line_collapses_whitespace_and_controls() {
+        assert_eq!(flatten_line("a\n\n  b"), "a b");
+        assert_eq!(flatten_line("  padded\ttext  "), "padded text");
+        assert_eq!(flatten_line("bell\u{7}here"), "bell here");
+        assert_eq!(flatten_line("   \n\t "), "", "全空白压成空串");
+        assert_eq!(flatten_line("already one line"), "already one line");
+    }
 
     #[test]
     fn formats_bytes_and_rates() {

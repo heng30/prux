@@ -10,6 +10,7 @@ use crate::{
     },
     modes::tui::app::{App, MsgLevel},
     utils::{
+        display::flatten_line,
         glyphs::{DEF_ELLIPSIS, DEF_SPINNER, DEF_SPINNER_BRAILLE},
         image::{ImageResizeLimits, prepare_image},
         process::HideConsole,
@@ -141,7 +142,7 @@ pub fn split_model(raw: &str) -> Option<(String, String)> {
 
 /// 目标文本压成单行（空白折叠为一个空格）并按字符数截断，超出时以 `…` 收尾。
 pub fn truncate_objective(objective: &str, max: usize) -> String {
-    let single = objective.split_whitespace().collect::<Vec<_>>().join(" ");
+    let single = flatten_line(objective);
     truncate_chars_within(&single, max, DEF_ELLIPSIS)
 }
 

@@ -1420,7 +1420,7 @@ impl Agent {
         }
     }
 
-    /// 设置 thinking 级别：重置到模型支持范围，仅在级别实际变化时记录 session。
+    /// 设置会话名称
     pub fn set_session_name(&mut self, name: &str) -> bool {
         let Some(s) = self.session.as_mut() else {
             return false;

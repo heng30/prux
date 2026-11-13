@@ -15,7 +15,9 @@
 //! 这里只有纯逻辑（拼提示 / 解析 / 校验 / 落图）；请求本身在 [`super::run_maintenance`]。
 
 use super::graph::{MemoryEntry, MemoryGraph, MemoryScope};
-use crate::utils::{glyphs::DEF_ELLIPSIS, time::now_iso, truncate::truncate_chars};
+use crate::utils::{
+    display::flatten_line, glyphs::DEF_ELLIPSIS, time::now_iso, truncate::truncate_chars,
+};
 use serde::Deserialize;
 use strum_macros::{EnumString, IntoStaticStr};
 
@@ -158,12 +160,7 @@ pub(super) fn build_prompt(candidates: &[Candidate]) -> String {
 
 /// 压成单行并截断（多行正文会把一条记忆拆成几行，读起来分不清边界）。
 fn one_line(text: &str) -> String {
-    truncate_chars(
-        &super::recall::single_line(text),
-        PREVIEW_CHARS,
-        Some(DEF_ELLIPSIS),
-        true,
-    )
+    truncate_chars(&flatten_line(text), PREVIEW_CHARS, Some(DEF_ELLIPSIS), true)
 }
 
 /// 解析并校验模型回复。
