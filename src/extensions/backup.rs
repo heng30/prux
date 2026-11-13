@@ -85,6 +85,7 @@ const SKIP_TREES: &[&str] = &[
     "extensions/permissions/logs",
     "extensions/schedules",
     "extensions/worktrees",
+    "extensions/review",
 ];
 
 /// 自声明工厂：linkme 分布式切片。

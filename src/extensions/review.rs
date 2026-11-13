@@ -297,8 +297,18 @@ struct State {
 }
 
 impl State {
-    /// 会话切换 / 会话开始时清掉上一会话的评审目标（marker 也随会话变）。
+    /// 会话切换 / 会话开始时改记会话 id；**真的换会话**时清掉上一会话的目标（marker 也随会话变）。
+    ///
+    /// 两个钩子的标识都走 [`session_id_of`]（会话文件名 stem），否则同一会话在「刚有文件」
+    /// 那一刻看起来就像另一个会话（一个给 id、一个给 stem），刚设的目标当场就没了。
     fn reset_session(&mut self, session_id: Option<String>) {
+        // `None → Some` 是「同一个新会话刚有文件」，`同值` 是同一会话又报了一次：都不是换会话。
+        if let Some(id) = &session_id
+            && self.session_id.as_deref().is_none_or(|old| old == id)
+        {
+            self.session_id = session_id;
+            return;
+        }
         self.session_id = session_id;
         self.active = None;
     }
@@ -366,9 +376,10 @@ impl Extension for Review {
         register_host_command(EXT, CMD, command_review);
     }
 
-    /// 会话开始：记住会话 id 并清掉上一会话的目标。
+    /// 会话开始：拾录会话 id（未落盘的会话此刻还没有文件，交由首次落盘时的切换钩子补记）。
     fn on_session_start(&self, _cwd: &str, _messages: &[AgentMessage], session: Option<&Session>) {
-        lock().reset_session(session.map(|s| s.session_id.clone()));
+        let id = session.and_then(|s| session_id_of(s.get_session_file().and_then(|p| p.to_str())));
+        lock().reset_session(id);
     }
 
     /// 会话切换：改记新会话 id 并清掉上一会话的目标。
@@ -705,7 +716,8 @@ fn prepare_checkout(dir: &Path, url: &str, refspec: &str) -> Result<(), String> 
         run_git(dir, &["remote", "add", "origin", url])?;
     }
 
-    run_git(
+    let auth = git_http_auth(dir, url);
+    if let Err(err) = run_git_env(
         dir,
         &[
             "fetch",
@@ -716,7 +728,16 @@ fn prepare_checkout(dir: &Path, url: &str, refspec: &str) -> Result<(), String> 
             "origin",
             &format!("{refspec}:refs/review/head"),
         ],
-    )?;
+        &auth,
+    ) {
+        return Err(if auth.is_empty() {
+            format!(
+                "{err}\nhint: private repository? run `gh auth login` — its token is reused for git"
+            )
+        } else {
+            err
+        });
+    }
     run_git(
         dir,
         &[
@@ -732,11 +753,57 @@ fn prepare_checkout(dir: &Path, url: &str, refspec: &str) -> Result<(), String> 
 
 /// 跑一条 `git`（在副本目录里，超时与输出全部走管道）。
 fn run_git(dir: &Path, args: &[&str]) -> Result<String, String> {
-    let out = git::run(dir, "git", args, GIT_TIMEOUT)?;
+    run_git_env(dir, args, &[])
+}
+
+/// 同 [`run_git`]，追加一组环境变量（HTTPS 认证走这里，不进 argv）。
+fn run_git_env(dir: &Path, args: &[&str], envs: &[(&str, String)]) -> Result<String, String> {
+    let out = git::run_env(dir, "git", args, envs, GIT_TIMEOUT)?;
     if !out.ok {
         return Err(out.failure(&format!("git {}", args.first().copied().unwrap_or(""))));
     }
     Ok(out.stdout)
+}
+
+/// 借 `gh` 的 token 给 `url` 所在主机配一条 git HTTPS 认证（`http.<base>.extraheader`）。
+///
+/// 私有仓库用 https 拉取时 git 要问用户名密码，而 TUI 里问不了；`gh` 既然能读私有仓库的元数据，
+/// 就直接用它的 token。取不到（本地路径 / `gh` 未装未登录）时返回空，回到用户自己的凭证配置。
+fn git_http_auth(dir: &Path, url: &str) -> Vec<(&'static str, String)> {
+    let host = url
+        .strip_prefix("https://")
+        .and_then(|rest| rest.split('/').next())
+        .filter(|host| !host.is_empty());
+    let Some(host) = host else {
+        return Vec::new();
+    };
+    let Ok(out) = git::run(
+        dir,
+        "gh",
+        &["auth", "token", "--hostname", host],
+        GH_TIMEOUT,
+    ) else {
+        return Vec::new();
+    };
+    let token = out.stdout.trim();
+    if !out.ok || token.is_empty() {
+        return Vec::new();
+    }
+    let basic = base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        format!("x-access-token:{token}"),
+    );
+    vec![
+        ("GIT_CONFIG_COUNT", "1".to_string()),
+        (
+            "GIT_CONFIG_KEY_0",
+            format!("http.https://{host}/.extraheader"),
+        ),
+        (
+            "GIT_CONFIG_VALUE_0",
+            format!("AUTHORIZATION: basic {basic}"),
+        ),
+    ]
 }
 
 /// 取 JSON 字符串字段（缺失 / 非字符串 → 空串）。
@@ -1251,6 +1318,47 @@ mod tests {
             return None;
         }
         Some(dir)
+    }
+
+    #[test]
+    fn review_target_survives_the_session_gaining_its_file() {
+        let target = parse_target("https://github.com/o/r/pull/1").unwrap();
+        let active = || Active {
+            target: target.clone(),
+            comment: false,
+            posted: false,
+            cwd: PathBuf::from("/tmp"),
+        };
+
+        // 新会话：还没落盘（session_file 为空），/review 先设了目标
+        let session =
+            Session::create_deferred("/tmp", Some(std::env::temp_dir().join("prux-review-x")))
+                .unwrap();
+        Review.on_session_start("/tmp", &[], Some(&session));
+        lock().active = Some(active());
+
+        // 简报落盘：路径此刻才有，仍是同一会话
+        Review.on_session_switched(Some("/tmp/2026-11-13T07-08-48-995Z_abc.jsonl"), &[]);
+        assert!(lock().active.is_some(), "首次落盘不能丢掉当前目标");
+
+        // 真的切到另一个会话才丢
+        Review.on_session_switched(Some("/tmp/2026-11-13T08-00-00-000Z_def.jsonl"), &[]);
+        assert!(lock().active.is_none());
+
+        // 已有文件的会话：再报一次同一会话不算切
+        lock().active = Some(active());
+        Review.on_session_switched(Some("/tmp/2026-11-13T08-00-00-000Z_def.jsonl"), &[]);
+        assert!(lock().active.is_some(), "同一会话重复上报不能丢掉目标");
+
+        lock().active = Some(active());
+        Review.on_session_switched(None, &[]); // /new：还没有新会话文件
+        assert!(lock().active.is_none());
+        lock().active = None;
+    }
+
+    #[test]
+    fn git_http_auth_ignores_local_paths() {
+        assert!(git_http_auth(Path::new("."), "/tmp/some/repo").is_empty());
     }
 
     #[test]

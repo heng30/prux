@@ -56,8 +56,27 @@ impl Output {
 /// `git` 子命令与调用方自己的工具 CLI（如 `gh`）共用这套管道语义：stdin 接 null，
 /// stdout/stderr 收管道，超时连子进程一起杀。只有进程起不来才返回 `Err`。
 pub fn run(dir: &Path, program: &str, args: &[&str], timeout: Duration) -> Result<Output, String> {
+    run_env(dir, program, args, &[], timeout)
+}
+
+/// 同 [`run`]，追加一组环境变量：凭证这类不该出现在 argv 里（`ps` 可见）的值走这里。
+pub fn run_env(
+    dir: &Path,
+    program: &str,
+    args: &[&str],
+    envs: &[(&str, String)],
+    timeout: Duration,
+) -> Result<Output, String> {
     let mut cmd = Command::new(program);
-    cmd.args(args).current_dir(dir);
+    cmd.args(args)
+        .current_dir(dir)
+        // 认证失败时让 git 立刻报错，而不是去问用户名密码——TUI 里没有终端可问，
+        // 提示会一直挂着直到超时。
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GCM_INTERACTIVE", "never");
+    for (key, value) in envs {
+        cmd.env(key, value);
+    }
     let out = run_timed(cmd, None, timeout).map_err(|err| format!("{program}: {err}"))?;
     Ok(Output {
         ok: out.code == Some(0),
