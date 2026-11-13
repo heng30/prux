@@ -13,9 +13,13 @@
 //! size 与 sha256。恢复先整份校验（路径合法 + 条目齐全 + 校验和一致）再写盘——
 //! 任何一条对不上就一个字节都不写。
 //!
-//! 恢复**不覆盖**已存在的文件，除非显式 `--force`；`--force` 也先把原文件改名成
-//! `<名字>.bak-<时间戳>`，手滑能再回来。归档里的路径必须落在两份根目录之内
+//! 恢复**不覆盖**已存在的文件，除非显式 `--force`；`--force` 也先把原文件挪进
+//! `agent_dir()/backups/recovery/<时间戳>/`（保留相对路径），手滑能再回来——
+//! 放在 `backups/` 下是为了下一次打包不会把这份副本又收进归档。归档里的路径必须落在两份根目录之内
 //! （绝对路径、`..`、盘符一律拒绝）。
+//!
+//! `/backup rm-recovery` 与 `/backup rm-all` 删掉 `backups/recovery/` 与 `backups/` 的内容，
+//! 不二次确认（敲命令即是意图），只报告删了多少文件、释放多少字节。
 //!
 //! 路径参数以 `@` 开头时去掉那个 `@`：TUI 的路径补全带它，用户复制粘贴过来就是 `@/tmp/x`。
 
@@ -31,6 +35,7 @@ use crate::{
     extensions::{EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_BACKUP, command_arg},
     utils::{
         display::format_bytes,
+        paths::{remove_children, remove_tree, resolve_path},
         text::hex_lower,
         time::{file_stamp, format_local, now_ms},
     },
@@ -101,7 +106,15 @@ const SUBCOMMANDS: &[SubcommandDef] = &[
     },
     SubcommandDef {
         name: "restore",
-        description: "Restore a zip (file or folder, `--force` to overwrite); writes .bak copies",
+        description: "Restore a zip (file or folder, `--force` overwrites into backups/recovery)",
+    },
+    SubcommandDef {
+        name: "rm-recovery",
+        description: "Delete the recovery copies in agent_dir/backups/recovery (no prompt)",
+    },
+    SubcommandDef {
+        name: "rm-all",
+        description: "Delete every archive and every recovery copy in agent_dir/backups (no prompt)",
     },
 ];
 
@@ -156,8 +169,10 @@ struct Restored {
     written: usize,
     /// 其中覆盖了已有文件的数量。
     replaced: usize,
-    /// 覆盖前留下的 `.bak-<时间戳>` 副本路径。
+    /// 覆盖前挪进 `backups/recovery/<时间戳>/` 的原文件路径。
     backups: Vec<PathBuf>,
+    /// 本次恢复副本的根目录（`backups/recovery/<时间戳>`），报告里给用户看的落点。
+    recovery: PathBuf,
 }
 
 /// `backup` 扩展：只有一条 `/backup` 命令，无工具、无钩子。
@@ -203,7 +218,9 @@ impl Extension for Backup {
     fn commands(&self) -> Vec<ExtensionCommand> {
         vec![ExtensionCommand {
             name: CMD.to_string(),
-            description: "Snapshot prux assets to a zip, list archives, or restore one".to_string(),
+            description:
+                "Snapshot prux assets to a zip, list archives, restore one, or clean backups"
+                    .to_string(),
             busy_safe: true,
             subcommands: SUBCOMMANDS.to_vec(),
         }]
@@ -224,6 +241,10 @@ enum Action {
     List,
     /// `/backup restore [file|dir] [--force]`：恢复归档。
     Restore,
+    /// `/backup rm-recovery`：清空 `backups/recovery/` 下的恢复副本。
+    RmRecovery,
+    /// `/backup rm-all`：清空 `backups/` 下的全部内容（归档 + 恢复副本）。
+    RmAll,
     /// 认不出的子命令（原样带给错误提示）。
     Unknown,
 }
@@ -234,11 +255,13 @@ fn parse_action(sub: &str) -> Action {
         "" | "create" => Action::Create,
         "list" => Action::List,
         "restore" => Action::Restore,
+        "rm-recovery" => Action::RmRecovery,
+        "rm-all" => Action::RmAll,
         _ => Action::Unknown,
     }
 }
 
-/// `/backup` 命令入口：`create`（默认）/ `list` / `restore`。
+/// `/backup` 命令入口：`create`（默认）/ `list` / `restore` / `rm-recovery` / `rm-all`。
 fn command_backup(host: &mut dyn CommandHost, raw: &str) -> bool {
     let arg = command_arg(raw);
     let (sub, rest) = match arg.split_once(char::is_whitespace) {
@@ -252,8 +275,12 @@ fn command_backup(host: &mut dyn CommandHost, raw: &str) -> bool {
         Action::Create => run_create(host, rest, &agent),
         Action::List => run_list(host, rest, &agent),
         Action::Restore => run_restore(host, rest, &agent),
+        Action::RmRecovery => run_rm(host, &default_dir(&agent).join("recovery"), true),
+        Action::RmAll => run_rm(host, &default_dir(&agent), false),
         Action::Unknown => host.push_message(
-            &format!("backup: unknown subcommand `{sub}` — use /backup create|list|restore"),
+            &format!(
+                "backup: unknown subcommand `{sub}` — use /backup create|list|restore|rm-recovery|rm-all"
+            ),
             UiNotifyLevel::Error,
         ),
     }
@@ -368,8 +395,8 @@ fn run_restore(host: &mut dyn CommandHost, rest: &str, agent: &Path) {
             )];
             if !done.backups.is_empty() {
                 lines.push(format!(
-                    "previous copies kept as {}.bak-*:",
-                    done.backups.len()
+                    "previous copies moved to {}:",
+                    done.recovery.display()
                 ));
                 lines.extend(
                     done.backups
@@ -388,6 +415,44 @@ fn run_restore(host: &mut dyn CommandHost, rest: &str, agent: &Path) {
     }
 }
 
+/// `/backup rm-recovery` 与 `/backup rm-all`：删掉 `dir` 这一棵（`keep` 时保留目录本身），
+/// 不二次确认——报告删掉的文件数与释放的字节数。
+fn run_rm(host: &mut dyn CommandHost, dir: &Path, keep: bool) {
+    if !dir.exists() {
+        host.push_message(
+            &format!(
+                "backup: nothing to remove, {} does not exist",
+                dir.display()
+            ),
+            UiNotifyLevel::Info,
+        );
+        return;
+    }
+    let result = if keep {
+        remove_tree(dir)
+    } else {
+        remove_children(dir)
+    };
+    match result {
+        Ok((files, bytes)) => {
+            let level = if files == 0 {
+                UiNotifyLevel::Info
+            } else {
+                UiNotifyLevel::Success
+            };
+            host.push_message(
+                &format!(
+                    "backup: removed {files} files ({} freed) from {}",
+                    format_bytes(bytes),
+                    dir.display()
+                ),
+                level,
+            );
+        }
+        Err(e) => host.push_message(&format!("backup: {e}"), UiNotifyLevel::Error),
+    }
+}
+
 /// 默认归档目录：`agent_dir()/backups`。
 fn default_dir(agent: &Path) -> PathBuf {
     agent.join("backups")
@@ -398,18 +463,13 @@ fn clean_path(raw: &str) -> &str {
     raw.strip_prefix('@').unwrap_or(raw)
 }
 
-/// 把用户给的参数解析成绝对路径（相对路径按 `cwd` 展开）；空参数取 `fallback`。
+/// 把用户给的参数解析成绝对路径（`~`/`~/` 展开，相对路径按 `cwd` 展开）；空参数取 `fallback`。
 fn resolve_target(raw: &str, cwd: &Path, fallback: &Path) -> Result<PathBuf, String> {
     let raw = clean_path(raw.trim());
     if raw.is_empty() {
         return Ok(fallback.to_path_buf());
     }
-    let path = Path::new(raw);
-    Ok(if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        cwd.join(path)
-    })
+    Ok(resolve_path(raw, &cwd.to_string_lossy()))
 }
 
 /// 把 `restore` 的参数拆成「路径」与 `--force`（`force` 也认，位置不限）。
@@ -729,20 +789,30 @@ fn restore_archive(archive: &Path, agent: &Path, force: bool) -> Result<Restored
             lines.push(format!("  … {} more", conflicts.len() - 8));
         }
         lines.push(
-            "re-run with --force to overwrite (originals are kept as *.bak-<stamp>)".to_string(),
+            "re-run with --force to overwrite (originals are moved to backups/recovery/<stamp>/)"
+                .to_string(),
         );
         return Err(lines.join("\n"));
     }
 
     let stamp = file_stamp();
+    let recovery = default_dir(agent).join("recovery").join(&stamp);
     let mut restored = Restored {
         written: 0,
         replaced: 0,
         backups: Vec::new(),
+        recovery: recovery.clone(),
     };
     for (target, bytes) in plan {
         if target.exists() {
-            let backup = backup_name(&target, &stamp)?;
+            let rel = target
+                .strip_prefix(agent)
+                .map_err(|_| format!("{} is outside {}", target.display(), agent.display()))?;
+            let backup = free_path(&recovery.join(rel))?;
+            if let Some(parent) = backup.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("create {}: {e}", parent.display()))?;
+            }
             std::fs::rename(&target, &backup)
                 .map_err(|e| format!("move {} aside: {e}", target.display()))?;
             restored.backups.push(backup);
@@ -758,26 +828,20 @@ fn restore_archive(archive: &Path, agent: &Path, force: bool) -> Result<Restored
     Ok(restored)
 }
 
-/// 覆盖前给原文件准备的 `.bak-<时间戳>` 名字；重名时追加 `-1`、`-2`…
-fn backup_name(target: &Path, stamp: &str) -> Result<PathBuf, String> {
-    let mut base = target.as_os_str().to_os_string();
-    base.push(format!(".bak-{stamp}"));
-    let first = PathBuf::from(&base);
-    if !first.exists() {
-        return Ok(first);
+/// 恢复副本的落地路径：`path` 已存在时追加 `-1`、`-2`…（同一秒恢复两次也不会互相覆盖）。
+fn free_path(path: &Path) -> Result<PathBuf, String> {
+    if !path.exists() {
+        return Ok(path.to_path_buf());
     }
     for n in 1..1000 {
-        let mut candidate = base.clone();
+        let mut candidate = path.as_os_str().to_os_string();
         candidate.push(format!("-{n}"));
-        let path = PathBuf::from(candidate);
-        if !path.exists() {
-            return Ok(path);
+        let candidate = PathBuf::from(candidate);
+        if !candidate.exists() {
+            return Ok(candidate);
         }
     }
-    Err(format!(
-        "cannot find a free .bak name beside {}",
-        target.display()
-    ))
+    Err(format!("cannot find a free name for {}", path.display()))
 }
 
 #[cfg(test)]
@@ -793,6 +857,29 @@ mod tests {
         }
         assert_eq!(parse_action(""), Action::Create);
         assert_eq!(parse_action("nope"), Action::Unknown);
+    }
+
+    /// `rm-recovery` 只清 recovery 树、`rm-all` 连归档一起清，两者都保留 `backups/` 本身。
+    #[test]
+    fn remove_trees_only_touch_what_they_should() {
+        let _guard = AgentDirGuard::temp();
+        let agent = agent_dir();
+        let backups = agent.join("backups");
+        let recovery = backups.join("recovery/20260101-000000");
+        std::fs::create_dir_all(recovery.join("skills/demo")).unwrap();
+        std::fs::write(recovery.join("settings.json"), b"old").unwrap();
+        std::fs::write(recovery.join("skills/demo/SKILL.md"), b"old").unwrap();
+        std::fs::write(backups.join("one.zip"), b"zip").unwrap();
+
+        let (files, bytes) = remove_tree(&backups.join("recovery")).unwrap();
+        assert_eq!((files, bytes), (2, 6));
+        assert!(!backups.join("recovery").exists());
+        assert!(backups.join("one.zip").exists(), "rm-recovery 不碰归档");
+
+        let (files, bytes) = remove_children(&backups).unwrap();
+        assert_eq!((files, bytes), (1, 3));
+        assert!(backups.exists(), "backups/ 目录本身保留");
+        assert_eq!(std::fs::read_dir(&backups).unwrap().count(), 0);
     }
 
     /// 造一个 agent 目录：既有该备份的资产，也有必须排除的文件。
@@ -816,6 +903,30 @@ mod tests {
         std::fs::write(agent.join("extensions/permissions/logs/a.log"), b"audit").unwrap();
         std::fs::write(agent.join("extensions/memory/projects/p.json"), b"{}").unwrap();
         std::fs::write(agent.join("extensions/schedules/s.json"), b"{}").unwrap();
+    }
+
+    /// `~`/`~/` 展开成家目录，`@` 前缀照旧剥掉，相对路径仍按 cwd 拼。
+    #[test]
+    fn resolve_target_expands_tilde() {
+        let _home = crate::test_support::HomeGuard::temp();
+        let home_path = crate::utils::paths::home_dir();
+        let cwd = Path::new("/work");
+        let fallback = Path::new("/default");
+
+        assert_eq!(
+            resolve_target("~/x", cwd, fallback).unwrap(),
+            home_path.join("x")
+        );
+        assert_eq!(resolve_target("~", cwd, fallback).unwrap(), home_path);
+        assert_eq!(
+            resolve_target("@~/x.zip", cwd, fallback).unwrap(),
+            home_path.join("x.zip")
+        );
+        assert_eq!(
+            resolve_target("rel/x", cwd, fallback).unwrap(),
+            PathBuf::from("/work/rel/x")
+        );
+        assert_eq!(resolve_target("", cwd, fallback).unwrap(), fallback);
     }
 
     /// `@` 只剥一层，其它原样。
@@ -915,18 +1026,30 @@ mod tests {
             "拒绝时不得覆盖"
         );
 
-        // --force 覆盖，原文件留成 .bak-*
+        // --force 覆盖，原文件挪进 backups/recovery/<stamp>/（打包时不会又收进归档）
         let done = restore_archive(&archive, &agent, true).expect("强制恢复失败");
         assert!(done.replaced > 0);
         assert_eq!(
             std::fs::read(agent.join("settings.json")).unwrap(),
             b"{\"theme\":\"x\"}"
         );
+        let aside = done.recovery.join("settings.json");
+        assert!(done.backups.contains(&aside), "副本要保留归档内的相对路径");
+        assert_eq!(
+            std::fs::read(&aside).unwrap(),
+            b"{\"theme\":\"changed\"}",
+            "覆盖前的原文件应完整挪到 recovery 目录"
+        );
+        assert!(done.recovery.starts_with(agent.join("backups/recovery")));
+
+        let again = agent.join("backups/two.zip");
+        let created = create_archive(&again, &agent).expect("再次打包失败");
+        assert_eq!(created.entries, 3, "recovery 目录不该被打进归档");
         assert!(
-            done.backups
+            !archive_names(&again)
                 .iter()
-                .any(|p| p.file_name().unwrap().to_string_lossy().contains(".bak-")),
-            "覆盖前应留下 .bak 副本"
+                .any(|n| n.contains("bak-") || n.contains("recovery")),
+            "归档里不该出现恢复副本"
         );
     }
 

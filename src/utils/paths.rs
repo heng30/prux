@@ -555,6 +555,31 @@ pub fn copy_no_overwrite(src: &Path, dst: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// 删掉 `dir` 里的每个条目（`dir` 本身保留），返回（文件数，字节数）。
+pub fn remove_children(dir: &Path) -> Result<(usize, u64), String> {
+    let read = std::fs::read_dir(dir).map_err(|e| format!("read {}: {e}", dir.display()))?;
+    let mut total = (0usize, 0u64);
+    for entry in read.flatten() {
+        let (files, bytes) = remove_tree(&entry.path())?;
+        total = (total.0 + files, total.1 + bytes);
+    }
+    Ok(total)
+}
+
+/// 删除 `path` 这一棵（目录递归、文件直删），返回（文件数，字节数）；`path` 不存在时返回 0。
+pub fn remove_tree(path: &Path) -> Result<(usize, u64), String> {
+    let Ok(meta) = std::fs::symlink_metadata(path) else {
+        return Ok((0, 0));
+    };
+    if meta.is_dir() {
+        let (files, bytes) = remove_children(path)?;
+        std::fs::remove_dir(path).map_err(|e| format!("remove {}: {e}", path.display()))?;
+        return Ok((files, bytes));
+    }
+    std::fs::remove_file(path).map_err(|e| format!("remove {}: {e}", path.display()))?;
+    Ok((1, meta.len()))
+}
+
 /// 自身是否为符号链接（不跟随）；元数据不可读时为 false。
 pub fn is_symlink(path: &Path) -> bool {
     std::fs::symlink_metadata(path)
