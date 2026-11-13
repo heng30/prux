@@ -118,6 +118,9 @@ struct State {
     prompt: Option<String>,
     /// 当前生效的型号 `(provider, model_id)`，由 `on_exec_ctx` 缓存。
     model: Option<(String, String)>,
+    /// 已绑定的会话 id：`None` = 还没收到会话通知，`Some(None)` = 刚 `/new` 且文件未落盘，
+    /// `Some(Some(id))` = 已绑定到该会话。
+    session: Option<Option<String>>,
 }
 
 /// 取状态槽（进程级单例）。
@@ -253,11 +256,31 @@ impl Extension for AutoTitle {
         shared::remember_session(session.map(|s| s.session_id.clone()));
         let skip = !messages.is_empty() || session.is_some_and(|s| s.name.is_some());
         reset(skip);
+        lock().session = Some(session.map(|s| s.session_id.clone()));
     }
 
     /// 会话切换：同上；空会话也可能已被 `/name` 起过名，读一次文件确认。
+    ///
+    /// `/new` 的新会话是延迟落盘的，文件建出来时 UI 会**再发一次**同样的通知（带的是当前
+    /// 转录，而非重新加载的历史）——那不是切换，见下面对 `reannounced` 的判定。
     fn on_session_switched(&self, session_path: Option<&str>, messages: &[AgentMessage]) {
-        shared::remember_session(session_id_of(session_path));
+        let id = session_id_of(session_path);
+        shared::remember_session(id.clone());
+
+        // shortcut: 只在"刚 /new、还没落盘、本会话已经收下素材"时把携带路径的通知认作本会话
+        // 自己的文件；此时若用户其实切走去了另一个会话，状态会留在本会话（素材已是旧文本）。
+        // 该窗口极短（文件在首条消息落盘时就建），故不额外区分。
+        let reannounced = {
+            let mut st = lock();
+            let reannounced =
+                st.session == Some(None) && id.is_some() && (st.prompt.is_some() || st.done);
+            st.session = Some(id);
+            reannounced
+        };
+        if reannounced {
+            return;
+        }
+
         let named = messages.is_empty()
             && session_path
                 .and_then(|p| Session::open(p).ok())
@@ -611,6 +634,26 @@ mod tests {
         assert!(
             naming_prompt("", "only reply").contains("only reply"),
             "只有转录时也要能起名"
+        );
+    }
+
+    #[test]
+    fn new_session_keeps_state_when_its_file_appears() {
+        let _g = lock_global();
+        reset(false);
+        lock().session = Some(None); // 刚 /new：会话还没有文件
+        AutoTitle.on_user_submit("fix the parser", false);
+
+        // /new 的新会话首次落盘：UI 补发一次切换，带的是当前转录而不是加载的历史。
+        AutoTitle.on_session_switched(
+            Some("/tmp/2026-11-13T07-08-48-995Z_abc.jsonl"),
+            &[message("user", "fix the parser")],
+        );
+        assert!(!lock().skip, "/new 之后落盘不得被当成旧会话");
+        assert_eq!(
+            lock().prompt.as_deref(),
+            Some("fix the parser"),
+            "素材要留着，首轮结束才能命名"
         );
     }
 

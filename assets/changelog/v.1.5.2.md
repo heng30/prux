@@ -7,7 +7,7 @@
   assistant's reply, and writes it as the session name so the sidebar and the status bar show what a
   session is about instead of the first line of its prompt. It only ever touches the main agent's
   first turn: a resumed session that already has messages, or one the user renamed with `/name`, is
-  left alone, and a failed request falls back to the first few words of the prompt instead of leaving
+  left alone, a session started with `/new` is named as usual, and a failed request falls back to the first few words of the prompt instead of leaving
   a session unnamed. `/title` names the current session on demand — use it for sessions that
   already exist — and `/title set --provider <p> --model <m>` points naming at a cheaper model of
   your choice, kept in `agent_dir()/extensions/auto-title.json` and validated against the catalog when
@@ -349,7 +349,7 @@
 
 - **会话自动命名**：新增 `auto-title` 扩展，在首轮结束后用一次短请求（首条用户输入 + assistant 开头一段正文）
   给会话起名，写入会话名，侧栏与状态栏因此显示"这个会话在干什么"而不是提示词的第一行。它只碰主 agent 的首轮：
-  已带消息恢复的旧会话、以及用 `/name` 改过名的会话一律不动；请求失败时退回用户输入的前几个词，不留下无名会话。
+  已带消息恢复的旧会话、以及用 `/name` 改过名的会话一律不动，`/new` 起的新会话照常命名；请求失败时退回用户输入的前几个词，不留下无名会话。
   `/title` 可按需给当前会话起名（已存在的旧会话用它补名字）；`/title set --provider <p>
   --model <m>` 可把命名改用你挑的便宜模型（存 `agent_dir()/extensions/auto-title.json`，写入时按目录校验），
   `/title unset` 清除后回到会话自己的模型；`set` 不带参数只打用法，不会误清配置。
