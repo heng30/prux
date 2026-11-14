@@ -12,11 +12,16 @@
 //!
 //! `hardware_capabilities` 只走串口：它问的是固件自己报告哪些引脚可用。
 
-use super::{DeviceTarget, load_config, tool_labels};
+use super::{
+    bridge,
+    config::{DeviceTarget, load_config},
+    serial, tool_labels,
+};
 use crate::core::{
     extensions::{ExtensionTool, ToolAnnotations, ToolExposure},
     tools::{ToolError, ToolResult},
 };
+use crate::extensions::util::req_u64;
 use serde_json::{Value, json};
 
 /// 工具名：写 GPIO。
@@ -102,30 +107,22 @@ pub(super) fn capabilities_tool() -> ExtensionTool {
     )
 }
 
-/// 必填整数参数（缺参时给一句明确的错误）。
-fn required_u64(args: &Value, key: &str) -> std::result::Result<u64, ToolError> {
-    args.get(key)
-        .and_then(Value::as_u64)
-        .ok_or_else(|| ToolError(format!("missing required parameter: `{key}`")))
-}
-
 /// 执行 `gpio_write`。
-pub(super) async fn run_write(args: &Value) -> std::result::Result<ToolResult, ToolError> {
-    let pin = required_u64(args, "pin")?;
-    let value = required_u64(args, "value")?;
+pub(super) async fn run_write(args: &Value) -> Result<ToolResult, ToolError> {
+    let pin = req_u64(args, "pin")?;
+    let value = req_u64(args, "value")?;
     if value > 1 {
         return Err(ToolError("`value` must be 0 or 1.".to_string()));
     }
 
     let config = load_config();
-    let (alias, target) = config.device_target(args).map_err(ToolError)?;
+    let (alias, target, baud) = config.device_target(args).map_err(ToolError)?;
     let wanted = if value == 1 { "HIGH" } else { "LOW" };
 
     match target {
         DeviceTarget::Serial(path) => {
-            let command =
-                super::serial::Command::new("gpio_write", json!({ "pin": pin, "value": value }));
-            match super::serial::send(&path, config.baud, command).await {
+            let command = serial::Command::new("gpio_write", json!({ "pin": pin, "value": value }));
+            match serial::send(&path, baud, command).await {
                 Ok(response) if response.ok => {
                     let state = response
                         .data
@@ -142,10 +139,10 @@ pub(super) async fn run_write(args: &Value) -> std::result::Result<ToolResult, T
         }
         DeviceTarget::Bridge(addr) => {
             let argv = [pin.to_string(), value.to_string()];
-            match super::bridge::request(&addr, "gpio_write", &argv).await {
-                Ok(reply) if !super::bridge::is_error_response(&reply) => Ok(ToolResult::text(
-                    format!("GPIO {pin} set {wanted} on {alias} ({addr}): {reply}"),
-                )),
+            match bridge::request(&addr, "gpio_write", &argv).await {
+                Ok(reply) if !bridge::is_error_response(&reply) => Ok(ToolResult::text(format!(
+                    "GPIO {pin} set {wanted} on {alias} ({addr}): {reply}"
+                ))),
                 Ok(reply) => Ok(ToolResult::error(reply)),
                 Err(err) => Ok(ToolResult::error(err)),
             }
@@ -154,16 +151,16 @@ pub(super) async fn run_write(args: &Value) -> std::result::Result<ToolResult, T
 }
 
 /// 执行 `gpio_read`。
-pub(super) async fn run_read(args: &Value) -> std::result::Result<ToolResult, ToolError> {
-    let pin = required_u64(args, "pin")?;
+pub(super) async fn run_read(args: &Value) -> Result<ToolResult, ToolError> {
+    let pin = req_u64(args, "pin")?;
 
     let config = load_config();
-    let (alias, target) = config.device_target(args).map_err(ToolError)?;
+    let (alias, target, baud) = config.device_target(args).map_err(ToolError)?;
 
     match target {
         DeviceTarget::Serial(path) => {
-            let command = super::serial::Command::new("gpio_read", json!({ "pin": pin }));
-            match super::serial::send(&path, config.baud, command).await {
+            let command = serial::Command::new("gpio_read", json!({ "pin": pin }));
+            match serial::send(&path, baud, command).await {
                 Ok(response) if response.ok => {
                     let state = response
                         .data
@@ -187,10 +184,10 @@ pub(super) async fn run_read(args: &Value) -> std::result::Result<ToolResult, To
         }
         DeviceTarget::Bridge(addr) => {
             let argv = [pin.to_string()];
-            match super::bridge::request(&addr, "gpio_read", &argv).await {
-                Ok(reply) if !super::bridge::is_error_response(&reply) => Ok(ToolResult::text(
-                    format!("GPIO {pin} on {alias} ({addr}) is {reply}"),
-                )),
+            match bridge::request(&addr, "gpio_read", &argv).await {
+                Ok(reply) if !bridge::is_error_response(&reply) => Ok(ToolResult::text(format!(
+                    "GPIO {pin} on {alias} ({addr}) is {reply}"
+                ))),
                 Ok(reply) => Ok(ToolResult::error(reply)),
                 Err(err) => Ok(ToolResult::error(err)),
             }
@@ -201,10 +198,10 @@ pub(super) async fn run_read(args: &Value) -> std::result::Result<ToolResult, To
 /// 执行 `hardware_capabilities`：问固件它有哪些引脚、哪个是板载 LED。
 pub(super) async fn run_capabilities(args: &Value) -> std::result::Result<ToolResult, ToolError> {
     let config = load_config();
-    let (alias, path) = config.serial_target(args).map_err(ToolError)?;
+    let (alias, path, baud) = config.serial_target(args).map_err(ToolError)?;
 
-    let command = super::serial::Command::new("capabilities", json!({}));
-    match super::serial::send(&path, config.baud, command).await {
+    let command = serial::Command::new("capabilities", json!({}));
+    match serial::send(&path, baud, command).await {
         Ok(response) if response.ok => {
             let data = &response.data;
             let mut out = format!("{alias} ({path}) capabilities:");
@@ -259,20 +256,20 @@ pub(super) fn devices_tool() -> ExtensionTool {
 }
 
 /// 执行 `hardware_devices`。
-pub(super) async fn run_devices(args: &Value) -> std::result::Result<ToolResult, ToolError> {
+pub(super) async fn run_devices(args: &Value) -> Result<ToolResult, ToolError> {
     let config = load_config();
-    let ports = super::serial::list_ports();
+    let ports = serial::list_ports();
     let ping = args.get("ping").and_then(Value::as_bool).unwrap_or(false);
 
     let mut out = String::from("Serial ports:\n");
     if ports.is_empty() {
         out.push_str(&format!(
             "  (none; allowed prefixes are {})\n",
-            super::serial::allowed_prefixes()
+            serial::allowed_prefixes()
         ));
     } else {
         for (path, detail) in &ports {
-            let firmware = if ping && super::serial::ping(path, config.baud).await {
+            let firmware = if ping && serial::ping(path, config.baud_for_port(path)).await {
                 "  [serial bridge firmware]"
             } else {
                 ""
@@ -286,13 +283,14 @@ pub(super) async fn run_devices(args: &Value) -> std::result::Result<ToolResult,
     }
 
     out.push_str("\nConfigured devices:\n");
-    if config.devices.is_empty() {
+    let devices = config.all_devices();
+    if devices.is_empty() {
         out.push_str(
-            "  (none; add `devices: {\"pico0\": \"/dev/ttyACM0\"}` to the extension config)\n",
+            "  (none; add `devices: {\"pico0\": \"/dev/ttyACM0\"}` to a board in the extension config)\n",
         );
     } else {
-        for (alias, target) in &config.devices {
-            out.push_str(&format!("  {alias} → {target}\n"));
+        for (alias, board, target, _) in &devices {
+            out.push_str(&format!("  {alias} → {target} ({board})\n"));
         }
     }
     Ok(ToolResult::text(out))
@@ -320,8 +318,8 @@ mod tests {
 
     #[test]
     fn missing_parameters_are_reported_by_name() {
-        assert!(required_u64(&json!({}), "pin").is_err());
-        assert_eq!(required_u64(&json!({ "pin": 25 }), "pin").unwrap(), 25);
+        assert!(req_u64(&json!({}), "pin").is_err());
+        assert_eq!(req_u64(&json!({ "pin": 25 }), "pin").unwrap(), 25);
     }
 
     #[test]

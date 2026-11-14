@@ -9,13 +9,14 @@
 //! - **每次调用重新打开端口**：既然 prux 是一次一进程的 TUI，没有长驻连接要维护，
 //!   打开-写-读-关 也顺带避免半死连接把后续命令拖死。
 
+use super::boards;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio_serial::SerialPortBuilderExt;
 
-/// 设备路径白名单前缀（与 zeroclaw 的 allowlist 一致）。
+/// 设备路径白名单前缀
 const ALLOWED_PREFIXES: &[&str] = &[
     "/dev/ttyACM",
     "/dev/ttyUSB",
@@ -101,7 +102,7 @@ pub(super) fn list_ports() -> Vec<(String, String)> {
         .map(|port| {
             let detail = match &port.port_type {
                 tokio_serial::SerialPortType::UsbPort(usb) => {
-                    let board = super::boards::lookup_usb(usb.vid, usb.pid);
+                    let board = boards::lookup_usb(usb.vid, usb.pid);
                     match board {
                         Some(spec) => format!("{:04x}:{:04x} {}", usb.vid, usb.pid, spec.board),
                         None => format!("{:04x}:{:04x}", usb.vid, usb.pid),

@@ -120,7 +120,7 @@ pub(super) fn info_tool() -> ExtensionTool {
 }
 
 /// 必填引脚号（限制在 BCM 可寻址范围，避免模型给个 400 去开不存在的引脚）。
-fn required_pin(args: &Value) -> std::result::Result<u8, ToolError> {
+fn required_pin(args: &Value) -> Result<u8, ToolError> {
     let pin = args
         .get("pin")
         .and_then(Value::as_u64)
@@ -129,7 +129,7 @@ fn required_pin(args: &Value) -> std::result::Result<u8, ToolError> {
 }
 
 /// 执行 `gpio_rpi_write`。
-pub(super) async fn run_write(args: &Value) -> std::result::Result<ToolResult, ToolError> {
+pub(super) async fn run_write(args: &Value) -> Result<ToolResult, ToolError> {
     let pin = required_pin(args)?;
     let value = args
         .get("value")
@@ -142,13 +142,13 @@ pub(super) async fn run_write(args: &Value) -> std::result::Result<ToolResult, T
 }
 
 /// 执行 `gpio_rpi_read`。
-pub(super) async fn run_read(args: &Value) -> std::result::Result<ToolResult, ToolError> {
+pub(super) async fn run_read(args: &Value) -> Result<ToolResult, ToolError> {
     let pin = required_pin(args)?;
     read_pin(pin).map(ToolResult::text)
 }
 
 /// 执行 `gpio_rpi_blink`。
-pub(super) async fn run_blink(args: &Value) -> std::result::Result<ToolResult, ToolError> {
+pub(super) async fn run_blink(args: &Value) -> Result<ToolResult, ToolError> {
     let pin = required_pin(args)?;
     let times = args
         .get("times")
@@ -165,12 +165,12 @@ pub(super) async fn run_blink(args: &Value) -> std::result::Result<ToolResult, T
 }
 
 /// 执行 `rpi_system_info`。
-pub(super) async fn run_info() -> std::result::Result<ToolResult, ToolError> {
+pub(super) async fn run_info() -> Result<ToolResult, ToolError> {
     Ok(ToolResult::text(system_info()))
 }
 
 #[cfg(target_os = "linux")]
-fn drive_pin(pin: u8, high: bool) -> std::result::Result<String, ToolError> {
+fn drive_pin(pin: u8, high: bool) -> Result<String, ToolError> {
     use rppal::gpio::Gpio;
 
     let gpio = Gpio::new().map_err(|e| ToolError(format!("could not open /dev/gpiochip: {e}")))?;
@@ -197,7 +197,7 @@ fn drive_pin(pin: u8, _high: bool) -> std::result::Result<String, ToolError> {
 }
 
 #[cfg(target_os = "linux")]
-fn read_pin(pin: u8) -> std::result::Result<String, ToolError> {
+fn read_pin(pin: u8) -> Result<String, ToolError> {
     use rppal::gpio::Gpio;
 
     let gpio = Gpio::new().map_err(|e| ToolError(format!("could not open /dev/gpiochip: {e}")))?;
@@ -217,7 +217,7 @@ fn read_pin(pin: u8) -> std::result::Result<String, ToolError> {
 }
 
 #[cfg(target_os = "linux")]
-fn blink_pin(pin: u8, times: u64, delay_ms: u64) -> std::result::Result<String, ToolError> {
+fn blink_pin(pin: u8, times: u64, delay_ms: u64) -> Result<String, ToolError> {
     use rppal::gpio::Gpio;
     use std::time::Duration;
 

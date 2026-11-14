@@ -13,7 +13,7 @@
 //! 约束（AGENTS「外部命令的输出必须有去处」）：子进程 stdin 接 null，stdout/stderr
 //! 全部走管道，绝不继承终端；超时到点就杀进程，不让一次卡住的串口把回合拖死。
 
-use super::{load_config, tool_labels};
+use super::{config::load_config, tool_labels};
 use crate::{
     core::{
         extensions::{ExtensionTool, ToolAnnotations, ToolExposure},
@@ -23,6 +23,8 @@ use crate::{
 };
 use serde_json::{Value, json};
 use std::time::Duration;
+use tempfile::NamedTempFile;
+use tokio::process::Command;
 
 /// 工具名：读设备上的程序。
 pub(super) const TOOL_READ_CODE: &str = "device_read_code";
@@ -122,9 +124,7 @@ pub(super) fn tools() -> Vec<ExtensionTool> {
 }
 
 /// 跑一次 `mpremote`，返回合并后的输出（失败时带上 stderr）。
-async fn run_mpremote(args: &[&str], timeout: Duration) -> std::result::Result<String, String> {
-    use tokio::process::Command;
-
+async fn run_mpremote(args: &[&str], timeout: Duration) -> Result<String, String> {
     let mut command = Command::new("mpremote");
     command
         .args(args)
@@ -175,7 +175,7 @@ async fn run_mpremote(args: &[&str], timeout: Duration) -> std::result::Result<S
 }
 
 /// 写一份临时脚本（保持到命令跑完）。
-fn temp_script(code: &str) -> std::result::Result<tempfile::NamedTempFile, ToolError> {
+fn temp_script(code: &str) -> Result<NamedTempFile, ToolError> {
     let file = tempfile::Builder::new()
         .prefix("prux_device_")
         .suffix(".py")
@@ -187,9 +187,9 @@ fn temp_script(code: &str) -> std::result::Result<tempfile::NamedTempFile, ToolE
 }
 
 /// 执行 `device_read_code`。
-pub(super) async fn run_read(args: &Value) -> std::result::Result<ToolResult, ToolError> {
+pub(super) async fn run_read(args: &Value) -> Result<ToolResult, ToolError> {
     let config = load_config();
-    let (alias, port) = config.serial_target(args).map_err(ToolError)?;
+    let (alias, port, _baud) = config.serial_target(args).map_err(ToolError)?;
 
     match run_mpremote(&["connect", &port, "cat", ":main.py"], READ_TIMEOUT).await {
         Ok(output) if output.trim().is_empty() => Ok(ToolResult::text(format!(
@@ -203,7 +203,7 @@ pub(super) async fn run_read(args: &Value) -> std::result::Result<ToolResult, To
 }
 
 /// 执行 `device_write_code`。
-pub(super) async fn run_write(args: &Value) -> std::result::Result<ToolResult, ToolError> {
+pub(super) async fn run_write(args: &Value) -> Result<ToolResult, ToolError> {
     let code = args
         .get("code")
         .and_then(Value::as_str)
@@ -211,7 +211,7 @@ pub(super) async fn run_write(args: &Value) -> std::result::Result<ToolResult, T
         .ok_or_else(|| ToolError("missing or empty parameter: `code`".to_string()))?;
 
     let config = load_config();
-    let (alias, port) = config.serial_target(args).map_err(ToolError)?;
+    let (alias, port, _baud) = config.serial_target(args).map_err(ToolError)?;
 
     let script = temp_script(code)?;
     let remote = ":main.py";
@@ -237,7 +237,7 @@ pub(super) async fn run_write(args: &Value) -> std::result::Result<ToolResult, T
 }
 
 /// 执行 `device_exec`。
-pub(super) async fn run_exec(args: &Value) -> std::result::Result<ToolResult, ToolError> {
+pub(super) async fn run_exec(args: &Value) -> Result<ToolResult, ToolError> {
     let code = args
         .get("code")
         .and_then(Value::as_str)
@@ -245,7 +245,7 @@ pub(super) async fn run_exec(args: &Value) -> std::result::Result<ToolResult, To
         .ok_or_else(|| ToolError("missing or empty parameter: `code`".to_string()))?;
 
     let config = load_config();
-    let (alias, port) = config.serial_target(args).map_err(ToolError)?;
+    let (alias, port, _baud) = config.serial_target(args).map_err(ToolError)?;
 
     let script = temp_script(code)?;
     let local = script

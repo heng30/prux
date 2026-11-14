@@ -308,6 +308,13 @@ pub fn req_str(args: &Value, key: &str) -> Result<String, ToolError> {
         .ok_or_else(|| ToolError(format!("missing required argument: {key}")))
 }
 
+/// 必填无符号整数参数（缺键或不是非负整数时报错）。
+pub fn req_u64(args: &Value, key: &str) -> Result<u64, ToolError> {
+    args.get(key)
+        .and_then(Value::as_u64)
+        .ok_or_else(|| ToolError(format!("missing required argument: {key}")))
+}
+
 /// 可选字符串参数（空串视为未提供）。
 pub fn opt_string(args: &Value, key: &str) -> Option<String> {
     args.get(key)

@@ -145,6 +145,17 @@
 
 ### Changed
 
+- **`hardware` config is per board**: `agent_dir()/extensions/hardware/config.json` is now an
+  array with one entry per board (`board` / `chip` / `devices` / `baud`), so several boards with
+  different chips each carry their own probe-rs target, devices and baud rate; the first entry is
+  the default board and a board without `chip` still falls back to the built-in table. Each entry
+  can also carry an `fqbn` for `arduino_upload`, a device alias may only claim one port (a
+  duplicate raises an error instead of writing the wrong board), duplicate board names keep the
+  first entry, and probing ports uses the baud rate of the board that owns them. The old object
+  layout is not read. Enabling the extension
+  creates `datasheets/` and a `config.template` example, writes `[]` when `config.json` is
+  missing, and never touches a config that exists.
+
 - **Claude models that manage effort per message now say so**: for models whose catalog entry
   declares `supportsMidConvoEffort`, every request is sent with adaptive thinking, a fixed top-level
   effort of `low`, and an empty system message carrying the real level before each assistant turn —
@@ -471,6 +482,13 @@
   **默认不启用**（`Dev`/`All` 模式可用），需在 `/extension` 面板开启。
 
 ### 变更
+
+- **`hardware` 配置按板卡分组**：`agent_dir()/extensions/hardware/config.json` 改为数组，每块板子一项
+  （`board` / `chip` / `devices` / `baud`），多块芯片不同的板子各带自己的 probe-rs target、设备与波特率；
+  第一项是默认板卡，没写 `chip` 的板子仍按内置表推导。每项还可带 `arduino_upload` 用的 `fqbn`；
+  设备别名只能挂在一个端口上（重名直接报错，不会写错板子），同名板卡只认第一项，探活端口用
+  所属板子的波特率。旧的单对象格式不再读取。启用扩展时自动建
+  `datasheets/`、写一份 `config.template` 示例，`config.json` 缺失时写入 `[]`，已存在的文件一律不动。
 
 - **按消息管理 effort 的 Claude 模型现在照实下发**：目录条目声明了 `supportsMidConvoEffort` 的模型，
   请求改为 adaptive thinking + 固定顶层 `low`，并在每条 assistant 消息前用一条空 system 消息携带当时的真实档位——

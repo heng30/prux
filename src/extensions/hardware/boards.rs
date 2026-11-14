@@ -8,21 +8,6 @@
 //! 探针实时路径用的芯片名在 [`PROBE_CHIPS`]：probe-rs 的 target 名（如
 //! `STM32F401RETx`），与展示用的完整型号（`STM32F401RET6`）不是一回事。
 
-/// 一块板卡的静态资料。
-#[derive(Debug, Clone, Copy)]
-pub struct BoardSpec {
-    /// 板卡名（配置里用的标识，如 `nucleo-f401re`）。
-    pub board: &'static str,
-    /// 展示用芯片完整型号。
-    pub chip: &'static str,
-    /// 一句话描述（内核、主频、存储、板载 LED 引脚）。
-    pub description: &'static str,
-    /// datasheet 里的内存映射（多行文本）。
-    pub memory_map: &'static str,
-    /// probe-rs 的 target 名；`None` = 本板不走探针通道。
-    pub probe_chip: Option<&'static str>,
-}
-
 /// 已知板卡表（顺序即 `/hardware` 面板与兜底提示里的展示顺序）。
 pub const BOARDS: &[BoardSpec] = &[
     BoardSpec {
@@ -89,6 +74,21 @@ const USB_BOARDS: &[(u16, u16, &str)] = &[
     (0x1a86, 0x7523, "esp32"),
     (0x1a86, 0x55d4, "esp32"),
 ];
+
+/// 一块板卡的静态资料。
+#[derive(Debug, Clone, Copy)]
+pub struct BoardSpec {
+    /// 板卡名（配置里用的标识，如 `nucleo-f401re`）。
+    pub board: &'static str,
+    /// 展示用芯片完整型号。
+    pub chip: &'static str,
+    /// 一句话描述（内核、主频、存储、板载 LED 引脚）。
+    pub description: &'static str,
+    /// datasheet 里的内存映射（多行文本）。
+    pub memory_map: &'static str,
+    /// probe-rs 的 target 名；`None` = 本板不走探针通道。
+    pub probe_chip: Option<&'static str>,
+}
 
 /// 按 USB VID/PID 查板卡；未收录返回 `None`（不代表不能连，只是不认识）。
 pub fn lookup_usb(vid: u16, pid: u16) -> Option<&'static BoardSpec> {

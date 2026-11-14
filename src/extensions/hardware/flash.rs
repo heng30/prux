@@ -10,10 +10,19 @@
 //! 两者都是**破坏性**操作：写错固件或写错地址会把板子刷成砖，因此工具标注
 //! `destructive`，并受 `permissions` 扩展的审批约束（启用它时）。
 
-use super::{config_path, load_config, probe, serial, tool_labels};
-use crate::core::{
-    extensions::{ExtensionTool, ToolAnnotations, ToolExposure},
-    tools::{ToolError, ToolResult},
+use super::{
+    config::{config_path, load_config},
+    probe, serial, tool_labels,
+};
+use crate::{
+    core::{
+        extensions::{ExtensionTool, ToolAnnotations, ToolExposure},
+        tools::{ToolError, ToolResult},
+    },
+    utils::paths::resolve_path,
+};
+use probe_rs::flashing::{
+    BinLoader, BinOptions, ElfLoader, ElfOptions, HexLoader, Uf2Loader, download_file,
 };
 use serde_json::{Value, json};
 use std::{
@@ -62,6 +71,7 @@ pub(super) fn flash_tool_def() -> ExtensionTool {
             "properties": {
                 "file": { "type": "string", "description": "Firmware file path (absolute, or relative to the working directory)." },
                 "chip": { "type": "string", "description": "probe-rs target name (e.g. `STM32F401RETx`). Omit to use the configured chip / board." },
+                "board": { "type": "string", "description": "Board from config.json used to pick the target when `chip` is omitted (defaults to the first configured board)." },
                 "address": { "type": "string", "description": "Base address for a raw `.bin` (e.g. `0x08000000`). Required for `.bin`, ignored otherwise." }
             },
             "required": ["file"]
@@ -90,27 +100,88 @@ pub(super) fn pico_flash_tool_def() -> ExtensionTool {
     )
 }
 
-/// 把工具参数里的路径按工作目录解析成绝对路径。
-fn resolve_path(value: &str, cwd: &str) -> PathBuf {
-    let path = PathBuf::from(value);
-    if path.is_absolute() {
-        path
-    } else {
-        Path::new(cwd).join(path)
+/// 可烧写的固件格式（按文件扩展名判定）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ImageKind {
+    /// ELF（自带地址与段信息）。
+    Elf,
+    /// Intel HEX（自带地址）。
+    Hex,
+    /// 裸二进制（必须显式给起始地址）。
+    Bin,
+    /// UF2（自带地址，RP2 等常用）。
+    Uf2,
+}
+
+impl ImageKind {
+    /// 按扩展名判定格式；不认识返回 `None`。
+    pub(super) fn from_path(path: &Path) -> Option<Self> {
+        match path.extension()?.to_str()?.to_lowercase().as_str() {
+            "elf" => Some(ImageKind::Elf),
+            "hex" | "ihex" | "intelhex" => Some(ImageKind::Hex),
+            "bin" | "binary" => Some(ImageKind::Bin),
+            "uf2" => Some(ImageKind::Uf2),
+            _ => None,
+        }
+    }
+
+    /// 展示名（报告里用）。
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            ImageKind::Elf => "ELF",
+            ImageKind::Hex => "Intel HEX",
+            ImageKind::Bin => "raw binary",
+            ImageKind::Uf2 => "UF2",
+        }
     }
 }
 
+/// 把一份固件烧进目标 Flash。
+///
+/// `base_address` 只对裸二进制有意义（ELF / HEX / UF2 自带地址），缺省时用 0；
+/// 调用方应在 `Bin` 且没给地址时直接拒绝，而不是让固件被写到 0x0。
+pub(super) fn flash(
+    chip: &str,
+    file: &Path,
+    kind: ImageKind,
+    base_address: Option<u64>,
+) -> Result<String, String> {
+    let mut session = probe::attach(chip)?;
+    let downloaded = match kind {
+        ImageKind::Elf => download_file(&mut session, file, ElfLoader(ElfOptions::default())),
+        ImageKind::Hex => download_file(&mut session, file, HexLoader),
+        ImageKind::Uf2 => download_file(&mut session, file, Uf2Loader),
+        ImageKind::Bin => download_file(
+            &mut session,
+            file,
+            BinLoader(BinOptions {
+                base_address,
+                skip: 0,
+            }),
+        ),
+    };
+    downloaded.map_err(|e| format!("flashing `{}` failed: {e}", file.display()))?;
+
+    let address_note = match (kind, base_address) {
+        (ImageKind::Bin, Some(address)) => format!(" at 0x{address:08X}"),
+        _ => String::new(),
+    };
+    Ok(format!(
+        "Flashed {} ({}){} to {chip} and verified.",
+        file.display(),
+        kind.label(),
+        address_note
+    ))
+}
+
 /// `.bin` 必须有显式地址：默认落到 0x0 会把固件写到不该写的区域。
-fn required_bin_address(
-    args: &Value,
-    kind: probe::ImageKind,
-) -> std::result::Result<Option<u64>, ToolError> {
+fn required_bin_address(args: &Value, kind: ImageKind) -> Result<Option<u64>, ToolError> {
     let raw = args.get("address").and_then(Value::as_str).map(str::trim);
     match (kind, raw) {
-        (probe::ImageKind::Bin, None) => Err(ToolError(
+        (ImageKind::Bin, None) => Err(ToolError(
             "`address` is required for a raw `.bin` image (e.g. `0x08000000`).".to_string(),
         )),
-        (probe::ImageKind::Bin, Some(raw)) => match probe::parse_address(raw) {
+        (ImageKind::Bin, Some(raw)) => match probe::parse_address(raw) {
             Some(address) => Ok(Some(address)),
             None => Err(ToolError(format!(
                 "`address` must be hex (e.g. `0x08000000`), got `{raw}`."
@@ -121,7 +192,7 @@ fn required_bin_address(
 }
 
 /// 执行 `hardware_flash`。
-pub(super) fn run_flash(args: &Value, cwd: &str) -> std::result::Result<ToolResult, ToolError> {
+pub(super) fn run_flash(args: &Value, cwd: &str) -> Result<ToolResult, ToolError> {
     let file = args
         .get("file")
         .and_then(Value::as_str)
@@ -130,7 +201,7 @@ pub(super) fn run_flash(args: &Value, cwd: &str) -> std::result::Result<ToolResu
         .ok_or_else(|| ToolError("missing required parameter: `file`".to_string()))?;
     let path = resolve_path(file, cwd);
 
-    let Some(kind) = probe::ImageKind::from_path(&path) else {
+    let Some(kind) = ImageKind::from_path(&path) else {
         return Err(ToolError(format!(
             "unsupported firmware format for `{}`; expected .elf / .hex / .bin / .uf2",
             path.display()
@@ -150,7 +221,7 @@ pub(super) fn run_flash(args: &Value, cwd: &str) -> std::result::Result<ToolResu
         .get("chip")
         .and_then(Value::as_str)
         .map(str::to_string)
-        .or_else(|| config.probe_chip_for(None));
+        .or_else(|| config.probe_chip_for(args.get("board").and_then(Value::as_str)));
     let Some(chip) = chip else {
         return Ok(ToolResult::error(format!(
             "No probe target. Pass `chip` (e.g. `STM32F401RETx`) or add \"chip\" / a probe-capable \
@@ -159,7 +230,7 @@ pub(super) fn run_flash(args: &Value, cwd: &str) -> std::result::Result<ToolResu
         )));
     };
 
-    match probe::flash(&chip, &path, kind, base_address) {
+    match flash(&chip, &path, kind, base_address) {
         Ok(report) => Ok(ToolResult::text(report)),
         Err(err) => Ok(ToolResult::error(err)),
     }
@@ -198,10 +269,7 @@ fn wait_for_bootloader_volume() -> Option<PathBuf> {
 }
 
 /// 执行 `pico_flash`。
-pub(super) async fn run_pico_flash(
-    args: &Value,
-    cwd: &str,
-) -> std::result::Result<ToolResult, ToolError> {
+pub(super) async fn run_pico_flash(args: &Value, cwd: &str) -> Result<ToolResult, ToolError> {
     let file = args
         .get("file")
         .and_then(Value::as_str)
@@ -236,9 +304,9 @@ pub(super) async fn run_pico_flash(
     if mount.is_none() && args.get("reboot").and_then(Value::as_bool).unwrap_or(false) {
         let config = load_config();
         match config.serial_target(args) {
-            Ok((alias, path)) => {
+            Ok((alias, path, baud)) => {
                 let command = serial::Command::new("reboot_bootsel", json!({}));
-                if let Err(err) = serial::send(&path, config.baud, command).await {
+                if let Err(err) = serial::send(&path, baud, command).await {
                     return Ok(ToolResult::error(format!(
                         "could not ask {alias} ({path}) to reboot into the bootloader: {err}"
                     )));
@@ -296,17 +364,15 @@ mod tests {
 
     #[test]
     fn bin_images_require_an_address() {
-        let err = required_bin_address(&json!({}), probe::ImageKind::Bin).unwrap_err();
+        let err = required_bin_address(&json!({}), ImageKind::Bin).unwrap_err();
         assert!(err.0.contains("required"), "{}", err.0);
         assert_eq!(
-            required_bin_address(&json!({ "address": "0x08000000" }), probe::ImageKind::Bin)
-                .unwrap(),
+            required_bin_address(&json!({ "address": "0x08000000" }), ImageKind::Bin).unwrap(),
             Some(0x0800_0000)
         );
         // ELF 自带地址：给了也忽略
         assert_eq!(
-            required_bin_address(&json!({ "address": "0x08000000" }), probe::ImageKind::Elf)
-                .unwrap(),
+            required_bin_address(&json!({ "address": "0x08000000" }), ImageKind::Elf).unwrap(),
             None
         );
     }
@@ -345,16 +411,25 @@ mod tests {
             .unwrap_err();
         assert!(err.0.contains("not a .uf2"), "{}", err.0);
     }
-
     #[test]
-    fn resolve_path_joins_relative_paths_against_the_working_dir() {
+    fn image_kinds_are_derived_from_extensions() {
         assert_eq!(
-            resolve_path("fw.elf", "/work"),
-            PathBuf::from("/work/fw.elf")
+            ImageKind::from_path(Path::new("/tmp/fw.elf")),
+            Some(ImageKind::Elf)
         );
         assert_eq!(
-            resolve_path("/abs/fw.elf", "/work"),
-            PathBuf::from("/abs/fw.elf")
+            ImageKind::from_path(Path::new("/tmp/FW.HEX")),
+            Some(ImageKind::Hex)
         );
+        assert_eq!(
+            ImageKind::from_path(Path::new("/tmp/fw.bin")),
+            Some(ImageKind::Bin)
+        );
+        assert_eq!(
+            ImageKind::from_path(Path::new("/tmp/fw.uf2")),
+            Some(ImageKind::Uf2)
+        );
+        assert_eq!(ImageKind::from_path(Path::new("/tmp/fw.txt")), None);
+        assert_eq!(ImageKind::from_path(Path::new("/tmp/fw")), None);
     }
 }

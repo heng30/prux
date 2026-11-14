@@ -623,6 +623,14 @@ pub fn find_in_path(name: &str) -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
+/// 缺失时才写：用户已有的配置（哪怕手改坏了）绝不被覆盖。
+pub fn write_if_missing(path: &Path, body: &str) {
+    if !path.exists() {
+        // 写不出来不影响工具：缺配置时按空配置跑，错误提示里带路径。
+        _ = std::fs::write(path, body);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

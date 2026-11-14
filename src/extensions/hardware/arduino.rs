@@ -7,7 +7,7 @@
 //! `fqbn`（板型标识）默认按配置的板卡名推导，也可由调用方显式给：
 //! `arduino-uno` → `arduino:avr:uno`，`arduino-mega` → `arduino:avr:mega`。
 
-use super::{load_config, tool_labels};
+use super::{config::load_config, tool_labels};
 use crate::{
     core::{
         extensions::{ExtensionTool, ToolAnnotations, ToolExposure},
@@ -17,6 +17,8 @@ use crate::{
 };
 use serde_json::{Value, json};
 use std::time::Duration;
+use tempfile::TempDir;
+use tokio::process::Command;
 
 /// 工具名。
 pub(super) const TOOL_UPLOAD: &str = "arduino_upload";
@@ -72,9 +74,7 @@ fn fqbn_for_board(board: &str) -> Option<&'static str> {
 }
 
 /// 跑一次 `arduino-cli`，失败时把 stderr 一起带回来。
-async fn run_cli(args: &[String], timeout: Duration) -> std::result::Result<String, String> {
-    use tokio::process::Command;
-
+async fn run_cli(args: &[String], timeout: Duration) -> Result<String, String> {
     let mut command = Command::new("arduino-cli");
     command
         .args(args)
@@ -125,7 +125,7 @@ async fn run_cli(args: &[String], timeout: Duration) -> std::result::Result<Stri
 }
 
 /// 把 sketch 写进临时目录（目录名必须与 `.ino` 同名，否则 arduino-cli 不认）。
-fn write_sketch(code: &str) -> std::result::Result<tempfile::TempDir, ToolError> {
+fn write_sketch(code: &str) -> Result<TempDir, ToolError> {
     let dir = tempfile::Builder::new()
         .prefix("prux_arduino_")
         .tempdir()
@@ -139,7 +139,7 @@ fn write_sketch(code: &str) -> std::result::Result<tempfile::TempDir, ToolError>
 }
 
 /// 执行 `arduino_upload`。
-pub(super) async fn run_upload(args: &Value) -> std::result::Result<ToolResult, ToolError> {
+pub(super) async fn run_upload(args: &Value) -> Result<ToolResult, ToolError> {
     let code = args
         .get("code")
         .and_then(Value::as_str)
@@ -155,7 +155,11 @@ pub(super) async fn run_upload(args: &Value) -> std::result::Result<ToolResult, 
         .or_else(|| config.default_board().map(str::to_string));
     let fqbn = match (
         args.get("fqbn").and_then(Value::as_str),
-        board.as_deref().and_then(fqbn_for_board),
+        board.as_deref().and_then(|board| {
+            config
+                .fqbn_for(board)
+                .or_else(|| fqbn_for_board(board).map(str::to_string))
+        }),
     ) {
         (Some(fqbn), _) => fqbn.to_string(),
         (None, Some(fqbn)) => fqbn.to_string(),

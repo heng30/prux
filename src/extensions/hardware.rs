@@ -13,14 +13,19 @@
 //! `hardware_memory_read` 按地址读一段内存并渲染 hex dump。探针不可用时前两个工具
 //! **回落 datasheet 静态表**（[`boards`]）——「这块板是什么芯片」不需要插板就能答。
 //!
-//! 配置在 `agent_dir()/extensions/hardware/config.json`：
+//! 配置在 `agent_dir()/extensions/hardware/config.json`，一个数组，每块板子一项：
 //!
 //! ```json
-//! { "boards": ["nucleo-f401re"], "chip": "STM32F401RETx" }
+//! [
+//!   { "board": "nucleo-f401re", "chip": "STM32F401RETx",
+//!     "devices": { "pico0": "/dev/ttyACM0" }, "baud": 115200 }
+//! ]
 //! ```
 //!
-//! - `boards`：板卡名（对应 [`boards::BOARDS`]），工具省略 `board` 参数时取第一个；
-//! - `chip`：probe-rs 的 target 名覆盖（非 Nucleo 的板子靠它直连）。
+//! - `board`：板卡名（对应 [`boards::BOARDS`]，表外板子也能写）；数组第一项是默认板卡；
+//! - `chip`：这块钱的 probe-rs target 名；省略则按板卡表推导；
+//! - `devices`：这块板上的设备别名（`"bridge"` = Uno Q Bridge 默认地址）；
+//! - `baud`：这块板的串口波特率，省略用串口默认值。
 //!
 //! 探针 IO 是阻塞的（USB 传输），因此三个探针工具都在 `spawn_blocking` 里跑；
 //! 同一时刻只能有一个会话占着探针——这是 probe-rs 的语义。
@@ -33,6 +38,7 @@
 mod arduino;
 mod boards;
 mod bridge;
+mod config;
 mod flash;
 mod gpio;
 mod micropython;
@@ -43,7 +49,6 @@ mod serial;
 
 use crate::{
     core::{
-        config_cache::ConfigCache,
         extensions::{
             CommandHost, Extension, ExtensionCommand, ExtensionMode, ExtensionTool,
             ForkProjectInfo, ToolAnnotations, ToolExecCtx, ToolExposure, UiNotifyLevel,
@@ -52,40 +57,23 @@ use crate::{
         tools::{ToolError, ToolResult},
     },
     extensions::{
-        EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_HARDWARE, command_arg,
+        EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_HARDWARE, command_arg, tool_search,
         util::{notify_plain, opt_string},
     },
     modes::tui::handlers::register_host_command,
-    utils::paths::read_json_file,
+    utils::{paths::write_if_missing, process},
 };
+use boards::BoardSpec;
+use config::{CONFIG_TEMPLATE, CONFIG_TEMPLATE_FILE, Config, config_path, load_config};
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
-use std::{
-    collections::BTreeMap,
-    path::PathBuf,
-    sync::{Arc, RwLock},
-};
+use std::{fs, path::PathBuf, sync::Arc};
 
 /// 扩展名（也是 `/extension` 面板中的标识与配置目录名）。
 const EXT: &str = "hardware";
 
 /// 斜杠命令名（不含 `/`）。
 const CMD: &str = "hardware";
-
-/// 配置文件名（位于 `agent_dir()/extensions/hardware/` 下）。
-const CONFIG_FILE: &str = "config.json";
-
-/// 配置文件里的键：板卡名列表。
-const CONFIG_BOARDS: &str = "boards";
-
-/// 配置文件里的键：probe-rs 的 target 名覆盖。
-const CONFIG_CHIP: &str = "chip";
-
-/// 配置文件里的键：设备别名 → 串口路径。
-const CONFIG_DEVICES: &str = "devices";
-
-/// 配置文件里的键：串口波特率。
-const CONFIG_BAUD: &str = "baud";
 
 /// 工具名：板卡信息。
 const TOOL_BOARD_INFO: &str = "hardware_board_info";
@@ -99,7 +87,7 @@ const TOOL_MEMORY_READ: &str = "hardware_memory_read";
 /// 工具名：串口设备清单。
 const TOOL_DEVICES: &str = "hardware_devices";
 
-/// 未给地址时默认读的起点：STM32 的 RAM 基底（zeroclaw 的默认值）。
+/// 未给地址时默认读的起点：STM32 的 RAM 基底
 const DEFAULT_READ_ADDRESS: u64 = 0x2000_0000;
 
 /// 未给长度时默认读的字节数。
@@ -112,191 +100,9 @@ static HARDWARE_FACTORY: ExtensionFactory = ExtensionFactory {
     make: || -> Arc<dyn Extension> { Arc::new(Hardware) },
 };
 
-/// 配置文件读写锁（`/hardware` 与工具读取串行化）。
-static CONFIG_LOCK: RwLock<()> = RwLock::new(());
-
-/// 配置文件的读缓存（锁序恒为「RwLock → 缓存内层 Mutex」）。
-static CONFIG_CACHE: ConfigCache = ConfigCache::new();
-
 /// 资料目录：`agent_dir()/extensions/hardware/datasheets`。
 fn datasheet_dir() -> PathBuf {
     agent_dir().join(search::DATASHEET_REL)
-}
-
-/// 一台设备怎么连。
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum DeviceTarget {
-    /// 串口设备路径（`/dev/ttyACM0`、`COM3`）。
-    Serial(String),
-    /// Arduino Uno Q Bridge 的 `host:port`。
-    Bridge(String),
-}
-
-impl std::fmt::Display for DeviceTarget {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            DeviceTarget::Serial(path) => write!(f, "{path}"),
-            DeviceTarget::Bridge(addr) => write!(f, "bridge:{addr}"),
-        }
-    }
-}
-
-/// 配置文件路径：`agent_dir()/extensions/hardware/config.json`。
-fn config_path() -> PathBuf {
-    agent_dir().join("extensions").join(EXT).join(CONFIG_FILE)
-}
-
-/// 运行期配置。
-#[derive(Debug, Clone, Default)]
-struct Config {
-    /// 板卡名列表（对应 [`boards::BOARDS`]）；空 = 没配置，工具要求显式给 `board`。
-    boards: Vec<String>,
-    /// probe-rs 的 target 名覆盖；空 = 按板卡表推导。
-    chip: Option<String>,
-    /// 设备别名 → 传输方式（`pico0` → 串口，`unoq` → 本地 Bridge）。
-    devices: BTreeMap<String, DeviceTarget>,
-    /// 串口波特率。
-    baud: u32,
-}
-
-impl Config {
-    /// 省略 `board` 参数时的默认板卡。
-    fn default_board(&self) -> Option<&str> {
-        self.boards.first().map(String::as_str)
-    }
-
-    /// 探针 target 名：显式 `chip` 覆盖优先，否则按板卡表推导。
-    fn probe_chip_for(&self, board: Option<&str>) -> Option<String> {
-        if let Some(chip) = &self.chip
-            && !chip.is_empty()
-        {
-            return Some(chip.clone());
-        }
-        let board = board.or_else(|| self.default_board())?;
-        boards::lookup(board)
-            .and_then(|spec| spec.probe_chip)
-            .map(str::to_string)
-    }
-
-    /// 设备目标：`device` 别名 → `(别名, 传输方式)`。
-    ///
-    /// 省略别名时要求**恰好**配置了一个设备：多设备时让模型显式选，避免「随手操作第一个」
-    /// 这种在真板子上会烧错的默认。
-    fn device_target(&self, args: &Value) -> std::result::Result<(String, DeviceTarget), String> {
-        if let Some(alias) = opt_string(args, "device") {
-            return self
-                .devices
-                .get(&alias)
-                .map(|target| (alias.clone(), target.clone()))
-                .ok_or_else(|| {
-                    format!(
-                        "unknown device `{alias}`; configured: {}",
-                        self.device_aliases()
-                    )
-                });
-        }
-        match self.devices.len() {
-            0 => Err(format!(
-                "no device configured; add \"devices\": {{\"pico0\": \"/dev/ttyACM0\"}} to {}",
-                config_path().display()
-            )),
-            1 => {
-                let (alias, target) = self.devices.iter().next().expect("len == 1");
-                Ok((alias.clone(), target.clone()))
-            }
-            _ => Err(format!(
-                "multiple devices configured; pass `device` (one of: {})",
-                self.device_aliases()
-            )),
-        }
-    }
-
-    /// 串口路径：只接受串口设备（`mpremote` / `arduino-cli` / `pico_flash` 要的是路径）。
-    fn serial_target(&self, args: &Value) -> std::result::Result<(String, String), String> {
-        let (alias, target) = self.device_target(args)?;
-        match target {
-            DeviceTarget::Serial(path) => Ok((alias, path)),
-            DeviceTarget::Bridge(addr) => Err(format!(
-                "device `{alias}` is a Uno Q Bridge ({addr}), not a serial port"
-            )),
-        }
-    }
-
-    /// 已配置别名的展示串（错误提示用）。
-    fn device_aliases(&self) -> String {
-        if self.devices.is_empty() {
-            "(none)".to_string()
-        } else {
-            self.devices.keys().cloned().collect::<Vec<_>>().join(", ")
-        }
-    }
-}
-
-/// 读配置（缺失 / 非法时返回空配置，不影响其它工具）。
-fn load_config() -> Config {
-    let path = config_path();
-    let _guard = CONFIG_LOCK.read().unwrap_or_else(|e| e.into_inner());
-    let value = CONFIG_CACHE.read(&path, || read_json_file(&path));
-
-    let boards = value
-        .get(CONFIG_BOARDS)
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_str)
-                .map(|s| s.trim().to_lowercase())
-                .filter(|s| !s.is_empty())
-                .collect()
-        })
-        .unwrap_or_default();
-    let chip = value
-        .get(CONFIG_CHIP)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string);
-    let devices = value
-        .get(CONFIG_DEVICES)
-        .and_then(Value::as_object)
-        .map(|map| {
-            map.iter()
-                .filter_map(|(alias, value)| {
-                    let target = match value {
-                        // 字面量 `"bridge"` = 用 Uno Q Bridge 的默认地址
-                        Value::String(word) if word.trim() == "bridge" => {
-                            DeviceTarget::Bridge(bridge::DEFAULT_ADDR.to_string())
-                        }
-                        Value::String(path) if !path.trim().is_empty() => {
-                            DeviceTarget::Serial(path.trim().to_string())
-                        }
-                        Value::Object(obj) => {
-                            let addr = obj.get("bridge")?.as_str()?.trim();
-                            if addr.is_empty() {
-                                return None;
-                            }
-                            DeviceTarget::Bridge(addr.to_string())
-                        }
-                        _ => return None,
-                    };
-                    Some((alias.trim().to_lowercase(), target))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    let baud = value
-        .get(CONFIG_BAUD)
-        .and_then(Value::as_u64)
-        .filter(|baud| (1..=4_000_000).contains(baud))
-        .map(|baud| baud as u32)
-        .unwrap_or(serial::DEFAULT_BAUD);
-
-    Config {
-        boards,
-        chip,
-        devices,
-        baud,
-    }
 }
 
 /// 某块板卡的静态资料块（工具省略 `board` 时用默认板卡）。
@@ -305,7 +111,7 @@ fn resolve_board(args: &Value, config: &Config) -> Option<String> {
 }
 
 /// 板卡静态信息文本（含内存映射与探针不可用的说明）。
-fn static_board_info(spec: &boards::BoardSpec, probe_error: Option<&str>) -> String {
+fn static_board_info(spec: &BoardSpec, probe_error: Option<&str>) -> String {
     let mut out = format!(
         "**Board:** {}\n**Chip:** {}\n**Description:** {}\n\n**Memory map:**\n{}",
         spec.board, spec.chip, spec.description, spec.memory_map
@@ -319,7 +125,7 @@ fn static_board_info(spec: &boards::BoardSpec, probe_error: Option<&str>) -> Str
 }
 
 /// `hardware_board_info`：探针优先，失败回落静态表。
-fn board_info(args: &Value) -> std::result::Result<ToolResult, ToolError> {
+fn board_info(args: &Value) -> Result<ToolResult, ToolError> {
     let config = load_config();
     let Some(board) = resolve_board(args, &config) else {
         return Ok(ToolResult::error(format!(
@@ -329,7 +135,7 @@ fn board_info(args: &Value) -> std::result::Result<ToolResult, ToolError> {
         )));
     };
 
-    let spec = boards::lookup(&board);
+    let spec = boards::lookup(&board); // 按板卡名查静态资料
     let probe_chip = config.probe_chip_for(Some(&board));
 
     if let Some(chip) = &probe_chip {
@@ -364,7 +170,7 @@ fn board_info(args: &Value) -> std::result::Result<ToolResult, ToolError> {
 }
 
 /// `hardware_memory_map`：探针优先，失败回落 datasheet。
-fn memory_map(args: &Value) -> std::result::Result<ToolResult, ToolError> {
+fn memory_map(args: &Value) -> Result<ToolResult, ToolError> {
     let config = load_config();
     let Some(board) = resolve_board(args, &config) else {
         return Ok(ToolResult::error(format!(
@@ -404,13 +210,13 @@ fn memory_map(args: &Value) -> std::result::Result<ToolResult, ToolError> {
     }
 }
 
-/// 解析 `hardware_memory_read` 的目标芯片（显式 `chip` > 配置 `chip` > 板卡表）。
+/// 解析 `hardware_memory_read` 的目标芯片（显式 `chip` > 该板 / 默认板的配置 `chip` > 板卡表）。
 fn read_chip(args: &Value, config: &Config) -> Option<String> {
-    opt_string(args, "chip").or_else(|| config.probe_chip_for(None))
+    opt_string(args, "chip").or_else(|| config.probe_chip_for(opt_string(args, "board").as_deref()))
 }
 
 /// `hardware_memory_read`：必须走探针（读的是板子上真实的寄存器）。
-fn memory_read(args: &Value) -> std::result::Result<ToolResult, ToolError> {
+fn memory_read(args: &Value) -> Result<ToolResult, ToolError> {
     let config = load_config();
     let Some(chip) = read_chip(args, &config) else {
         return Ok(ToolResult::error(format!(
@@ -443,16 +249,15 @@ fn memory_read(args: &Value) -> std::result::Result<ToolResult, ToolError> {
     Ok(ToolResult::text(text))
 }
 
-/// 在 blocking 线程池里跑探针 IO（USB 传输是阻塞的）。
-async fn run_blocking<T, F>(job: F) -> std::result::Result<T, ToolError>
+/// 在 blocking 线程池里跑探针 IO（USB 传输是阻塞的），把 panic / 取消统一成工具错误。
+async fn run_blocking<T, F>(job: F) -> Result<T, ToolError>
 where
     T: Send + 'static,
-    F: FnOnce() -> std::result::Result<T, ToolError> + Send + 'static,
+    F: FnOnce() -> Result<T, ToolError> + Send + 'static,
 {
-    match tokio::task::spawn_blocking(job).await {
-        Ok(result) => result,
-        Err(err) => Err(ToolError(format!("hardware probe task failed: {err}"))),
-    }
+    process::spawn_blocking(job)
+        .await
+        .map_err(|err| ToolError(format!("hardware probe task failed: {err}")))?
 }
 
 /// 设备清单工具的 UI 标签。
@@ -485,7 +290,7 @@ fn board_info_tool() -> ExtensionTool {
             "properties": {
                 "board": {
                     "type": "string",
-                    "description": "Board name from the datasheet table (e.g. nucleo-f401re, arduino-uno). Omit to use the configured default."
+                    "description": "Board name: a built-in datasheet name (e.g. nucleo-f401re, arduino-uno) or a board from config.json. Omit to use the configured default."
                 }
             }
         }),
@@ -504,7 +309,7 @@ fn memory_map_tool() -> ExtensionTool {
             "properties": {
                 "board": {
                     "type": "string",
-                    "description": "Board name from the datasheet table (e.g. nucleo-f401re). Omit to use the configured default."
+                    "description": "Board name: a built-in datasheet name (e.g. nucleo-f401re) or a board from config.json. Omit to use the configured default."
                 }
             }
         }),
@@ -535,6 +340,10 @@ fn memory_read_tool() -> ExtensionTool {
                 "chip": {
                     "type": "string",
                     "description": "probe-rs target name (e.g. `STM32F401RETx`). Omit to use the configured chip / board."
+                },
+                "board": {
+                    "type": "string",
+                    "description": "Board from config.json used to pick the target when `chip` is omitted (defaults to the first configured board)."
                 }
             }
         }),
@@ -557,14 +366,25 @@ fn command_hardware(_host: &mut dyn CommandHost, raw: &str) -> bool {
     let root = datasheet_dir();
     let (files, chunks) = search::stats(&root);
     let boards = if config.boards.is_empty() {
-        "(none — pass `board` to the tools or add \"boards\" to config.json)".to_string()
+        "(none — pass `board` to the tools or add an entry to config.json)".to_string()
     } else {
-        config.boards.join(", ")
+        config
+            .boards
+            .iter()
+            .map(|b| b.board.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
     };
-    let chip = config
-        .chip
-        .as_deref()
-        .unwrap_or("(derived from the board table)");
+    let chip = if config.boards.iter().all(|b| b.chip.is_none()) {
+        "(derived from the board table)".to_string()
+    } else {
+        config
+            .boards
+            .iter()
+            .filter_map(|b| b.chip.as_ref().map(|chip| format!("{}={chip}", b.board)))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
 
     notify_plain(
         format!(
@@ -575,7 +395,7 @@ fn command_hardware(_host: &mut dyn CommandHost, raw: &str) -> bool {
             } else {
                 "directory missing".to_string()
             },
-            config.device_aliases(),
+            config.device_summary(),
             Hardware
                 .tools()
                 .into_iter()
@@ -623,7 +443,7 @@ impl Extension for Hardware {
 
     /// 工具都是延迟工具：模型得先用 `tool_search` 才能发现它们。
     fn prerequisite_tools(&self) -> Vec<String> {
-        vec![crate::extensions::tool_search::TOOL_NAME.to_string()]
+        vec![tool_search::TOOL_NAME.to_string()]
     }
 
     /// 全部工具：手册检索、探针读写、引脚、烧写、Arduino 上传与 MicroPython 执行。
@@ -666,13 +486,30 @@ impl Extension for Hardware {
         register_host_command(EXT, CMD, command_hardware);
     }
 
+    /// 启用后建好资料目录（含启动时按 settings 恢复的启用态），用户直接往里放手手册。
+    fn on_enabled_changed(&self, enabled: bool) {
+        if enabled {
+            // 建不出来不影响检索：缺目录时 `hardware_search` 自己会提示路径。
+            _ = fs::create_dir_all(datasheet_dir());
+            let config = config_path();
+            if let Some(dir) = config.parent() {
+                _ = fs::create_dir_all(dir);
+            }
+            write_if_missing(
+                &config.with_file_name(CONFIG_TEMPLATE_FILE),
+                CONFIG_TEMPLATE,
+            );
+            write_if_missing(&config, "[]\n");
+        }
+    }
+
     /// 执行 `hardware_*` 工具；探针类工具在 blocking 线程池里跑。
     fn execute_tool_async(
         &self,
         name: String,
         args: Value,
         ctx: ToolExecCtx,
-    ) -> BoxFuture<'static, std::result::Result<ToolResult, ToolError>> {
+    ) -> BoxFuture<'static, Result<ToolResult, ToolError>> {
         let cwd = ctx.cwd.clone();
         Box::pin(async move {
             match name.as_str() {
@@ -720,6 +557,38 @@ mod tests {
     }
 
     #[test]
+    fn enabling_the_extension_creates_the_datasheet_dir() {
+        let (_g, _ad) = guard();
+        let root = datasheet_dir();
+        assert!(!root.exists(), "沙箱里初始没有资料目录");
+        Hardware.on_enabled_changed(true);
+        assert!(root.is_dir(), "启用后应建出 {}", root.display());
+    }
+
+    #[test]
+    fn enabling_writes_a_template_and_an_empty_config() {
+        let (_g, _ad) = guard();
+        Hardware.on_enabled_changed(true);
+        let template =
+            fs::read_to_string(config_path().with_file_name(CONFIG_TEMPLATE_FILE)).unwrap();
+        assert!(template.contains("\"board\""), "{template}");
+        assert!(template.contains("\"devices\""), "{template}");
+        assert_eq!(fs::read_to_string(config_path()).unwrap().trim(), "[]");
+    }
+
+    #[test]
+    fn an_existing_config_is_never_overwritten() {
+        let (_g, _ad) = guard();
+        write_config(&json!([{ "board": "esp32" }]));
+        Hardware.on_enabled_changed(true);
+        assert_eq!(
+            load_config().default_board(),
+            Some("esp32"),
+            "启用不得清掉用户配置"
+        );
+    }
+
+    #[test]
     fn board_info_falls_back_to_the_datasheet_table() {
         let (_g, _ad) = guard();
         let out = board_info(&json!({ "board": "arduino-uno" })).unwrap();
@@ -738,7 +607,7 @@ mod tests {
     #[test]
     fn the_configured_board_is_the_default() {
         let (_g, _ad) = guard();
-        write_config(&json!({ "boards": ["nucleo-f411re"] }));
+        write_config(&json!([{ "board": "nucleo-f411re" }]));
         let out = board_info(&json!({})).unwrap();
         // 探针不可用 → 静态表兜底（不是报错），并点明失败原因
         assert!(!out.is_error, "{}", out.text);
@@ -777,24 +646,124 @@ mod tests {
     }
 
     #[test]
-    fn chip_override_beats_the_board_table() {
-        let config = Config {
-            boards: vec!["nucleo-f401re".to_string()],
-            chip: Some("STM32F411RETx".to_string()),
-            ..Config::default()
-        };
+    fn a_chip_map_picks_the_target_per_board_and_falls_back_to_the_table() {
+        let (_g, _ad) = guard();
+        write_config(&json!([
+            { "board": "nucleo-f401re" },
+            { "board": "my-board", "chip": "NRF52840_xxAA" }
+        ]));
+        let config = load_config();
+        assert_eq!(
+            config.probe_chip_for(Some("my-board")),
+            Some("NRF52840_xxAA".to_string())
+        );
+        // 没写 chip 的板子仍按内置表推导
         assert_eq!(
             config.probe_chip_for(Some("nucleo-f401re")),
-            Some("STM32F411RETx".to_string())
-        );
-        let derived = Config {
-            boards: vec!["nucleo-f401re".to_string()],
-            ..Config::default()
-        };
-        assert_eq!(
-            derived.probe_chip_for(None),
             Some("STM32F401RETx".to_string())
         );
+        assert_eq!(
+            config.probe_chip_for(None),
+            Some("STM32F401RETx".to_string()),
+            "未给 board 时回落默认板卡"
+        );
+    }
+
+    #[test]
+    fn devices_are_scoped_to_their_board_and_carry_that_board_bbox_baud() {
+        let (_g, _ad) = guard();
+        write_config(&json!([
+            { "board": "nucleo-f401re", "devices": { "pico0": "/dev/ttyACM0" } },
+            { "board": "nucleo-f411re", "baud": 9600, "devices": { "pico1": "/dev/ttyACM1" } }
+        ]));
+        let config = load_config();
+        let (alias, _, baud) = config.device_target(&json!({ "device": "pico1" })).unwrap();
+        assert_eq!(alias, "pico1");
+        assert_eq!(baud, 9600, "波特率取这块板自己的配置");
+        assert!(
+            config.device_target(&json!({})).is_err(),
+            "多设备时要求显式选"
+        );
+    }
+
+    #[test]
+    fn a_device_alias_on_two_boards_is_an_error() {
+        let (_g, _ad) = guard();
+        write_config(&json!([
+            { "board": "nucleo-f401re", "devices": { "pico0": "/dev/ttyACM0" } },
+            { "board": "nucleo-f411re", "devices": { "pico0": "/dev/ttyACM1" } }
+        ]));
+        let config = load_config();
+        let err = config
+            .device_target(&json!({ "device": "pico0" }))
+            .unwrap_err();
+        assert!(err.contains("more than one board"), "{err}");
+    }
+
+    #[test]
+    fn memory_read_picks_the_chip_of_the_named_board() {
+        let (_g, _ad) = guard();
+        write_config(&json!([
+            { "board": "nucleo-f401re" },
+            { "board": "my-board", "chip": "NRF52840_xxAA" }
+        ]));
+        let config = load_config();
+        assert_eq!(
+            read_chip(&json!({ "board": "my-board" }), &config),
+            Some("NRF52840_xxAA".to_string())
+        );
+        assert_eq!(
+            read_chip(&json!({}), &config),
+            Some("STM32F401RETx".to_string()),
+            "未给 board 时取默认板卡"
+        );
+    }
+
+    #[test]
+    fn duplicate_board_entries_keep_the_first() {
+        let (_g, _ad) = guard();
+        write_config(&json!([
+            { "board": "my-board", "chip": "FIRST_TARGET" },
+            { "board": "my-board", "chip": "SECOND_TARGET", "devices": { "pico0": "/dev/ttyACM0" } }
+        ]));
+        let config = load_config();
+        assert_eq!(config.boards.len(), 1);
+        assert_eq!(
+            config.probe_chip_for(Some("my-board")),
+            Some("FIRST_TARGET".to_string())
+        );
+        assert!(
+            config.all_devices().is_empty(),
+            "重复项的 devices 不得掺进来"
+        );
+    }
+
+    #[test]
+    fn ping_uses_the_baud_of_the_board_that_owns_the_port() {
+        let (_g, _ad) = guard();
+        write_config(&json!([
+            { "board": "nucleo-f401re", "baud": 115200 },
+            { "board": "nucleo-f411re", "baud": 9600, "devices": { "pico1": "/dev/ttyACM1" } }
+        ]));
+        let config = load_config();
+        assert_eq!(config.baud_for_port("/dev/ttyACM1"), 9600);
+        assert_eq!(
+            config.baud_for_port("/dev/ttyACM9"),
+            115200,
+            "未配置的端口用第一块板的"
+        );
+    }
+
+    #[test]
+    fn fqbn_comes_from_the_config_board_entry() {
+        let (_g, _ad) = guard();
+        write_config(&json!([{ "board": "my-board", "fqbn": "esp32:esp32:esp32" }]));
+        let config = load_config();
+        assert_eq!(
+            config.fqbn_for(" My-Board "),
+            Some("esp32:esp32:esp32".to_string())
+        );
+        assert_eq!(config.fqbn_for("nucleo-f401re"), None);
     }
 
     #[test]

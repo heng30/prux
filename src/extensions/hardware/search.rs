@@ -242,7 +242,7 @@ fn render(query: &str, root: &Path, chunks_total: usize, ranked: &[Ranked]) -> S
 }
 
 /// 执行 `hardware_search`。
-pub(super) fn run_search(args: &Value) -> std::result::Result<ToolResult, ToolError> {
+pub(super) fn run_search(args: &Value) -> Result<ToolResult, ToolError> {
     let query = req_str(args, "query")?;
     if text::terms(&query, MAX_QUERY_TERMS).is_empty() {
         return Err(ToolError(

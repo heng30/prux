@@ -35,11 +35,7 @@ const MAX_RESPONSE: usize = 256;
 ///
 /// 以 `error:` 开头的响应会被调用方当成失败处理（这里原样返回，不抛错——错误文案要
 /// 原封不动地交给模型）。
-pub(super) async fn request(
-    addr: &str,
-    command: &str,
-    args: &[String],
-) -> std::result::Result<String, String> {
+pub(super) async fn request(addr: &str, command: &str, args: &[String]) -> Result<String, String> {
     let mut stream = match tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(addr)).await {
         Ok(Ok(stream)) => stream,
         Ok(Err(e)) => {

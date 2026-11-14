@@ -12,8 +12,7 @@
 //!   有一个会话占着探针——这是 probe-rs 的语义，不是本模块的限制；
 //! - 没插探针 / 芯片名不认识时返回**可读的错误串**，由工具层决定是否回落静态资料。
 
-use probe_rs::{MemoryInterface, Session, SessionConfig};
-use std::path::Path;
+use probe_rs::{MemoryInterface, Session, SessionConfig, config::MemoryRegion};
 
 /// hex dump 每行的字节数。
 const DUMP_COLS: usize = 16;
@@ -22,7 +21,7 @@ const DUMP_COLS: usize = 16;
 pub const MAX_READ_BYTES: usize = 256;
 
 /// 自动挂载探针并按芯片识别目标；`chip` 是 probe-rs 的 target 名（如 `STM32F401RETx`）。
-fn attach(chip: &str) -> Result<Session, String> {
+pub(super) fn attach(chip: &str) -> Result<Session, String> {
     Session::auto_attach(chip, SessionConfig::default())
         .map_err(|e| format!("probe-rs could not attach to `{chip}`: {e}"))
 }
@@ -60,8 +59,6 @@ pub fn memory_map(chip: &str) -> Result<String, String> {
 
 /// 把 target 的 RAM / NVM 区间渲染成文本（空串 = 定义里没有这两类区间）。
 fn memory_regions(session: &Session) -> String {
-    use probe_rs::config::MemoryRegion;
-
     let mut out = String::new();
     for region in session.target().memory_map.iter() {
         let (label, range) = match region {
@@ -122,84 +119,6 @@ fn hex_dump(address: u64, bytes: &[u8]) -> String {
     out
 }
 
-/// 可烧写的固件格式（按文件扩展名判定）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ImageKind {
-    /// ELF（自带地址与段信息）。
-    Elf,
-    /// Intel HEX（自带地址）。
-    Hex,
-    /// 裸二进制（必须显式给起始地址）。
-    Bin,
-    /// UF2（自带地址，RP2 等常用）。
-    Uf2,
-}
-
-impl ImageKind {
-    /// 按扩展名判定格式；不认识返回 `None`。
-    pub(super) fn from_path(path: &Path) -> Option<Self> {
-        match path.extension()?.to_str()?.to_lowercase().as_str() {
-            "elf" => Some(ImageKind::Elf),
-            "hex" | "ihex" | "intelhex" => Some(ImageKind::Hex),
-            "bin" | "binary" => Some(ImageKind::Bin),
-            "uf2" => Some(ImageKind::Uf2),
-            _ => None,
-        }
-    }
-
-    /// 展示名（报告里用）。
-    pub(super) fn label(self) -> &'static str {
-        match self {
-            ImageKind::Elf => "ELF",
-            ImageKind::Hex => "Intel HEX",
-            ImageKind::Bin => "raw binary",
-            ImageKind::Uf2 => "UF2",
-        }
-    }
-}
-
-/// 把一份固件烧进目标 Flash。
-///
-/// `base_address` 只对裸二进制有意义（ELF / HEX / UF2 自带地址），缺省时用 0；
-/// 调用方应在 `Bin` 且没给地址时直接拒绝，而不是让固件被写到 0x0。
-pub(super) fn flash(
-    chip: &str,
-    file: &Path,
-    kind: ImageKind,
-    base_address: Option<u64>,
-) -> Result<String, String> {
-    use probe_rs::flashing::{BinLoader, BinOptions, ElfLoader, ElfOptions, HexLoader, Uf2Loader};
-
-    let mut session = attach(chip)?;
-    let downloaded = match kind {
-        ImageKind::Elf => {
-            probe_rs::flashing::download_file(&mut session, file, ElfLoader(ElfOptions::default()))
-        }
-        ImageKind::Hex => probe_rs::flashing::download_file(&mut session, file, HexLoader),
-        ImageKind::Uf2 => probe_rs::flashing::download_file(&mut session, file, Uf2Loader),
-        ImageKind::Bin => probe_rs::flashing::download_file(
-            &mut session,
-            file,
-            BinLoader(BinOptions {
-                base_address,
-                skip: 0,
-            }),
-        ),
-    };
-    downloaded.map_err(|e| format!("flashing `{}` failed: {e}", file.display()))?;
-
-    let address_note = match (kind, base_address) {
-        (ImageKind::Bin, Some(address)) => format!(" at 0x{address:08X}"),
-        _ => String::new(),
-    };
-    Ok(format!(
-        "Flashed {} ({}){} to {chip} and verified.",
-        file.display(),
-        kind.label(),
-        address_note
-    ))
-}
-
 /// 解析 `0x20000000` / `20000000` / `536870912` 三种写法的地址。
 ///
 /// 带 `0x` 前缀按十六进制、纯数字按十六进制（嵌入式语境里裸数字几乎都是地址），
@@ -255,28 +174,6 @@ mod tests {
         assert_eq!(parse_address("20000000"), Some(0x2000_0000));
         assert_eq!(parse_address("0x"), None);
         assert_eq!(parse_address("not-hex"), None);
-    }
-
-    #[test]
-    fn image_kinds_are_derived_from_extensions() {
-        assert_eq!(
-            ImageKind::from_path(Path::new("/tmp/fw.elf")),
-            Some(ImageKind::Elf)
-        );
-        assert_eq!(
-            ImageKind::from_path(Path::new("/tmp/FW.HEX")),
-            Some(ImageKind::Hex)
-        );
-        assert_eq!(
-            ImageKind::from_path(Path::new("/tmp/fw.bin")),
-            Some(ImageKind::Bin)
-        );
-        assert_eq!(
-            ImageKind::from_path(Path::new("/tmp/fw.uf2")),
-            Some(ImageKind::Uf2)
-        );
-        assert_eq!(ImageKind::from_path(Path::new("/tmp/fw.txt")), None);
-        assert_eq!(ImageKind::from_path(Path::new("/tmp/fw")), None);
     }
 
     #[test]
