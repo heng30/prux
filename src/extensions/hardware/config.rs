@@ -7,9 +7,9 @@ use super::{EXT, boards, bridge, serial};
 use crate::{
     core::{config_cache::ConfigCache, settings_manager::agent_dir},
     extensions::util::opt_string,
-    utils::paths::read_json_file,
+    utils::paths::{read_json_file, write_json_file},
 };
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::PathBuf,
@@ -294,6 +294,31 @@ fn parse_board(value: &Value) -> Option<BoardConfig> {
         devices,
         baud,
     })
+}
+
+/// 把一块板子写进配置：同名（大小写不敏感）只更新 `chip`，其它键原样保留；没有则追加。
+pub(super) fn upsert_board(board: &str, chip: &str) -> Result<PathBuf, String> {
+    let path = config_path();
+    let _guard = CONFIG_LOCK.write().unwrap_or_else(|e| e.into_inner());
+    let mut value = CONFIG_CACHE.read(&path, || read_json_file(&path));
+    if !value.is_array() {
+        value = Value::Array(Vec::new());
+    }
+    let key = board.trim().to_lowercase();
+    let items = value.as_array_mut().expect("just ensured array");
+    let existing = items.iter_mut().find(|item| {
+        item.get(CONFIG_BOARD)
+            .and_then(Value::as_str)
+            .is_some_and(|name| name.trim().to_lowercase() == key)
+    });
+    match existing {
+        Some(item) => item[CONFIG_CHIP] = Value::String(chip.to_string()),
+        None => items.push(json!({ CONFIG_BOARD: key, CONFIG_CHIP: chip })),
+    }
+    write_json_file(&path, &value)
+        .map_err(|e| format!("could not write {}: {e}", path.display()))?;
+    CONFIG_CACHE.store(&path, value);
+    Ok(path)
 }
 
 /// 读配置（缺失 / 非法时返回空配置，不影响其它工具）。

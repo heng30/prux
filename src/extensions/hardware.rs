@@ -10,8 +10,10 @@
 //!
 //! **2. 看板子**（[`probe`]）——通过 `probe-rs` 直连调试探针（板载 ST-Link 也算）：
 //! `hardware_board_info` 读芯片名与架构，`hardware_memory_map` 列 RAM/Flash 区间，
-//! `hardware_memory_read` 按地址读一段内存并渲染 hex dump。探针不可用时前两个工具
-//! **回落 datasheet 静态表**（[`boards`]）——「这块板是什么芯片」不需要插板就能答。
+//! `hardware_memory_read` 按地址读一段内存并渲染 hex dump。没配置板卡时
+//! `hardware_board_info` 先列探针、让 probe-rs 自己认芯片，`hardware_update_board` 把
+//! 认出的 target 名写进配置；探针不可用时前两个工具**回落 datasheet 静态表**
+//! （[`boards`]）——「这块板是什么芯片」不需要插板就能答。
 //!
 //! 配置在 `agent_dir()/extensions/hardware/config.json`，一个数组，每块板子一项：
 //!
@@ -27,7 +29,7 @@
 //! - `devices`：这块板上的设备别名（`"bridge"` = Uno Q Bridge 默认地址）；
 //! - `baud`：这块板的串口波特率，省略用串口默认值。
 //!
-//! 探针 IO 是阻塞的（USB 传输），因此三个探针工具都在 `spawn_blocking` 里跑；
+//! 探针 IO 是阻塞的（USB 传输），因此探针类工具都在 `spawn_blocking` 里跑；
 //! 同一时刻只能有一个会话占着探针——这是 probe-rs 的语义。
 //!
 //! 工具全部是延迟工具（`ToolExposure::Deferred`）：模型先用 `tool_search` 检索到
@@ -51,7 +53,8 @@ use crate::{
     core::{
         extensions::{
             CommandHost, Extension, ExtensionCommand, ExtensionMode, ExtensionTool,
-            ForkProjectInfo, ToolAnnotations, ToolExecCtx, ToolExposure, UiNotifyLevel,
+            ForkProjectInfo, SelectOption, ToolAnnotations, ToolExecCtx, ToolExposure,
+            UiNotifyLevel, ask_pending, ask_prompt, ui_ready,
         },
         settings_manager::agent_dir,
         tools::{ToolError, ToolResult},
@@ -64,10 +67,12 @@ use crate::{
     utils::{paths::write_if_missing, process},
 };
 use boards::BoardSpec;
-use config::{CONFIG_TEMPLATE, CONFIG_TEMPLATE_FILE, Config, config_path, load_config};
+use config::{
+    CONFIG_TEMPLATE, CONFIG_TEMPLATE_FILE, Config, config_path, load_config, upsert_board,
+};
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
-use std::{fs, path::PathBuf, sync::Arc};
+use std::{fs, path::PathBuf, sync::Arc, time::Duration};
 
 /// 扩展名（也是 `/extension` 面板中的标识与配置目录名）。
 const EXT: &str = "hardware";
@@ -86,6 +91,15 @@ const TOOL_MEMORY_READ: &str = "hardware_memory_read";
 
 /// 工具名：串口设备清单。
 const TOOL_DEVICES: &str = "hardware_devices";
+
+/// 工具名：把探测到的芯片写进 `config.json`。
+const TOOL_UPDATE_BOARD: &str = "hardware_update_board";
+
+/// 写入确认面板的「同意」选项串（`starts_with("save")` 判定，故前缀须为 `save`）。
+const CONFIRM_SAVE: &str = "save  Write this board into config.json";
+
+/// 写入确认面板的「取消」选项串。
+const CONFIRM_CANCEL: &str = "cancel  Leave config.json untouched";
 
 /// 未给地址时默认读的起点：STM32 的 RAM 基底
 const DEFAULT_READ_ADDRESS: u64 = 0x2000_0000;
@@ -128,11 +142,8 @@ fn static_board_info(spec: &BoardSpec, probe_error: Option<&str>) -> String {
 fn board_info(args: &Value) -> Result<ToolResult, ToolError> {
     let config = load_config();
     let Some(board) = resolve_board(args, &config) else {
-        return Ok(ToolResult::error(format!(
-            "No board selected. Pass `board` or add one to {}: known boards: {}.",
-            config_path().display(),
-            boards::names().join(", ")
-        )));
+        // 没配置板卡：先问探针（不需要事先知道芯片是谁）
+        return Ok(detect_board_info());
     };
 
     let spec = boards::lookup(&board); // 按板卡名查静态资料
@@ -167,6 +178,88 @@ fn board_info(args: &Value) -> Result<ToolResult, ToolError> {
             boards::names().join(", ")
         ))),
     }
+}
+
+/// 没配置板卡时的主动探测：列探针，再让 probe-rs 自己认芯片。
+fn detect_board_info() -> ToolResult {
+    let probes = probe::list_probes();
+    if probes.is_empty() {
+        return ToolResult::error(format!(
+            "No board selected and no debug probe found. Pass `board` or add one to {}: known boards: {}.",
+            config_path().display(),
+            boards::names().join(", ")
+        ));
+    }
+    match probe::detect() {
+        Ok((chip, info)) => ToolResult::text(format!(
+            "**Probes:**\n{}\n\n{info}\n\nDetected target `{chip}` — `{TOOL_UPDATE_BOARD}` saves it to {}.",
+            probes.join("\n"),
+            config_path().display()
+        )),
+        Err(err) => ToolResult::error(format!(
+            "**Probes:**\n{}\n\n{err}\n\nPass `board` (known: {}) or `{TOOL_UPDATE_BOARD}` to configure one.",
+            probes.join("\n"),
+            boards::names().join(", ")
+        )),
+    }
+}
+
+/// 解析要写入的 `(板卡名, chip)`；省略 `chip` 时走探针。
+fn resolve_update(args: &Value) -> Result<(String, String), ToolError> {
+    let chip = match opt_string(args, "chip") {
+        Some(chip) => chip,
+        None => probe::detect()
+            .map_err(|e| {
+                ToolError(format!(
+                    "hardware_update_board needs a chip: pass `chip` or attach a debug probe: {e}"
+                ))
+            })?
+            .0,
+    };
+    let board = opt_string(args, "board").unwrap_or_else(|| chip.to_lowercase());
+    Ok((board, chip))
+}
+
+/// `hardware_update_board`：探测芯片 → 用户确认 → 写进 `config.json`。
+///
+/// 写配置文件要改动用户的板卡清单，因此**必须**当场拿到批准：面板被 Esc / 超时 / 非交互
+/// 模式下拿不到答复时一律不写（fail closed），与 `permissions`、`hooks` 的门控口径一致。
+async fn update_board(args: Value) -> Result<ToolResult, ToolError> {
+    let (board, chip) = run_blocking(move || resolve_update(&args)).await?;
+    if !ui_ready() || ask_pending() {
+        // 没有面板可弹、或已有别的确认在等（再发一个会把它的面板顶掉）
+        return Ok(ToolResult::error(format!(
+            "Not saved: `{TOOL_UPDATE_BOARD}` needs your approval, but no confirm panel could be \
+             shown (non-interactive run, or another prompt is already open). {} was left untouched; \
+             add the board to it by hand if you want it saved.",
+            config_path().display()
+        )));
+    }
+    let answer = ask_prompt(
+        format!(
+            "hardware: save board `{board}` (chip `{chip}`) to {}?",
+            config_path().display()
+        ),
+        vec![
+            SelectOption::new(CONFIRM_SAVE),
+            SelectOption::new(CONFIRM_CANCEL),
+        ],
+        Some(Duration::from_secs(120)),
+    )
+    .await;
+    if !answer.as_deref().is_some_and(|a| a.starts_with("save")) {
+        return Ok(ToolResult::error(format!(
+            "Not saved: `{TOOL_UPDATE_BOARD}` needs your approval (the confirm panel was cancelled, \
+             timed out, or there is no interactive prompt). {} was left untouched.",
+            config_path().display()
+        )));
+    }
+    let path = upsert_board(&board, &chip)
+        .map_err(|e| ToolError(format!("hardware_update_board failed: {e}")))?;
+    Ok(ToolResult::text(format!(
+        "Saved board `{board}` with chip `{chip}` to {}.",
+        path.display()
+    )))
 }
 
 /// `hardware_memory_map`：探针优先，失败回落 datasheet。
@@ -296,6 +389,36 @@ fn board_info_tool() -> ExtensionTool {
         }),
         "Read connected board info (chip, architecture, memory map)",
     )
+}
+
+/// `hardware_update_board` 的工具定义。
+fn update_board_tool() -> ExtensionTool {
+    let mut tool = probe_tool(
+        TOOL_UPDATE_BOARD,
+        "Detect the chip behind an attached debug probe and save it as a board in config.json. \
+         Add `board` / `chip` to write them without probing. Asks the user to approve the write first.",
+        json!({
+            "type": "object",
+            "properties": {
+                "board": {
+                    "type": "string",
+                    "description": "Board name to save (default: the detected target name, lowercased). An existing entry with the same name keeps its other keys."
+                },
+                "chip": {
+                    "type": "string",
+                    "description": "probe-rs target name to save (default: detected over the attached probe)."
+                }
+            }
+        }),
+        "Save the probed chip as a board in config.json (asks first)",
+    );
+    // 写配置文件，不是只读操作
+    tool.annotations = ToolAnnotations {
+        read_only: false,
+        destructive: false,
+        idempotent: true,
+    };
+    tool
 }
 
 /// `hardware_memory_map` 的工具定义。
@@ -451,6 +574,7 @@ impl Extension for Hardware {
         vec![
             search::search_tool(),
             board_info_tool(),
+            update_board_tool(),
             memory_map_tool(),
             memory_read_tool(),
             gpio::devices_tool(),
@@ -515,6 +639,7 @@ impl Extension for Hardware {
             match name.as_str() {
                 search::TOOL_SEARCH => search::run_search(&args),
                 TOOL_BOARD_INFO => run_blocking(move || board_info(&args)).await,
+                TOOL_UPDATE_BOARD => update_board(args).await,
                 TOOL_MEMORY_MAP => run_blocking(move || memory_map(&args)).await,
                 TOOL_MEMORY_READ => run_blocking(move || memory_read(&args)).await,
                 TOOL_DEVICES => gpio::run_devices(&args).await,
@@ -547,6 +672,37 @@ mod tests {
     fn guard() -> (MutexGuard<'static, ()>, AgentDirGuard) {
         let lock = AUTH_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         (lock, AgentDirGuard::temp())
+    }
+
+    /// 跑一个 async 测试体（独立 runtime；UI 队列是进程级全局态，靠 `guard()` 串行）。
+    fn block_on<F: std::future::Future>(fut: F) -> F::Output {
+        tokio::runtime::Runtime::new()
+            .expect("runtime")
+            .block_on(fut)
+    }
+
+    /// 跑 `update_board` 并在确认面板上按 `answer` 作答；面板没出现则用例失败。
+    fn update_board_answered(args: Value, answer: &'static str) -> Result<ToolResult, ToolError> {
+        use crate::core::extensions::{
+            ExtensionUiRequest, set_ui_ready, submit_ui_choice, take_pending_ui,
+        };
+        set_ui_ready(true);
+        let out = block_on(async move {
+            let call = update_board(args);
+            let respond = async {
+                for _ in 0..400 {
+                    if let Some(ExtensionUiRequest::Select { id, .. }) = take_pending_ui() {
+                        submit_ui_choice(id, Some(answer.to_string()));
+                        return;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                }
+                panic!("no confirm panel was queued");
+            };
+            tokio::join!(call, respond).0
+        });
+        set_ui_ready(false);
+        out
     }
 
     /// 写一份板卡配置。
@@ -600,8 +756,12 @@ mod tests {
     fn an_empty_config_asks_for_a_board_and_lists_the_known_ones() {
         let (_g, _ad) = guard();
         let out = board_info(&json!({})).unwrap();
-        assert!(out.is_error);
-        assert!(out.text.contains("nucleo-f401re"), "{}", out.text);
+        // 插着探针时主动探测成功；没有探针才该报错并点出已知板卡
+        if out.is_error {
+            assert!(out.text.contains("nucleo-f401re"), "{}", out.text);
+        } else {
+            assert!(out.text.contains("Detected target"), "{}", out.text);
+        }
     }
 
     #[test]
@@ -613,6 +773,83 @@ mod tests {
         assert!(!out.is_error, "{}", out.text);
         assert!(out.text.contains("STM32F411RET6"), "{}", out.text);
         assert!(out.text.contains("probe-rs unavailable"), "{}", out.text);
+    }
+
+    #[test]
+    fn update_board_writes_a_new_entry_and_keeps_the_existing_keys() {
+        let (_g, _ad) = guard();
+        write_config(&json!([{ "board": "nucleo-f401re", "baud": 9600 }]));
+        let saved = update_board_answered(
+            json!({ "board": "esp32c6", "chip": "esp32c6" }),
+            CONFIRM_SAVE,
+        )
+        .unwrap();
+        assert!(saved.text.contains("Saved"), "{}", saved.text);
+        let config = load_config();
+        assert_eq!(
+            config
+                .boards
+                .iter()
+                .map(|b| b.board.as_str())
+                .collect::<Vec<_>>(),
+            vec!["nucleo-f401re", "esp32c6"]
+        );
+        assert_eq!(
+            config.probe_chip_for(Some("esp32c6")).as_deref(),
+            Some("esp32c6")
+        );
+
+        // 同名只更新 chip，既有键（baud / devices）必须还在
+        update_board_answered(
+            json!({ "board": "nucleo-f401re", "chip": "STM32F401RETx" }),
+            CONFIRM_SAVE,
+        )
+        .unwrap();
+        assert_eq!(load_config().default_baud(), 9600, "既有键必须原样保留");
+        assert_eq!(
+            load_config()
+                .probe_chip_for(Some("nucleo-f401re"))
+                .as_deref(),
+            Some("STM32F401RETx")
+        );
+    }
+
+    #[test]
+    fn update_board_can_be_told_the_chip_without_a_probe() {
+        let (_g, _ad) = guard();
+        // 不接探针时也必须能用：板上板卡名默认取 chip 的小写
+        update_board_answered(json!({ "chip": "esp32c6" }), CONFIRM_SAVE).unwrap();
+        assert_eq!(load_config().default_board(), Some("esp32c6"));
+    }
+
+    #[test]
+    fn update_board_writes_nothing_when_the_user_declines() {
+        let (_g, _ad) = guard();
+        write_config(&json!([{ "board": "nucleo-f401re" }]));
+        let out = update_board_answered(
+            json!({ "board": "esp32c6", "chip": "esp32c6" }),
+            CONFIRM_CANCEL,
+        )
+        .unwrap();
+        assert!(out.is_error, "{}", out.text);
+        assert_eq!(
+            load_config().boards.len(),
+            1,
+            "declined write must not touch config.json"
+        );
+    }
+
+    #[test]
+    fn update_board_refuses_without_an_interactive_prompt() {
+        let (_g, _ad) = guard();
+        write_config(&json!([{ "board": "nucleo-f401re" }]));
+        // 非交互模式（无 TUI 事件循环）→ fail closed，不写文件
+        let out = block_on(update_board(
+            json!({ "board": "esp32c6", "chip": "esp32c6" }),
+        ))
+        .unwrap();
+        assert!(out.is_error, "{}", out.text);
+        assert_eq!(load_config().boards.len(), 1);
     }
 
     #[test]
@@ -774,6 +1011,7 @@ mod tests {
             vec![
                 "hardware_search",
                 "hardware_board_info",
+                "hardware_update_board",
                 "hardware_memory_map",
                 "hardware_memory_read",
                 "hardware_devices",

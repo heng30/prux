@@ -143,6 +143,15 @@
   and no hooks: with `prux rpc` not running it does nothing. Off by default (Dev/All modes);
   enable it in `/extension`.
 
+- **`hardware` probes the attached chip instead of asking for config first**: `hardware_board_info`
+  with no board configured now lists the connected debug probes and lets probe-rs identify the chip
+  on its own (chip name, architecture, RAM / Flash map), so a board you have never configured still
+  answers. The new `hardware_update_board` writes that result into
+  `agent_dir()/extensions/hardware/config.json` — it asks for your approval in a confirm panel
+  first and writes nothing when that panel is cancelled, times out or cannot be shown; an existing
+  entry with the same board name only gets its `chip` updated, every other key stays. ESP32 / ESP32-C3 / C6 / S3 boards are recognized
+  through their built-in USB-JTAG, not just through an external probe.
+
 ### Changed
 
 - **`hardware` config is per board**: `agent_dir()/extensions/hardware/config.json` is now an
@@ -480,6 +489,12 @@
   逐题提问，多选那几题按未作答报告。`bash` 只执行并回结果、不写进会话上下文；关停就是关 stdin——
   在途的 bash 与 OAuth 刷新会被等完后才退出。不注册任何工具与钩子：不开 `prux rpc` 时它什么都不做。
   **默认不启用**（`Dev`/`All` 模式可用），需在 `/extension` 面板开启。
+
+- **`hardware` 先探测再接配置**：未配置板卡时，`hardware_board_info` 会列出连着的调试探针并让
+  probe-rs 自己认芯片（芯片名、架构、RAM / Flash 映射），没配过的板子照样答得出来。新增
+  `hardware_update_board` 把探测结果写进 `agent_dir()/extensions/hardware/config.json`：写之前先在
+  确认面板里问一次，取消、超时或弹不出面板时一个字都不写；同名板卡只更新 `chip`，其余键原样保留。ESP32 / ESP32-C3 / C6 / S3 这类板子靠自带的 USB-JTAG 就能识别，
+  不必外接调试器。
 
 ### 变更
 
