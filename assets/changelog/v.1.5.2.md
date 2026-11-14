@@ -127,6 +127,21 @@
   registers nothing, so `/model` never lists a half-configured entry. Window and output limits take
   the smaller of the two targets, thinking levels their intersection. Off by default
   (Dev/Creator modes).
+- **RPC mode for other languages and IDEs**: the new `rpc` extension injects a `prux rpc` subcommand
+  that speaks one JSON record per line on stdin/stdout — commands in, each answered by a `response`
+  carrying the same `id`, with the full agent event stream, extension UI records, and everything
+  else (same model chain, tools, session file and extension hooks as the TUI) coming out alongside.
+  Any language or IDE can drive the same agent without reimplementing the loop. `prompt` answers
+  `started` / `queued` / `handled` right away and the result arrives as events; wait for
+  `agent_settled` before treating the session as idle. A turn (and a manual `compact`) holds the
+  agent, and during that window `steer`, `follow_up`, `abort`, `clear_queue` and `abort_bash` still
+  work while every other command answers "already processing". Extension dialogs travel as
+  `extension_ui_request` / `extension_ui_response` (`select` / `notify` / `setStatus`), and the
+  `ask_user_question` form is asked one question at a time, reporting multi-select questions as
+  unanswered. `bash` runs and returns its result without touching the session context, and shutdown
+  is "close stdin" — in-flight bash and OAuth refreshes are given time to finish. Registers no tools
+  and no hooks: with `prux rpc` not running it does nothing. Off by default (Dev/All modes);
+  enable it in `/extension`.
 
 ### Changed
 
@@ -438,6 +453,17 @@
   `agent_dir()/extensions/image-route.json`；配置不完整或目标解析不到就不注册，`/model` 里不会出现
   半成品条目。首次响应前展示的窗口 / 输出上限取两档较小者，thinking 档位取两档交集。
   **默认不启用**（`Dev`/`Creator` 模式可用）。
+- **给别的语言与 IDE 用的 RPC 模式**：新增 `rpc` 扩展，注入 `prux rpc` 子命令，在 stdin/stdout 上
+  「一行一条 JSON」——stdin 是命令，每条命令回一条带同一个 `id` 的 `response`，同时把**完整的 agent
+  事件流**、扩展 UI 记录一起写出来（模型链、工具表、会话文件与扩展钩子都和 TUI 是同一份）。任何语言或
+  IDE 都不必再写一遍 agent loop 就能驱动同一个 agent。`prompt` 立刻回 `started` / `queued` /
+  `handled`，结果从事件流里读；要判断会话真的空闲得等 `agent_settled`。一个回合（以及手动
+  `compact`）会独占 agent，这段时间里 `steer` / `follow_up` / `abort` / `clear_queue` /
+  `abort_bash` 照常可用，其余命令回一句「正在处理」。扩展对话框经 `extension_ui_request` /
+  `extension_ui_response` 双向往来（`select` / `notify` / `setStatus`），`ask_user_question` 的问卷
+  逐题提问，多选那几题按未作答报告。`bash` 只执行并回结果、不写进会话上下文；关停就是关 stdin——
+  在途的 bash 与 OAuth 刷新会被等完后才退出。不注册任何工具与钩子：不开 `prux rpc` 时它什么都不做。
+  **默认不启用**（`Dev`/`All` 模式可用），需在 `/extension` 面板开启。
 
 ### 变更
 

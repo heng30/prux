@@ -51,6 +51,7 @@ pub mod recap_btw;
 pub mod review;
 pub mod rewind;
 pub mod rollback;
+pub mod rpc;
 pub mod rtk;
 pub mod sandbox;
 pub mod session_search;
@@ -172,6 +173,8 @@ pub const PRIORITY_SSH_REMOTE: u32 = 51;
 pub const PRIORITY_ASK_USER_QUESTION: u32 = 52;
 /// acp 编辑器协议服务端（`prux acp` 子命令）扩展的注册优先级。
 pub const PRIORITY_ACP: u32 = 46;
+/// rpc JSONL 服务端（`prux rpc` 子命令）扩展的注册优先级。
+pub const PRIORITY_RPC: u32 = 46;
 /// doc-helper 按需文档查询扩展的注册优先级。
 pub const PRIORITY_DOC_HELPER: u32 = 50;
 /// processes 后台进程监督扩展的注册优先级。
