@@ -1279,7 +1279,23 @@ impl GuiApp {
 
         // `/cmd`：GUI 命令
         if let Some(command) = text.strip_prefix('/') {
-            self.run_slash(command.trim(), cx);
+            let command = command.trim();
+            // 忙碌时只有 busy_safe 的命令能立即执行（GUI 内置命令全部经信道下发，不锁 agent）；
+            // 其余已知命令给警告并丢弃——入队等于把 `/plan` 这类命令当普通文本发给模型。
+            // 不是命令的（`/skill:名`、模板、未知斜杠）仍按普通输入发送。
+            if self.busy && blocked_while_busy(command) {
+                self.toast(
+                    format!(
+                        "/{} is not available while the agent is working; wait for the current turn to finish",
+                        slash::command_name(command)
+                    ),
+                    ToastKind::Info,
+                    cx,
+                );
+                return;
+            }
+
+            self.run_slash(command, cx);
             self.scroll_to_bottom();
             return;
         }
@@ -1849,6 +1865,24 @@ fn takes_argument(command: &str) -> bool {
             | "theme"
             | "skills"
     )
+}
+
+/// GUI 内置命令名（[`suggest_engine::COMMANDS`] 的名字列）：忙碌时命令分类用。
+fn builtin_names() -> Vec<&'static str> {
+    suggest_engine::COMMANDS
+        .iter()
+        .map(|(name, _)| *name)
+        .collect()
+}
+
+/// 忙碌时 `/命令` 能不能立刻执行。
+///
+/// GUI 内置命令全部经信道下发给 worker、不锁 agent，故整表都算 busy_safe；
+/// 只有没声明 `busy_safe` 的扩展命令会被拦下。不是命令的（`/skill:名`、模板、
+/// 未知斜杠）返回 false：它们本来就该当普通输入发。
+fn blocked_while_busy(command: &str) -> bool {
+    let names = builtin_names();
+    slash::busy_command(&names, &names, command) == slash::BusyCommand::Blocked
 }
 
 /// Ctrl-M 命令面板的条目：只放 `/` 面板里没有的东西 + 允许两边都在的三个

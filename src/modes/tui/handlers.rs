@@ -51,7 +51,7 @@ pub(crate) mod events;
 pub(crate) mod session_repair;
 
 use self::{
-    commands::{extension_keybinding_handler, is_busy_safe_command},
+    commands::extension_keybinding_handler,
     mouse::handle_mouse_event,
     suggest::{complete_path, last_word},
     tools::{open_external_editor, run_shell_command},
@@ -347,8 +347,9 @@ fn handle_busy_key(st: &mut App, key: &KeyEvent) -> Option<KeyAction> {
 
     // 忙碌时仍可输入——Enter（tui.input.submit）将文本加入 steer 队列
     // （当前轮结束后自动继续执行），其余编辑键（含 Up/Down 历史）放行。
-    // 但声明为 busy_safe 的扩展命令（handler 不锁 agent，如 plan-mode 的 /todos）
-    // 立即分发执行，避免被误当普通消息排队。
+    // 带 `/` 的输入先分类：声明为 busy_safe 的命令（handler 不锁 agent，如 plan-mode 的 /todos）
+    // 立即分发执行；是命令但忙碌时不能执行的给警告并丢弃（入队等于把 `/model` 发给模型）；
+    // 其余（/skill、模板、普通文本）照旧排队。
     if kb.matches(key, "tui.input.submit")
         && !key.modifiers.contains(KeyModifiers::SHIFT)
         && !key.modifiers.contains(KeyModifiers::CONTROL)
@@ -391,31 +392,53 @@ fn handle_busy_key(st: &mut App, key: &KeyEvent) -> Option<KeyAction> {
         if let Some(cmd) = raw
             .strip_prefix('/')
             .map(str::trim)
-            .filter(|c| is_busy_safe_command(c))
+            .filter(|c| !c.is_empty())
         {
-            let cmd = cmd.to_string();
-            submit_and_record(st); // 清空编辑器并记录（/命令不落历史），与空闲提交一致
-            _ = st.handle_slash_command(&cmd);
-        } else {
-            // 与空闲提交同一条展开链：先 /skill:name + prompt 模板展开，再做扩展拦截，
-            // 最后入 steer 队列——忙碌时 skill 也要按 skill 命令处理，不能原样当普通文本发。
-            // 记录的是**用户原文**（编辑器里写的），不是展开/改写后的文本。
-            let expanded = expand_user_text(st, &raw);
-            if let Some(text) = intercept_user_prompt(&expanded, &st.messages, st.busy) {
-                // 扩展输入拦截（@mention 等）：继续排队（可能是改写后的文本）。
-                submit_and_record(st);
-                st.queue_steer_text(text, false);
-            } else {
-                // 已被扩展认领：不排队、不启动回合（扩展自行投递）
-                submit_and_record(st);
+            match commands::busy_slash_command(cmd) {
+                slash::BusyCommand::Safe => {
+                    let cmd = cmd.to_string();
+                    submit_and_record(st); // 清空编辑器并记录（/命令不落历史），与空闲提交一致
+                    _ = st.handle_slash_command(&cmd);
+                }
+                slash::BusyCommand::Blocked => {
+                    submit_and_record(st);
+                    st.push_msg(
+                        format!(
+                            "/{} is not available while the agent is working; wait for the current turn to finish",
+                            slash::command_name(cmd)
+                        ),
+                        MsgLevel::Warning,
+                    );
+                }
+                slash::BusyCommand::Message => queue_busy_text(st, &raw),
             }
+            return Some(KeyAction::Continue);
         }
+
+        // 与空闲提交同一条展开链：先 /skill:name + prompt 模板展开，再做扩展拦截，
+        // 最后入 steer 队列——忙碌时 skill 也要按 skill 命令处理，不能原样当普通文本发。
+        // 记录的是**用户原文**（编辑器里写的），不是展开/改写后的文本。
+        queue_busy_text(st, &raw);
 
         return Some(KeyAction::Continue);
     }
 
     // 其他键（含 / 命令候选、@ 文件补全、Up/Down 历史）：放行到下方正常处理
     None
+}
+
+/// 忙碌时把编辑器内容排队：skill/模板展开 → 扩展输入拦截 → steer 队列。
+/// 记录的是用户原文（编辑器里写的），不是展开/改写后的文本。
+fn queue_busy_text(st: &mut App, raw: &str) {
+    let expanded = expand_user_text(st, raw);
+    if let Some(text) = intercept_user_prompt(&expanded, &st.messages, st.busy) {
+        // 扩展输入拦截（@mention 等）：继续排队（可能是改写后的文本）。
+        submit_and_record(st);
+        st.queue_steer_text(text, false);
+    } else {
+        // 已被扩展认领：不排队、不启动回合（扩展自行投递）
+        submit_and_record(st);
+    }
 }
 
 /// 编辑器按键处理结果：OpenExternal 需在释放 RefMut 后由调用方打开外部编辑器
@@ -994,6 +1017,7 @@ mod tests {
     use super::*;
     use crate::modes::tui::agent_actor::WorkerHandle;
     use crate::modes::tui::app::App;
+    use crate::modes::tui::handlers::commands::busy_slash_command;
     use crate::modes::tui::line_input::shift_layer;
     use crate::modes::tui::panel::{PanelItem, PanelKind};
     use crossterm::event::KeyEvent;
@@ -2190,7 +2214,7 @@ mod tests {
     fn busy_submit_dispatches_busy_safe_todos_cmd() {
         // 回归：忙碌时回车，声明了 busy_safe 的扩展命令（plan-mode /todos，
         // handler 不锁 agent）必须立即分发显示，而非被误当普通消息入 steer 队列；
-        // 非 busy_safe 命令（/plan 锁 agent）保持原行为仍排队。
+        // 非 busy_safe 命令（/plan 锁 agent）给警告并丢弃，不入队。
         // 另：无 todo 任务时 /todos 不再注册为命令（busy_safe=false，
         // 忙碌时按普通文本入 steer 队列），避免空计划时误操作。
         let _g = test_agent_dir();
@@ -2278,7 +2302,7 @@ mod tests {
             assert_eq!(st.editor.text(), "", "命令消费后编辑器应清空");
         }
 
-        // busy + /plan（busy_safe=false）：保持原行为入 steer 队列
+        // busy + /plan（busy_safe=false）：给警告并丢弃，不入队列
         {
             let mut st = shared.borrow_mut();
             st.busy = true;
@@ -2289,14 +2313,22 @@ mod tests {
             Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
         );
         {
-            let st = shared.borrow_mut();
+            let st = shared.borrow();
             assert_eq!(
                 st.runtime_followup_inbox.len(),
                 0,
-                "/plan 非 busy_safe 应进注入箱而非本地队列"
+                "/plan 非 busy_safe 不应入 followup 队列"
             );
-            assert_eq!(st.runtime_steer_inbox.lock().unwrap().len(), 1);
-            assert_eq!(st.runtime_steer_inbox.lock().unwrap()[0].text(), "/plan");
+            assert!(
+                st.runtime_steer_inbox.lock().unwrap().is_empty(),
+                "/plan 非 busy_safe 不应入 steer 队列（会被当普通文本发给模型）"
+            );
+            assert_eq!(st.editor.text(), "", "警告后编辑器应清空");
+            let warned = st.system_messages.iter().any(|(_, s)| {
+                crate::modes::tui::app::sys_spans_text(&s.spans)
+                    .contains("/plan is not available while the agent is working")
+            });
+            assert!(warned, "busy 时 /plan 应输出警告");
         }
 
         shared.borrow_mut().busy = false;
@@ -2329,9 +2361,17 @@ mod tests {
         let _ = std::fs::remove_file(dir.join("plan-mode.json"));
         let shared = Rc::new(RefCell::new(App::new()));
 
-        // 内置 busy_safe 标记：dock=true（不依赖任何扩展声明），未知命令仍 false
-        assert!(is_busy_safe_command("dock"));
-        assert!(!is_busy_safe_command("go to the moon"));
+        // 内置 busy_safe 标记：dock=true（不依赖任何扩展声明）；模型命令是命令但忙碌不可执行；
+        // 未知斜杠（技能/模板/普通文本）不是命令
+        assert_eq!(busy_slash_command("dock"), slash::BusyCommand::Safe);
+        assert_eq!(
+            busy_slash_command("model deepseek-v4-pro"),
+            slash::BusyCommand::Blocked
+        );
+        assert_eq!(
+            busy_slash_command("go to the moon"),
+            slash::BusyCommand::Message
+        );
 
         // 无 dock 内容：busy + /dock 仍立即执行（提示无内容），不入队列
         {
@@ -2424,12 +2464,12 @@ mod tests {
     #[test]
     fn busy_submit_applies_active_suggestion_before_busy_safe_check() {
         // 回归：busy 时输入 `/comp` 弹出命令候选（默认选中 `/compact`），按 Enter
-        // 应把**面板中选中的命令**入 steer 队列，而不是未完成的前缀 `/comp`；
-        // busy_safe 命令（`/doc` → `/dock`）则应立即执行，同样不入队列。
+        // 应按**面板中选中的命令**分类（警告文本里是完整命令，而非未完成的前缀 `/comp`），
+        // 且非 busy_safe 命令不入队；busy_safe 命令（`/doc` → `/dock`）则立即执行。
         let _g = test_agent_dir();
         let shared = Rc::new(RefCell::new(App::new()));
 
-        // 非 busy_safe：`/comp` → 选中 compact → Enter 入 steer 的是 `/compact`
+        // 非 busy_safe：`/comp` → 选中 compact → Enter 警告并丢弃，不入 steer 队列
         {
             let mut st = shared.borrow_mut();
             st.busy = true;
@@ -2447,17 +2487,18 @@ mod tests {
             Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
         );
         {
-            let st = shared.borrow_mut();
-            assert_eq!(
-                st.runtime_steer_inbox.lock().unwrap().len(),
-                1,
-                "非 busy_safe 命令应入 steer 队列"
+            let st = shared.borrow();
+            assert!(
+                st.runtime_steer_inbox.lock().unwrap().is_empty(),
+                "非 busy_safe 命令不应入 steer 队列"
             );
-            let text = st.runtime_steer_inbox.lock().unwrap()[0].text();
-            assert_eq!(
-                text.trim(),
-                "/compact",
-                "入队文本应为面板选中的完整命令，而非前缀 /comp: {text:?}"
+            let warned = st.system_messages.iter().any(|(_, s)| {
+                crate::modes::tui::app::sys_spans_text(&s.spans)
+                    .contains("/compact is not available while the agent is working")
+            });
+            assert!(
+                warned,
+                "警告应指向面板选中的完整命令 /compact，而非前缀 /comp"
             );
             assert_eq!(st.editor.text(), "", "提交后编辑器应清空");
         }

@@ -1,6 +1,6 @@
 //! /斜杠命令分发
 
-use super::expand_user_text;
+use super::{expand_user_text, slash::command_name};
 use crate::{
     PROJECT_SCOPE_NAME,
     cli::args::VALID_THINKING_LEVELS,
@@ -18,6 +18,7 @@ use crate::{
     extensions::skills::bundled_skill_names,
     modes::{
         cwd_store,
+        slash::{self, BusyCommand},
         tui::{
             agent_actor::AgentCommand,
             app::{App, MsgLevel, SessionDeleteScope, WorkingKind},
@@ -40,7 +41,7 @@ use std::{
 pub type ExtensionKeybindingHandler = fn(&mut App);
 
 /// 忙碌时可安全执行的内置命令（handler 不锁 agent、纯 UI 操作）。
-/// 其余内置命令忙碌时仍入 steer 队列，避免与可能锁 agent 的 handler 死锁。
+/// 其余内置命令忙碌时给警告并丢弃，避免与可能锁 agent 的 handler 死锁。
 const BUILTIN_BUSY_SAFE: &[&str] = &["dock"];
 
 /// 内置斜杠命令候选（名称, 描述, 子命令；不显示短命令/别名）。
@@ -972,22 +973,19 @@ fn cmd_arg<'a>(raw: &'a str, keyword: &str) -> &'a str {
     }
 }
 
-/// 斜杠命令是否可在忙碌（流式输出）时安全执行。
-///
-/// 忙碌时 prompt future 持续持有 agent 锁，只有 [`BUILTIN_BUSY_SAFE`] 中的内置命令、
-/// 以及声明了 `busy_safe`（handler 不锁 agent）的扩展命令才允许立即分发；
-/// 其余命令忙碌时仍作为普通文本入 steer 队列（与历史行为一致，避免死锁）。
-pub(super) fn is_busy_safe_command(cmd: &str) -> bool {
-    let name = command_name(cmd).to_lowercase();
-    BUILTIN_BUSY_SAFE.contains(&name.as_str()) || core::extensions::command_busy_safe(&name)
+/// 内置命令名表（[`slash::busy_command`] 的入参形态）。
+fn builtin_names() -> Vec<&'static str> {
+    let mut names: Vec<&'static str> = BUILTIN_COMMANDS.iter().map(|(name, _, _)| *name).collect();
+    names.push("q"); // `/q` 是 `/quit` 的别名，不进候选表但要参与忙碌分类
+    names
 }
 
-/// 斜杠命令名：原文首个空白前的部分（`plan foo` → `plan`）。
-/// 扩展命令带参数时按名查表，参数由 handler 自行解析。
-fn command_name(cmd: &str) -> &str {
-    cmd.trim()
-        .split_once(char::is_whitespace)
-        .map_or_else(|| cmd.trim(), |(name, _)| name)
+/// 忙碌时提交的 `/命令` 分类：立即执行 / 警告丢弃 / 当普通消息排队。
+///
+/// 忙碌时 prompt future 持续持有 agent 锁，只有 [`BUILTIN_BUSY_SAFE`] 中的内置命令、
+/// 以及声明了 `busy_safe`（handler 不锁 agent）的扩展命令才允许立即分发。
+pub(super) fn busy_slash_command(cmd: &str) -> BusyCommand {
+    slash::busy_command(&builtin_names(), BUILTIN_BUSY_SAFE, cmd)
 }
 
 /// 动态注册keybinding

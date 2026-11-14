@@ -361,6 +361,11 @@
   the block's outer width, so its own padding and border pushed it past the edge and the right side
   was clipped. Monospace blocks now lay the figure out to the inner width, and view it through the
   same draggable horizontal scrollbar as code cards when it still does not fit.
+- **A command typed mid-turn was sent to the model as text**: with a turn still running, pressing
+  Enter on `/model` queued the line as a steer message, so the model received the literal command.
+  Input starting with `/` is now classified first: commands that are safe to run while busy execute
+  immediately (as before), other commands are refused with a warning, and only real messages (plain
+  text, `/skill:name`, prompt templates) are queued.
 
 ## 中文
 
@@ -617,4 +622,7 @@
   项目内的文件可能被判成「目录之外」。现在只在 Windows 上折叠大小写，其它平台仍按组件比较、行为不变。
 - **桌面应用里比块宽的图被裁掉**：mermaid 图按块的外宽排版，块自己的内边距与边框把它顶出边界，
   右侧就那么被切掉了。等宽块现在按内宽排版，仍放不下时和代码卡一样出现一条可拖的横向滚动条。
+- **回合进行中敲的斜杠命令被当成普通消息发给了模型**：忙碌时回车 `/model` 会把这一行排进 steer 队列，
+  模型收到的就是命令原文。现在 `/` 开头的输入先分类：忙碌安全的命令立即执行（行为不变），
+  其余命令给一条警告并丢弃，只有真正的消息（普通文本、`/skill:名`、提示词模板）才排队。
 

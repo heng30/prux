@@ -19,6 +19,42 @@ pub fn expand_user_text(text: &str, skills: &[Skill], templates: &[PromptTemplat
     expand_prompt_template(&expanded, templates)
 }
 
+/// 忙碌（回合进行中）时提交的 `/命令` 该怎么处理。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BusyCommand {
+    /// 忙碌安全（handler 不锁 agent）：立即执行。
+    Safe,
+    /// 是命令但忙碌时不可执行：警告后丢弃，不执行也不入队。
+    Blocked,
+    /// 不是命令（`/skill:名`、模板、普通文本）：按消息排队。
+    Message,
+}
+
+/// 斜杠命令名：原文首个空白前的部分（`plan foo` → `plan`）。
+/// 扩展命令带参数时按名查表，参数由 handler 自行解析。
+pub fn command_name(cmd: &str) -> &str {
+    cmd.trim()
+        .split_once(char::is_whitespace)
+        .map_or_else(|| cmd.trim(), |(name, _)| name)
+}
+
+/// 分类忙碌时提交的 `/命令`。
+///
+/// `builtin` 是界面自己的内置命令名表，`builtin_safe` 是其中忙碌时也能安全执行的子集；
+/// 扩展命令看声明：`busy_safe` 为 [`BusyCommand::Safe`]，有执行入口但没声明为
+/// [`BusyCommand::Blocked`]。两边都不命中说明它是技能/模板/未知斜杠（分发侧本来就当用户输入），
+/// 按 [`BusyCommand::Message`] 排队。
+pub fn busy_command(builtin: &[&str], builtin_safe: &[&str], cmd: &str) -> BusyCommand {
+    let name = command_name(cmd).to_lowercase();
+    if builtin_safe.contains(&name.as_str()) || extensions::command_busy_safe(&name) {
+        return BusyCommand::Safe;
+    }
+    if builtin.contains(&name.as_str()) || extensions::command_handler(&name).is_some() {
+        return BusyCommand::Blocked;
+    }
+    BusyCommand::Message
+}
+
 /// `/` 补全候选：内置命令 → 扩展命令 → 技能（`skill:名`）→ 提示词模板。
 ///
 /// 重名按这个顺序优先：内置命令压扩展命令（分发也是内置优先），命令压同名模板
@@ -65,6 +101,24 @@ pub fn candidates(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 忙碌时 `/命令` 分类：busy_safe 立即执行；已知但非 busy_safe 给警告；其余当消息排队。
+    #[test]
+    fn busy_command_classifies_builtin_and_unknown() {
+        let builtin = ["dock", "model"];
+        let safe = ["dock"];
+        assert_eq!(busy_command(&builtin, &safe, "dock"), BusyCommand::Safe);
+        // 参数不影响按名判定，名字大小写不敏感
+        assert_eq!(
+            busy_command(&builtin, &safe, "Model  deepseek-v4-pro"),
+            BusyCommand::Blocked
+        );
+        // 不是命令：技能 / 模板 / 普通文本（分发侧也当用户输入）
+        assert_eq!(
+            busy_command(&builtin, &safe, "skill:research 看看这个"),
+            BusyCommand::Message
+        );
+    }
 
     fn template(name: &str, content: &str) -> PromptTemplate {
         PromptTemplate {
