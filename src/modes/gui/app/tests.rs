@@ -33,6 +33,27 @@ fn command_palette_keeps_only_the_three_shared_entries() {
     }
 }
 
+/// 忙碌时 `/命令` 分类：只碰本地状态的放行，其余已知命令被拦下（给警告）；
+/// 技能 / 模板 / 未知斜杠仍当普通输入发。
+#[test]
+fn busy_slash_only_runs_local_commands() {
+    use super::actions::blocked_while_busy;
+
+    assert!(!blocked_while_busy("dock"));
+    assert!(!blocked_while_busy("theme dark"));
+    // 裸命令只开面板，带参数则下发 worker
+    assert!(!blocked_while_busy("model"));
+    assert!(blocked_while_busy("model deepseek-v4-pro"));
+    assert!(blocked_while_busy("session rm-all"));
+    // 一发就拉到 worker 侧的命令
+    assert!(blocked_while_busy("new"));
+    assert!(blocked_while_busy("compact 保留登录流程"));
+    assert!(blocked_while_busy("reload"));
+    // 不是命令：跟普通文本一样排队
+    assert!(!blocked_while_busy("skill:research 看看这个"));
+    assert!(!blocked_while_busy("some-template arg"));
+}
+
 /// 模型循环按 scope 走：顺序跟 scope，不可用的跳过；scope 为空才用全部模型。
 #[test]
 fn cycle_models_follows_scope_order() {

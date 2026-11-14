@@ -8,6 +8,31 @@ use crate::{
     utils::paths,
 };
 
+/// 忙碌时可以立即执行的内置命令：只碰本地状态与面板，不发给 worker。
+const BUSY_SAFE: &[&str] = &[
+    "history",
+    "theme",
+    "panel",
+    "dock",
+    "sidebar",
+    "copy",
+    "quit",
+    "giff",
+    "bug",
+    "login",
+    "logout",
+    "trust",
+    "settings",
+    "extension",
+    "scoped-models",
+    "hotkeys",
+    "changelog",
+];
+
+/// **裸**命令才忙碌安全的内置命令：无参数时只打开面板，带参数则下发 worker
+/// （切模型/会话、删会话、扔目录），要等回合结束才见效。
+const BUSY_SAFE_BARE: &[&str] = &["model", "thinking", "session", "cwd", "resume", "skills"];
+
 impl GuiApp {
     /// 斜杠命令：与命令面板共用同一批动作。
     pub(super) fn run_slash(&mut self, name: &str, cx: &mut Context<Self>) {
@@ -1280,18 +1305,15 @@ impl GuiApp {
         // `/cmd`：GUI 命令
         if let Some(command) = text.strip_prefix('/') {
             let command = command.trim();
-            // 忙碌时只有 busy_safe 的命令能立即执行（GUI 内置命令全部经信道下发，不锁 agent）；
-            // 其余已知命令给警告并丢弃——入队等于把 `/plan` 这类命令当普通文本发给模型。
+            // 忙碌时只有 busy_safe 的命令能立即执行；其余已知命令给警告并丢弃（同 TUI，
+            // 入队等于把命令当普通文本发给模型，而经 worker 下发的命令要等回合结束才见效）。
             // 不是命令的（`/skill:名`、模板、未知斜杠）仍按普通输入发送。
             if self.busy && blocked_while_busy(command) {
-                self.toast(
-                    format!(
-                        "/{} is not available while the agent is working; wait for the current turn to finish",
-                        slash::command_name(command)
-                    ),
-                    ToastKind::Info,
-                    cx,
-                );
+                self.transcript.push_note(Note::Warning(format!(
+                    "/{} is not available while the agent is working; wait for the current turn to finish",
+                    slash::command_name(command)
+                )));
+                self.scroll_to_bottom();
                 return;
             }
 
@@ -1877,12 +1899,15 @@ fn builtin_names() -> Vec<&'static str> {
 
 /// 忙碌时 `/命令` 能不能立刻执行。
 ///
-/// GUI 内置命令全部经信道下发给 worker、不锁 agent，故整表都算 busy_safe；
-/// 只有没声明 `busy_safe` 的扩展命令会被拦下。不是命令的（`/skill:名`、模板、
-/// 未知斜杠）返回 false：它们本来就该当普通输入发。
-fn blocked_while_busy(command: &str) -> bool {
+/// 不是命令的（`/skill:名`、模板、未知斜杠）返回 false：它们本来就该当普通输入发。
+pub(super) fn blocked_while_busy(command: &str) -> bool {
+    let name = slash::command_name(command);
+    let mut safe = BUSY_SAFE.to_vec();
+    if command.trim() == name {
+        safe.extend_from_slice(BUSY_SAFE_BARE);
+    }
     let names = builtin_names();
-    slash::busy_command(&names, &names, command) == slash::BusyCommand::Blocked
+    slash::busy_command(&names, &safe, command) == slash::BusyCommand::Blocked
 }
 
 /// Ctrl-M 命令面板的条目：只放 `/` 面板里没有的东西 + 允许两边都在的三个

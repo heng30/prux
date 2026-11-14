@@ -212,6 +212,8 @@ pub struct Tool {
 pub enum Note {
     /// 一般信息（压缩、重试、状态）
     Info(String),
+    /// 警告（命令被拒、退而求次的降级）：正文照常显示，只是标黄
+    Warning(String),
     /// 错误
     Error(String),
 }
@@ -221,7 +223,7 @@ impl Note {
     /// `tools` 表与 `open_assistant` 引用），渲染时按空块跳过。
     pub fn is_empty(&self) -> bool {
         match self {
-            Note::Info(text) | Note::Error(text) => text.is_empty(),
+            Note::Info(text) | Note::Warning(text) | Note::Error(text) => text.is_empty(),
         }
     }
 }
@@ -2025,6 +2027,7 @@ fn system_block(text: &str, theme: &Theme, lines: &mut TextLines, width: Pixels)
 fn note_block(note: &Note, theme: &Theme, lines: &mut TextLines) -> AnyElement {
     let (text, color, mark) = match note {
         Note::Info(text) => (text, theme.text_tertiary, "·"),
+        Note::Warning(text) => (text, theme.warning, "!"),
         Note::Error(text) => (text, theme.danger, "!"),
     };
 
