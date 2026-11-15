@@ -54,6 +54,7 @@ mod probe;
 mod rpi;
 mod search;
 mod serial;
+mod template;
 
 use crate::{
     core::{
@@ -603,6 +604,7 @@ impl Extension for Hardware {
     fn tools(&self) -> Vec<ExtensionTool> {
         vec![
             search::search_tool(),
+            template::tool(),
             datasheet::import_tool(),
             datasheet::tidy_tool(),
             board_info_tool(),
@@ -701,6 +703,7 @@ impl Extension for Hardware {
         Box::pin(async move {
             match name.as_str() {
                 search::TOOL_SEARCH => search::run_search(&args),
+                template::TOOL_TEMPLATE => template::run(&args).await,
                 TOOL_BOARD_INFO => run_blocking(move || board_info(&args)).await,
                 TOOL_UPDATE_BOARD => update_board(args).await,
                 TOOL_MEMORY_MAP => run_blocking(move || memory_map(&args)).await,
@@ -1092,6 +1095,7 @@ mod tests {
             names,
             vec![
                 "hardware_search",
+                "hardware_project_template",
                 "hardware_datasheet_import",
                 "hardware_datasheet_tidy",
                 "hardware_board_info",

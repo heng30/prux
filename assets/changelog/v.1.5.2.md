@@ -178,6 +178,15 @@
   matches, `hardware_search` lists the PDFs and images in the directory and says which tool
   opens them.
 
+- **`hardware` recommends a crate set per chip**: `hardware_project_template` answers with a ready
+  `Cargo.toml`, `.cargo/config.toml` and `rust-toolchain.toml` for a chip name — ESP32 / C2 / C3 /
+  C6 / H2 / S2 / S3, STM32, nRF52 / nRF5340, RP2040, RP2350, SAM D21 and AVR. The dependency list
+  carries embassy wherever embassy has a HAL for that chip (ESP32 uses `esp-hal` + `esp-rtos`, the
+  ARM families use `embassy-stm32` / `embassy-nrf` / `embassy-rp`), and says so plainly when there
+  is none. Every version is the newest stable one read from the crates.io index at call time,
+  falling back to a built-in baseline set that is known to compile together when the index cannot
+  be reached — the result names the crates that used a baseline.
+
 ### Changed
 
 - **`hardware` config is per board**: `agent_dir()/extensions/hardware/config.json` is now an
@@ -538,6 +547,13 @@
   删掉抽取器留下的页眉、页脚、页码、水印碎片、目录页，以及图上散落的引脚名与编号，表格、寄存器偏移、引脚编号与电气参数原样保留，
   手写文件不动。文本没命中时，`hardware_search` 会列出目录里的 PDF 与图片，
   并说明该用哪个工具打开。
+
+- **`hardware` 按芯片给一套依赖**：`hardware_project_template` 传入芯片名（ESP32 / C2 / C3 / C6 /
+  H2 / S2 / S3、STM32、nRF52 / nRF5340、RP2040、RP2350、SAM D21、AVR）就返回可直接抄的
+  `Cargo.toml`、`.cargo/config.toml` 与 `rust-toolchain.toml`。依赖里在该芯片有 embassy HAL 时
+  就带上 embassy 栈（ESP32 用 `esp-hal` + `esp-rtos`，ARM 各族用 `embassy-stm32` / `embassy-nrf` /
+  `embassy-rp`），没有时明说。版本在调用时从 crates.io 索引取最新稳定版，取不到才回落到
+  一组验证过能一起编译的内置基线版本，并点名哪几个 crate 用了基线。
 
 ### 变更
 
