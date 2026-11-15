@@ -29,50 +29,56 @@ pub(super) const DATASHEET_REL: &str = "extensions/hardware/datasheets";
 /// 它只讲怎么写，不该出现在检索结果里。
 pub(super) const DATASHEET_TEMPLATE_FILE: &str = "example-datasheet.md.template";
 
-/// 写进 [`DATASHEET_TEMPLATE_FILE`] 的示例：一份能被检索到的手册该长什么样。
-pub(super) const DATASHEET_TEMPLATE: &str = r#"# STM32F401RE (LQFP64)
-
-把手册转成 Markdown 或纯文本放进来即可：`hardware_search` 按空行切块、按词元打分，
-返回 `file:line` 与片段正文。文件名与目录名也参与打分，所以用 `stm32f401.md`、
-`stm32f4/pinout.csv` 这种看得岀芯片的名字，命中会排得更前。
-
-## 概要
-
-- 内核：ARM Cortex-M4F，最高 84 MHz
-- Flash：512 KiB / RAM：96 KiB
-- 数据手册：DS9716 Rev 8，参考手册 RM0368
-
-## 引脚（节选）
-
-| 引脚 | 复用功能 | 备注 |
-|---|---|---|
-| PA9 | USART1_TX, TIM1_CH2 | 板载 ST-LINK 的 VCP 用 PD5/PD6 |
-| PA10 | USART1_RX | |
-| PC13 | GPIO | 板载用户按键，低电平有效 |
-
-引脚别名也可以直接放一份 `pins.csv`，每行 `PA9,USART1_TX,TIM1_CH2`，
-没有第二套映射机制。
-
-## 寄存器（节选）
-
-| 偏移 | 名称 | 说明 |
-|---|---|---|
-| 0x00 | MODER | 每引脚 2 bit：00 输入、01 输出、10 复用、11 模拟 |
-| 0x14 | ODR | 输出数据寄存器 |
-
-## 内存映射
+/// 写进 [`DATASHEET_TEMPLATE_FILE`] 的示例：一块芯片 / 一块板子一个目录该怎么摆。
+///
+/// 正文是**英文**：这份文件会被模型与用户直接读到，与 `overview.md` 保持同一语言。
+pub(super) const DATASHEET_TEMPLATE: &str = r#"# One directory per chip or board
 
 ```
-Flash  0x0800_0000 .. 0x0808_0000  (512 KiB)
-RAM    0x2000_0000 .. 0x2001_8000  (96 KiB)
+datasheets/
+  esp32c6/                                     <- directory name is the board name; `path` filters on it
+    overview.md                                <- rebuilt on every import
+    esp32-c6_datasheet_en.pdf                  <- original kept for lookups
+    nanoESP32-C6.jpg                           <- board photo, goes to the vision model
+    esp32-c6_datasheet_en-ch02-pins.md         <- chapter text extracted from the PDF
+    pins.csv                                   <- hand-written pin aliases
 ```
 
-## 写法提醒
+## Importing
 
-- 收的扩展名：`.md` `.markdown` `.txt` `.csv` `.tsv` `.json` `.rst` `.adoc`，单文件不超过 4 MB。
-- 按空行分块，一块不超过约 1200 字符；一段只讲一件事，检索才给得准。
-- 想按芯片分目录就建子目录，检索时用 `path` 参数按前缀过滤（如 `stm32f4/`）。
-- 本文件扩展名是 `.template`，不会被索引；复制成 `stm32f401.md` 再填内容。
+Run `hardware_datasheet_import` once per PDF or board photo:
+
+```
+hardware_datasheet_import(source: "~/Downloads/esp32-c6_datasheet_en.pdf", board: "esp32c6")
+```
+
+- PDFs: only the **text layer** is used (the bundled parser, with poppler's `pdftotext` as a
+  fallback). Its bookmarks become `-chNN-<chapter>.md` files; a PDF without bookmarks becomes one
+  `-full-text.md`, and a scanned PDF is refused with a pointer to `read_doc`.
+- Images: the original is stored as-is; open it with `read` (vision model) for silkscreen and wiring.
+- Originals and chapter files stay in the same directory, and `overview.md` is rebuilt on every
+  import.
+
+## Search order
+
+1. `hardware_search` reads text first (chapter `.md`, `pins.csv`, ...) and returns `file:line` plus
+   the matching excerpt.
+2. When no text matches, it lists the PDFs and images in the directory and says whether to open them
+   with `read_doc` or `read`.
+
+## Writing one by hand
+
+Any `.md` / `.markdown` / `.txt` / `.csv` / `.tsv` / `.json` / `.rst` / `.adoc` file up to 4 MB is
+indexed; text is chunked on blank lines (about 1200 characters per chunk), so keep one topic per
+paragraph. Pin aliases are just a line in `pins.csv`: `PA9,USART1_TX,TIM1_CH2`. This file itself is
+`.template`, so it is not indexed.
+
+## What is worth writing down
+
+- chip name, core, clock, Flash / RAM, package;
+- pin table: pin, alternate functions, what the board wires it to;
+- register table: offset, name, one line on what it does;
+- memory map.
 "#;
 
 /// 单次检索返回的默认块数。
@@ -93,8 +99,23 @@ const EXCERPT_CHARS: usize = 800;
 /// 查询最多取用的词元个数。
 const MAX_QUERY_TERMS: usize = 12;
 
+/// 文本没命中时最多列出多少个非文本资料。
+const MAX_LISTED_ASSETS: usize = 12;
+
 /// 收为资料的文件扩展名（其余忽略：二进制手册、图片都索引不了）。
-const TEXT_EXTENSIONS: &[&str] = &["md", "markdown", "txt", "csv", "tsv", "json", "rst", "adoc"];
+pub(super) const TEXT_EXTENSIONS: &[&str] =
+    &["md", "markdown", "txt", "csv", "tsv", "json", "rst", "adoc"];
+
+/// 不进索引、需另用工具打开的资料：扩展名 → 该用的工具。
+const ASSET_READERS: &[(&str, &str)] = &[
+    ("pdf", "read_doc"),
+    ("jpg", "read"),
+    ("jpeg", "read"),
+    ("png", "read"),
+    ("webp", "read"),
+    ("bmp", "read"),
+    ("gif", "read"),
+];
 
 /// 一块可检索的片段。
 #[derive(Debug, Clone)]
@@ -262,17 +283,8 @@ fn rank(chunks: &[Chunk], query: &str, filters: &[String], limit: usize) -> Vec<
     ranked
 }
 
-/// 把命中渲染成给模型看的报告。
-fn render(query: &str, root: &Path, chunks_total: usize, ranked: &[Ranked]) -> String {
-    if ranked.is_empty() {
-        return format!(
-            "No matches for `{query}` in {} ({chunks_total} chunks indexed).\n\
-             Put datasheets or pinout tables as .md / .txt / .csv files under {}.",
-            root.display(),
-            root.display()
-        );
-    }
-
+/// 把命中渲染成给模型看的报告（`ranked` 非空时调用）。
+fn render(query: &str, root: &Path, ranked: &[Ranked]) -> String {
     let mut out = format!(
         "{} match(es) for `{query}` in {}:\n",
         ranked.len(),
@@ -289,6 +301,95 @@ fn render(query: &str, root: &Path, chunks_total: usize, ranked: &[Ranked]) -> S
             "…",
         ));
         out.push_str("\n</doc>\n");
+    }
+    out
+}
+
+/// 递归收集不进索引的资料（PDF / 图片），带上打开它该用的工具。
+fn collect_assets(dir: &Path, out: &mut Vec<(String, &'static str)>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') {
+            continue;
+        }
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
+        let path = entry.path();
+        if kind.is_dir() {
+            collect_assets(&path, out);
+            continue;
+        }
+        if !kind.is_file() {
+            continue;
+        }
+        let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+            continue;
+        };
+        let ext = ext.to_lowercase();
+        if let Some((_, reader)) = ASSET_READERS.iter().find(|(e, _)| *e == ext) {
+            out.push((path.to_string_lossy().replace('\\', "/"), reader));
+        }
+    }
+}
+
+/// 文本没命中时，把目录里的 PDF / 图片指给模型（它们不在索引里，需另开工具看）。
+fn render_assets(query: &str, root: &Path, chunks_total: usize) -> String {
+    let mut assets = Vec::new();
+    collect_assets(root, &mut assets);
+    // 绝对路径换成相对资料目录的写法：模型拼路径时不用再想 agent_dir 在哪。
+    let prefix = root.to_string_lossy().replace('\\', "/");
+    let mut assets: Vec<(String, &'static str)> = assets
+        .into_iter()
+        .map(|(path, reader)| {
+            (
+                path.replace(&prefix, "")
+                    .trim_start_matches('/')
+                    .to_string(),
+                reader,
+            )
+        })
+        .collect();
+    assets.sort();
+
+    if assets.is_empty() {
+        return format!(
+            "No matches for `{query}` and no PDFs or images to fall back on ({} chunks indexed).\n\
+             Put datasheets or pinout tables as .md / .txt / .csv files under {}, or import a PDF \
+             or photo with `hardware_datasheet_import`.",
+            chunks_total,
+            root.display()
+        );
+    }
+
+    let terms = text::terms(query, MAX_QUERY_TERMS);
+    let mut matched: Vec<&(String, &'static str)> = assets
+        .iter()
+        .filter(|(path, _)| {
+            let lowered = path.to_lowercase();
+            terms.iter().any(|term| lowered.contains(term.as_str()))
+        })
+        .collect();
+    let matched_any = !matched.is_empty();
+    if !matched_any {
+        matched = assets.iter().take(MAX_LISTED_ASSETS).collect();
+    }
+
+    let mut out = format!(
+        "{} for `{query}` in {} ({} chunks indexed).\n",
+        if matched_any {
+            "No indexed text matched, but these files may:"
+        } else {
+            "No matches; these files are not indexed text, so open them directly:"
+        },
+        root.display(),
+        chunks_total
+    );
+    for (path, reader) in matched {
+        out.push_str(&format!("\n- `{path}` — open with `{reader}`"));
     }
     out
 }
@@ -322,12 +423,10 @@ pub(super) fn run_search(args: &Value) -> Result<ToolResult, ToolError> {
     let root = super::datasheet_dir();
     let chunks = collect_chunks(&root);
     let ranked = rank(&chunks, &query, &filters, limit);
-    Ok(ToolResult::text(render(
-        &query,
-        &root,
-        chunks.len(),
-        &ranked,
-    )))
+    if ranked.is_empty() {
+        return Ok(ToolResult::text(render_assets(&query, &root, chunks.len())));
+    }
+    Ok(ToolResult::text(render(&query, &root, &ranked)))
 }
 
 /// 资料目录的索引统计：文件数 + 块数（`/hardware` 面板用）。
@@ -398,7 +497,7 @@ mod tests {
     /// 在资料目录里写一份文档。
     fn write_doc(relative: &str, body: &str) {
         let path = super::super::datasheet_dir().join(relative);
-        fs::create_dir_all(path.parent().expect("应有父目录")).unwrap();
+        fs::create_dir_all(path.parent().expect("a doc path has a parent")).unwrap();
         fs::write(path, body).unwrap();
     }
 
@@ -481,6 +580,26 @@ mod tests {
         let (_g, _ad) = guard();
         assert!(run_search(&json!({ "query": "the" })).is_err());
         assert!(run_search(&json!({ "query": "usart", "limit": 0 })).is_err());
+    }
+
+    #[test]
+    fn a_pdf_or_photo_is_pointed_at_when_no_text_matches() {
+        let (_g, _ad) = guard();
+        write_doc("esp32c6/board.jpg", "not really an image");
+        write_doc("esp32c6/manual.pdf", "not really a pdf");
+        write_doc("esp32c6/pins.csv", "PA9,USART1_TX\n");
+
+        let hit = run_search(&json!({ "query": "board" })).unwrap();
+        assert!(hit.text.contains("esp32c6/board.jpg"), "{}", hit.text);
+        assert!(hit.text.contains("`read`"), "{}", hit.text);
+
+        let listed = run_search(&json!({ "query": "usartx" })).unwrap();
+        assert!(
+            listed.text.contains("esp32c6/manual.pdf"),
+            "{}",
+            listed.text
+        );
+        assert!(listed.text.contains("`read_doc`"), "{}", listed.text);
     }
 
     #[test]

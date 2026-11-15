@@ -2,9 +2,12 @@
 //!
 //! 两块能力，对应嵌入式排障的两个方向：
 //!
-//! **1. 查手册**（[`search`]）——资料放 `agent_dir()/extensions/hardware/datasheets/`
-//! （可递归建芯片子目录），收 `.md` / `.markdown` / `.txt` / `.csv` / `.tsv` / `.json` /
-//! `.rst` / `.adoc`；`hardware_search` 按词元给每块打分，返回 `file:line` + 片段。
+//! **1. 查手册**（[`search`] / [`datasheet`]）——资料放
+//! `agent_dir()/extensions/hardware/datasheets/`，**一块芯片或板子一个目录**：
+//! 原件（PDF、板卡照片）与拆出来的章节 `.md` 放在一起，外加一份 `overview.md` 总览。
+//! `hardware_datasheet_import` 负责把 PDF 按运行页眉拆成章节、图片与原件收进目录、
+//! 重建总览；`hardware_search` 先查文本（返回 `file:line` + 片段），文本没命中时
+//! 列出目录里的 PDF / 图片，指明用 `read_doc`（PDF）还是 `read`（图片，视觉模型）。
 //! 引脚别名不需要第二套机制：引脚表的一行（`PA9,USART1_TX,TIM1_CH2`）就是一块，
 //! 引脚名与复用功能名都能命中。
 //!
@@ -41,6 +44,7 @@ mod arduino;
 mod boards;
 mod bridge;
 mod config;
+mod datasheet;
 mod flash;
 mod gpio;
 mod micropython;
@@ -72,7 +76,12 @@ use config::{
 };
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
-use std::{fs, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 
 /// 扩展名（也是 `/extension` 面板中的标识与配置目录名）。
 const EXT: &str = "hardware";
@@ -573,6 +582,7 @@ impl Extension for Hardware {
     fn tools(&self) -> Vec<ExtensionTool> {
         vec![
             search::search_tool(),
+            datasheet::import_tool(),
             board_info_tool(),
             update_board_tool(),
             memory_map_tool(),
@@ -654,6 +664,12 @@ impl Extension for Hardware {
                 rpi::TOOL_RPI_WRITE => rpi::run_write(&args).await,
                 rpi::TOOL_RPI_BLINK => rpi::run_blink(&args).await,
                 rpi::TOOL_RPI_INFO => rpi::run_info().await,
+                datasheet::TOOL_IMPORT => {
+                    run_blocking(move || {
+                        datasheet::run_import(&args, &datasheet_dir(), Path::new(&cwd))
+                    })
+                    .await
+                }
                 flash::TOOL_FLASH => run_blocking(move || flash::run_flash(&args, &cwd)).await,
                 flash::TOOL_PICO_FLASH => flash::run_pico_flash(&args, &cwd).await,
                 arduino::TOOL_UPLOAD => arduino::run_upload(&args).await,
@@ -1018,6 +1034,7 @@ mod tests {
             names,
             vec![
                 "hardware_search",
+                "hardware_datasheet_import",
                 "hardware_board_info",
                 "hardware_update_board",
                 "hardware_memory_map",

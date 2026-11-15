@@ -152,6 +152,17 @@
   entry with the same board name only gets its `chip` updated, every other key stays. ESP32 / ESP32-C3 / C6 / S3 boards are recognized
   through their built-in USB-JTAG, not just through an external probe.
 
+- **`hardware` imports real datasheets instead of expecting text only**: `hardware_datasheet_import`
+  files one board's or chip's material into its own directory under
+  `agent_dir()/extensions/hardware/datasheets/`, keeping the PDFs and board photos next to the
+  Markdown it generates and rebuilding `overview.md` on every import. A PDF is split into
+  `-chNN-<chapter>.md` files from its PDF bookmarks (whole document as one `full text` chapter
+  when it has none; text layer only, the bundled `pdf-extract` first and poppler's `pdftotext` when
+  that parser fails; a scanned PDF is refused with a pointer to `read_doc`), while images are kept
+  as originals to be looked at with `read`. When no
+  text matches, `hardware_search` lists the PDFs and images in the directory and says which tool
+  opens them.
+
 ### Changed
 
 - **`hardware` config is per board**: `agent_dir()/extensions/hardware/config.json` is now an
@@ -496,6 +507,13 @@
   `hardware_update_board` 把探测结果写进 `agent_dir()/extensions/hardware/config.json`：写之前先在
   确认面板里问一次，取消、超时或弹不出面板时一个字都不写；同名板卡只更新 `chip`，其余键原样保留。ESP32 / ESP32-C3 / C6 / S3 这类板子靠自带的 USB-JTAG 就能识别，
   不必外接调试器。
+
+- **`hardware` 能导入真手册，不再只认纯文本**：`hardware_datasheet_import` 把一块芯片或板子的资料
+  收进 `agent_dir()/extensions/hardware/datasheets/` 下它自己的目录——PDF 与板卡照片和生成的 Markdown
+  放在一起，每次导入重建 `overview.md`。PDF 按**书签（目录）**拆成 `-chNN-<章节>.md`，没有书签就整本写一份
+  `full text`（只抽文本层，内置 `pdf-extract` 为主、它解析失败时回落 poppler 的 `pdftotext`；扫描件直接拒绝并指向 `read_doc`），图片保留原件，
+  用 `read` 交给视觉模型看丝印与接线。文本没命中时，`hardware_search` 会列出目录里的 PDF 与图片，
+  并说明该用哪个工具打开。
 
 ### 变更
 
