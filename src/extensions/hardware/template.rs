@@ -1,14 +1,15 @@
 //! `hardware_project_template`：给一块芯片预定一套「能一起编译」的 Rust 依赖。
 //!
 //! 输出三份文件的内容：`Cargo.toml`（依赖 + release profile）、`.cargo/config.toml`
-//! （target 三元组与 probe-rs runner）、`rust-toolchain.toml`。版本分两步来：
+//! （target 三元组、probe-rs runner、ESP 的链接脚本与 `DEFMT_LOG`）、`rust-toolchain.toml`。版本分两步来：
 //! 内置表给**离线基线**（一组验证过能一起编译的版本，ESP32 那套来自仓库里
 //! `blink-async` 参考工程），调用时再从 crates.io 稀疏索引取每个 crate 的**最新稳定版**
 //! 覆盖基线；索引取不到就保留基线并在结果里点名，不让一次网络故障毁掉整个答案。
 //!
-//! 芯片族的划分决定依赖栈：ESP32 用 `esp-hal` + `esp-rtos`，STM32 / RP / nRF 用
-//! embassy（`embassy-*` 支持这些芯片），SAM D21 与 AVR 没有 embassy HAL，退回各自
-//! 的 `*-hal`（AVR 的 `arduino-hal` 只在 git 上，结果里明说）。
+//! 芯片族的划分决定依赖栈：ESP32 用 `esp-hal` + `esp-rtos` + embassy（`esp-rtos` 的
+//! `embassy` feature 提供调度器集成，任务栈仍是 `embassy-executor` + `embassy-time`），
+//! STM32 / RP / nRF 用 embassy（`embassy-*` 支持这些芯片），SAM D21 与 AVR 没有
+//! embassy HAL，退回各自的 `*-hal`（AVR 的 `arduino-hal` 只在 git 上，结果里明说）。
 
 use crate::{
     core::{
@@ -87,7 +88,7 @@ const ESP_DEPS: &[Dep] = &[
     Dep {
         name: "esp-bootloader-esp-idf",
         baseline: "0.5",
-        features: &["$chip"],
+        features: &["defmt", "$chip"],
         optional: false,
     },
     Dep {
@@ -141,7 +142,7 @@ const ESP_DEPS: &[Dep] = &[
     Dep {
         name: "esp-hal-smartled",
         baseline: "0.18",
-        features: &[],
+        features: &["defmt"],
         optional: true,
     },
     Dep {
@@ -153,8 +154,11 @@ const ESP_DEPS: &[Dep] = &[
 ];
 
 const ESP_NOTES: &[&str] = &[
-    "An `esp-hal` project must call `esp_bootloader_esp_idf::esp_app_desc!()`, otherwise probe-rs refuses the ESP-IDF image layout with `app descriptor missing`.",
-    "Linker scripts go through `build.rs`: `cargo:rustc-link-arg=-Tdefmt.x` and `-Tlinkall.x` (`linkall.x` must be the last one).",
+    "This stack is embassy-based and not replaceable: `esp-rtos` (with its `embassy` feature) provides the scheduler, `embassy-executor` + `embassy-time` provide the task and timer stack. Enter it with `#[esp_rtos::main]` (not `#[embassy_executor::main]`, which skips the esp-rtos scheduler) and wait with `embassy_time::Timer`; keep every `embassy-*` / `esp-rtos` dependency and its `defmt` feature as listed. Dropping them for a blocking `esp_hal::delay::Delay` loop plus `esp-println` does compile and does print, but it leaves the timer and the defmt pipeline this config is wired for unused, so the project no longer matches the configuration below.",
+    "An `esp-hal` project must call `esp_bootloader_esp_idf::esp_app_desc!()` at crate root, outside `main`, otherwise the ESP-IDF image layout carries no `app descriptor` and probe-rs refuses it with `app descriptor missing`.",
+    "Both linker scripts go through `rustflags` as shown: `-Tdefmt.x` first, `-Tlinkall.x` last. `-Tdefmt.x` is what keeps the defmt internals alive, `-Tlinkall.x` lays out the flash sections, and the order matters; `-C force-frame-pointers` keeps RTT backtraces usable. Do not pass them again from `build.rs`, a second definition makes rust-lld fail with `region 'RAM' already defined`.",
+    "Logging is `defmt` plus the `rtt-target` crate: call `rtt_target::rtt_init_defmt!()` as the first statement of `main` to install the defmt channel, then log with `defmt::info!` / `defmt::error!`; frames emitted before the channel exists are dropped. Read the output with `probe-rs attach <elf> --chip <chip>`, since RTT lives in RAM and never goes out on a serial port. The on-board USB-Serial-JTAG is one peripheral shared by the serial port and the debugger, so a monitor or flash tool holding `/dev/ttyACM*`, or a chip whose JTAG side stops answering (`Timeout during DMI access`), leaves RTT silent — flash over the serial bootloader (`espflash flash --port <port> <elf>`) and keep the logging path as is instead of swapping in `esp-println` (or its `println!`), which writes to the UART / USB-Serial-JTAG port and never feeds the RTT defmt pipeline. `DEFMT_LOG` is already pinned to `info` in the config, because defmt keeps only `error!` when it is unset.",
+    "`panic-rtt-target` is part of that logging stack, not an optional extra: `use panic_rtt_target as _;` supplies the `#[panic_handler]` that prints panics as defmt frames over RTT, which only works after `rtt_init_defmt!()` ran — a panic before that point halts with no output at all. Drop the crate and the link fails with `#[panic_handler] function required, but not found`.",
     "Xtensa chips (esp32 / esp32s2 / esp32s3) need the `esp` toolchain installed by `espup`, not upstream stable.",
 ];
 
@@ -199,7 +203,7 @@ const STM32_DEPS: &[Dep] = &[
     Dep {
         name: "panic-probe",
         baseline: "1.0",
-        features: &[],
+        features: &["print-defmt"],
         optional: false,
     },
     Dep {
@@ -255,7 +259,7 @@ const NRF_DEPS: &[Dep] = &[
     Dep {
         name: "panic-probe",
         baseline: "1.0",
-        features: &[],
+        features: &["print-defmt"],
         optional: false,
     },
     Dep {
@@ -310,7 +314,7 @@ const RP_DEPS: &[Dep] = &[
     Dep {
         name: "panic-probe",
         baseline: "1.0",
-        features: &[],
+        features: &["print-defmt"],
         optional: false,
     },
     Dep {
@@ -716,11 +720,15 @@ fn render(
         Some(target) => format!("probe-rs run --chip={target}"),
         None => "probe-rs run --chip=<probe-rs target>".to_string(),
     };
-    // ESP 的链接脚本与 frame-pointer 是 esp-hal 的硬要求；ARM 侧用不到，别乱写。
-    let targets_extra = if std::ptr::eq(chip.family, &ESP) {
-        "\n[unstable]\nbuild-std = [\"core\"]\n\n[env]\nDEFMT_LOG = \"info\"\n"
+    // ESP 的链接脚本与 frame-pointer 是 esp-hal 的硬要求，只写进 rustflags 一处：
+    // build.rs 再传一次会让 rust-lld 报 `region 'RAM' already defined`；ARM 侧用不到，别乱写。
+    let (rustflags, targets_extra) = if std::ptr::eq(chip.family, &ESP) {
+        (
+            "[\"-C\", \"link-arg=-Tdefmt.x\", \"-C\", \"link-arg=-Tlinkall.x\", \"-C\", \"force-frame-pointers\"]",
+            "\n[env]\nDEFMT_LOG = \"info\"\n",
+        )
     } else {
-        "\n"
+        ("[\"-C\", \"force-frame-pointers\"]", "\n")
     };
 
     let embassy = if chip.family.embassy {
@@ -736,6 +744,9 @@ fn render(
     notes.push_str(
         "- Versions are the newest stable release in the crates.io index at call time; lines starting with `# ` are optional dependencies, delete them when unused.\n",
     );
+    notes.push_str(
+        "- Every dependency above that ships a `defmt` feature has it enabled, so the whole stack logs through one defmt/RTT channel; `panic-probe` names that feature `print-defmt`.\n",
+    );
     if !stale.is_empty() {
         notes.push_str(&format!(
             "- Not found in the crates.io index (renamed, or a local alias?), so the built-in baseline version was used: {}.\n",
@@ -747,7 +758,7 @@ fn render(
         "Recommended crates for `{chip_name}` → {family} ({embassy})\n\
          Target triple `{target}`, toolchain `{channel}`.\n\n\
          ## Cargo.toml\n\n```toml\n[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\n{deps}\n[profile.release]\ndebug = 2\nlto = \"fat\"\nopt-level = \"s\"\ncodegen-units = 1\nincremental = false\noverflow-checks = false\n```\n\n\
-         ## .cargo/config.toml\n\n```toml\n[target.{target}]\nrunner = \"{runner}\"\n\n[build]\ntarget = \"{target}\"\nrustflags = [\"-C\", \"force-frame-pointers\"]\n{targets_extra}```\n\n\
+         ## .cargo/config.toml\n\n```toml\n[target.{target}]\nrunner = \"{runner}\"\n\n[build]\ntarget = \"{target}\"\nrustflags = {rustflags}\n{targets_extra}```\n\n\
          ## rust-toolchain.toml\n\n```toml\n[toolchain]\nchannel = \"{channel}\"\ncomponents = [\"rust-src\"]\ntargets = [\"{target}\"]\n```\n\n\
          ## Notes\n\n{notes}",
         family = chip.family.label,
@@ -855,7 +866,33 @@ mod tests {
             "esp-hal = { version = \"1.0\", features = [\"defmt\", \"esp32c6\", \"unstable\"] }"
         ));
         assert!(text.contains("runner = \"probe-rs run --chip=esp32c6\""));
-        assert!(text.contains("Not found in the crates.io index"));
+        assert!(text.contains(
+            "rustflags = [\"-C\", \"link-arg=-Tdefmt.x\", \"-C\", \"link-arg=-Tlinkall.x\", \"-C\", \"force-frame-pointers\"]"
+        ));
+        assert!(text.contains("[env]\nDEFMT_LOG = \"info\""));
+        assert!(
+            !text.contains("build-std"),
+            "stable targets need no build-std"
+        );
+        assert!(text.contains("rtt-target = { version = \"0.6\", features = [\"defmt\"] }"));
+        assert!(
+            text.contains(
+                "esp-bootloader-esp-idf = { version = \"0.5\", features = [\"defmt\", \"esp32c6\"] }"
+            ),
+            "defmt features must be on wherever the crate offers one"
+        );
+        assert!(
+            text.contains("rtt_target::rtt_init_defmt!()") && text.contains("esp-println"),
+            "logging must be spelled out as defmt + rtt-target, with esp-println called out as wrong"
+        );
+        assert!(
+            text.contains("#[embassy_executor::main]") && text.contains("DEFMT_LOG = \"info\""),
+            "the embassy stack and the generated .cargo/config.toml must stay paired"
+        );
+        assert!(
+            text.contains("Not found in the crates.io index"),
+            "baseline fallback must be reported"
+        );
         assert!(text.contains("name = \"blink\""));
     }
 
@@ -866,6 +903,9 @@ mod tests {
         let text = render(chip, "rp2040", "rp2040", "fw", &versions);
         assert!(!text.contains("build-std"));
         assert!(text.contains("embassy-rp = { version = \"1.0.0\""));
+        assert!(
+            text.contains("panic-probe = { version = \"1.0.0\", features = [\"print-defmt\"] }")
+        );
         assert!(text.contains("thumbv6m-none-eabi"));
     }
 }
