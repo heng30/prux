@@ -5,8 +5,9 @@
 //! **1. 查手册**（[`search`] / [`datasheet`]）——资料放
 //! `agent_dir()/extensions/hardware/datasheets/`，**一块芯片或板子一个目录**：
 //! 原件（PDF、板卡照片）与拆出来的章节 `.md` 放在一起，外加一份 `overview.md` 总览。
-//! `hardware_datasheet_import` 负责把 PDF 按运行页眉拆成章节、图片与原件收进目录、
-//! 重建总览；`hardware_search` 先查文本（返回 `file:line` + 片段），文本没命中时
+//! `hardware_datasheet_import` 负责把 PDF 按书签拆成章节、图片与原件收进目录、
+//! 重建总览；`hardware_datasheet_tidy` 再把生成的章节交给当前模型复核，删掉版式噪声。
+//! `hardware_search` 先查文本（返回 `file:line` + 片段），文本没命中时
 //! 列出目录里的 PDF / 图片，指明用 `read_doc`（PDF）还是 `read`（图片，视觉模型）。
 //! 引脚别名不需要第二套机制：引脚表的一行（`PA9,USART1_TX,TIM1_CH2`）就是一块，
 //! 引脚名与复用功能名都能命中。
@@ -80,7 +81,7 @@ use serde_json::{Value, json};
 use std::{
     fs,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Mutex, OnceLock},
     time::Duration,
 };
 
@@ -127,6 +128,21 @@ static HARDWARE_FACTORY: ExtensionFactory = ExtensionFactory {
 /// 资料目录：`agent_dir()/extensions/hardware/datasheets`。
 fn datasheet_dir() -> PathBuf {
     agent_dir().join(search::DATASHEET_REL)
+}
+
+/// 会话 id 槽：一次性请求（`hardware_datasheet_tidy`）要带上它做路由与提示缓存亲和。
+fn session_slot() -> &'static Mutex<Option<String>> {
+    /// 当前会话 id 的进程级单例。
+    static S: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+    S.get_or_init(|| Mutex::new(None))
+}
+
+/// 读会话 id（`None` = 还不知道，调用方按"没有会话身份"处理）。
+fn session_id() -> Option<String> {
+    session_slot()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
 }
 
 /// 某块板卡的静态资料块（工具省略 `board` 时用默认板卡）。
@@ -588,6 +604,7 @@ impl Extension for Hardware {
         vec![
             search::search_tool(),
             datasheet::import_tool(),
+            datasheet::tidy_tool(),
             board_info_tool(),
             update_board_tool(),
             memory_map_tool(),
@@ -625,6 +642,32 @@ impl Extension for Hardware {
         register_host_command(EXT, CMD, command_hardware);
     }
 
+    /// 会话建立：记住会话 id，复核请求要靠它。
+    fn on_session_start(
+        &self,
+        _cwd: &str,
+        _messages: &[crate::core::provider::AgentMessage],
+        session: Option<&crate::core::session_manager::Session>,
+    ) {
+        *session_slot().lock().unwrap_or_else(|e| e.into_inner()) =
+            session.map(|s| s.session_id.clone());
+    }
+
+    /// 会话 id 已知时刻（`/new` 尚未落盘也有）。
+    fn on_session_id(&self, session_id: &str) {
+        *session_slot().lock().unwrap_or_else(|e| e.into_inner()) = Some(session_id.to_string());
+    }
+
+    /// 会话切换：改记新会话 id。
+    fn on_session_switched(
+        &self,
+        session_path: Option<&str>,
+        _messages: &[crate::core::provider::AgentMessage],
+    ) {
+        *session_slot().lock().unwrap_or_else(|e| e.into_inner()) =
+            crate::extensions::util::session_id_of(session_path);
+    }
+
     /// 启用后建好资料目录（含启动时按 settings 恢复的启用态），用户直接往里放手手册。
     fn on_enabled_changed(&self, enabled: bool) {
         if enabled {
@@ -654,6 +697,7 @@ impl Extension for Hardware {
         ctx: ToolExecCtx,
     ) -> BoxFuture<'static, Result<ToolResult, ToolError>> {
         let cwd = ctx.cwd.clone();
+        let parent_model = ctx.parent_model.clone();
         Box::pin(async move {
             match name.as_str() {
                 search::TOOL_SEARCH => search::run_search(&args),
@@ -673,6 +717,15 @@ impl Extension for Hardware {
                     run_blocking(move || {
                         datasheet::run_import(&args, &datasheet_dir(), Path::new(&cwd))
                     })
+                    .await
+                }
+                datasheet::TOOL_TIDY => {
+                    datasheet::run_tidy(
+                        &args,
+                        &datasheet_dir(),
+                        parent_model.as_deref(),
+                        session_id(),
+                    )
                     .await
                 }
                 flash::TOOL_FLASH => run_blocking(move || flash::run_flash(&args, &cwd)).await,
@@ -1040,6 +1093,7 @@ mod tests {
             vec![
                 "hardware_search",
                 "hardware_datasheet_import",
+                "hardware_datasheet_tidy",
                 "hardware_board_info",
                 "hardware_update_board",
                 "hardware_memory_map",

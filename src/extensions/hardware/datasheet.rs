@@ -5,6 +5,7 @@
 //! - `overview.md` —— 总览，每次导入重建。文本文件都按章节 / 文件名列在这里，
 //!   `hardware_search` 先命中的就是它；
 //! - `<stem>-chNN-<slug>.md` —— PDF 按书签（目录）拆出来的章节正文，检索走这些小块；
+//!   抽取保留版式，页眉页脚页码都在，所以由 `hardware_datasheet_tidy` 交给模型复核一遍；
 //! - 原件（`.pdf` / 图片）—— 原样留在同一目录，图片交给视觉模型看，PDF 可用 `read_doc`。
 //!
 //! 只抽 PDF 的**文本层**（`pdf-extract`）：扫描件抽出来是空的，此时明确报错，
@@ -13,10 +14,13 @@
 use super::search::TEXT_EXTENSIONS;
 use crate::{
     core::{
+        auth,
         extensions::{ExtensionTool, ToolAnnotations, ToolExposure},
+        model_resolver,
+        provider::{self, ModelConfig},
         tools::{ToolError, ToolResult},
     },
-    extensions::util::{opt_string, req_str},
+    extensions::util::{opt_string, req_str, split_model},
     utils::process::run_stdout,
 };
 use serde_json::{Value, json};
@@ -26,8 +30,11 @@ use std::{
     path::{Path, PathBuf},
 };
 
-/// 工具名。
+/// 工具名：导入一份资料。
 pub(super) const TOOL_IMPORT: &str = "hardware_datasheet_import";
+
+/// 工具名：把生成的章节交给模型复核，删掉版式噪声。
+pub(super) const TOOL_TIDY: &str = "hardware_datasheet_tidy";
 
 /// 总览文件名（每次导入重建）。
 pub(super) const OVERVIEW_FILE: &str = "overview.md";
@@ -43,6 +50,31 @@ const MAX_ASSETS_IN_OVERVIEW: usize = 40;
 
 /// 能收的图片扩展名。
 const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp", "bmp", "gif"];
+
+/// 复核后正文至少留这么多（占原字符数的百分数），低于它说明模型在丢内容而不是在删噪声。
+const KEEP_PERCENT: usize = 50;
+
+/// 复核正文时每块的字符上限：手册章节动辄几十 KB，按块送才不会撑爆上下文。
+const TIDY_CHUNK_CHARS: usize = 6000;
+
+/// 拉丁文本页里空格占比低于此百分比，说明解析器把词粘成了一串。
+const MIN_SPACE_PERCENT: usize = 4;
+
+/// 生成文件里的来源注释开头：手写文件没有它，复核时一律不动。
+const ORIGIN_MARKER: &str = "<!-- from ";
+
+/// 复核用的系统提示词：只删版式噪声，不动技术内容。
+const TIDY_SYSTEM: &str = "\
+You clean text that was extracted from a chip manual PDF. The extractor kept the page layout, so
+the text is littered with things that are not content: running headers, footers, page numbers,
+watermark fragments, the chapter title repeated on every page, and blank-line runs.
+
+Remove exactly those. Keep everything else verbatim: tables, register names and offsets, bit
+fields, addresses, reset values, pin names and numbers, electrical values with their units,
+footnotes, figure captions and every sentence of substance. Never summarise, never reorder, never
+translate, never merge lines that were separate rows of a table.
+
+Reply with the cleaned text only: no preamble, no explanation, no code fences.";
 
 /// 源文件是什么。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -161,6 +193,36 @@ fn clean_page(page: &str) -> String {
         .join("\n")
 }
 
+/// 这一行足够像正文吗：至少 4 个词，或至少 8 个汉字。
+fn is_prose_line(line: &str) -> bool {
+    line.split_whitespace().count() >= 4 || line.chars().filter(|c| is_cjk(*c)).count() >= 8
+}
+
+/// 一个字符是否属于中日韩统一表意文字。
+fn is_cjk(c: char) -> bool {
+    ('\u{4e00}'..='\u{9fff}').contains(&c)
+}
+
+/// 文本层里有没有能当正文读的东西。
+///
+/// 原理图、PCB 这类 CAD 导出的 PDF 有文本层，但抽出来全是 `R10` / `COC1` / `VDD`
+/// 这种孤立标签（正文行占比接近 0）：再拆成章节只会用噪声挤掉检索结果里的真内容。
+fn has_prose(pages: &[String]) -> bool {
+    let mut total = 0usize;
+    let mut prose = 0usize;
+    for line in pages.iter().flat_map(|page| page.lines()) {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        total += 1;
+        if is_prose_line(line) {
+            prose += 1;
+        }
+    }
+    total == 0 || prose * 50 >= total
+}
+
 /// PDF 书签（目录）里的一条。
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Bookmark {
@@ -257,14 +319,28 @@ fn split_chapters(pages: &[String], bookmarks: &[Bookmark]) -> Vec<Chapter> {
 /// 按页抽 PDF 的文本层（不渲染版面、不识别图片）。
 ///
 /// 主路径是内置的 `pdf-extract`；它对某些字体（如 ESP32-C6 的技术参考手册）会 panic，
-/// 这时回落到 poppler 的 `pdftotext`。
+/// 这时回落到 poppler 的 `pdftotext`。它不报错但把表格页的词粘成一串时也改用 poppler，
+/// 否则整张引脚总表会变成一行没有空格的文本，检索与阅读都用不了。
 fn extract_pages(path: &Path) -> Result<Vec<String>, String> {
     match extract_pages_mem(path) {
+        Ok(pages) if glued_words(&pages) => Ok(extract_pages_poppler(path).unwrap_or(pages)),
         Ok(pages) => Ok(pages),
         Err(mem_err) => extract_pages_poppler(path).map_err(|poppler_err| {
             format!("{mem_err} (poppler `pdftotext` failed too: {poppler_err})")
         }),
     }
+}
+
+/// 抽出的文本里是否有整页被粘成了一串词（页内字符数够多、以拉丁字母数字为主、几乎没有空格）。
+///
+/// 中文之类本来就不分词的语言不算：它们空格本来就少。
+fn glued_words(pages: &[String]) -> bool {
+    pages.iter().any(|page| {
+        let chars = page.chars().count();
+        let latin = page.chars().filter(|c| c.is_ascii_alphanumeric()).count();
+        let spaces = page.chars().filter(|c| *c == ' ').count();
+        chars >= 400 && latin * 100 >= chars * 50 && spaces * 100 < chars * MIN_SPACE_PERCENT
+    })
 }
 
 /// 用 poppler 的 `pdftotext` 抽逐页文本（`pdf-extract` 解析失败时的兜底）。
@@ -353,6 +429,10 @@ fn write_chapters(source: &Path, dir: &Path) -> Result<Vec<PathBuf>, String> {
             "`{}` has no text layer (a scanned PDF?); read it with `read_doc` or keep the images instead",
             source.display()
         ));
+    }
+    if !has_prose(&pages) {
+        // 图纸而不是手册：原件留在目录里给 `read_doc`，不产章节文件。
+        return Ok(Vec::new());
     }
     let stem = stem_of(source);
     let bookmarks = read_bookmarks(source);
@@ -443,14 +523,17 @@ fn write_overview(dir: &Path, board: &str) -> Result<PathBuf, String> {
         } else {
             format!(" — {heading}")
         };
-        text.push_str(&format!("- `{name}` ({} KB){suffix}\n", size / 1024));
+        text.push_str(&format!(
+            "- `{name}` ({} KB){suffix}\n",
+            size.div_ceil(1024)
+        ));
     }
 
     let pdfs: Vec<&(String, Kind, u64)> = assets.iter().filter(|a| a.1 == Kind::Pdf).collect();
     if !pdfs.is_empty() {
         text.push_str("\n## PDF originals (kept for lookups; read with `read_doc`)\n\n");
         for (name, _, size) in pdfs.iter().take(MAX_ASSETS_IN_OVERVIEW) {
-            text.push_str(&format!("- `{name}` ({} KB)\n", size / 1024));
+            text.push_str(&format!("- `{name}` ({} KB)\n", size.div_ceil(1024)));
         }
     }
 
@@ -460,7 +543,7 @@ fn write_overview(dir: &Path, board: &str) -> Result<PathBuf, String> {
             "\n## Images (open with `read`; the vision model reads pin silkscreen / wiring)\n\n",
         );
         for (name, _, size) in images.iter().take(MAX_ASSETS_IN_OVERVIEW) {
-            text.push_str(&format!("- `{name}` ({} KB)\n", size / 1024));
+            text.push_str(&format!("- `{name}` ({} KB)\n", size.div_ceil(1024)));
         }
     }
 
@@ -514,11 +597,240 @@ pub(super) fn run_import(args: &Value, root: &Path, cwd: &Path) -> Result<ToolRe
         }
     }
     match kind {
+        Kind::Pdf if chapters.is_empty() => out.push_str(
+            "\n\nNo chapter files: the text layer is only labels (a schematic or a drawing). \
+             Open the original with `read_doc`.",
+        ),
         Kind::Pdf => out.push_str("\n\nText description is in the chapter files; use `read_doc` for the original layout."),
         Kind::Image => out.push_str("\n\nThis is an image: view it with `read` (vision model) when pin silkscreen or wiring matters."),
         Kind::Text => out.push_str("\n\nIt is a text file, so `hardware_search` picks it up as-is."),
     }
     Ok(ToolResult::text(out))
+}
+
+/// 把生成的章节文件拆成「头（标题与来源注释）」与「正文」；不是生成的文件返回 `None`。
+fn split_origin(text: &str) -> Option<(String, String)> {
+    let mut header: Vec<&str> = Vec::new();
+    let mut body: Vec<&str> = Vec::new();
+    let mut in_body = false;
+    for line in text.lines() {
+        if in_body {
+            body.push(line);
+        } else {
+            header.push(line);
+            if line.trim_start().starts_with(ORIGIN_MARKER) {
+                in_body = true;
+            }
+        }
+    }
+    in_body.then(|| (header.join("\n"), body.join("\n")))
+}
+
+/// 按行把正文切成不超过 [`TIDY_CHUNK_CHARS`] 的块（一行本身超限时独占一块）。
+fn chunk_body(body: &str) -> Vec<String> {
+    let mut chunks: Vec<String> = Vec::new();
+    let mut current = String::new();
+    for line in body.lines() {
+        if !current.is_empty()
+            && current.chars().count() + line.chars().count() + 1 > TIDY_CHUNK_CHARS
+        {
+            chunks.push(std::mem::take(&mut current));
+        }
+        if !current.is_empty() {
+            current.push('\n');
+        }
+        current.push_str(line);
+    }
+    if !current.trim().is_empty() {
+        chunks.push(current);
+    }
+    chunks
+}
+
+/// 资料目录名（也就是板卡名）。
+fn dir_name(dir: &Path) -> String {
+    dir.file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| "datasheets".to_string())
+}
+
+/// 待复核的目录：`board` 给了就只那个，否则 `datasheets/` 下每个目录。
+fn tidy_targets(args: &Value, root: &Path) -> Result<Vec<PathBuf>, ToolError> {
+    let Some(board) = opt_string(args, "board") else {
+        let Ok(entries) = fs::read_dir(root) else {
+            return Ok(Vec::new());
+        };
+        let mut dirs: Vec<PathBuf> = entries
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.is_dir())
+            .collect();
+        dirs.sort();
+        return Ok(dirs);
+    };
+    if !is_plain_name(&board) {
+        return Err(ToolError(format!(
+            "`{board}` is not a usable directory name: use letters, digits, `.`, `_` or `-`"
+        )));
+    }
+    let dir = root.join(&board);
+    if !dir.is_dir() {
+        return Err(ToolError(format!(
+            "`{}` is not a datasheet directory",
+            dir.display()
+        )));
+    }
+    Ok(vec![dir])
+}
+
+/// 把一批章节文件交给模型复核，原地改写。
+///
+/// 返回（复核的文件数，少掉的字符数，跳过的文件与原因）。
+async fn review_dir(
+    model: &ModelConfig,
+    dir: &Path,
+) -> Result<(usize, usize, Vec<String>), String> {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Err(format!("could not read `{}`", dir.display()));
+    };
+    let mut files: Vec<PathBuf> = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| classify(path) == Some(Kind::Text))
+        .collect();
+    files.sort();
+
+    let mut reviewed = 0usize;
+    let mut saved = 0usize;
+    let mut skipped: Vec<String> = Vec::new();
+    for path in files {
+        let Ok(text) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Some((header, body)) = split_origin(&text) else {
+            continue;
+        };
+        let total = body.chars().count();
+        let mut cleaned: Vec<String> = Vec::new();
+        let mut failure: Option<String> = None;
+        for chunk in chunk_body(&body) {
+            let max_tokens = model.max_tokens.filter(|m| *m > 0).unwrap_or(8192);
+            match provider::simple_completion(model, TIDY_SYSTEM, &chunk, Some(max_tokens)).await {
+                Ok((text, _usage)) => cleaned.push(text.trim().to_string()),
+                Err(err) => {
+                    failure = Some(format!("`{}`: {err}", file_label(&path)));
+                    break;
+                }
+            }
+        }
+        // 某一块失败就不写回：半份清洗过的文件比脏的更糟。
+        if let Some(note) = failure {
+            skipped.push(note);
+            continue;
+        }
+
+        let after_body = cleaned.join("\n\n");
+        let kept = after_body.chars().count();
+        // 内容掉了大半只能是模型截断或乱删：这一份保持原样，别把手册洗没了。
+        if total > 0 && kept * 100 < total * KEEP_PERCENT {
+            skipped.push(format!(
+                "`{}`: the model dropped {}% of the text, left the original alone",
+                file_label(&path),
+                100 - kept * 100 / total
+            ));
+            continue;
+        }
+        saved += total.saturating_sub(kept);
+        reviewed += 1;
+        fs::write(&path, format!("{header}\n{after_body}\n"))
+            .map_err(|err| format!("could not write `{}`: {err}", path.display()))?;
+    }
+    write_overview(dir, &dir_name(dir))?;
+    Ok((reviewed, saved, skipped))
+}
+
+/// 文件在错误信息里的名字（只给文件名，目录太长）。
+fn file_label(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| path.display().to_string())
+}
+
+/// 执行复核：用当前会话的模型逐章重写生成的 Markdown。
+pub(super) async fn run_tidy(
+    args: &Value,
+    root: &Path,
+    parent_model: Option<&str>,
+    session_id: Option<String>,
+) -> Result<ToolResult, ToolError> {
+    let dirs = tidy_targets(args, root)?;
+    if dirs.is_empty() {
+        return Ok(ToolResult::text(format!(
+            "No datasheet directories under `{}` yet.",
+            root.display()
+        )));
+    }
+    let Some((provider, model_id)) = parent_model.and_then(split_model) else {
+        return Err(ToolError(
+            "no model to review with: pick one first with `/model`".to_string(),
+        ));
+    };
+    auth::ensure_oauth_valid(&provider)
+        .await
+        .map_err(|err| ToolError(format!("{err}")))?;
+    // 会话 id 要带给 provider：opencode 这类缺 `x-opencode-session` 会直接 400。
+    let model = model_resolver::configured_model(&provider, &model_id, None, session_id)
+        .map_err(|err| ToolError(format!("{err}")))?;
+
+    let mut out = String::new();
+    for dir in dirs {
+        let board = dir_name(&dir);
+        let (reviewed, saved, skipped) = review_dir(&model, &dir).await.map_err(ToolError)?;
+        match reviewed {
+            0 => out.push_str(&format!("\n- **{board}**: nothing to review")),
+            _ => out.push_str(&format!(
+                "\n- **{board}**: {reviewed} chapter file(s) cleaned, {saved} character(s) of page \
+                 furniture removed"
+            )),
+        }
+        for note in skipped {
+            out.push_str(&format!("\n  - skipped {note}"));
+        }
+    }
+    Ok(ToolResult::text(format!(
+        "Datasheets reviewed by `{provider}/{model_id}`: running headers, footers, page numbers and \
+         watermark litter removed, technical content kept as-is.{out}"
+    )))
+}
+
+/// 构造 `hardware_datasheet_tidy` 的工具定义。
+pub(super) fn tidy_tool() -> ExtensionTool {
+    let mut tool = ExtensionTool::simple(
+        TOOL_TIDY,
+        "Have the current model clean up the chapter Markdown this extension generated: it reads \
+         every generated file in the directory (or one `board`), strips running headers, footers, \
+         page numbers and watermark litter, keeps tables and technical values as-is, writes the \
+         result back and rebuilds overview.md. Use it after importing a manual whose chapters came \
+         out noisy. Hand-written files are left alone.",
+        json!({
+            "type": "object",
+            "properties": {
+                "board": {
+                    "type": "string",
+                    "description": "Directory under the datasheets directory to tidy (e.g. `esp32c6`). Omit to tidy every directory."
+                }
+            }
+        }),
+        "Clean up generated datasheet chapters with the model",
+    )
+    .with_exposure(ToolExposure::Deferred)
+    .with_annotations(ToolAnnotations {
+        read_only: false,
+        destructive: false,
+        idempotent: true,
+    });
+    tool.label = Some(super::tool_labels());
+    tool
 }
 
 /// 构造 `hardware_datasheet_import` 的工具定义。
@@ -665,6 +977,66 @@ mod tests {
         assert!(text.contains("chip.pdf"), "{text}");
         assert!(text.contains("board.jpg"), "{text}");
         assert!(text.contains("`read`"), "{text}");
+    }
+
+    #[test]
+    fn a_schematic_full_of_labels_is_not_text() {
+        let labels = "RGB LED\nR10\n22R\nCOC1\nU3\nAMS1117-3.3V\nGND\nGPIO9\nVDD\nDOUT\n";
+        assert!(!has_prose(&[page(labels)]), "孤立标签不是正文");
+        let manual = "The GPIO matrix routes any peripheral signal to any pin.\n\n";
+        assert!(has_prose(&[page(manual)]), "成句的手册正文要留下");
+        let chinese = "第 4 章 系统和存储器\n芯片内部的存储器和外设都映射到同一份地址空间。\n";
+        assert!(has_prose(&[page(chinese)]), "中文正文也要留下");
+    }
+
+    #[test]
+    fn a_glued_table_page_is_detected() {
+        let glued = format!(
+            "Table7-1.QFN40PinOverview{}AntAnalog",
+            "PinPinPin".repeat(40)
+        );
+        assert!(glued_words(&[page(&glued)]), "粘成一串的表格页要认出来");
+        let prose = "The GPIO matrix routes any peripheral signal to any pin. ".repeat(20);
+        assert!(!glued_words(&[page(&prose)]), "正常正文不算粘连");
+        let chinese =
+            "第 4 章 系统和存储器\n芯片内部的存储器和外设都映射到同一份地址空间。".repeat(20);
+        assert!(!glued_words(&[page(&chinese)]), "中文本来就不分词");
+        assert!(!glued_words(&[page("short")]), "短页不做判断");
+    }
+
+    #[test]
+    fn origin_marker_separates_generated_from_hand_written() {
+        let generated = "# 2 Pins\n\n<!-- from chip.pdf · pages 3-5 -->\n\nbody\n";
+        let (header, body) = split_origin(generated).expect("生成文件应带来源注释");
+        assert!(header.ends_with("pages 3-5 -->"), "{header}");
+        assert_eq!(body.trim(), "body");
+        assert!(split_origin("# notes\n\nhand written\n").is_none());
+        assert!(split_origin("").is_none(), "空文件没有来源注释");
+    }
+
+    #[test]
+    fn chunks_respect_the_size_cap_and_keep_every_line() {
+        let lines = (0..2000).map(|n| format!("line {n}")).collect::<Vec<_>>();
+        let body = lines.join("\n");
+        let chunks = chunk_body(&body);
+        assert!(chunks.len() > 1, "大正文要切块: {}", chunks.len());
+        for chunk in &chunks {
+            assert!(
+                chunk.chars().count() <= TIDY_CHUNK_CHARS,
+                "块超限: {}",
+                chunk.chars().count()
+            );
+        }
+        let rejoined = chunks.join("\n");
+        assert_eq!(rejoined, body, "切块不能丢行或改行");
+    }
+
+    #[test]
+    fn a_single_huge_line_still_gets_sent() {
+        let line = "x".repeat(TIDY_CHUNK_CHARS + 100);
+        let chunks = chunk_body(&line);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0], line);
     }
 
     #[test]

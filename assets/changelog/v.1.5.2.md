@@ -168,9 +168,13 @@
   Markdown it generates and rebuilding `overview.md` on every import. A PDF is split into
   `-chNN-<chapter>.md` files from its PDF bookmarks (whole document as one `full text` chapter
   when it has none; text layer only, the bundled `pdf-extract` first and poppler's `pdftotext` when
-  that parser fails; a scanned PDF is refused with a pointer to `read_doc`), while images are kept
-  as originals to be looked at with `read`. When no
-  text matches, `hardware_search` lists the PDFs and images in the directory and says which tool
+  that parser fails; a scanned PDF is refused with a pointer to `read_doc`, and a drawing whose
+  text layer is only labels — a schematic, say — is kept as an original too, without chapter
+  files), while images are kept as originals to be looked at with `read`.
+  `hardware_datasheet_tidy` then has the current model retire the page furniture the extractor kept
+  — running headers, footers, page numbers, watermark litter — while leaving tables, register
+  offsets, pin numbers and electrical values alone; hand-written files are untouched. When no text
+  matches, `hardware_search` lists the PDFs and images in the directory and says which tool
   opens them.
 
 ### Changed
@@ -528,8 +532,10 @@
 - **`hardware` 能导入真手册，不再只认纯文本**：`hardware_datasheet_import` 把一块芯片或板子的资料
   收进 `agent_dir()/extensions/hardware/datasheets/` 下它自己的目录——PDF 与板卡照片和生成的 Markdown
   放在一起，每次导入重建 `overview.md`。PDF 按**书签（目录）**拆成 `-chNN-<章节>.md`，没有书签就整本写一份
-  `full text`（只抽文本层，内置 `pdf-extract` 为主、它解析失败时回落 poppler 的 `pdftotext`；扫描件直接拒绝并指向 `read_doc`），图片保留原件，
-  用 `read` 交给视觉模型看丝印与接线。文本没命中时，`hardware_search` 会列出目录里的 PDF 与图片，
+  `full text`（只抽文本层，内置 `pdf-extract` 为主、它解析失败时回落 poppler 的 `pdftotext`；扫描件或原理图这类只有零散标签、成不了句的图纸只留原件不产章节，并指向 `read_doc`），图片保留原件，
+  用 `read` 交给视觉模型看丝印与接线。`hardware_datasheet_tidy` 再把生成的章节交给当前模型复核：
+  删掉抽取器留下的页眉、页脚、页码与水印碎片，表格、寄存器偏移、引脚编号与电气参数原样保留，
+  手写文件不动。文本没命中时，`hardware_search` 会列出目录里的 PDF 与图片，
   并说明该用哪个工具打开。
 
 ### 变更

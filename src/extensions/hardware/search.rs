@@ -58,6 +58,13 @@ hardware_datasheet_import(source: "~/Downloads/esp32-c6_datasheet_en.pdf", board
 - Images: the original is stored as-is; open it with `read` (vision model) for silkscreen and wiring.
 - Originals and chapter files stay in the same directory, and `overview.md` is rebuilt on every
   import.
+- Extraction keeps the page layout, so a chapter starts out littered with running headers, footers,
+  page numbers and watermark fragments. That is what the tidy pass is for.
+
+`hardware_datasheet_tidy` sends every generated chapter file in the directory (or just one
+`board: "esp32c6"`) to the current model and writes back what comes home: the page furniture gone,
+tables, register offsets, pin numbers and electrical values untouched. Hand-written `.md` / `.csv`
+files carry no origin marker and are left alone; `overview.md` is rebuilt afterwards.
 
 ## Search order
 
