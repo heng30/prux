@@ -11,12 +11,13 @@
 //! 引脚别名不需要第二套机制：引脚表的一行（`PA9,USART1_TX,TIM1_CH2`）就是一块，
 //! 引脚名与复用功能名都能命中。
 //!
-//! **2. 看板子**（[`probe`]）——通过 `probe-rs` 直连调试探针（板载 ST-Link 也算）：
+//! **2. 看板子**（[`probe`]）——通过系统里的 `probe-rs` 命令直连调试探针（板载 ST-Link 也算）：
 //! `hardware_board_info` 读芯片名与架构，`hardware_memory_map` 列 RAM/Flash 区间，
 //! `hardware_memory_read` 按地址读一段内存并渲染 hex dump。没配置板卡时
 //! `hardware_board_info` 先列探针、让 probe-rs 自己认芯片，`hardware_update_board` 把
 //! 认出的 target 名写进配置；探针不可用时前两个工具**回落 datasheet 静态表**
 //! （[`boards`]）——「这块板是什么芯片」不需要插板就能答。
+//! 走探针的工具需要机器上装了 `probe-rs`（没装时工具结果里给出 [`probe::INSTALL_HINT`]）。
 //!
 //! 配置在 `agent_dir()/extensions/hardware/config.json`，一个数组，每块板子一项：
 //!
@@ -32,8 +33,8 @@
 //! - `devices`：这块板上的设备别名（`"bridge"` = Uno Q Bridge 默认地址）；
 //! - `baud`：这块板的串口波特率，省略用串口默认值。
 //!
-//! 探针 IO 是阻塞的（USB 传输），因此探针类工具都在 `spawn_blocking` 里跑；
-//! 同一时刻只能有一个会话占着探针——这是 probe-rs 的语义。
+//! 探针 IO 是阻塞的（等子进程 + USB 传输），因此探针类工具都在 `spawn_blocking` 里跑；
+//! 子进程一律 `--non-interactive` 且输出走管道，不接管终端。
 //!
 //! 工具全部是延迟工具（`ToolExposure::Deferred`）：模型先用 `tool_search` 检索到
 //! `hardware_*`，下一轮才拿到声明，因此隐式依赖 `tool-search` 扩展。
@@ -172,7 +173,7 @@ fn board_info(args: &Value) -> Result<ToolResult, ToolError> {
             Err(err) => {
                 let Some(spec) = spec else {
                     return Ok(ToolResult::error(format!(
-                        "probe-rs could not attach and `{board}` has no datasheet entry: {err}"
+                        "probe-rs could not read `{board}` and it has no datasheet entry: {err}"
                     )));
                 };
                 return Ok(ToolResult::text(static_board_info(spec, Some(&err))));
@@ -191,7 +192,11 @@ fn board_info(args: &Value) -> Result<ToolResult, ToolError> {
 
 /// 没配置板卡时的主动探测：列探针，再让 probe-rs 自己认芯片。
 fn detect_board_info() -> ToolResult {
-    let probes = probe::list_probes();
+    // 没装 probe-rs 时不要伪装成「没插探针」，否则会把用户送去查 udev 规则
+    let probes = match probe::list_probes() {
+        Ok(probes) => probes,
+        Err(err) => return ToolResult::error(err),
+    };
     if probes.is_empty() {
         return ToolResult::error(format!(
             "No board selected and no debug probe found. Pass `board` or add one to {}: known boards: {}.",

@@ -21,9 +21,6 @@ use crate::{
     },
     utils::paths::resolve_path,
 };
-use probe_rs::flashing::{
-    BinLoader, BinOptions, ElfLoader, ElfOptions, HexLoader, Uf2Loader, download_file,
-};
 use serde_json::{Value, json};
 use std::{
     fs,
@@ -134,6 +131,16 @@ impl ImageKind {
             ImageKind::Uf2 => "UF2",
         }
     }
+
+    /// probe-rs 的 `--binary-format` 取值。
+    pub(super) fn probe_format(self) -> &'static str {
+        match self {
+            ImageKind::Elf => "elf",
+            ImageKind::Hex => "hex",
+            ImageKind::Bin => "bin",
+            ImageKind::Uf2 => "uf2",
+        }
+    }
 }
 
 /// 把一份固件烧进目标 Flash。
@@ -146,21 +153,8 @@ pub(super) fn flash(
     kind: ImageKind,
     base_address: Option<u64>,
 ) -> Result<String, String> {
-    let mut session = probe::attach(chip)?;
-    let downloaded = match kind {
-        ImageKind::Elf => download_file(&mut session, file, ElfLoader(ElfOptions::default())),
-        ImageKind::Hex => download_file(&mut session, file, HexLoader),
-        ImageKind::Uf2 => download_file(&mut session, file, Uf2Loader),
-        ImageKind::Bin => download_file(
-            &mut session,
-            file,
-            BinLoader(BinOptions {
-                base_address,
-                skip: 0,
-            }),
-        ),
-    };
-    downloaded.map_err(|e| format!("flashing `{}` failed: {e}", file.display()))?;
+    probe::download(chip, file, kind.probe_format(), base_address)
+        .map_err(|e| format!("flashing `{}` failed: {e}", file.display()))?;
 
     let address_note = match (kind, base_address) {
         (ImageKind::Bin, Some(address)) => format!(" at 0x{address:08X}"),

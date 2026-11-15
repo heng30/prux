@@ -80,7 +80,6 @@ strum_macros = { version = "0.28", default-features = false }
 unicode-width = { version = "0.2", default-features = false }
 http-body-util = { version = "0.1", default-features = false }
 pulldown-cmark = { version = "0.13", default-features = false }
-probe-rs-espressif = { version = "0.32", default-features = false }
 unicode-segmentation = { version = "1.13", default-features = false }
 unicode-normalization = { version = "0.1", default-features = false }
 
@@ -174,10 +173,6 @@ rquickjs = { version = "0.14", default-features = false, features = [
   "rust-alloc",
   "properties",
   "array-buffer",
-] }
-probe-rs = { version = "0.32", default-features = false, features = [
-  "builtin-targets",
-  "builtin-formats",
 ] }
 serde_json = { version = "1.0", default-features = false, features = [
   "preserve_order",

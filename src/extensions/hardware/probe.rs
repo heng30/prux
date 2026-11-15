@@ -1,137 +1,212 @@
-//! SWD/JTAG 通道：通过 `probe-rs` 直连调试探针读取目标板信息与内存。
+//! SWD/JTAG 通道：调系统的 `probe-rs` 命令行读取目标板信息与内存。
 //!
 //! 工具共用这里的实现：
-//! - `hardware_board_info`：探针实时读芯片名与架构（失败回落静态表）；没配置板卡时先用
-//!   [`auto_session`] 让 probe-rs 自己认芯片（[`detect`]）；
+//! - `hardware_board_info`：探针实时读芯片名（失败回落静态表）；没配置板卡时先用
+//!   [`detect`] 让 probe-rs 自己认芯片；
 //! - `hardware_update_board`：把 [`detect`] 认出的 target 名写进配置；
-//! - `hardware_memory_map`：从探针的 target 定义里列出 RAM / Flash 区间；
+//! - `hardware_memory_map`：列出目标定义里的 RAM / Flash 区间；
 //! - `hardware_memory_read`：按地址读一段内存并渲染成 hex dump。
 //!
 //! 约束：
-//! - 探针 IO 是**阻塞**的（USB 传输），调用方必须放进 `spawn_blocking`，不能直接
-//!   在 async 任务里跑；
-//! - `Session::auto_attach` 会自动选第一个可用探针并识别目标芯片，因此同一时刻只能
-//!   有一个会话占着探针——这是 probe-rs 的语义，不是本模块的限制；
-//! - 没插探针 / 芯片名不认识时返回**可读的错误串**，由工具层决定是否回落静态资料。
+//! - 这里**不内嵌** probe-rs 库，全部经外部 `probe-rs` 命令；机器上没装时
+//!   [`INSTALL_HINT`] 会原样回到工具结果里，指明怎么装；
+//! - 子进程按 AGENTS.md 的口径**不继承终端**：stdin 接 null、stdout/stderr 走管道，
+//!   所以必须带 `--non-interactive`，否则 probe-rs 会交互式问选哪支探针、在 TUI 里挂住；
+//! - 调用是阻塞的（等子进程 + USB 传输），调用方仍要走 `spawn_blocking`；
+//! - 没有探针 / 芯片名不认识时返回**可读的错误串**，由工具层决定是否回落静态资料。
 
-use probe_rs::{
-    MemoryInterface, Session, SessionConfig,
-    config::{MemoryRegion, TargetSelector},
-    probe::list::Lister,
+use crate::utils::display::sanitize_output;
+use std::{
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
+    sync::atomic::{AtomicUsize, Ordering},
 };
-use std::sync::Once;
+
+/// 外部探针工具名：走 PATH 查找。
+const PROBE_BINARY: &str = "probe-rs";
 
 /// hex dump 每行的字节数。
 const DUMP_COLS: usize = 16;
 
-/// 一次读内存的字节上限：再长就该用 `probe-rs` CLI 或 gdb，不该经模型上下文。
+/// 一次读内存的字节上限：再长就该直接跑 probe-rs CLI，不该经模型上下文。
 pub const MAX_READ_BYTES: usize = 256;
 
-/// 自动挂载探针并按芯片识别目标；`chip` 是 probe-rs 的 target 名（如 `STM32F401RETx`）。
-pub(super) fn attach(chip: &str) -> Result<Session, String> {
-    register_plugins();
-    Session::auto_attach(chip, SessionConfig::default())
-        .map_err(|e| format!("probe-rs could not attach to `{chip}`: {e}"))
+/// 找不到 `probe-rs` 时回给用户的安装指南（原文进工具结果，所以写清命令与文档链接）。
+pub const INSTALL_HINT: &str = "\
+`probe-rs` was not found on PATH, and the probe tools shell out to it. Install it, then retry:
+- cargo (Rust 1.89+): `cargo install probe-rs-tools --locked`
+- prebuilt binaries: https://probe.rs/docs/getting-started/installation/
+- Linux: also install the udev rules so probes are reachable without root: https://probe.rs/docs/getting-started/probe-setup/
+Check the install with `probe-rs list`.";
+
+/// 跑一次 `probe-rs <args>`，成功返回 stdout，失败返回最后一条错误行。
+fn run(args: &[String]) -> Result<String, String> {
+    run_with(PROBE_BINARY, args)
 }
 
-/// 一次性注册 espressif 插件：ESP 的探针驱动与芯片表都不在 probe-rs 内置表里。
-fn register_plugins() {
-    static ONCE: Once = Once::new();
-    ONCE.call_once(probe_rs_espressif::register_plugin);
+/// 按指定的二进制名跑一次，`binary` 抽成参数是为了能在离线测试里验证「找不到命令」的分支。
+fn run_with(binary: &str, args: &[String]) -> Result<String, String> {
+    let output = Command::new(binary)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|err| match err.kind() {
+            std::io::ErrorKind::NotFound => INSTALL_HINT.to_string(),
+            _ => format!("could not run `{binary}`: {err}"),
+        })?;
+
+    let stdout = sanitize_output(&String::from_utf8_lossy(&output.stdout));
+    if output.status.success() {
+        return Ok(stdout);
+    }
+    let stderr = sanitize_output(&String::from_utf8_lossy(&output.stderr));
+    // probe-rs 先刷一串 WARN 再报真正的 Error，所以取最后一条非空行
+    let reason = last_line(&stderr)
+        .or_else(|| last_line(&stdout))
+        .unwrap_or_else(|| "no output".to_string());
+    Err(format!("`{binary} {}` failed: {reason}", args.join(" ")))
 }
 
-/// 已连接探针的展示串（`probe-rs list` 的同款格式），空 vec = 没插探针。
-pub fn list_probes() -> Vec<String> {
-    register_plugins();
-    Lister::new()
-        .list_all()
-        .into_iter()
-        .enumerate()
-        .map(|(index, probe)| format!("[{index}]: {probe}"))
+/// 最后一条非空行（去掉首尾空白）。
+fn last_line(text: &str) -> Option<String> {
+    text.lines()
+        .map(str::trim)
+        .rfind(|line| !line.is_empty())
+        .map(str::to_string)
+}
+
+/// 已连接探针的展示行（`[0]: …`，与 `probe-rs list` 同格式）；空 vec = 没插探针。
+pub fn list_probes() -> Result<Vec<String>, String> {
+    let stdout = run(&["list".to_string()])?;
+    Ok(parse_probe_list(&stdout))
+}
+
+/// 从 `probe-rs list` 的输出里挑出 `[n]:` 行（无探针时它只打一句 `No debug probes were found.`）。
+fn parse_probe_list(stdout: &str) -> Vec<String> {
+    stdout
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with('['))
+        .map(str::to_string)
         .collect()
 }
 
-/// 让 probe-rs 自己读芯片识别信息挑 target（不需要配置里的芯片名）。
-fn auto_session() -> Result<Session, String> {
-    register_plugins();
-    Session::auto_attach(TargetSelector::Auto, SessionConfig::default())
-        .map_err(|e| format!("probe-rs could not identify the attached chip: {e}"))
+/// 让探针自己认芯片，返回 probe-rs 的 target 名（`probe-rs info` 的 `Detected chip:` 行）。
+fn detected_chip() -> Result<String, String> {
+    let stdout = run(&["info".to_string(), "--non-interactive".to_string()])?;
+    parse_detected_chip(&stdout).ok_or_else(|| {
+        format!(
+            "probe-rs could not identify the attached chip:\n{}",
+            stdout.trim()
+        )
+    })
 }
 
-/// 自动识别目标，返回 `probe-rs` 的 target 名与渲染好的芯片信息。
+/// 从 `probe-rs info` 的输出里取芯片名；没有这一行时返回 `None`。
+fn parse_detected_chip(stdout: &str) -> Option<String> {
+    stdout
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("Detected chip:"))
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+}
+
+/// 自动识别目标，返回 probe-rs 的 target 名与芯片信息（内核 + 内存区间）。
 pub fn detect() -> Result<(String, String), String> {
-    let session = auto_session()?;
-    let chip = session.target().name.clone();
-    Ok((chip, describe_session(&session)))
+    let chip = detected_chip()?;
+    Ok((chip.clone(), describe_chip(&chip)?))
 }
 
-/// 探针视角下的芯片名、架构与内存映射（多行文本）。
+/// 探针视角下的芯片信息：先确认探针认出的芯片，再列它的内核与内存区间。
+///
+/// `chip` 是配置里的期望值（probe-rs target 名）；探针认出的名字与它不一致时一并说明，
+/// 因为那通常意味着配置写错了芯片。
 pub fn describe(chip: &str) -> Result<String, String> {
-    Ok(describe_session(&attach(chip)?))
-}
-
-/// 把已挂载的会话渲染成芯片名 + 架构 + 内存映射。
-fn describe_session(session: &Session) -> String {
-    let target = session.target();
-    let mut out = format!(
-        "Target: {}\nArchitecture: {:?}\n\nMemory map:\n",
-        target.name,
-        session.architecture()
-    );
-
-    let regions = memory_regions(session);
-    if regions.is_empty() {
-        out.push_str("(the target definition lists no RAM or Flash regions)\n");
-    } else {
-        out.push_str(&regions);
-    }
-    out.push_str("\n(Read over USB/SWD — the target needs no firmware for this.)");
-    out
-}
-
-/// 只列内存映射（`hardware_memory_map` 用）；探针可用时优先用它。
-pub fn memory_map(chip: &str) -> Result<String, String> {
-    let session = attach(chip)?;
-    let regions = memory_regions(&session);
-    if regions.is_empty() {
-        // 探针连上了但 target 定义里没有区间：这比「读不到」更值得说清楚
-        return Ok("(the target definition lists no RAM or Flash regions)".to_string());
-    }
-    Ok(regions)
-}
-
-/// 把 target 的 RAM / NVM 区间渲染成文本（空串 = 定义里没有这两类区间）。
-fn memory_regions(session: &Session) -> String {
-    let mut out = String::new();
-    for region in session.target().memory_map.iter() {
-        let (label, range) = match region {
-            MemoryRegion::Ram(ram) => ("RAM", &ram.range),
-            MemoryRegion::Nvm(flash) => ("Flash", &flash.range),
-            _ => continue,
-        };
+    let detected = detected_chip()?;
+    let mut out = format!("Probe detected chip: {detected}\n");
+    if detected != chip {
         out.push_str(&format!(
-            "{label}: 0x{:08X} - 0x{:08X} ({} KB)\n",
-            range.start,
-            range.end,
-            (range.end - range.start) / 1024
+            "(config.json says `{chip}`; run `hardware_update_board` to save the detected name)\n"
         ));
     }
-    out
+    out.push_str(&describe_chip(&detected)?);
+    Ok(out)
+}
+
+/// 列芯片定义里的内核与 RAM / Flash 区间（`probe-rs chip info`，只查表、不需要探针）。
+pub fn memory_map(chip: &str) -> Result<String, String> {
+    describe_chip(chip)
+}
+
+/// `probe-rs chip info <chip>` 的渲染结果（芯片名、内核、内存区间）。
+fn describe_chip(chip: &str) -> Result<String, String> {
+    run(&["chip".to_string(), "info".to_string(), chip.to_string()])
 }
 
 /// 读一段内存并渲染成 hex dump。
 pub fn read_memory(chip: &str, address: u64, length: usize) -> Result<String, String> {
-    let mut session = attach(chip)?;
-    let mut core = session
-        .core(0)
-        .map_err(|e| format!("probe-rs could not open core 0: {e}"))?;
-
     let length = length.clamp(1, MAX_READ_BYTES);
-    let mut buffer = vec![0u8; length];
-    core.read_8(address, &mut buffer)
-        .map_err(|e| format!("probe-rs could not read {length} byte(s) at 0x{address:08X}: {e}"))?;
+    let path = dump_file_path();
+    let args: Vec<String> = [
+        "read".to_string(),
+        "b8".to_string(),
+        format!("0x{address:08X}"),
+        length.to_string(),
+        "--chip".to_string(),
+        chip.to_string(),
+        "--output".to_string(),
+        path.display().to_string(),
+        "--format".to_string(),
+        "binary".to_string(),
+        "--non-interactive".to_string(),
+    ]
+    .to_vec();
 
-    Ok(hex_dump(address, &buffer))
+    let result = run(&args);
+    let bytes = std::fs::read(&path);
+    let _ = std::fs::remove_file(&path);
+    result?;
+    let bytes = bytes.map_err(|err| {
+        format!("probe-rs read {length} byte(s) at 0x{address:08X} but wrote no data: {err}")
+    })?;
+
+    Ok(hex_dump(address, &bytes))
+}
+
+/// 读内存用的临时文件名：进程内自增计数避免同进程并发调用互相覆盖。
+fn dump_file_path() -> PathBuf {
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
+    let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!("prux-probe-{}-{seq}.bin", std::process::id()))
+}
+
+/// 烧写固件：`format` 是 probe-rs 的 `--binary-format`（elf / hex / uf2 / bin）。
+///
+/// 固定带 `--verify`：写后读回校验，与工具描述里的承诺一致。
+pub(super) fn download(
+    chip: &str,
+    file: &Path,
+    format: &str,
+    base_address: Option<u64>,
+) -> Result<(), String> {
+    let mut args: Vec<String> = [
+        "download".to_string(),
+        file.display().to_string(),
+        "--chip".to_string(),
+        chip.to_string(),
+        "--binary-format".to_string(),
+        format.to_string(),
+        "--verify".to_string(),
+        "--non-interactive".to_string(),
+    ]
+    .to_vec();
+    if let Some(address) = base_address {
+        args.push("--base-address".to_string());
+        args.push(format!("0x{address:08X}"));
+    }
+    run(&args).map(|_| ())
 }
 
 /// 把字节渲染成 `0xADDR  XX XX …  ascii` 的三段式 hex dump。
@@ -220,10 +295,29 @@ mod tests {
     }
 
     #[test]
-    fn attach_failure_is_a_readable_error() {
-        // 无探针 / 未知芯片名时 probe-rs 都会失败：错误串必须点名芯片且不 panic
-        let err = describe("NoSuchChipXyz").unwrap_err();
-        assert!(err.contains("NoSuchChipXyz"), "{err}");
-        assert!(read_memory("NoSuchChipXyz", 0x2000_0000, 16).is_err());
+    fn probe_list_keeps_only_index_lines() {
+        let out = "The following debug probes were found:\n[0]: ST-Link V2 0483:3748:SERIAL\n[1]: ESP JTAG 303a:1001\n";
+        assert_eq!(
+            parse_probe_list(out),
+            vec![
+                "[0]: ST-Link V2 0483:3748:SERIAL".to_string(),
+                "[1]: ESP JTAG 303a:1001".to_string()
+            ]
+        );
+        assert!(parse_probe_list("No debug probes were found.\n").is_empty());
+    }
+
+    #[test]
+    fn detected_chip_is_read_from_the_info_output() {
+        let out = "Detected chip: esp32c6\nFor more detailed information about the target, run with the --verbose flag.\n";
+        assert_eq!(parse_detected_chip(out).as_deref(), Some("esp32c6"));
+        assert_eq!(parse_detected_chip("Could not attach to target.\n"), None);
+    }
+
+    #[test]
+    fn missing_binary_reports_the_install_hint() {
+        // 不碰 PATH，只换二进制名：错误串必须是安装指南而不是空 vec
+        let err = run_with("prux-no-such-probe-rs", &[]).unwrap_err();
+        assert!(err.contains("cargo install probe-rs-tools"), "{err}");
     }
 }
