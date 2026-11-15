@@ -172,8 +172,9 @@
   text layer is only labels — a schematic, say — is kept as an original too, without chapter
   files), while images are kept as originals to be looked at with `read`.
   `hardware_datasheet_tidy` then has the current model retire the page furniture the extractor kept
-  — running headers, footers, page numbers, watermark litter — while leaving tables, register
-  offsets, pin numbers and electrical values alone; hand-written files are untouched. When no text
+  — running headers, footers, page numbers, watermark litter, contents pages, and the stray pin
+  names and numbers that were a drawing's own lettering — while leaving tables, register offsets,
+  pin numbers and electrical values alone; hand-written files are untouched. When no text
   matches, `hardware_search` lists the PDFs and images in the directory and says which tool
   opens them.
 
@@ -534,7 +535,7 @@
   放在一起，每次导入重建 `overview.md`。PDF 按**书签（目录）**拆成 `-chNN-<章节>.md`，没有书签就整本写一份
   `full text`（只抽文本层，内置 `pdf-extract` 为主、它解析失败时回落 poppler 的 `pdftotext`；扫描件或原理图这类只有零散标签、成不了句的图纸只留原件不产章节，并指向 `read_doc`），图片保留原件，
   用 `read` 交给视觉模型看丝印与接线。`hardware_datasheet_tidy` 再把生成的章节交给当前模型复核：
-  删掉抽取器留下的页眉、页脚、页码与水印碎片，表格、寄存器偏移、引脚编号与电气参数原样保留，
+  删掉抽取器留下的页眉、页脚、页码、水印碎片、目录页，以及图上散落的引脚名与编号，表格、寄存器偏移、引脚编号与电气参数原样保留，
   手写文件不动。文本没命中时，`hardware_search` 会列出目录里的 PDF 与图片，
   并说明该用哪个工具打开。
 

@@ -51,8 +51,9 @@ const MAX_ASSETS_IN_OVERVIEW: usize = 40;
 /// 能收的图片扩展名。
 const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp", "bmp", "gif"];
 
-/// 复核后正文至少留这么多（占原字符数的百分数），低于它说明模型在丢内容而不是在删噪声。
-const KEEP_PERCENT: usize = 50;
+/// 复核后正文少于原字符数的这个百分比，就在结果里点名提醒过一眼：
+/// 目录页、图上字块本来就占篇幅，掉得多不代表模型出错，所以只提示、不拦下写回。
+const HEAVY_DROP_PERCENT: usize = 50;
 
 /// 复核正文时每块的字符上限：手册章节动辄几十 KB，按块送才不会撑爆上下文。
 const TIDY_CHUNK_CHARS: usize = 6000;
@@ -66,13 +67,33 @@ const ORIGIN_MARKER: &str = "<!-- from ";
 /// 复核用的系统提示词：只删版式噪声，不动技术内容。
 const TIDY_SYSTEM: &str = "\
 You clean text that was extracted from a chip manual PDF. The extractor kept the page layout, so
-the text is littered with things that are not content: running headers, footers, page numbers,
-watermark fragments, the chapter title repeated on every page, and blank-line runs.
+the text still carries things that are not content. Remove them, and nothing else. What counts as
+theirs is exactly this list:
 
-Remove exactly those. Keep everything else verbatim: tables, register names and offsets, bit
-fields, addresses, reset values, pin names and numbers, electrical values with their units,
-footnotes, figure captions and every sentence of substance. Never summarise, never reorder, never
-translate, never merge lines that were separate rows of a table.
+1. Running headers and footers: the chapter or section title repeated at the top or bottom of each
+   page, the company line (`Espressif Systems 42`), the feedback line (`Submit Documentation
+   Feedback ...`), the product and version line (`ESP32-C6 Series Datasheet v0.5`), the document
+   stamp (`PRELIMINARY`, `DRAFT`, `CONFIDENTIAL`), and the blank lines around them.
+2. Page numbers standing alone at the top or bottom of a page. A bare number inside a table is a
+   cell value, not a page number: keep it.
+3. Watermark litter: a run of one or two capital letters (`PR`, `EL`, `IM`, `AR`, `Y`) and
+   `GoBack`, left where the diagonal watermark crossed the page.
+4. Page-break markers: `Cont'd on next page`, `Table 2-4 – cont'd from previous page`.
+5. Front matter: a table of contents, a list of tables, a list of figures, with the page numbers
+   each of them lists.
+6. Figure lettering: the stray text a drawing carries — runs of bare numbers (`1`, `2`, ...) and
+   bare pin or part names (`GPIO3`, `XTAL_32K_P`, `VDD_SPA`, `RSPI`) that sit right before a
+   `Figure N-N.` caption, or between the page header and that caption. Drop the lettering and keep
+   the caption, which is the only useful part. Never apply this near a `Table N-N.` caption or
+   inside a table region: there such lines are the table's rows and cells.
+
+Everything outside that list stays verbatim: table rows, register names and offsets, bit fields,
+addresses, reset values, pin names and numbers, electrical values with their units, footnotes,
+figure and table captions, and every sentence of substance. Never summarise, never reorder, never
+translate, never reflow, never merge lines that were separate, never fix or normalise symbols
+(`Ω` stays `Ω`, `Ω` stays `Ω`), never add anything.
+
+A line you cannot tie to one of the six items above is content: keep it. When in doubt, keep.
 
 Reply with the cleaned text only: no preamble, no explanation, no code fences.";
 
@@ -175,14 +196,52 @@ impl Chapter {
         }
     }
 
-    /// 追加一页的正文（先清掉水印碎片）。
+    /// 追加一页的正文（先清掉水印碎片；图纸页只留图注与脚注）。
     fn push_page(&mut self, page: usize, text: &str) {
         self.last_page = page;
+        let body = if is_drawing_page(text) {
+            clean_drawing(text)
+        } else {
+            clean_page(text)
+        };
+        if body.trim().is_empty() {
+            return;
+        }
         if !self.body.is_empty() {
             self.body.push_str("\n\n");
         }
-        self.body.push_str(&clean_page(text));
+        self.body.push_str(&body);
     }
+}
+
+/// 图注行：`Figure 2-1. ESP32-C6 Pin Layout (QFN40, Top View)` / `图 2-1 …`。
+fn is_figure_caption(line: &str) -> bool {
+    let lowered = line.trim().to_lowercase();
+    lowered.starts_with("figure ") || lowered.starts_with("图 ")
+}
+
+/// 是不是图纸页：带图注，且除图注与页脚外没有成句的正文。
+///
+/// 引脚布局图、框图这类页图的文字层只有散落的引脚名与编号（`1`、`30 U0RXD`、
+/// `1801234567`），留着只会用噪声挤掉检索结果里的具内容。带 `Table` 图注的页要整个留下：
+/// 引脚表就是这种长相。
+fn is_drawing_page(page: &str) -> bool {
+    let prose: Vec<&str> = page
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !is_noise(line) && is_prose_line(line))
+        .collect();
+    // 最多两行成句：图注一行，页脚一行。
+    prose.len() <= 2 && prose.iter().any(|line| is_figure_caption(line))
+}
+
+/// 图纸页只留成句的行（图注、脚注）：图上散落的引脚名与编号一律扔掉。
+fn clean_drawing(page: &str) -> String {
+    page.lines()
+        .filter(|line| !is_noise(line) && is_prose_line(line.trim()))
+        .map(str::trim)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// 一页正文：去掉水印碎片这类噪声行（只清正文，不参与章节判定）。
@@ -685,11 +744,11 @@ fn tidy_targets(args: &Value, root: &Path) -> Result<Vec<PathBuf>, ToolError> {
 
 /// 把一批章节文件交给模型复核，原地改写。
 ///
-/// 返回（复核的文件数，少掉的字符数，跳过的文件与原因）。
+/// 返回（复核的文件数，少掉的字符数，跳过的文件与原因，掉篇幅大需过眼的文件）。
 async fn review_dir(
     model: &ModelConfig,
     dir: &Path,
-) -> Result<(usize, usize, Vec<String>), String> {
+) -> Result<(usize, usize, Vec<String>, Vec<String>), String> {
     let Ok(entries) = fs::read_dir(dir) else {
         return Err(format!("could not read `{}`", dir.display()));
     };
@@ -703,6 +762,7 @@ async fn review_dir(
     let mut reviewed = 0usize;
     let mut saved = 0usize;
     let mut skipped: Vec<String> = Vec::new();
+    let mut shrank: Vec<String> = Vec::new();
     for path in files {
         let Ok(text) = fs::read_to_string(&path) else {
             continue;
@@ -716,7 +776,18 @@ async fn review_dir(
         for chunk in chunk_body(&body) {
             let max_tokens = model.max_tokens.filter(|m| *m > 0).unwrap_or(8192);
             match provider::simple_completion(model, TIDY_SYSTEM, &chunk, Some(max_tokens)).await {
-                Ok((text, _usage)) => cleaned.push(text.trim().to_string()),
+                Ok((text, _usage)) => {
+                    let text = text.trim().to_string();
+                    // 整块回空就是没洗成（截断或拒答），这一份保持原样。
+                    if text.is_empty() && !chunk.trim().is_empty() {
+                        failure = Some(format!(
+                            "`{}`: the model returned nothing for one chunk",
+                            file_label(&path)
+                        ));
+                        break;
+                    }
+                    cleaned.push(text);
+                }
                 Err(err) => {
                     failure = Some(format!("`{}`: {err}", file_label(&path)));
                     break;
@@ -731,14 +802,12 @@ async fn review_dir(
 
         let after_body = cleaned.join("\n\n");
         let kept = after_body.chars().count();
-        // 内容掉了大半只能是模型截断或乱删：这一份保持原样，别把手册洗没了。
-        if total > 0 && kept * 100 < total * KEEP_PERCENT {
-            skipped.push(format!(
-                "`{}`: the model dropped {}% of the text, left the original alone",
+        if total > 0 && kept * 100 < total * HEAVY_DROP_PERCENT {
+            shrank.push(format!(
+                "`{}`: {}% shorter than the original, check it",
                 file_label(&path),
                 100 - kept * 100 / total
             ));
-            continue;
         }
         saved += total.saturating_sub(kept);
         reviewed += 1;
@@ -746,7 +815,7 @@ async fn review_dir(
             .map_err(|err| format!("could not write `{}`: {err}", path.display()))?;
     }
     write_overview(dir, &dir_name(dir))?;
-    Ok((reviewed, saved, skipped))
+    Ok((reviewed, saved, skipped, shrank))
 }
 
 /// 文件在错误信息里的名字（只给文件名，目录太长）。
@@ -785,7 +854,8 @@ pub(super) async fn run_tidy(
     let mut out = String::new();
     for dir in dirs {
         let board = dir_name(&dir);
-        let (reviewed, saved, skipped) = review_dir(&model, &dir).await.map_err(ToolError)?;
+        let (reviewed, saved, skipped, shrank) =
+            review_dir(&model, &dir).await.map_err(ToolError)?;
         match reviewed {
             0 => out.push_str(&format!("\n- **{board}**: nothing to review")),
             _ => out.push_str(&format!(
@@ -795,6 +865,9 @@ pub(super) async fn run_tidy(
         }
         for note in skipped {
             out.push_str(&format!("\n  - skipped {note}"));
+        }
+        for note in shrank {
+            out.push_str(&format!("\n  - {note}"));
         }
     }
     Ok(ToolResult::text(format!(
@@ -1002,6 +1075,27 @@ mod tests {
             "第 4 章 系统和存储器\n芯片内部的存储器和外设都映射到同一份地址空间。".repeat(20);
         assert!(!glued_words(&[page(&chinese)]), "中文本来就不分词");
         assert!(!glued_words(&[page("short")]), "短页不做判断");
+    }
+
+    #[test]
+    fn drawing_pages_lose_their_label_soup() {
+        let layout = page(
+            "2 Pins\n2.1 Pin Layout\n1\n2\n3\n10SPICS0GPIO13\nGPIO3\n 30 U0RXD\n ESP32-C6\n \
+             41 GND\nFigure 2-1. ESP32-C6 Pin Layout (QFN40, Top View)\nEspressif Systems 13",
+        );
+        assert!(is_drawing_page(&layout), "引脚布局图算图纸页");
+        let cleaned = clean_drawing(&layout);
+        assert_eq!(cleaned, "Figure 2-1. ESP32-C6 Pin Layout (QFN40, Top View)");
+
+        let table = page(
+            "Table 2-6. Analog Functions\n1\nANT\n2\nVDDA3P3\nAnalog\nPower\nEspressif Systems 22",
+        );
+        assert!(!is_drawing_page(&table), "表格页不能当图纸页丢掉");
+        let prose = page(
+            "2.7 Pin Mapping Between Chip and Flash\nTable 2-17 lists the pin mapping between the \
+             chip and off-package flash for all SPI modes.\nFigure 2-3. Something\n",
+        );
+        assert!(!is_drawing_page(&prose), "有成句正文的页不能清成图注");
     }
 
     #[test]
