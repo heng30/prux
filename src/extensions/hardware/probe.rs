@@ -119,20 +119,22 @@ pub fn detect() -> Result<(String, String), String> {
     Ok((chip.clone(), describe_chip(&chip)?))
 }
 
-/// 探针视角下的芯片信息：先确认探针认出的芯片，再列它的内核与内存区间。
+/// 探针视角下的芯片信息：先确认探针认出的芯片与配置一致，再列它的内核与内存区间。
 ///
-/// `chip` 是配置里的期望值（probe-rs target 名）；探针认出的名字与它不一致时一并说明，
-/// 因为那通常意味着配置写错了芯片。
+/// `chip` 是配置里的期望值（probe-rs target 名）。探针认出的名字与它不一致时直接报错，
+/// 由工具层回落静态资料：插着另一块板时把它的内存映射钉在这块板的标题下是误导。
 pub fn describe(chip: &str) -> Result<String, String> {
     let detected = detected_chip()?;
-    let mut out = format!("Probe detected chip: {detected}\n");
-    if detected != chip {
-        out.push_str(&format!(
-            "(config.json says `{chip}`; run `hardware_update_board` to save the detected name)\n"
+    if !detected.eq_ignore_ascii_case(chip) {
+        return Err(format!(
+            "probe-rs sees `{detected}`, but config.json says `{chip}` (run `hardware_update_board` \
+             to save the detected chip)"
         ));
     }
-    out.push_str(&describe_chip(&detected)?);
-    Ok(out)
+    Ok(format!(
+        "Probe detected chip: {detected}\n{}",
+        describe_chip(&detected)?
+    ))
 }
 
 /// 列芯片定义里的内核与 RAM / Flash 区间（`probe-rs chip info`，只查表、不需要探针）。

@@ -25,8 +25,10 @@ use serde_json::{Value, json};
 use std::{
     fs,
     path::{Path, PathBuf},
+    str::FromStr,
     time::{Duration, Instant},
 };
+use strum::{AsRefStr, EnumString};
 
 /// 工具名：探针烧录。
 pub(super) const TOOL_FLASH: &str = "hardware_flash";
@@ -61,15 +63,17 @@ pub(super) fn flash_tool_def() -> ExtensionTool {
     flash_tool(
         TOOL_FLASH,
         "Flash a firmware image into a board's flash over SWD/JTAG. Accepts .elf / .hex / .uf2 \
-         (addresses come from the file) and .bin (an `address` is required). Erases and verifies \
-         the written regions.",
+         (addresses come from the file) and .bin (an `address` is required). `format` overrides the \
+         format guessed from the extension: ESP chips built with the ESP-IDF bootloader need \
+         `format: \"idf\"`. Erases and verifies the written regions.",
         json!({
             "type": "object",
             "properties": {
                 "file": { "type": "string", "description": "Firmware file path (absolute, or relative to the working directory)." },
                 "chip": { "type": "string", "description": "probe-rs target name (e.g. `STM32F401RETx`). Omit to use the configured chip / board." },
                 "board": { "type": "string", "description": "Board from config.json used to pick the target when `chip` is omitted (defaults to the first configured board)." },
-                "address": { "type": "string", "description": "Base address for a raw `.bin` (e.g. `0x08000000`). Required for `.bin`, ignored otherwise." }
+                "address": { "type": "string", "description": "Base address for a raw `.bin` (e.g. `0x08000000`). Required for `.bin`, ignored otherwise." },
+                "format": { "type": "string", "enum": ["auto", "elf", "hex", "bin", "uf2", "idf"], "description": "Image format override. Default `auto` guesses from the file extension; ESP chips using the ESP-IDF bootloader layout need `idf`." }
             },
             "required": ["file"]
         }),
@@ -97,8 +101,9 @@ pub(super) fn pico_flash_tool_def() -> ExtensionTool {
     )
 }
 
-/// 可烧写的固件格式（按文件扩展名判定）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// 可烧写的固件格式（默认按文件扩展名判定，也可由 `format` 参数覆盖）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, AsRefStr, EnumString)]
+#[strum(serialize_all = "lowercase")]
 pub(super) enum ImageKind {
     /// ELF（自带地址与段信息）。
     Elf,
@@ -108,6 +113,8 @@ pub(super) enum ImageKind {
     Bin,
     /// UF2（自带地址，RP2 等常用）。
     Uf2,
+    /// ESP-IDF 镜像（ELF 里的 flash 段按 IDF 分区搬到真实 flash 地址）。
+    Idf,
 }
 
 impl ImageKind {
@@ -129,18 +136,32 @@ impl ImageKind {
             ImageKind::Hex => "Intel HEX",
             ImageKind::Bin => "raw binary",
             ImageKind::Uf2 => "UF2",
+            ImageKind::Idf => "ESP-IDF image",
         }
     }
+}
 
-    /// probe-rs 的 `--binary-format` 取值。
-    pub(super) fn probe_format(self) -> &'static str {
-        match self {
-            ImageKind::Elf => "elf",
-            ImageKind::Hex => "hex",
-            ImageKind::Bin => "bin",
-            ImageKind::Uf2 => "uf2",
-        }
+/// 解析要用的镜像格式：显式 `format` 参数（`auto` = 按扩展名）优先。
+fn resolve_kind(args: &Value, path: &Path) -> Result<ImageKind, ToolError> {
+    let raw = args
+        .get("format")
+        .and_then(Value::as_str)
+        .map(|s| s.trim().to_lowercase())
+        .unwrap_or_else(|| "auto".to_string());
+    if raw == "auto" || raw.is_empty() {
+        return ImageKind::from_path(path).ok_or_else(|| {
+            ToolError(format!(
+                "unsupported firmware format for `{}`; expected .elf / .hex / .bin / .uf2, or pass \
+                 `format` (elf / hex / bin / uf2 / idf)",
+                path.display()
+            ))
+        });
     }
+    ImageKind::from_str(&raw).map_err(|_| {
+        ToolError(format!(
+            "`format` must be one of auto / elf / hex / bin / uf2 / idf, got `{raw}`."
+        ))
+    })
 }
 
 /// 把一份固件烧进目标 Flash。
@@ -153,7 +174,7 @@ pub(super) fn flash(
     kind: ImageKind,
     base_address: Option<u64>,
 ) -> Result<String, String> {
-    probe::download(chip, file, kind.probe_format(), base_address)
+    probe::download(chip, file, kind.as_ref(), base_address)
         .map_err(|e| format!("flashing `{}` failed: {e}", file.display()))?;
 
     let address_note = match (kind, base_address) {
@@ -194,13 +215,7 @@ pub(super) fn run_flash(args: &Value, cwd: &str) -> Result<ToolResult, ToolError
         .filter(|s| !s.is_empty())
         .ok_or_else(|| ToolError("missing required parameter: `file`".to_string()))?;
     let path = resolve_path(file, cwd);
-
-    let Some(kind) = ImageKind::from_path(&path) else {
-        return Err(ToolError(format!(
-            "unsupported firmware format for `{}`; expected .elf / .hex / .bin / .uf2",
-            path.display()
-        )));
-    };
+    let kind = resolve_kind(args, &path)?;
     if !path.is_file() {
         return Err(ToolError(format!(
             "firmware file not found: {}",
@@ -226,6 +241,15 @@ pub(super) fn run_flash(args: &Value, cwd: &str) -> Result<ToolResult, ToolError
 
     match flash(&chip, &path, kind, base_address) {
         Ok(report) => Ok(ToolResult::text(report)),
+        // ESP 的 ELF 把 flash 段映射在 0x42000000，没有任何 flash 算法覆盖得到，
+        // 只有 IDF 格式会按分区把它们搬到真实 flash 地址（实测 ESP32-C6）
+        Err(err) if matches!(kind, ImageKind::Elf) && chip.starts_with("esp") => {
+            Ok(ToolResult::error(format!(
+                "{err}\n\nESP images built with the ESP-IDF bootloader layout need \
+                 `format: \"idf\"`: the ELF maps its flash sections to 0x42000000, where no flash \
+                 algorithm applies."
+            )))
+        }
         Err(err) => Ok(ToolResult::error(err)),
     }
 }
@@ -405,6 +429,30 @@ mod tests {
             .unwrap_err();
         assert!(err.0.contains("not a .uf2"), "{}", err.0);
     }
+    #[test]
+    fn format_override_beats_the_extension() {
+        let elf = Path::new("/tmp/fw.elf");
+        assert_eq!(resolve_kind(&json!({}), elf).unwrap(), ImageKind::Elf);
+        assert_eq!(
+            resolve_kind(&json!({ "format": "IDF" }), elf).unwrap(),
+            ImageKind::Idf
+        );
+        assert_eq!(
+            resolve_kind(&json!({ "format": "auto" }), elf).unwrap(),
+            ImageKind::Elf
+        );
+        assert!(resolve_kind(&json!({ "format": "nope" }), elf).is_err());
+        assert!(resolve_kind(&json!({}), Path::new("/tmp/fw.txt")).is_err());
+    }
+
+    #[test]
+    fn idf_images_need_no_address() {
+        assert_eq!(
+            required_bin_address(&json!({}), ImageKind::Idf).unwrap(),
+            None
+        );
+    }
+
     #[test]
     fn image_kinds_are_derived_from_extensions() {
         assert_eq!(

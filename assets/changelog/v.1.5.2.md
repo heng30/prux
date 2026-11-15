@@ -157,7 +157,10 @@
   <https://probe.rs/docs/getting-started/probe-setup/>). When it is missing the tool result prints
   those steps instead of reporting no probe. `hardware_flash` goes through
   `probe-rs download --verify` as well, so a failed flash reports probe-rs' own reason instead of a
-  generic flashing-procedure error.
+  generic flashing-procedure error. `hardware_flash` also takes a `format` override (`auto` / `elf` /
+  `hex` / `bin` / `uf2` / `idf`): an ESP image built on the ESP-IDF bootloader layout maps its flash
+  sections to 0x42000000, which no flash algorithm covers, so it flashes as `idf` — and the plain
+  `elf` attempt now says exactly that.
 
 - **`hardware` imports real datasheets instead of expecting text only**: `hardware_datasheet_import`
   files one board's or chip's material into its own directory under
@@ -515,7 +518,9 @@
   <https://probe.rs/docs/getting-started/installation/> 的预编译二进制；Linux 另需
   <https://probe.rs/docs/getting-started/probe-setup/> 的 udev 规则）；没装时工具结果里直接给出这些安装步骤，
   而不是报「没找到探针」。`hardware_flash` 也改走 `probe-rs download --verify`，烧录失败时报 probe-rs 自己的原因，
-  不再是一句笼统的 flashing-procedure 错误。
+  不再是一句笼统的 flashing-procedure 错误。`hardware_flash` 另外接受 `format` 覆盖（`auto` / `elf` /
+  `hex` / `bin` / `uf2` / `idf`）：ESP-IDF bootloader 布局的 ESP 固件会把 flash 段映射到 0x42000000，
+  没有任何 flash 算法覆盖得到，得用 `idf` 才能烧——直接按 `.elf` 烧时的报错也会点明这一点。
   新增 `hardware_update_board` 把探测结果写进 `agent_dir()/extensions/hardware/config.json`：写之前先在
   确认面板里问一次，取消、超时或弹不出面板时一个字都不写；同名板卡只更新 `chip`，其余键原样保留。ESP32 / ESP32-C3 / C6 / S3 这类板子靠自带的 USB-JTAG 就能识别，
   不必外接调试器。
