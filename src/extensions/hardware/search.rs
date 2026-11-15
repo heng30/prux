@@ -23,6 +23,58 @@ pub(super) const TOOL_SEARCH: &str = "hardware_search";
 /// 资料目录相对 agent 目录的路径（`/hardware` 提示与文档里都用它）。
 pub(super) const DATASHEET_REL: &str = "extensions/hardware/datasheets";
 
+/// 资料示例文件名：启用时缺失则写进 `datasheets/`。
+///
+/// 扩展名是 `.template` 而不是 `.md`，这样示例不会被 [`TEXT_EXTENSIONS`] 收进索引——
+/// 它只讲怎么写，不该出现在检索结果里。
+pub(super) const DATASHEET_TEMPLATE_FILE: &str = "example-datasheet.md.template";
+
+/// 写进 [`DATASHEET_TEMPLATE_FILE`] 的示例：一份能被检索到的手册该长什么样。
+pub(super) const DATASHEET_TEMPLATE: &str = r#"# STM32F401RE (LQFP64)
+
+把手册转成 Markdown 或纯文本放进来即可：`hardware_search` 按空行切块、按词元打分，
+返回 `file:line` 与片段正文。文件名与目录名也参与打分，所以用 `stm32f401.md`、
+`stm32f4/pinout.csv` 这种看得岀芯片的名字，命中会排得更前。
+
+## 概要
+
+- 内核：ARM Cortex-M4F，最高 84 MHz
+- Flash：512 KiB / RAM：96 KiB
+- 数据手册：DS9716 Rev 8，参考手册 RM0368
+
+## 引脚（节选）
+
+| 引脚 | 复用功能 | 备注 |
+|---|---|---|
+| PA9 | USART1_TX, TIM1_CH2 | 板载 ST-LINK 的 VCP 用 PD5/PD6 |
+| PA10 | USART1_RX | |
+| PC13 | GPIO | 板载用户按键，低电平有效 |
+
+引脚别名也可以直接放一份 `pins.csv`，每行 `PA9,USART1_TX,TIM1_CH2`，
+没有第二套映射机制。
+
+## 寄存器（节选）
+
+| 偏移 | 名称 | 说明 |
+|---|---|---|
+| 0x00 | MODER | 每引脚 2 bit：00 输入、01 输出、10 复用、11 模拟 |
+| 0x14 | ODR | 输出数据寄存器 |
+
+## 内存映射
+
+```
+Flash  0x0800_0000 .. 0x0808_0000  (512 KiB)
+RAM    0x2000_0000 .. 0x2001_8000  (96 KiB)
+```
+
+## 写法提醒
+
+- 收的扩展名：`.md` `.markdown` `.txt` `.csv` `.tsv` `.json` `.rst` `.adoc`，单文件不超过 4 MB。
+- 按空行分块，一块不超过约 1200 字符；一段只讲一件事，检索才给得准。
+- 想按芯片分目录就建子目录，检索时用 `path` 参数按前缀过滤（如 `stm32f4/`）。
+- 本文件扩展名是 `.template`，不会被索引；复制成 `stm32f401.md` 再填内容。
+"#;
+
 /// 单次检索返回的默认块数。
 const DEFAULT_LIMIT: usize = 8;
 

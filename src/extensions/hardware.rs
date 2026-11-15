@@ -615,6 +615,10 @@ impl Extension for Hardware {
         if enabled {
             // 建不出来不影响检索：缺目录时 `hardware_search` 自己会提示路径。
             _ = fs::create_dir_all(datasheet_dir());
+            write_if_missing(
+                &datasheet_dir().join(search::DATASHEET_TEMPLATE_FILE),
+                search::DATASHEET_TEMPLATE,
+            );
             let config = config_path();
             if let Some(dir) = config.parent() {
                 _ = fs::create_dir_all(dir);
@@ -719,6 +723,10 @@ mod tests {
         assert!(!root.exists(), "沙箱里初始没有资料目录");
         Hardware.on_enabled_changed(true);
         assert!(root.is_dir(), "启用后应建出 {}", root.display());
+        assert!(
+            root.join(search::DATASHEET_TEMPLATE_FILE).is_file(),
+            "启用后应写出手册示例"
+        );
     }
 
     #[test]
