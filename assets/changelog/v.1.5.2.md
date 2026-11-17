@@ -191,8 +191,8 @@
   character on its own layer inside the desktop GUI window and plays an animation for the current
   state — thinking, writing code, a failed tool call, a finished turn, a retry or a compaction —
   and it falls asleep after two minutes without events; clicking it plays a short acknowledgement.
-  Each animation runs its full clip before the next state takes over (a click, a failure or a
-  finished turn cut in immediately). Drag it anywhere inside the window and the spot is remembered
+  The state switches as soon as it changes; only a click holds its three-second acknowledgement
+  before the agent state takes over again. Drag it anywhere inside the window and the spot is remembered
   across restarts; it is part of the window, so the window manager never manages it and it
   disappears together with the main window. Animations are not built into the binary:
   `/pet download` prints where to get `anim.tar.gz` (`--open` also opens the browser), and
@@ -574,7 +574,7 @@
 
 - **桌面宠物跟着 agent 干活**：新扩展 `pet` 在桌面 GUI 窗口里单独画一层角色动画，
   按当前状态播——思考、写代码、工具报错、一轮结束、重试或上下文压缩，两分钟没有事件就睡着，
-  点一下给个回应。每段动画播完才换下一个状态（点击、报错、一轮结束可以插队）。
+  点一下给个回应。状态一变就换动作，只有点击回应会先把三秒播完。
   在窗口内拖到哪儿就记在哪儿，重启照原位摆；它是窗口的一部分，不归窗口管理器管，主窗口收起来时一起消失。
   动画不内嵌进二进制：`/pet download` 打印 `anim.tar.gz` 的下载地址（`--open` 顺手开浏览器），
   `/pet switch <名字>` 在 `agent_dir()/extensions/pet/<桌宠>/anim/` 里已装的桌宠之间切换（不带名字列出清单）。

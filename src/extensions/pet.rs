@@ -279,12 +279,13 @@ fn download_notice() -> String {
     )
 }
 
-/// 记一次 agent 事件：按事件类型换算姿态，`agentScope` 不是 `main` 的一律忽略
-/// （子代理并行时否则姿态会来回抖）。
+/// 记一次 agent 事件：按事件类型换算姿态，不认识的事件直接忽略。
+///
+/// 不按 `agentScope` 过滤：主 agent 的 `agent_start` / `message_start` /
+/// `tool_execution_*` / `agent_settled` 根本不带这个字段（只有 `turn_end` 与
+/// `agent_before_settle` 带），按它过滤等于把桌宠要的事件全丢掉。子代理的事件走
+/// 各自独立的 sink，不会进到这里。
 pub fn note_event(event: &Value) {
-    if event.get("agentScope").and_then(Value::as_str) != Some("main") {
-        return;
-    }
     let ty = event
         .get("type")
         .and_then(Value::as_str)
@@ -634,29 +635,23 @@ mod tests {
     }
 
     #[test]
-    fn events_map_to_poses_and_skip_subagents() {
+    fn events_map_to_poses() {
         let _guard = AgentDirGuard::temp();
 
-        note_event(&serde_json::json!({"type": "message_start", "agentScope": "main"}));
+        // 主 agent 的事件不带 agentScope：带了才处理等于全丢
+        note_event(&serde_json::json!({"type": "message_start"}));
         assert_eq!(pose(), Pose::Thinking);
 
-        note_event(&serde_json::json!({"type": "tool_execution_start", "agentScope": "main"}));
+        note_event(&serde_json::json!({"type": "tool_execution_start"}));
         assert_eq!(pose(), Pose::Coding);
 
-        note_event(
-            &serde_json::json!({"type": "tool_execution_end", "isError": true, "agentScope": "main"}),
-        );
+        note_event(&serde_json::json!({"type": "tool_execution_end", "isError": true}));
         assert_eq!(pose(), Pose::ToolError);
 
-        note_event(&serde_json::json!({"type": "message_start", "agentScope": "subagent"}));
-        assert_eq!(pose(), Pose::ToolError, "子代理事件不参与姿态");
-
-        note_event(&serde_json::json!({"type": "agent_settled", "agentScope": "main"}));
+        note_event(&serde_json::json!({"type": "agent_settled"}));
         assert_eq!(pose(), Pose::Celebrate);
 
-        note_event(
-            &serde_json::json!({"type": "agent_settled", "aborted": true, "agentScope": "main"}),
-        );
+        note_event(&serde_json::json!({"type": "agent_settled", "aborted": true}));
         assert_eq!(pose(), Pose::Yawn, "被中断的一轮不庆祝");
     }
 
@@ -664,8 +659,8 @@ mod tests {
     fn turn_end_does_not_drop_back_to_idle_mid_round() {
         let _guard = AgentDirGuard::temp();
 
-        note_event(&serde_json::json!({"type": "tool_execution_start", "agentScope": "main"}));
-        note_event(&serde_json::json!({"type": "turn_end", "agentScope": "main"}));
+        note_event(&serde_json::json!({"type": "tool_execution_start"}));
+        note_event(&serde_json::json!({"type": "turn_end"}));
         assert_eq!(pose(), Pose::Coding, "turn_end 之后模型常常接着干活");
     }
 

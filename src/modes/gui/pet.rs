@@ -33,9 +33,6 @@ const COLS: usize = 8;
 /// 同时缓存的动画数：当前姿态 + 上一个（换姿态时不会闪白）。
 const CACHE: usize = 2;
 
-/// 一段 clip 播多久（毫秒）：120 帧 ÷ 12fps。播完才换姿态，免得来回抖。
-const CLIP_MS: u64 = 10_000;
-
 /// 点击回应的时长（毫秒）：它插队播完就交回 agent 姿态，不必等满一整段。
 const CLICK_MS: u64 = 3_000;
 
@@ -108,16 +105,23 @@ impl Pet {
         pet
     }
 
-    /// 每帧一次：收解码结果、按 agent 姿态换动作（一段 clip 播完才换，点击/报错/庆祝插队）。
+    /// 每帧一次：收解码结果、按 agent 姿态换动作。
+    ///
+    /// 姿态一变就切：一段动画是一个 10 秒循环，等它播完再换就等于让宠物滞后十秒，
+    /// 一整个回合最多只来得及换一次。只有点击回应要占满 [`CLICK_MS`]——
+    /// 否则鼠标一点就被下一帧的 agent 姿态盖掉，看不出它在回应。
     pub fn tick(&mut self) {
         self.poll_decoded();
         self.reload_if_switched();
 
         let want = pet_ext::pose();
-        let urgent = matches!(want, Pose::ToolError | Pose::Celebrate);
-        if want != self.pose && (urgent || self.clip_done()) {
-            self.play(want);
+        if want == self.pose {
+            return;
         }
+        if self.pose == Pose::Click && !self.click_done() {
+            return;
+        }
+        self.play(want);
     }
 
     /// 开始拖动（顺带播一下点击回应）。
@@ -196,14 +200,9 @@ impl Pet {
         sheet.frames.get(index).cloned()
     }
 
-    /// 当前这段 clip 播完了没（点击回应按 [`CLICK_MS`] 单独算）。
-    fn clip_done(&self) -> bool {
-        let clip = if self.pose == Pose::Click {
-            CLICK_MS
-        } else {
-            CLIP_MS
-        };
-        self.started.elapsed().as_millis() as u64 >= clip
+    /// 点击回应播满 [`CLICK_MS`] 了没（播满才让位给 agent 姿态）。
+    fn click_done(&self) -> bool {
+        self.started.elapsed().as_millis() as u64 >= CLICK_MS
     }
 
     /// 切到某个动作：从现在起重新计时，并让动画就位。
