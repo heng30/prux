@@ -54,10 +54,10 @@ const CONFIG_REL: &str = "extensions/pet/config.json";
 /// 配置键：当前桌宠（资源根目录下的子目录名）。
 const CONFIG_PET: &str = "pet";
 
-/// 配置键：宠物在主窗口内的左上角横坐标（逻辑像素，窗口原点起算）。
+/// 配置键：宠物左上角在主窗口内的横向比例（0–1，乘窗口宽度得逻辑像素）。
 const CONFIG_POS_X: &str = "posX";
 
-/// 配置键：宠物在主窗口内的左上角纵坐标（逻辑像素，窗口原点起算）。
+/// 配置键：宠物左上角在主窗口内的纵向比例（0–1，乘窗口高度得逻辑像素）。
 const CONFIG_POS_Y: &str = "posY";
 
 /// 配置键：资源根目录覆盖（空 = 用 [`ROOT_REL`]）。
@@ -352,20 +352,21 @@ fn reset_pose() {
     POSE.store(Pose::Idle as u8, Ordering::Relaxed);
 }
 
-/// 宠物在主窗口内的左上角坐标（逻辑像素，窗口原点起算）：上次拖动后保存的位置。
+/// 宠物在主窗口内的位置：左上角的横向/纵向比例（`0.0`–`1.0`，乘窗口尺寸即逻辑像素）。
 ///
+/// 存比例而不是像素，换窗口尺寸或换显示器后位置仍然对得上。
 /// 两个键缺任一或不是数字就当没存过（返回 `None`），由界面回落到默认位置。
-pub fn saved_offset() -> Option<(f32, f32)> {
+pub fn saved_pos() -> Option<(f32, f32)> {
     let root = config();
     let x = root.get(CONFIG_POS_X)?.as_f64()? as f32;
     let y = root.get(CONFIG_POS_Y)?.as_f64()? as f32;
-    Some((x, y))
+    Some((x.clamp(0.0, 1.0), y.clamp(0.0, 1.0)))
 }
 
-/// 记住宠物在主窗口内的位置（拖动松手时调用）。
+/// 记住宠物在主窗口内的位置（拖动松手时调用），取值是 `0.0`–`1.0` 的比例。
 ///
 /// 写盘失败静默忽略：位置只是装饰，不该因此弹错误。
-pub fn save_offset(x: f32, y: f32) {
+pub fn save_pos(x: f32, y: f32) {
     _ = update_config(|map| {
         map.insert(CONFIG_POS_X.to_string(), serde_json::json!(x));
         map.insert(CONFIG_POS_Y.to_string(), serde_json::json!(y));
@@ -605,10 +606,18 @@ mod tests {
     #[test]
     fn position_round_trips_through_the_config() {
         let _guard = AgentDirGuard::temp();
-        assert_eq!(saved_offset(), None, "没存过就没有位置");
+        assert_eq!(saved_pos(), None, "没存过就没有位置");
 
-        save_offset(120.5, 340.0);
-        assert_eq!(saved_offset(), Some((120.5, 340.0)));
+        save_pos(0.25, 0.5);
+        assert_eq!(saved_pos(), Some((0.25, 0.5)));
+
+        // 手改配置写了越界值（换成像素的老值也算）：读出来夹回 0–1
+        update_config(|map| {
+            map.insert(CONFIG_POS_X.to_string(), serde_json::json!(2326.6));
+            map.insert(CONFIG_POS_Y.to_string(), serde_json::json!(-3.0));
+        })
+        .unwrap();
+        assert_eq!(saved_pos(), Some((1.0, 0.0)));
     }
 
     #[test]
