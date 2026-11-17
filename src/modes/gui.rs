@@ -22,7 +22,7 @@ mod transcript;
 
 use crate::{
     APP_NAME, cli::startup::Startup, core, core::settings_manager, embedded_bytes,
-    extensions::desktop_pet, modes::tui::agent_actor, utils::async_task,
+    modes::tui::agent_actor, utils::async_task,
 };
 use app::GuiApp;
 use gpui::{
@@ -149,12 +149,6 @@ pub fn run(startup: Startup, rt: &Handle) {
             window.focus(&focus, cx);
             view
         });
-
-        // 桌宠：扩展启用且资源已安装才开第二个窗口；缺资源时扩展自己已经在聊天区提示过
-        if core::extensions::is_extension_enabled(desktop_pet::NAME) && desktop_pet::assets_ready()
-        {
-            _ = pet::open(cx);
-        }
     });
 
     core::extensions::set_ui_ready(false);

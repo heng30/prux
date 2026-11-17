@@ -1165,6 +1165,14 @@ impl GuiApp {
             .font_family(theme::UI_FONT_FAMILY)
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::on_key_down))
+            // 拖桌宠时鼠标可能跑到别的元素上：移动与松手都在根节点兜着
+            .on_mouse_move(cx.listener(|this, event: &gpui::MouseMoveEvent, _, cx| {
+                this.pet_drag(event.position, cx);
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| this.pet_release(cx)),
+            )
             .on_mouse_down(
                 MouseButton::Middle,
                 cx.listener(|this, _, _, cx| this.middle_click(cx)),
@@ -1196,6 +1204,7 @@ impl GuiApp {
         let theme = self.theme.clone();
         let empty = self.transcript.blocks().is_empty();
 
+        let root = self.render_pet(root, window, cx);
         let root = self.render_modal(root, &theme, cx);
         let root = root.child(self.toast_layer(&theme));
         let root = root.child(self.hover_probe(!empty, cx));

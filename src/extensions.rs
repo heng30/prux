@@ -69,7 +69,7 @@ pub mod web_access;
 pub mod worktree;
 
 #[cfg(feature = "gui")]
-pub mod desktop_pet;
+pub mod pet;
 
 pub use plan_mode::PlanMode;
 
@@ -214,8 +214,8 @@ pub const PRIORITY_FOOTER_MINIMAL: u32 = 13;
 pub const PRIORITY_FOOTER_NORMAL: u32 = 10;
 
 #[cfg(feature = "gui")]
-/// desktop-pet 桌面宠物扩展的注册优先级（仅桌面 GUI 编译）。
-pub const PRIORITY_DESKTOP_PET: u32 = 21;
+/// pet 桌面宠物扩展的注册优先级（仅桌面 GUI 编译）。
+pub const PRIORITY_PET: u32 = 21;
 
 /// 主题样式键与缺省色
 pub(crate) const DIM: (&str, &str) = ("dim", "#666666");

@@ -1,4 +1,4 @@
-# desktop-pet 动画资源
+# pet 动画资源
 
 桌面宠物（`/pet`）用的角色动画。**这些文件不内嵌进二进制**——`assets/` 只有被
 `embedded!` / `embedded_bytes!` 显式引用才会编进去，这里没有任何引用，所以它们只随仓库发布，
@@ -28,14 +28,14 @@
 ## 安装
 
 ```bash
-curl -LO https://github.com/heng30/prux/raw/main/assets/desktop-pet/anim.tar.gz
-tar -xzf anim.tar.gz -C ~/.prux/extensions/desktop-pet/
+curl -LO https://github.com/heng30/prux/raw/main/assets/pet/anim.tar.gz
+tar -xzf anim.tar.gz -C ~/.prux/extensions/pet/
 ```
 
 `anim.tar.gz` 就是本目录下所有桌宠的 `anim/` 打包，展开后是
-`~/.prux/extensions/desktop-pet/<桌宠>/anim/`。也可以只装一个：把某个桌宠目录整个拷进去。
+`~/.prux/extensions/pet/<桌宠>/anim/`。也可以只装一个：把某个桌宠目录整个拷进去。
 
-动画目录也可以由 `~/.prux/extensions/desktop-pet/config.json` 的 `media` 指向别处
+动画目录也可以由 `~/.prux/extensions/pet/config.json` 的 `media` 指向别处
 （此时按 `<media>/<桌宠>/anim/` 查找）。
 
 缺资源时宠物不建窗，只在聊天区给一条带下载地址的提示。

@@ -20,6 +20,7 @@ mod input;
 mod keys;
 mod menus;
 mod panels;
+mod pet;
 mod render;
 mod status;
 mod suggest;
@@ -42,6 +43,7 @@ use super::{
         TABLE_NAME_W, TABLE_PROVIDER_W, TABLE_SETTING_W, TABLE_SOURCE_W, TABLE_STATUS_W,
         TABLE_VALUE_W, TOGGLE_PANEL_HINT,
     },
+    pet::Pet,
     sidebar::{self, SessionRow},
     suggest::{self as suggest_engine, Suggest, Trigger},
     text_edit::{self, Editor},
@@ -476,6 +478,10 @@ pub struct GuiApp {
     /// 扩展收到 `Char(c)` 后才会把输入行露出来，而 IME 随后又会把同一个字符写进刚出现的输入框
     /// （表现为 note 输入框里凭空多出一个 `n`）。TUI 只有一条按键通路，没有这个问题。
     swallow_char: Option<char>,
+    /// 主窗口内的桌宠层（`None` = 扩展没启用或一个动画都没装）
+    pet: Option<Pet>,
+    /// 桌宠的重绘任务是否在跑
+    pet_ticking: bool,
 }
 
 impl GuiApp {
@@ -602,6 +608,8 @@ impl GuiApp {
             dock_visible: false,
             dock_scroll: ScrollHandle::new(),
             swallow_char: None,
+            pet: None,
+            pet_ticking: false,
         };
         app.start_request_poll(cx);
         app.maybe_ask_trust(cx);

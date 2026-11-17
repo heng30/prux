@@ -1,30 +1,27 @@
-//! 桌宠窗口：一个透明、置顶、不抢焦点的小窗口，跟着 agent 姿态播 spritesheet 动画。
+//! 桌宠层：主窗口里的一层可拖动动画，跟着 agent 姿态播 spritesheet。
 //!
-//! 平台差异只在建窗这一处：Wayland 用 layer-shell（贴屏底、不进任务栏、不吃键盘焦点），
-//! 其它平台退回 `Floating` 普通悬浮窗（透明与置顶由窗口系统给，穿透拿不到）。
-//! 资源解码放后台线程，UI 线程只做「换帧 + 通知重绘」。
+//! 它不是独立窗口：画在 prux 主窗口内，所以不受窗口管理器管、主窗口一收起来就跟着消失，
+//! 位置也能按窗口坐标记住。资源解码放后台线程，UI 线程只做「换帧 + 通知重绘」。
 
-use crate::extensions::desktop_pet::{self, Pose};
+use crate::extensions::pet::{self as pet_ext, Pose};
 use gpui::{
-    App, AppContext, Bounds, Context, ImageSource, IntoElement, MouseButton, ParentElement, Pixels,
-    Render, RenderImage, Styled, Window, WindowBackgroundAppearance, WindowBounds, WindowKind,
-    WindowOptions, div, img, layer_shell, point, prelude::*, px, size,
+    ImageSource, ParentElement, Pixels, RenderImage, Size, Styled, Window, div, img, prelude::*, px,
 };
 use std::{
     collections::VecDeque,
     path::{Path, PathBuf},
     sync::{Arc, mpsc::Receiver},
-    time::{Duration, Instant},
+    time::Instant,
 };
 
-/// 一帧的显示尺寸（逻辑像素）。原帧 640×360 在桌面上太大，解码时缩到这个尺寸。
-const PET_W: f32 = 320.0;
+/// 一帧的显示尺寸（逻辑像素）。原帧 640×360 在界面上太大，解码时缩到这个尺寸。
+pub const PET_W: f32 = 320.0;
 
 /// 一帧的显示高度（逻辑像素）。
-const PET_H: f32 = 180.0;
+pub const PET_H: f32 = 180.0;
 
 /// 播放帧率（与 spritesheet 一致）。
-const FPS: u64 = 12;
+pub const FPS: u64 = 12;
 
 /// 每个 spritesheet 的帧数（8 列 × 15 行）。
 const FRAMES: usize = 120;
@@ -35,11 +32,17 @@ const COLS: usize = 8;
 /// 同时缓存的动画数：当前姿态 + 上一个（换姿态时不会闪白）。
 const CACHE: usize = 2;
 
-/// 点击回应播多久（毫秒）。
+/// 一段 clip 播多久（毫秒）：120 帧 ÷ 12fps。播完才换姿态，免得来回抖。
+const CLIP_MS: u64 = 10_000;
+
+/// 点击回应的时长（毫秒）：它插队播完就交回 agent 姿态，不必等满一整段。
 const CLICK_MS: u64 = 3_000;
 
-/// 距屏幕边缘的留白（逻辑像素）。
+/// 默认位置距窗口边缘的留白（逻辑像素）。
 const MARGIN: f32 = 24.0;
+
+/// 判定「这是拖动而不是点击」的最小位移（逻辑像素）。
+const DRAG_SLOP: f32 = 4.0;
 
 /// 解码好的一个动作：按播放顺序排好的 120 帧。
 struct Sheet {
@@ -47,8 +50,16 @@ struct Sheet {
     frames: Vec<Arc<RenderImage>>,
 }
 
-/// 桌宠视图。
-pub struct PetView {
+/// 拖动状态。
+struct Drag {
+    /// 按下时鼠标与宠物左上角的差，拖动期间保持不变。
+    grab: (f32, f32),
+    /// 是否真的移动过：小于 [`DRAG_SLOP`] 当点击，不写盘。
+    moved: bool,
+}
+
+/// 桌宠视图（由主界面持有，不是独立窗口）。
+pub struct Pet {
     /// 当前正在播的动作。
     pose: Pose,
     /// 当前动作的起始时刻（换算帧号用）。
@@ -59,121 +70,115 @@ pub struct PetView {
     sheet_key: Option<String>,
     /// 后台解码中的动作名与它的接收端。
     pending: Option<(String, Receiver<Option<Sheet>>)>,
-    /// 点击回应的截止时刻。
-    click_until: Option<Instant>,
     /// 已解码动画的 LRU（键是动作名）。
     cache: VecDeque<(String, Arc<Sheet>)>,
+    /// 左上角在窗口内的位置（逻辑像素）。
+    offset: (f32, f32),
+    /// 进行中的拖动。
+    drag: Option<Drag>,
 }
 
-/// 打开桌宠窗口；平台不支持或没有资源时返回 `None`（静默跳过，不打扰用户）。
-///
-/// 调用方应先用 [`desktop_pet::assets_ready`] 判断资源是否就位。
-pub fn open(cx: &mut App) -> Option<gpui::WindowHandle<PetView>> {
-    let options = WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(bounds(cx))),
-        titlebar: None,
-        focus: false,
-        show: true,
-        kind: window_kind(),
-        is_movable: false,
-        is_resizable: false,
-        is_minimizable: false,
-        window_background: WindowBackgroundAppearance::Transparent,
-        app_id: Some("prux-pet".to_string()),
-        ..Default::default()
-    };
-
-    cx.open_window(options, |_, cx| cx.new(PetView::new)).ok()
-}
-
-/// 建窗参数里的位置与尺寸：Wayland 层壳按 anchor + margin 贴左下角，其余平台靠窗口坐标。
-fn bounds(cx: &mut App) -> Bounds<Pixels> {
-    let size = size(px(PET_W), px(PET_H));
-    let Some(display) = cx.primary_display() else {
-        return Bounds::new(point(px(MARGIN), px(MARGIN)), size);
-    };
-    let area = display.bounds();
-    let x = area.origin.x + px(MARGIN);
-    let y = area.origin.y + area.size.height - px(PET_H + MARGIN);
-    Bounds::new(point(x, y), size)
-}
-
-/// 窗口类型：Wayland 用层壳（贴底、不吃焦点），其它平台用浮动窗。
-fn window_kind() -> WindowKind {
-    if std::env::var_os("WAYLAND_DISPLAY").is_none() {
-        return WindowKind::Floating;
-    }
-
-    WindowKind::LayerShell(layer_shell::LayerShellOptions {
-        namespace: "prux-pet".to_string(),
-        layer: layer_shell::Layer::Overlay,
-        anchor: layer_shell::Anchor::BOTTOM | layer_shell::Anchor::LEFT,
-        margin: Some((px(0.), px(0.), px(0.), px(MARGIN))),
-        keyboard_interactivity: layer_shell::KeyboardInteractivity::None,
-        ..Default::default()
-    })
-}
-
-impl PetView {
-    /// 建视图、起播放循环，并开始解当前动作。
-    fn new(cx: &mut Context<Self>) -> Self {
-        let mut view = Self {
-            pose: desktop_pet::pose(),
+impl Pet {
+    /// 按上次保存的位置建视图（没存过就贴左下角），并开始解当前动作。
+    pub fn new(window: &Window) -> Self {
+        let default = default_offset(window.viewport_size());
+        let mut pet = Self {
+            pose: pet_ext::pose(),
             started: Instant::now(),
             sheet: None,
             sheet_key: None,
             pending: None,
-            click_until: None,
             cache: VecDeque::new(),
+            offset: pet_ext::saved_offset().unwrap_or(default),
+            drag: None,
         };
-        view.want(desktop_pet::anim_path(view.pose));
-
-        cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor()
-                    .timer(Duration::from_millis(1000 / FPS))
-                    .await;
-
-                let alive = this
-                    .update(cx, |pet, cx| {
-                        pet.step();
-                        cx.notify()
-                    })
-                    .is_ok();
-                if !alive {
-                    break;
-                }
-            }
-        })
-        .detach();
-
-        view
+        pet.want(pet_ext::anim_path(pet.pose));
+        pet
     }
 
-    /// 每帧一次：切姿态、收解码结果、推进帧号。
-    fn step(&mut self) {
-        if self.click_until.is_some_and(|t| Instant::now() >= t) {
-            self.click_until = None;
-        }
-        let pose = match self.click_until {
-            Some(_) => Pose::Click,
-            None => desktop_pet::pose(),
-        };
-        if pose != self.pose {
-            self.pose = pose;
-            self.started = Instant::now();
-            self.want(desktop_pet::anim_path(pose));
-        }
+    /// 每帧一次：收解码结果、按 agent 姿态换动作（一段 clip 播完才换，点击/报错/庆祝插队）。
+    pub fn tick(&mut self) {
         self.poll_decoded();
+
+        let want = pet_ext::pose();
+        let urgent = matches!(want, Pose::ToolError | Pose::Celebrate);
+        if want != self.pose && (urgent || self.clip_done()) {
+            self.play(want);
+        }
     }
 
-    /// 点击回应：播 [`Pose::Click`]，期间盖住 agent 姿态。
-    fn clicked(&mut self, cx: &mut Context<Self>) {
-        self.click_until = Some(Instant::now() + Duration::from_millis(CLICK_MS));
-        self.pose = Pose::Click;
+    /// 开始拖动（顺带播一下点击回应）。
+    pub fn down(&mut self, at: gpui::Point<Pixels>) {
+        self.drag = Some(Drag {
+            grab: (
+                f32::from(at.x) - self.offset.0,
+                f32::from(at.y) - self.offset.1,
+            ),
+            moved: false,
+        });
+        self.play(Pose::Click);
+    }
+
+    /// 跟随鼠标移动；返回是否真的移动了（调用方据此重绘）。
+    pub fn drag_to(&mut self, at: gpui::Point<Pixels>) -> bool {
+        let Some(drag) = self.drag.as_mut() else {
+            return false;
+        };
+        let next = (f32::from(at.x) - drag.grab.0, f32::from(at.y) - drag.grab.1);
+        let moved = (next.0 - self.offset.0).abs() > DRAG_SLOP
+            || (next.1 - self.offset.1).abs() > DRAG_SLOP;
+        self.offset = next;
+        if moved {
+            drag.moved = true;
+        }
+        moved
+    }
+
+    /// 松手：真的拖动过就把位置写进配置，下次启动照原样摆。
+    pub fn release(&mut self) {
+        if self.drag.take().is_some_and(|drag| drag.moved) {
+            pet_ext::save_offset(self.offset.0, self.offset.1);
+        }
+    }
+
+    /// 画出这一帧（绝对定位、透明底），位置夹在窗口可见范围内。
+    pub fn element(&mut self, window: &Window) -> gpui::Stateful<gpui::Div> {
+        let (x, y) = clamp(self.offset, window.viewport_size());
+        let frame = self.frame();
+        div()
+            .id("pet")
+            .absolute()
+            .left(px(x))
+            .top(px(y))
+            .w(px(PET_W))
+            .h(px(PET_H))
+            .when_some(frame, |this, frame| {
+                this.child(img(ImageSource::from(frame)).w(px(PET_W)).h(px(PET_H)))
+            })
+    }
+
+    /// 当前该显示的那一帧。
+    fn frame(&self) -> Option<Arc<RenderImage>> {
+        let sheet = self.sheet.as_ref()?;
+        let index = (self.started.elapsed().as_millis() * FPS as u128 / 1000) as usize % FRAMES;
+        sheet.frames.get(index).cloned()
+    }
+
+    /// 当前这段 clip 播完了没（点击回应按 [`CLICK_MS`] 单独算）。
+    fn clip_done(&self) -> bool {
+        let clip = if self.pose == Pose::Click {
+            CLICK_MS
+        } else {
+            CLIP_MS
+        };
+        self.started.elapsed().as_millis() as u64 >= clip
+    }
+
+    /// 切到某个动作：从现在起重新计时，并让动画就位。
+    fn play(&mut self, pose: Pose) {
+        self.pose = pose;
         self.started = Instant::now();
-        self.want(desktop_pet::anim_path(Pose::Click));
-        cx.notify();
+        self.want(pet_ext::anim_path(pose));
     }
 
     /// 让当前动作变成 `path` 对应的动画：缓存里有就换、没有就在后台解一份。
@@ -224,30 +229,18 @@ impl PetView {
             self.promote(key, Arc::new(sheet));
         }
     }
-
-    /// 当前该显示的那一帧。
-    fn frame(&self) -> Option<Arc<RenderImage>> {
-        let sheet = self.sheet.as_ref()?;
-        let index = (self.started.elapsed().as_millis() * FPS as u128 / 1000) as usize % FRAMES;
-        sheet.frames.get(index).cloned()
-    }
 }
 
-impl Render for PetView {
-    /// 只在窗口大小的方框里画当前帧，其余透明。
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let frame = self.frame();
-        div()
-            .w(px(PET_W))
-            .h(px(PET_H))
-            .when_some(frame, |this, frame| {
-                this.child(img(ImageSource::from(frame)).w(px(PET_W)).h(px(PET_H)))
-            })
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _, _, cx| this.clicked(cx)),
-            )
-    }
+/// 没存过位置时的默认摆放：窗口左下角，距边缘 [`MARGIN`]。
+fn default_offset(viewport: Size<Pixels>) -> (f32, f32) {
+    (MARGIN, f32::from(viewport.height) - PET_H - MARGIN)
+}
+
+/// 把位置夹回窗口可见范围（窗口缩小或换分辨率后不会跑到屏幕外）。
+fn clamp(offset: (f32, f32), viewport: Size<Pixels>) -> (f32, f32) {
+    let max_x = (f32::from(viewport.width) - PET_W).max(0.0);
+    let max_y = (f32::from(viewport.height) - PET_H).max(0.0);
+    (offset.0.clamp(0.0, max_x), offset.1.clamp(0.0, max_y))
 }
 
 /// 动作名（文件名去掉扩展名）。
@@ -294,6 +287,28 @@ mod tests {
     #[test]
     fn key_matches_the_animation_name() {
         assert_eq!(key_of(Path::new("/x/anim/tool-error.webp")), "tool-error");
+    }
+
+    #[test]
+    fn clamp_keeps_the_pet_inside_the_window() {
+        let viewport = gpui::size(px(800.), px(600.));
+        assert_eq!(clamp((100.0, 100.0), viewport), (100.0, 100.0));
+        assert_eq!(
+            clamp((-50.0, 900.0), viewport),
+            (0.0, 600.0 - PET_H),
+            "拖出边界后夹回可见区域"
+        );
+        assert_eq!(
+            clamp((10.0, 10.0), gpui::size(px(100.), px(100.))),
+            (0.0, 0.0),
+            "窗口比宠物还小时贴左上角"
+        );
+    }
+
+    #[test]
+    fn default_offset_sits_above_the_bottom_edge() {
+        let offset = default_offset(gpui::size(px(800.), px(600.)));
+        assert_eq!(offset, (MARGIN, 600.0 - PET_H - MARGIN));
     }
 
     #[test]

@@ -1,13 +1,13 @@
-//! `desktop-pet` 扩展：跟着 agent 状态做动作的桌面宠物（只在桌面 GUI 里建窗）。
+//! `pet` 扩展：跟着 agent 状态做动作的宠物（桌面 GUI 里画成主窗口内的一层）。
 //!
-//! 资源（spritesheet）**不内嵌**：`assets/desktop-pet/<桌宠>/anim/*.webp` 只作为仓库发布的
-//! 资源存在，用户自己放到 `agent_dir()/extensions/desktop-pet/<桌宠>/anim/`。缺资源时不建窗、
+//! 资源（spritesheet）**不内嵌**：`assets/pet/<桌宠>/anim/*.webp` 只作为仓库发布的
+//! 资源存在，用户自己放到 `agent_dir()/extensions/pet/<桌宠>/anim/`。缺资源时不画、
 //! 不报错，只在聊天区给一条带下载链接的提示——桌宠缺图不该让界面起不来。
 //!
-//! 配置写在自己的文件里（`agent_dir()/extensions/desktop-pet/config.json`），
+//! 配置写在自己的文件里（`agent_dir()/extensions/pet/config.json`），
 //! 不进 settings.json：桌宠是可关掉的装饰，不该占全局配置的版面。
 //!
-//! **默认不启用**：会多开一个窗口，属于抢行为的扩展，由用户在 `/extension` 里开启。
+//! **默认不启用**：属于抢行为的扩展，由用户在 `/extension` 里开启，开关即时生效。
 
 use crate::{
     core::{
@@ -19,7 +19,7 @@ use crate::{
         provider::AgentMessage,
         settings_manager::agent_dir,
     },
-    extensions::{EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_DESKTOP_PET, command_arg},
+    extensions::{EXTENSION_FACTORIES, ExtensionFactory, PRIORITY_PET, command_arg},
     modes::tui::handlers::register_host_command,
 };
 use serde_json::Value;
@@ -27,14 +27,14 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, OnceLock, RwLock,
-        atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
+        atomic::{AtomicU8, AtomicU64, Ordering},
     },
     time::Instant,
 };
 use strum_macros::{AsRefStr, EnumString};
 
 /// 扩展名（注册名，也是 `/extension` 面板里的名字）。
-const EXT: &str = "desktop-pet";
+const EXT: &str = "pet";
 
 /// 扩展名（对外可引用，GUI 建窗前用它查启用态）。
 pub const NAME: &str = EXT;
@@ -43,19 +43,22 @@ pub const NAME: &str = EXT;
 const CMD: &str = "pet";
 
 /// 资源包下载地址（缺资源时提示用户从这里下）。
-const ASSET_URL: &str = "https://github.com/heng30/prux/raw/main/assets/desktop-pet/anim.tar.gz";
+const ASSET_URL: &str = "https://github.com/heng30/prux/raw/main/assets/pet/anim.tar.gz";
 
 /// 资源根目录（相对 `agent_dir()`）：下面每个子目录是一个桌宠。
-const ROOT_REL: &str = "extensions/desktop-pet";
+const ROOT_REL: &str = "extensions/pet";
 
 /// 配置文件（相对 `agent_dir()`）。
-const CONFIG_REL: &str = "extensions/desktop-pet/config.json";
-
-/// 配置键：GUI 里是否显示宠物窗口。
-const CONFIG_ENABLED: &str = "enabledInGui";
+const CONFIG_REL: &str = "extensions/pet/config.json";
 
 /// 配置键：当前桌宠（资源根目录下的子目录名）。
 const CONFIG_PET: &str = "pet";
+
+/// 配置键：宠物在主窗口内的左上角横坐标（逻辑像素，窗口原点起算）。
+const CONFIG_POS_X: &str = "posX";
+
+/// 配置键：宠物在主窗口内的左上角纵坐标（逻辑像素，窗口原点起算）。
+const CONFIG_POS_Y: &str = "posY";
 
 /// 配置键：资源根目录覆盖（空 = 用 [`ROOT_REL`]）。
 const CONFIG_MEDIA: &str = "media";
@@ -82,14 +85,6 @@ const SUBCOMMANDS: &[SubcommandDef] = &[
         name: "switch",
         description: "Switch the current pet: /pet switch <name> (no name = list them)",
     },
-    SubcommandDef {
-        name: "on",
-        description: "Show the pet window",
-    },
-    SubcommandDef {
-        name: "off",
-        description: "Hide the pet window",
-    },
 ];
 
 /// 配置文件的读写锁（命令写盘与读盘互斥）。
@@ -97,9 +92,6 @@ static CONFIG_LOCK: RwLock<()> = RwLock::new(());
 
 /// 配置文件的读缓存（锁序恒为「RwLock → 缓存内层 Mutex」）。
 static CONFIG_CACHE: ConfigCache = ConfigCache::new();
-
-/// 扩展当前是否启用（由 [`Extension::on_enabled_changed`] 写入，供建窗前查询）。
-static ENABLED: AtomicBool = AtomicBool::new(false);
 
 /// 当前姿态（[`Pose`] 的 `u8` 值，无锁供 GUI 每帧读）。
 static POSE: AtomicU8 = AtomicU8::new(Pose::Idle as u8);
@@ -113,7 +105,7 @@ static START: OnceLock<Instant> = OnceLock::new();
 /// 自声明工厂：linkme 分布式切片。
 #[linkme::distributed_slice(EXTENSION_FACTORIES)]
 static DESKTOP_PET_FACTORY: ExtensionFactory = ExtensionFactory {
-    priority: PRIORITY_DESKTOP_PET,
+    priority: PRIORITY_PET,
     make: || -> Arc<dyn Extension> { Arc::new(DesktopPet) },
 };
 
@@ -160,7 +152,7 @@ fn now_ms() -> u64 {
     start().elapsed().as_millis() as u64
 }
 
-/// 配置文件路径：`agent_dir()/extensions/desktop-pet/config.json`。
+/// 配置文件路径：`agent_dir()/extensions/pet/config.json`。
 fn config_path() -> PathBuf {
     agent_dir().join(CONFIG_REL)
 }
@@ -196,7 +188,7 @@ fn update_config(edit: impl FnOnce(&mut serde_json::Map<String, Value>)) -> std:
     CONFIG_CACHE.write_object(&CONFIG_LOCK, &path, root)
 }
 
-/// 资源根目录：配置里的 `media` 非空就用它，否则用 `agent_dir()/extensions/desktop-pet`。
+/// 资源根目录：配置里的 `media` 非空就用它，否则用 `agent_dir()/extensions/pet`。
 fn anim_root() -> PathBuf {
     config_str(CONFIG_MEDIA)
         .map(PathBuf::from)
@@ -265,7 +257,7 @@ pub fn assets_ready() -> bool {
     !animations().is_empty()
 }
 
-/// 确保资源根目录存在（`agent_dir()/extensions/desktop-pet`），省得用户自己去翻路径。
+/// 确保资源根目录存在（`agent_dir()/extensions/pet`），省得用户自己去翻路径。
 ///
 /// `media` 指向自定义目录时不动手——那是用户自己挑的地方，凭空建目录只会盖住真正的问题。
 fn ensure_root() {
@@ -298,7 +290,8 @@ pub fn note_event(event: &Value) {
         .and_then(Value::as_str)
         .unwrap_or_default();
     let pose = match ty {
-        "message_start" => Pose::Thinking,
+        // 一轮开跑与模型开始产内容都是「在想」；`turn_end` 之后模型常常接着干活，不退回空闲
+        "agent_start" | "message_start" => Pose::Thinking,
         "tool_execution_start" => Pose::Coding,
         "tool_execution_end" => {
             if event.get("isError").and_then(Value::as_bool) == Some(true) {
@@ -307,8 +300,14 @@ pub fn note_event(event: &Value) {
                 Pose::Coding
             }
         }
-        "turn_end" => Pose::Idle,
-        "agent_settled" => Pose::Celebrate,
+        // 被中断的一轮不算庆祝，用打哈欠过渡
+        "agent_settled" => {
+            if event.get("aborted").and_then(Value::as_bool) == Some(true) {
+                Pose::Yawn
+            } else {
+                Pose::Celebrate
+            }
+        }
         "auto_retry_start" | "compaction_start" => Pose::Yawn,
         "auto_retry_end" | "compaction_end" => Pose::Thinking,
         _ => return,
@@ -353,7 +352,27 @@ fn reset_pose() {
     POSE.store(Pose::Idle as u8, Ordering::Relaxed);
 }
 
-/// `/pet` 命令分发：`download`（默认）/ `switch <名字>` / `on` / `off`。
+/// 宠物在主窗口内的左上角坐标（逻辑像素，窗口原点起算）：上次拖动后保存的位置。
+///
+/// 两个键缺任一或不是数字就当没存过（返回 `None`），由界面回落到默认位置。
+pub fn saved_offset() -> Option<(f32, f32)> {
+    let root = config();
+    let x = root.get(CONFIG_POS_X)?.as_f64()? as f32;
+    let y = root.get(CONFIG_POS_Y)?.as_f64()? as f32;
+    Some((x, y))
+}
+
+/// 记住宠物在主窗口内的位置（拖动松手时调用）。
+///
+/// 写盘失败静默忽略：位置只是装饰，不该因此弹错误。
+pub fn save_offset(x: f32, y: f32) {
+    _ = update_config(|map| {
+        map.insert(CONFIG_POS_X.to_string(), serde_json::json!(x));
+        map.insert(CONFIG_POS_Y.to_string(), serde_json::json!(y));
+    });
+}
+
+/// `/pet` 命令分发：`download`（默认）/ `switch <名字>`。
 ///
 /// 不锁 agent，因此声明 `busy_safe`。
 fn command_pet(host: &mut dyn CommandHost, raw: &str) -> bool {
@@ -376,34 +395,8 @@ fn command_pet(host: &mut dyn CommandHost, raw: &str) -> bool {
             }
         }
         "switch" => switch_pet(host, rest),
-        "on" => match update_config(|map| {
-            map.insert(CONFIG_ENABLED.to_string(), Value::Bool(true));
-        }) {
-            Ok(()) => {
-                host.push_message("desktop-pet: enabled for the GUI.", UiNotifyLevel::Success);
-                if !assets_ready() {
-                    host.push_message(&download_notice(), UiNotifyLevel::Warning);
-                }
-            }
-            Err(e) => host.push_message(
-                &format!("desktop-pet: cannot write config: {e}"),
-                UiNotifyLevel::Error,
-            ),
-        },
-        "off" => match update_config(|map| {
-            map.insert(CONFIG_ENABLED.to_string(), Value::Bool(false));
-        }) {
-            Ok(()) => host.push_message(
-                "desktop-pet: hidden (takes effect on restart).",
-                UiNotifyLevel::Success,
-            ),
-            Err(e) => host.push_message(
-                &format!("desktop-pet: cannot write config: {e}"),
-                UiNotifyLevel::Error,
-            ),
-        },
         other => host.push_message(
-            &format!("desktop-pet: unknown subcommand `{other}`; use download | switch | on | off"),
+            &format!("pet: unknown subcommand `{other}`; use download | switch"),
             UiNotifyLevel::Warning,
         ),
     }
@@ -417,7 +410,7 @@ fn switch_pet(host: &mut dyn CommandHost, name: &str) {
         if installed.is_empty() {
             host.push_message(
                 &format!(
-                    "desktop-pet: no pet installed under {}; /pet download shows where to get them.",
+                    "pet: no pet installed under {}; /pet download shows where to get them.",
                     anim_root().display()
                 ),
                 UiNotifyLevel::Info,
@@ -437,7 +430,7 @@ fn switch_pet(host: &mut dyn CommandHost, name: &str) {
             .collect::<Vec<_>>()
             .join(", ");
         host.push_message(
-            &format!("desktop-pet: installed pets: {list}; switch with /pet switch <name>."),
+            &format!("pet: installed pets: {list}; switch with /pet switch <name>."),
             UiNotifyLevel::Info,
         );
         return;
@@ -446,7 +439,7 @@ fn switch_pet(host: &mut dyn CommandHost, name: &str) {
     if !installed.iter().any(|p| p == name) {
         host.push_message(
             &format!(
-                "desktop-pet: `{name}` is not installed under {} (installed: {}).",
+                "pet: `{name}` is not installed under {} (installed: {}).",
                 anim_root().display(),
                 if installed.is_empty() {
                     "none".to_string()
@@ -465,18 +458,18 @@ fn switch_pet(host: &mut dyn CommandHost, name: &str) {
         Ok(()) => {
             reset_pose();
             host.push_message(
-                &format!("desktop-pet: switched to `{name}` (takes effect on restart)."),
+                &format!("pet: switched to `{name}`."),
                 UiNotifyLevel::Success,
             );
         }
         Err(e) => host.push_message(
-            &format!("desktop-pet: cannot write config: {e}"),
+            &format!("pet: cannot write config: {e}"),
             UiNotifyLevel::Error,
         ),
     }
 }
 
-/// `desktop-pet` 扩展。
+/// `pet` 扩展。
 pub struct DesktopPet;
 
 impl Extension for DesktopPet {
@@ -495,10 +488,8 @@ impl Extension for DesktopPet {
         false
     }
 
-    /// 桌宠只是装饰，不属于 agentic 工作流：声明最低级别 `Minimal`，
-    /// 即任何扩展模式下都可用（不声明会被 `/extension` 面板按模式过滤掉）。
     fn modes(&self) -> Vec<ExtensionMode> {
-        vec![ExtensionMode::Minimal]
+        vec![ExtensionMode::Dev, ExtensionMode::Creator]
     }
 
     /// 桌宠不提供工具。
@@ -510,7 +501,7 @@ impl Extension for DesktopPet {
     fn commands(&self) -> Vec<ExtensionCommand> {
         vec![ExtensionCommand {
             name: CMD.to_string(),
-            description: "Desktop pet: /pet download | switch | on | off".to_string(),
+            description: "Desktop pet: /pet download | switch".to_string(),
             busy_safe: true,
             subcommands: SUBCOMMANDS.to_vec(),
         }]
@@ -526,9 +517,8 @@ impl Extension for DesktopPet {
         register_host_command(EXT, CMD, command_pet);
     }
 
-    /// 记录启用态；顺手确保资源根目录存在，开着却没装资源时给一条下载提示（不建窗）。
+    /// 确保资源根目录存在；开着却没装资源时给一条下载提示（不画宠物）。
     fn on_enabled_changed(&self, enabled: bool) {
-        ENABLED.store(enabled, Ordering::Relaxed);
         if !enabled {
             return;
         }
@@ -613,19 +603,12 @@ mod tests {
     }
 
     #[test]
-    fn config_round_trips_enabled_flag() {
+    fn position_round_trips_through_the_config() {
         let _guard = AgentDirGuard::temp();
-        update_config(|map| {
-            map.insert(CONFIG_ENABLED.to_string(), Value::Bool(true));
-        })
-        .unwrap();
-        assert_eq!(config()[CONFIG_ENABLED], Value::Bool(true));
+        assert_eq!(saved_offset(), None, "没存过就没有位置");
 
-        update_config(|map| {
-            map.insert(CONFIG_ENABLED.to_string(), Value::Bool(false));
-        })
-        .unwrap();
-        assert_eq!(config()[CONFIG_ENABLED], Value::Bool(false));
+        save_offset(120.5, 340.0);
+        assert_eq!(saved_offset(), Some((120.5, 340.0)));
     }
 
     #[test]
@@ -661,6 +644,20 @@ mod tests {
 
         note_event(&serde_json::json!({"type": "agent_settled", "agentScope": "main"}));
         assert_eq!(pose(), Pose::Celebrate);
+
+        note_event(
+            &serde_json::json!({"type": "agent_settled", "aborted": true, "agentScope": "main"}),
+        );
+        assert_eq!(pose(), Pose::Yawn, "被中断的一轮不庆祝");
+    }
+
+    #[test]
+    fn turn_end_does_not_drop_back_to_idle_mid_round() {
+        let _guard = AgentDirGuard::temp();
+
+        note_event(&serde_json::json!({"type": "tool_execution_start", "agentScope": "main"}));
+        note_event(&serde_json::json!({"type": "turn_end", "agentScope": "main"}));
+        assert_eq!(pose(), Pose::Coding, "turn_end 之后模型常常接着干活");
     }
 
     #[test]
@@ -719,12 +716,12 @@ mod tests {
     }
 
     #[test]
-    fn available_in_every_extension_mode() {
+    fn available_in_dev_and_creator_modes() {
         let pet = DesktopPet;
-        for mode in ExtensionMode::ALL {
+        for mode in [ExtensionMode::Dev, ExtensionMode::Creator] {
             assert!(
                 pet.modes().iter().any(|d| d.usable_in(mode)),
-                "桌宠在 {mode:?} 模式下也该出现在 /extension 面板里"
+                "桌宠在 {mode:?} 模式下该出现在 /extension 面板里"
             );
         }
     }
