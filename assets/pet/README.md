@@ -12,14 +12,19 @@
 |---|---|
 | `claude-girl/` | 暖橙配色，9 个动作，17MB |
 | `dsh-girl/` | 深蓝配色，9 个动作，9.2MB |
+| `codex-girl/` | 银白发色与白裙，9 个动作，24MB |
 
 每个目录里的 `anim/README.md` 是动作对照表，`anim/*.webp` 是 spritesheet。
 
 ## 来源与许可
 
-角色立绘与动画帧**不属于本仓库的 MIT 许可**。它们来自
+角色立绘与动画帧**不属于本仓库的 MIT 许可**。`claude-girl/` 与 `dsh-girl/` 来自
 [aboutme-pets](https://github.com/hunmer/aboutme-pets)，再经
 [linux-desktop-pet](https://github.com/linxuan-sys/linux-desktop-pet) 编码成 10 秒 WebP 片段。
+
+`codex-girl/` 来自 linux-desktop-pet 的 `codex-girl/` 子目录（MIT，Copyleft © 2026 万昊轩）：
+上游有 90 个动作，这里只抽了 `/pet` 认得的 9 个，对照表见 `codex-girl/anim/README.md`。
+它的角色比另外两只高一头，抽取时按统一系数缩到同一档身材，画布仍是 640×360 一帧。
 
 - 公开分发时必须署名上述上游项目。
 - 未经许可不得商用。

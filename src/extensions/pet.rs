@@ -14,7 +14,7 @@ use crate::{
         config_cache::ConfigCache,
         extensions::{
             CommandHost, Extension, ExtensionCommand, ExtensionHook, ExtensionMode, ExtensionTool,
-            ExtensionUiRequest, SubcommandDef, UiNotifyLevel, request_ui,
+            ExtensionUiRequest, ForkProjectInfo, SubcommandDef, UiNotifyLevel, request_ui,
         },
         provider::AgentMessage,
         settings_manager::agent_dir,
@@ -487,6 +487,15 @@ impl Extension for DesktopPet {
     /// `/extension` 面板里的一行说明。
     fn description(&self) -> &str {
         "A desktop pet that reacts to agent activity (desktop GUI only; assets downloaded separately)"
+    }
+
+    /// `/extension` 二级详情展示的来源信息。
+    fn fork_project(&self) -> Option<ForkProjectInfo> {
+        Some(ForkProjectInfo {
+            plugin_name: "linux-desktop-pet".to_string(),
+            plugin_version: "3.0.0".to_string(),
+            url: String::from("https://github.com/linxuan-sys/linux-desktop-pet"),
+        })
     }
 
     /// 会多开一个窗口，默认不启用。
