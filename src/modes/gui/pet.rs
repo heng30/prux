@@ -77,9 +77,11 @@ pub struct Pet {
     cache: VecDeque<(String, Arc<Sheet>)>,
     /// 已解码动画属于哪个桌宠：配置里换了桌宠就整个重载。
     pet_name: String,
-    /// 左上角在窗口内的位置（逻辑像素）。
-    offset: (f32, f32),
-    /// 最近一次渲染时的窗口尺寸（逻辑像素）：保存位置时换算成比例用。
+    /// 位置：左上角的横向比例、**底边**的纵向比例（0–1），每帧按当前窗口尺寸换算成像素。
+    ///
+    /// 存比例而不是像素：窗口一建出来就被合成器拉大/缩小是常态，按像素存的位置会跑偏。
+    pos: (f32, f32),
+    /// 最近一次渲染时的窗口尺寸（逻辑像素）：拖动的像素与比例换算用。
     viewport: (f32, f32),
     /// 进行中的拖动。
     drag: Option<Drag>,
@@ -98,10 +100,7 @@ impl Pet {
             pending: None,
             cache: VecDeque::new(),
             pet_name: pet_ext::current_pet(),
-            offset: match pet_ext::saved_pos() {
-                Some((x, y)) => (x * viewport.0, y * viewport.1),
-                None => default_offset(viewport),
-            },
+            pos: pet_ext::saved_pos().unwrap_or_else(|| default_pos(viewport)),
             viewport,
             drag: None,
         };
@@ -123,11 +122,9 @@ impl Pet {
 
     /// 开始拖动（顺带播一下点击回应）。
     pub fn down(&mut self, at: gpui::Point<Pixels>) {
+        let (x, y) = self.top_left();
         self.drag = Some(Drag {
-            grab: (
-                f32::from(at.x) - self.offset.0,
-                f32::from(at.y) - self.offset.1,
-            ),
+            grab: (f32::from(at.x) - x, f32::from(at.y) - y),
             moved: false,
         });
         self.play(Pose::Click);
@@ -135,28 +132,34 @@ impl Pet {
 
     /// 跟随鼠标移动；返回是否真的移动了（调用方据此重绘）。
     pub fn drag_to(&mut self, at: gpui::Point<Pixels>) -> bool {
+        let (width, height) = self.viewport;
+        let (_, pet_h) = self.size();
+        let (from_left, from_bottom) = self.top_left();
+        let from_bottom = from_bottom + pet_h;
         let Some(drag) = self.drag.as_mut() else {
             return false;
         };
-        let next = (f32::from(at.x) - drag.grab.0, f32::from(at.y) - drag.grab.1);
-        let moved = (next.0 - self.offset.0).abs() > DRAG_SLOP
-            || (next.1 - self.offset.1).abs() > DRAG_SLOP;
-        self.offset = next;
+        let x = f32::from(at.x) - drag.grab.0;
+        let y = f32::from(at.y) - drag.grab.1;
+        let moved =
+            (x - from_left).abs() > DRAG_SLOP || (y + pet_h - from_bottom).abs() > DRAG_SLOP;
+        self.pos = (x / width.max(1.0), (y + pet_h) / height.max(1.0));
         if moved {
             drag.moved = true;
         }
         moved
     }
 
-    /// 松手：真的拖动过就按窗口比例记住位置，下次启动照原样摆。
+    /// 松手：真的拖动过就记住位置（0–1 的比例），下次启动照原样摆。
     pub fn release(&mut self) {
         if self.drag.take().is_some_and(|drag| drag.moved) {
-            let (width, height) = self.viewport;
-            pet_ext::save_pos(
-                (self.offset.0 / width.max(1.0)).clamp(0.0, 1.0),
-                (self.offset.1 / height.max(1.0)).clamp(0.0, 1.0),
-            );
+            pet_ext::save_pos(self.pos.0.clamp(0.0, 1.0), self.pos.1.clamp(0.0, 1.0));
         }
+    }
+
+    /// 宠物左上角的窗口内像素位置（不夹边界，拖动时允许拖出窗口）。
+    fn top_left(&self) -> (f32, f32) {
+        top_left_of(self.pos, self.viewport, self.size())
     }
 
     /// 画出这一帧（绝对定位、透明底），位置夹在窗口可见范围内。
@@ -165,7 +168,7 @@ impl Pet {
         self.viewport = (f32::from(viewport.width), f32::from(viewport.height));
 
         let (width, height) = self.size();
-        let (x, y) = clamp(self.offset, viewport, (width, height));
+        let (x, y) = place(self.pos, viewport, (width, height));
         let frame = self.frame();
         div()
             .id("pet")
@@ -248,12 +251,7 @@ impl Pet {
     }
 
     /// 换上已解码的动作并进 LRU（超出 [`CACHE`] 的丢掉）。
-    ///
-    /// 各动作裁剪出的高度不一样，换图时按高度差补一下纵向位置，脚底才不会上下跳。
     fn promote(&mut self, key: String, sheet: Arc<Sheet>) {
-        if let Some(old) = &self.sheet {
-            self.offset.1 += old.size.1 - sheet.size.1;
-        }
         self.sheet = Some(sheet.clone());
         self.sheet_key = Some(key.clone());
         self.cache.retain(|(k, _)| *k != key);
@@ -279,9 +277,25 @@ impl Pet {
     }
 }
 
-/// 没存过位置时的默认摆放：窗口左下角，距边缘 [`MARGIN`]。
-fn default_offset(viewport: (f32, f32)) -> (f32, f32) {
-    (MARGIN, viewport.1 - PET_H - MARGIN)
+/// 没存过位置时的默认摆放：左下角，距左、底边缘各 [`MARGIN`]。
+fn default_pos(viewport: (f32, f32)) -> (f32, f32) {
+    (
+        MARGIN / viewport.0.max(1.0),
+        (viewport.1 - MARGIN) / viewport.1.max(1.0),
+    )
+}
+
+/// 比例位置 → 左上角像素：`pos.0` 是左边缘占窗口宽度的比例，`pos.1` 是**底边**占窗口高度的比例。
+///
+/// 底边锚定的用处是换动作时裁剪高度变了，脚底也不会上下跳。
+fn top_left_of(pos: (f32, f32), viewport: (f32, f32), size: (f32, f32)) -> (f32, f32) {
+    (pos.0 * viewport.0, pos.1 * viewport.1 - size.1)
+}
+
+/// 比例位置 → 夹回窗口可见范围后的左上角像素（每帧按当前窗口尺寸算，缩放窗口也跟着对位）。
+fn place(pos: (f32, f32), viewport: Size<Pixels>, size: (f32, f32)) -> (f32, f32) {
+    let viewport_px = (f32::from(viewport.width), f32::from(viewport.height));
+    clamp(top_left_of(pos, viewport_px, size), viewport, size)
 }
 
 /// 把位置夹回窗口可见范围（窗口缩小或换分辨率后不会跑到屏幕外）。
@@ -409,10 +423,26 @@ mod tests {
     }
 
     #[test]
-    fn default_offset_sits_above_the_bottom_edge() {
+    fn position_follows_the_window_size() {
+        let pos = (0.5, 1.0);
+        let size = (100.0, 100.0);
         assert_eq!(
-            default_offset((800.0, 600.0)),
-            (MARGIN, 600.0 - PET_H - MARGIN)
+            place(pos, gpui::size(px(800.), px(600.)), size),
+            (400.0, 500.0),
+            "底边贴窗口底"
+        );
+        assert_eq!(
+            place(pos, gpui::size(px(2400.), px(1400.)), size),
+            (1200.0, 1300.0),
+            "窗口被合成器拉大后仍按比例对位（曾因建窗时的旧尺寸把宠物摆到竖直中间）"
+        );
+    }
+
+    #[test]
+    fn default_pos_sits_in_the_bottom_left_corner() {
+        assert_eq!(
+            default_pos((800.0, 600.0)),
+            (MARGIN / 800.0, (600.0 - MARGIN) / 600.0)
         );
     }
 
