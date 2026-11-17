@@ -340,15 +340,25 @@ fn decode(path: &Path) -> Option<Sheet> {
         let x = (index % COLS) as u32 * fw + left;
         let y = (index / COLS) as u32 * fh + top;
         let cell = image::imageops::crop_imm(&sheet, x, y, cw, ch).to_image();
-        let scaled = image::imageops::resize(
+        let mut scaled = image::imageops::resize(
             &cell,
             size.0 as u32,
             size.1 as u32,
             image::imageops::FilterType::Triangle,
         );
+        rgba_to_bgra(&mut scaled);
         frames.push(Arc::new(RenderImage::new(vec![image::Frame::new(scaled)])));
     }
     Some(Sheet { frames, size })
+}
+
+/// 就地交换红蓝通道：`image` 解出来是 RGBA，gpui 的 [`RenderImage`] 按 BGRA 上传。
+///
+/// 少了这一步橙色的桌面宠物会整只变蓝（红蓝互换），看着像换了另一只桌宠。
+fn rgba_to_bgra(image: &mut image::RgbaImage) {
+    for pixel in image.pixels_mut() {
+        pixel.0.swap(0, 2);
+    }
 }
 
 /// 所有帧不透明像素的并集包围盒（帧内坐标），用来裁掉四周的透明留白。
@@ -403,6 +413,17 @@ mod tests {
     fn content_box_is_none_for_a_fully_transparent_sheet() {
         let sheet = image::RgbaImage::new(40 * COLS as u32, 60);
         assert_eq!(content_box(&sheet, (40, 30)), None);
+    }
+
+    #[test]
+    fn frames_are_converted_to_bgra() {
+        let mut image = image::RgbaImage::from_pixel(1, 1, image::Rgba([255, 128, 0, 255]));
+        rgba_to_bgra(&mut image);
+        assert_eq!(
+            image.get_pixel(0, 0).0,
+            [0, 128, 255, 255],
+            "gpui 按 BGRA 上传，红蓝不换的话橙色桌宠会变蓝"
+        );
     }
 
     #[test]
