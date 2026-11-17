@@ -280,7 +280,7 @@ fn paste_from_wsl_clipboard() -> Result<String> {
 
 /// 当前会话是否运行在 Wayland 下：`WAYLAND_DISPLAY` 存在，或 `XDG_SESSION_TYPE == "wayland"`。
 #[cfg(target_os = "linux")]
-fn is_wayland() -> bool {
+pub fn is_wayland() -> bool {
     std::env::var("WAYLAND_DISPLAY").is_ok()
         || std::env::var("XDG_SESSION_TYPE")
             .map(|t| t == "wayland")

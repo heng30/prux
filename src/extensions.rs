@@ -68,6 +68,9 @@ pub mod vet;
 pub mod web_access;
 pub mod worktree;
 
+#[cfg(feature = "gui")]
+pub mod desktop_pet;
+
 pub use plan_mode::PlanMode;
 
 use crate::core::extensions::{self, BannerExtension, Extension, FooterExtension};
@@ -81,24 +84,24 @@ use std::sync::Arc;
 pub const PRIORITY_EXTRA_THEMES: u32 = 100;
 /// goal 持久化自主目标扩展的注册优先级。
 pub const PRIORITY_GOAL: u32 = 90;
+/// injection-guard 提示注入检测扩展的注册优先级。
+pub const PRIORITY_INJECTION_GUARD: u32 = 89;
 /// plan-mode 只读探索模式扩展的注册优先级。
-pub const PRIORITY_PLAN_MODE: u32 = 85;
+pub const PRIORITY_PLAN_MODE: u32 = 86;
 /// rtk bash 命令改写扩展的注册优先级。
 ///
 /// 高于 [`PRIORITY_PERMISSIONS`]：先改写、再判定，权限看到的是真正要执行的命令。
-pub const PRIORITY_RTK: u32 = 86;
+pub const PRIORITY_RTK: u32 = 85;
 /// permissions 工具权限门控扩展的注册优先级。
 pub const PRIORITY_PERMISSIONS: u32 = 84;
 /// leak-guard 凭据外发检测扩展的注册优先级。
 pub const PRIORITY_LEAK_GUARD: u32 = 83;
-/// injection-guard 提示注入检测扩展的注册优先级。
-pub const PRIORITY_INJECTION_GUARD: u32 = 82;
 /// shrink 工具结果压缩扩展的注册优先级。
 ///
 /// 落在 `AfterToolCall` 链的中间：低于 [`PRIORITY_INJECTION_GUARD`]（注入检测要扫未压缩的原文）、
 /// 高于 [`PRIORITY_HOOKS`]（`PostToolUse` 追加的上下文不该被当成工具输出重排）。
 /// 与 [`PRIORITY_SANDBOX`] 同值不影响语义：sandbox 只挂 `BeforeToolCall`，不在同一条链上。
-pub const PRIORITY_SHRINK: u32 = 81;
+pub const PRIORITY_SHRINK: u32 = 82;
 /// sandbox OS 级命令沙箱扩展的注册优先级（与 permissions 同属安全层，紧随其后）。
 pub const PRIORITY_SANDBOX: u32 = 81;
 /// tasks 结构化任务跟踪扩展的注册优先级。
@@ -109,6 +112,10 @@ pub const PRIORITY_TASKS: u32 = 80;
 pub const PRIORITY_HOOKS: u32 = 79;
 /// subagent 子代理扩展的注册优先级。
 pub const PRIORITY_SUBAGENT: u32 = 78;
+/// computer 桌面操作（截图/输入/窗口/无障碍）扩展的注册优先级。
+pub const PRIORITY_COMPUTER: u32 = 77;
+/// vet 收工前项目检查闭环扩展的注册优先级。
+pub const PRIORITY_VET: u32 = 76;
 /// loop-detect 循环行为检测扩展的注册优先级。
 pub const PRIORITY_LOOP_DETECT: u32 = 75;
 /// notify 空闲通知扩展的注册优先级。
@@ -119,28 +126,16 @@ pub const PRIORITY_HANG_DETECT: u32 = 73;
 pub const PRIORITY_PROXY: u32 = 72;
 /// rewind 回退上一次用户输入扩展的注册优先级。
 pub const PRIORITY_REWIND: u32 = 71;
-/// rollback 回合文件检查点扩展的注册优先级。
-pub const PRIORITY_ROLLBACK: u32 = 70;
-/// shake 手动丢弃重内容扩展的注册优先级。
-pub const PRIORITY_SHAKE: u32 = 70;
-/// pr 交付闭环（提交 / 推 / PR / 跟 CI）扩展的注册优先级。
-pub const PRIORITY_PR: u32 = 43;
-/// auto-title 会话首轮自动命名扩展的注册优先级。
-pub const PRIORITY_AUTO_TITLE: u32 = 42;
-/// vet 收工前项目检查闭环扩展的注册优先级。
-pub const PRIORITY_VET: u32 = 76;
 /// web-access 联网搜索与抓取扩展的注册优先级。
 pub const PRIORITY_WEB_ACCESS: u32 = 70;
 /// mcp MCP 客户端扩展的注册优先级。
 pub const PRIORITY_MCP: u32 = 69;
 /// browser 真实浏览器自动化（CDP）扩展的注册优先级。
 pub const PRIORITY_BROWSER: u32 = 68;
-/// computer 桌面操作（截图/输入/窗口/无障碍）扩展的注册优先级。
-pub const PRIORITY_COMPUTER: u32 = 77;
-/// cache-usage prompt cache 命中率统计扩展的注册优先级。
-pub const PRIORITY_CACHE_USAGE: u32 = 66;
 /// lsp 语言服务器查询（定义 / 引用 / 符号 / 诊断）扩展的注册优先级。
 pub const PRIORITY_LSP: u32 = 67;
+/// cache-usage prompt cache 命中率统计扩展的注册优先级。
+pub const PRIORITY_CACHE_USAGE: u32 = 66;
 /// skills 扩展技能管理（`/skills` 面板）扩展的注册优先级。
 pub const PRIORITY_SKILLS: u32 = 65;
 /// doctor provider 可达性诊断扩展的注册优先级。
@@ -161,20 +156,16 @@ pub const PRIORITY_CACHE_WATCH: u32 = 58;
 pub const PRIORITY_SESSION_SEARCH: u32 = 57;
 /// memory 跨会话记忆扩展的注册优先级。
 pub const PRIORITY_MEMORY: u32 = 56;
-/// ponytail 懒资深开发者模式扩展的注册优先级。
-pub const PRIORITY_PONYTAIL: u32 = 53;
 /// update-check 启动时版本检查扩展的注册优先级。
 pub const PRIORITY_UPDATE_CHECK: u32 = 55;
 /// usage provider 配额面板扩展的注册优先级。
 pub const PRIORITY_USAGE: u32 = 54;
-/// ssh-remote 远程工具族与隧道扩展的注册优先级。
-pub const PRIORITY_SSH_REMOTE: u32 = 51;
+/// ponytail 懒资深开发者模式扩展的注册优先级。
+pub const PRIORITY_PONYTAIL: u32 = 53;
 /// ask-user-question 结构化问卷扩展的注册优先级。
 pub const PRIORITY_ASK_USER_QUESTION: u32 = 52;
-/// acp 编辑器协议服务端（`prux acp` 子命令）扩展的注册优先级。
-pub const PRIORITY_ACP: u32 = 46;
-/// rpc JSONL 服务端（`prux rpc` 子命令）扩展的注册优先级。
-pub const PRIORITY_RPC: u32 = 46;
+/// ssh-remote 远程工具族与隧道扩展的注册优先级。
+pub const PRIORITY_SSH_REMOTE: u32 = 51;
 /// doc-helper 按需文档查询扩展的注册优先级。
 pub const PRIORITY_DOC_HELPER: u32 = 50;
 /// processes 后台进程监督扩展的注册优先级。
@@ -184,14 +175,18 @@ pub const PRIORITY_HARDWARE: u32 = 48;
 /// papers 文献检索与全文获取扩展的注册优先级。
 pub const PRIORITY_PAPERS: u32 = 47;
 /// debug 调试工具集扩展注册优先级。
-pub const PRIORITY_DEBUG: u32 = 45;
-/// worktree 工作副本扩展的注册优先级。
-pub const PRIORITY_WORKTREE: u32 = 44;
+pub const PRIORITY_DEBUG: u32 = 46;
 /// review 入站评审（拉取 PR / issue 评审，可回帖）扩展的注册优先级。
 pub const PRIORITY_REVIEW: u32 = 45;
+/// worktree 工作副本扩展的注册优先级。
+pub const PRIORITY_WORKTREE: u32 = 44;
+/// pr 交付闭环（提交 / 推 / PR / 跟 CI）扩展的注册优先级。
+pub const PRIORITY_PR: u32 = 43;
+/// auto-title 会话首轮自动命名扩展的注册优先级。
+pub const PRIORITY_AUTO_TITLE: u32 = 42;
+/// acp 编辑器协议服务端（`prux acp` 子命令）扩展的注册优先级。
+pub const PRIORITY_ACP: u32 = 41;
 /// backup 用户资产打包 / 恢复扩展的注册优先级。
-pub const PRIORITY_BACKUP: u32 = 37;
-/// tool_search 延迟工具检索扩展的注册优先级。
 pub const PRIORITY_TOOL_SEARCH: u32 = 40;
 /// codemode 工具编排扩展的注册优先级。
 pub const PRIORITY_CODEMODE: u32 = 39;
@@ -200,15 +195,27 @@ pub const PRIORITY_JET: u32 = 38;
 /// image-route 按请求里有无图片切换模型扩展的注册优先级。
 pub const PRIORITY_IMAGE_ROUTE: u32 = 37;
 /// banner（静态 art）启动横幅扩展的注册优先级。
-pub const PRIORITY_BANNER: u32 = 30;
+pub const PRIORITY_BACKUP: u32 = 36;
+/// rollback 回合文件检查点扩展的注册优先级。
+pub const PRIORITY_ROLLBACK: u32 = 35;
+/// shake 手动丢弃重内容扩展的注册优先级。
+pub const PRIORITY_SHAKE: u32 = 34;
+/// rpc JSONL 服务端（`prux rpc` 子命令）扩展的注册优先级。
+pub const PRIORITY_RPC: u32 = 33;
+/// tool_search 延迟工具检索扩展的注册优先级。
+pub const PRIORITY_BANNER: u32 = 20;
 /// bouncyballs-banner 启动横幅扩展的注册优先级：比静态版小一档，后注册故默认生效。
-pub const PRIORITY_BANNER_BOUNCY: u32 = 29;
+pub const PRIORITY_BANNER_BOUNCY: u32 = 16;
 /// footer(rich) 底栏布局的注册优先级，三者中值大者先注册。
-pub const PRIORITY_FOOTER_RICH: u32 = 20;
+pub const PRIORITY_FOOTER_RICH: u32 = 15;
 /// footer(minimal) 底栏布局的注册优先级，只显示模型统计行。
-pub const PRIORITY_FOOTER_MINIMAL: u32 = 15;
+pub const PRIORITY_FOOTER_MINIMAL: u32 = 13;
 /// footer(normal) 底栏布局的注册优先级，值最小故为默认底栏。
 pub const PRIORITY_FOOTER_NORMAL: u32 = 10;
+
+#[cfg(feature = "gui")]
+/// desktop-pet 桌面宠物扩展的注册优先级（仅桌面 GUI 编译）。
+pub const PRIORITY_DESKTOP_PET: u32 = 21;
 
 /// 主题样式键与缺省色
 pub(crate) const DIM: (&str, &str) = ("dim", "#666666");

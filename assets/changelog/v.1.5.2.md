@@ -187,6 +187,21 @@
   falling back to a built-in baseline set that is known to compile together when the index cannot
   be reached — the result names the crates that used a baseline.
 
+- **A desktop pet window follows what the agent is doing**: the new `desktop-pet` extension opens a
+  second, transparent, always-on-top window in the desktop GUI and plays a character animation for
+  the current state — thinking, writing code, a failed tool call, a finished turn, a retry or a
+  compaction — and it falls asleep after two minutes without events; clicking it plays a short
+  acknowledgement. On Wayland it is a layer-shell surface pinned to the bottom of the screen, so it
+  stays out of the taskbar and never takes keyboard focus; other platforms fall back to a plain
+  floating window. Animations are not built into the binary: `/pet download` prints where to get
+  `anim.tar.gz` (`--open` also opens the browser), `/pet switch <name>` picks among the pets
+  installed under `agent_dir()/extensions/desktop-pet/<pet>/anim/` (no name lists them), and
+  `/pet on` / `/pet off` decide whether the window shows up on the next start. With no animations
+  installed no window is opened at all — the chat log gets one notice with the download address
+  instead. Its config lives in `agent_dir()/extensions/desktop-pet/config.json` (`pet`, `media` for
+  an animations folder elsewhere, `enabledInGui`) rather than `settings.json`. Off by default
+  (enable it in `/extension`), available in every extension mode.
+
 ### Changed
 
 - **`hardware` config is per board**: `agent_dir()/extensions/hardware/config.json` is now an
@@ -554,6 +569,15 @@
   就带上 embassy 栈（ESP32 用 `esp-hal` + `esp-rtos`，ARM 各族用 `embassy-stm32` / `embassy-nrf` /
   `embassy-rp`），没有时明说。版本在调用时从 crates.io 索引取最新稳定版，取不到才回落到
   一组验证过能一起编译的内置基线版本，并点名哪几个 crate 用了基线。
+
+- **桌面宠物窗口跟着 agent 干活**：新扩展 `desktop-pet` 在桌面 GUI 里多开一个透明、置顶的小窗口，
+  按当前状态播角色动画——思考、写代码、工具报错、一轮结束、重试或上下文压缩，两分钟没有事件就睡着，
+  点一下给个回应。Wayland 下它是贴屏底的 layer-shell（不进任务栏、不吃键盘焦点），其它平台退回普通悬浮窗。
+  动画不内嵌进二进制：`/pet download` 打印 `anim.tar.gz` 的下载地址（`--open` 顺手开浏览器），
+  `/pet switch <名字>` 在 `agent_dir()/extensions/desktop-pet/<桌宠>/anim/` 里已装的桌宠之间切换（不带名字列出清单），
+  `/pet on` / `/pet off` 决定下次启动是否显示窗口。一个动画都没装时不建窗，只在聊天区留一条带下载地址的提示。
+  配置写在 `agent_dir()/extensions/desktop-pet/config.json`（`pet`、`media` 指向别处的动画目录、`enabledInGui`），
+  不占 `settings.json`。默认不启用（在 `/extension` 里开），所有扩展模式下都可用。
 
 ### 变更
 
