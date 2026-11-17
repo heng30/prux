@@ -19,7 +19,7 @@
 
 角色立绘与动画帧**不属于本仓库的 MIT 许可**。它们来自
 [aboutme-pets](https://github.com/hunmer/aboutme-pets)，再经
-[linux-desktop-pet](https://github.com/hunmer/linux-desktop-pet) 编码成 10 秒 WebP 片段。
+[linux-desktop-pet](https://github.com/linxuan-sys/linux-desktop-pet) 编码成 10 秒 WebP 片段。
 
 - 公开分发时必须署名上述上游项目。
 - 未经许可不得商用。

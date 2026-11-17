@@ -45,6 +45,9 @@ const CMD: &str = "pet";
 /// 资源包下载地址（缺资源时提示用户从这里下）。
 const ASSET_URL: &str = "https://github.com/heng30/prux/raw/main/assets/pet/anim.tar.gz";
 
+/// 桌宠动画的上游仓库（提示里额外给出的出处）。
+const PET_REPO_URL: &str = "https://github.com/linxuan-sys/linux-desktop-pet";
+
 /// 资源根目录（相对 `agent_dir()`）：下面每个子目录是一个桌宠。
 const ROOT_REL: &str = "extensions/pet";
 
@@ -266,13 +269,14 @@ fn ensure_root() {
     }
 }
 
-/// 缺资源时给用户的提示：下载地址 + 解压命令。
+/// 缺资源时给用户的提示：下载地址 + 上游仓库 + 解压命令。
 fn download_notice() -> String {
     let pet = current_pet();
     let dir = anim_dir();
     format!(
         "Desktop pet `{pet}` is not installed: {}\n\
          Download: {ASSET_URL}\n\
+         More animations: {PET_REPO_URL}\n\
          Install: tar -xzf anim.tar.gz -C {}",
         dir.display(),
         anim_root().display()
@@ -564,6 +568,7 @@ mod tests {
         let _guard = AgentDirGuard::temp();
         let notice = download_notice();
         assert!(notice.contains(ASSET_URL));
+        assert!(notice.contains(PET_REPO_URL));
         assert!(notice.contains(&anim_dir().display().to_string()));
         assert!(!assets_ready(), "临时 agent_dir 里没有动画");
     }
