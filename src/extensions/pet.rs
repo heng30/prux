@@ -301,10 +301,10 @@ pub fn note_event(event: &Value) {
                 Pose::Coding
             }
         }
-        // 被中断的一轮不算庆祝，用打哈欠过渡
+        // 被中断的一轮不庆祝，直接回默认待机
         "agent_settled" => {
             if event.get("aborted").and_then(Value::as_bool) == Some(true) {
-                Pose::Yawn
+                Pose::Idle
             } else {
                 Pose::Celebrate
             }
@@ -652,7 +652,7 @@ mod tests {
         assert_eq!(pose(), Pose::Celebrate);
 
         note_event(&serde_json::json!({"type": "agent_settled", "aborted": true}));
-        assert_eq!(pose(), Pose::Yawn, "被中断的一轮不庆祝");
+        assert_eq!(pose(), Pose::Idle, "被中断的一轮不庆祝，回默认待机");
     }
 
     #[test]
