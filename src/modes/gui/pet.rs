@@ -4,9 +4,10 @@
 //! 位置按窗口比例（0–1）记住，换窗口尺寸也不会跑偏。资源解码放后台线程，UI 线程只做
 //! 「换帧 + 通知重绘」。
 
-use crate::extensions::pet::{self as pet_ext, Pose};
+use crate::extensions::pet::{self as pet_ext, PlaceMode, Pose};
 use gpui::{
-    ImageSource, ParentElement, Pixels, RenderImage, Size, Styled, Window, div, img, prelude::*, px,
+    Bounds, ImageSource, ParentElement, Pixels, RenderImage, Size, Styled, Window, div, img,
+    prelude::*, px,
 };
 use std::{
     collections::VecDeque,
@@ -58,6 +59,16 @@ struct Drag {
     moved: bool,
 }
 
+/// 输入框在窗口内的实测位置（逻辑像素）：贴输入框模式按它定位。
+struct Composer {
+    /// 输入框左边沿的窗口横坐标。
+    left: f32,
+    /// 输入框上沿的窗口纵坐标。
+    top: f32,
+    /// 输入框宽度：横向可走范围 = 它减宠物宽度。
+    width: f32,
+}
+
 /// 桌宠视图（由主界面持有，不是独立窗口）。
 pub struct Pet {
     /// 当前正在播的动作。
@@ -80,6 +91,10 @@ pub struct Pet {
     pos: (f32, f32),
     /// 最近一次渲染时的窗口尺寸（逻辑像素）：拖动的像素与比例换算用。
     viewport: (f32, f32),
+    /// 输入框的实测位置（上一帧值）：贴输入框模式按它定位，每帧刷新；`None` = 自由模式。
+    composer: Option<Composer>,
+    /// 贴输入框模式的横向比例（0–1）：相对输入框可走范围，不是相对窗口。
+    dock_x: f32,
     /// 进行中的拖动。
     drag: Option<Drag>,
 }
@@ -99,6 +114,8 @@ impl Pet {
             pet_name: pet_ext::current_pet(),
             pos: pet_ext::saved_pos().unwrap_or_else(|| default_pos(viewport)),
             viewport,
+            composer: None,
+            dock_x: pet_ext::docked_x(),
             drag: None,
         };
         pet.want(pet_ext::anim_path(pet.pose));
@@ -135,44 +152,81 @@ impl Pet {
     }
 
     /// 跟随鼠标移动；返回是否真的移动了（调用方据此重绘）。
+    ///
+    /// 贴输入框模式只能左右拖：纵坐标由输入框上沿决定，横坐标夹在输入框左右边沿之间。
     pub fn drag_to(&mut self, at: gpui::Point<Pixels>) -> bool {
         let (width, height) = self.viewport;
-        let (_, pet_h) = self.size();
+        let size = self.size();
         let (from_left, from_bottom) = self.top_left();
-        let from_bottom = from_bottom + pet_h;
+        let composer = self.composer.as_ref().map(|c| (c.left, c.width));
         let Some(drag) = self.drag.as_mut() else {
             return false;
         };
+
         let x = f32::from(at.x) - drag.grab.0;
         let y = f32::from(at.y) - drag.grab.1;
-        let moved =
-            (x - from_left).abs() > DRAG_SLOP || (y + pet_h - from_bottom).abs() > DRAG_SLOP;
-        self.pos = (x / width.max(1.0), (y + pet_h) / height.max(1.0));
+        match composer {
+            Some((left, composer_w)) => {
+                let travel = (composer_w - size.0).max(0.0);
+                self.dock_x = if travel > 0.0 {
+                    ((x - left) / travel).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+            }
+            None => self.pos = (x / width.max(1.0), (y + size.1) / height.max(1.0)),
+        }
+
+        let moved = (x - from_left).abs() > DRAG_SLOP
+            || (composer.is_none() && (y + size.1 - from_bottom).abs() > DRAG_SLOP);
         if moved {
             drag.moved = true;
         }
         moved
     }
 
-    /// 松手：真的拖动过就记住位置（0–1 的比例），下次启动照原样摆。
+    /// 松手：真的拖动过就记住位置，下次启动照原样摆。
+    ///
+    /// 两种模式各存自己的横向比例：自由模式相对窗口，贴输入框模式相对输入框。
     pub fn release(&mut self) {
         if self.drag.take().is_some_and(|drag| drag.moved) {
-            pet_ext::save_pos(self.pos.0.clamp(0.0, 1.0), self.pos.1.clamp(0.0, 1.0));
+            if self.composer.is_none() {
+                pet_ext::save_pos(self.pos.0.clamp(0.0, 1.0), self.pos.1.clamp(0.0, 1.0));
+            } else {
+                pet_ext::save_docked_x(self.dock_x.clamp(0.0, 1.0));
+            }
         }
     }
 
     /// 宠物左上角的窗口内像素位置（不夹边界，拖动时允许拖出窗口）。
     fn top_left(&self) -> (f32, f32) {
-        top_left_of(self.pos, self.viewport, self.size())
+        match self.composer.as_ref() {
+            Some(composer) => docked_top_left(self.dock_x, composer, self.size()),
+            None => top_left_of(self.pos, self.viewport, self.size()),
+        }
     }
 
     /// 画出这一帧（绝对定位、透明底），位置夹在窗口可见范围内。
-    pub fn element(&mut self, window: &Window) -> gpui::Stateful<gpui::Div> {
+    ///
+    /// `composer` 是输入框在窗口内的实测位置（还没量到时为 `None`）：
+    /// 贴输入框模式拿它定位，新会话 / 多行输入每次都重新对位。
+    pub fn element(
+        &mut self,
+        window: &Window,
+        composer: Option<Bounds<Pixels>>,
+    ) -> gpui::Stateful<gpui::Div> {
         let viewport = window.viewport_size();
         self.viewport = (f32::from(viewport.width), f32::from(viewport.height));
+        self.composer = composer
+            .filter(|_| pet_ext::place_mode() == PlaceMode::Docked)
+            .map(|bounds| Composer {
+                left: f32::from(bounds.origin.x),
+                top: f32::from(bounds.origin.y),
+                width: f32::from(bounds.size.width),
+            });
 
         let (width, height) = self.size();
-        let (x, y) = place(self.pos, viewport, (width, height));
+        let (x, y) = clamp(self.top_left(), viewport, (width, height));
         let frame = self.frame();
         div()
             .id("pet")
@@ -291,10 +345,15 @@ fn top_left_of(pos: (f32, f32), viewport: (f32, f32), size: (f32, f32)) -> (f32,
     (pos.0 * viewport.0, pos.1 * viewport.1 - size.1)
 }
 
-/// 比例位置 → 夹回窗口可见范围后的左上角像素（每帧按当前窗口尺寸算，缩放窗口也跟着对位）。
-fn place(pos: (f32, f32), viewport: Size<Pixels>, size: (f32, f32)) -> (f32, f32) {
-    let viewport_px = (f32::from(viewport.width), f32::from(viewport.height));
-    clamp(top_left_of(pos, viewport_px, size), viewport, size)
+/// 贴输入框模式的左上角：底边贴在输入框上沿，左边缘落在输入框左右边沿之间。
+///
+/// `ratio` 是相对输入框可走范围（宽度减宠物宽度）的比例，而不是相对窗口左边。
+fn docked_top_left(ratio: f32, composer: &Composer, size: (f32, f32)) -> (f32, f32) {
+    let travel = (composer.width - size.0).max(0.0);
+    (
+        composer.left + ratio.clamp(0.0, 1.0) * travel,
+        (composer.top - size.1).max(0.0),
+    )
 }
 
 /// 把位置夹回窗口可见范围（窗口缩小或换分辨率后不会跑到屏幕外）。
@@ -446,15 +505,55 @@ mod tests {
     fn position_follows_the_window_size() {
         let pos = (0.5, 1.0);
         let size = (100.0, 100.0);
+        let at = |viewport: (f32, f32)| {
+            clamp(
+                top_left_of(pos, viewport, size),
+                gpui::size(px(viewport.0), px(viewport.1)),
+                size,
+            )
+        };
+        assert_eq!(at((800.0, 600.0)), (400.0, 500.0), "底边贴窗口底");
         assert_eq!(
-            place(pos, gpui::size(px(800.), px(600.)), size),
-            (400.0, 500.0),
-            "底边贴窗口底"
-        );
-        assert_eq!(
-            place(pos, gpui::size(px(2400.), px(1400.)), size),
+            at((2400.0, 1400.0)),
             (1200.0, 1300.0),
             "窗口被合成器拉大后仍按比例对位（曾因建窗时的旧尺寸把宠物摆到竖直中间）"
+        );
+    }
+
+    #[test]
+    fn docked_mode_sits_on_the_composer_with_free_x() {
+        let composer = Composer {
+            left: 100.0,
+            top: 500.0,
+            width: 400.0,
+        };
+        let size = (100.0, 80.0);
+        assert_eq!(
+            docked_top_left(0.0, &composer, size),
+            (100.0, 420.0),
+            "比例 0 贴输入框左边沿，底边贴在输入框上沿"
+        );
+        assert_eq!(
+            docked_top_left(1.0, &composer, size),
+            (400.0, 420.0),
+            "比例 1 贴输入框右边沿，不会跑到框外"
+        );
+        assert_eq!(
+            docked_top_left(2.0, &composer, size),
+            (400.0, 420.0),
+            "越界的比例夹回框内"
+        );
+        assert_eq!(
+            docked_top_left(
+                0.5,
+                &Composer {
+                    top: 30.0,
+                    ..composer
+                },
+                size
+            ),
+            (250.0, 0.0),
+            "输入框离窗口顶太近时贴顶，不把宠物画到窗口外"
         );
     }
 

@@ -25,6 +25,7 @@ use crate::{
 use serde_json::Value;
 use std::{
     path::{Path, PathBuf},
+    str::FromStr,
     sync::{
         Arc, OnceLock, RwLock,
         atomic::{AtomicU8, AtomicU64, Ordering},
@@ -66,6 +67,12 @@ const CONFIG_POS_Y: &str = "posY";
 /// 配置键：资源根目录覆盖（空 = 用 [`ROOT_REL`]）。
 const CONFIG_MEDIA: &str = "media";
 
+/// 配置键：位置模式（[`PlaceMode`] 的名字，缺省 = `free`）。
+const CONFIG_MODE: &str = "mode";
+
+/// 配置键：贴输入框模式下宠物左边缘在输入框可移动范围内的横向比例（0–1，0 = 贴输入框左端）。
+const CONFIG_DOCK_X: &str = "dockX";
+
 /// 没有配置也没有已安装资源时假定的桌宠名（提示文案里用）。
 const DEFAULT_PET: &str = "claude-girl";
 
@@ -87,6 +94,10 @@ const SUBCOMMANDS: &[SubcommandDef] = &[
     SubcommandDef {
         name: "switch",
         description: "Switch the current pet: /pet switch <name> (no name = list them)",
+    },
+    SubcommandDef {
+        name: "mode",
+        description: "Placement: /pet mode free | docked (no argument = show the current one)",
     },
 ];
 
@@ -143,6 +154,16 @@ impl Pose {
     pub fn file_name(self) -> String {
         format!("{}.webp", self.as_ref())
     }
+}
+
+/// 位置模式：桌宠的摆放方式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, AsRefStr, EnumString)]
+#[strum(serialize_all = "kebab-case")]
+pub enum PlaceMode {
+    /// 自由摆放：横纵都跟着拖动走
+    Free,
+    /// 贴输入框：纵向固定贴在输入框上沿之上，横向仍可自由拖动
+    Docked,
 }
 
 /// 计时原点（首次调用时初始化）。
@@ -378,7 +399,45 @@ pub fn save_pos(x: f32, y: f32) {
     });
 }
 
-/// `/pet` 命令分发：`download`（默认）/ `switch <名字>`。
+/// 当前位置模式：配置里的 `mode`，没写或认不出的值都当 [`PlaceMode::Free`]。
+pub fn place_mode() -> PlaceMode {
+    config_str(CONFIG_MODE)
+        .and_then(|s| PlaceMode::from_str(&s).ok())
+        .unwrap_or(PlaceMode::Free)
+}
+
+/// 记住位置模式。
+///
+/// 写盘失败静默忽略：这只是一份摆放偏好，不该因此弹错误。
+pub fn save_place_mode(mode: PlaceMode) {
+    _ = update_config(|map| {
+        map.insert(
+            CONFIG_MODE.to_string(),
+            Value::String(mode.as_ref().to_string()),
+        );
+    });
+}
+
+/// 贴输入框模式的横向比例：配置里的 `dockX`，没写或不是数字时取 1.0（贴输入框右端）。
+///
+/// 取值是宠物左边缘在输入框可移动范围内（输入框宽度减宠物宽度）的比例，而不是相对窗口。
+pub fn docked_x() -> f32 {
+    config()
+        .get(CONFIG_DOCK_X)
+        .and_then(Value::as_f64)
+        .map_or(1.0, |x| (x as f32).clamp(0.0, 1.0))
+}
+
+/// 记住贴输入框模式的横向比例。
+///
+/// 写盘失败静默忽略：摆放偏好不该弹错误。
+pub fn save_docked_x(x: f32) {
+    _ = update_config(|map| {
+        map.insert(CONFIG_DOCK_X.to_string(), serde_json::json!(x));
+    });
+}
+
+/// `/pet` 命令分发：`download`（默认）/ `switch <名字>` / `mode [模式]`。
 ///
 /// 不锁 agent，因此声明 `busy_safe`。
 fn command_pet(host: &mut dyn CommandHost, raw: &str) -> bool {
@@ -391,18 +450,19 @@ fn command_pet(host: &mut dyn CommandHost, raw: &str) -> bool {
     match sub {
         "" | "download" => {
             host.push_message(&download_notice(), UiNotifyLevel::Info);
-            if rest.split_whitespace().any(|f| f == "--open") {
-                if let Err(e) = webbrowser::open(ASSET_URL) {
-                    host.push_message(
-                        &format!("Could not open the browser ({e}); use the URL above."),
-                        UiNotifyLevel::Warning,
-                    );
-                }
+            if rest.split_whitespace().any(|f| f == "--open")
+                && let Err(e) = webbrowser::open(ASSET_URL)
+            {
+                host.push_message(
+                    &format!("Could not open the browser ({e}); use the URL above."),
+                    UiNotifyLevel::Warning,
+                );
             }
         }
         "switch" => switch_pet(host, rest),
+        "mode" => switch_mode(host, rest),
         other => host.push_message(
-            &format!("pet: unknown subcommand `{other}`; use download | switch"),
+            &format!("pet: unknown subcommand `{other}`; use download | switch | mode"),
             UiNotifyLevel::Warning,
         ),
     }
@@ -475,6 +535,38 @@ fn switch_pet(host: &mut dyn CommandHost, name: &str) {
     }
 }
 
+/// `/pet mode [模式]`：不带参数报当前模式，带参数时切过去。
+fn switch_mode(host: &mut dyn CommandHost, name: &str) {
+    let current = place_mode();
+    if name.is_empty() {
+        host.push_message(
+            &format!(
+                "pet: placement mode is `{}`; switch with /pet mode free | docked.",
+                current.as_ref()
+            ),
+            UiNotifyLevel::Info,
+        );
+        return;
+    }
+
+    let mode = match PlaceMode::from_str(name) {
+        Ok(mode) => mode,
+        Err(_) => {
+            host.push_message(
+                &format!("pet: unknown mode `{name}`; use free | docked."),
+                UiNotifyLevel::Warning,
+            );
+            return;
+        }
+    };
+
+    save_place_mode(mode);
+    host.push_message(
+        &format!("pet: placement mode is `{}`.", mode.as_ref()),
+        UiNotifyLevel::Success,
+    );
+}
+
 /// `pet` 扩展。
 pub struct DesktopPet;
 
@@ -516,7 +608,7 @@ impl Extension for DesktopPet {
     fn commands(&self) -> Vec<ExtensionCommand> {
         vec![ExtensionCommand {
             name: CMD.to_string(),
-            description: "Desktop pet: /pet download | switch".to_string(),
+            description: "Desktop pet: /pet download | switch | mode".to_string(),
             busy_safe: true,
             subcommands: SUBCOMMANDS.to_vec(),
         }]
@@ -633,6 +725,27 @@ mod tests {
         })
         .unwrap();
         assert_eq!(saved_pos(), Some((1.0, 0.0)));
+    }
+
+    #[test]
+    fn place_mode_defaults_to_free_and_round_trips() {
+        let _guard = AgentDirGuard::temp();
+        assert_eq!(place_mode(), PlaceMode::Free, "没配置时是自由摆放");
+
+        save_place_mode(PlaceMode::Docked);
+        assert_eq!(place_mode(), PlaceMode::Docked);
+
+        update_config(|map| {
+            map.insert(CONFIG_MODE.to_string(), Value::String("sideways".into()));
+        })
+        .unwrap();
+        assert_eq!(place_mode(), PlaceMode::Free, "认不出的值退回默认模式");
+    }
+
+    #[test]
+    fn modes_are_the_command_words() {
+        assert_eq!(PlaceMode::Free.as_ref(), "free");
+        assert_eq!(PlaceMode::Docked.as_ref(), "docked");
     }
 
     #[test]

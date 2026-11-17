@@ -59,8 +59,10 @@ use super::{
 };
 use crate::modes::cwd_store;
 use crate::{
+    APP_NAME,
     cli::session_picker::ProgressiveMetas,
     core::{
+        crash_log,
         extensions::{self, ExtensionMode, OverlayKey, dispatch_agent_event, git_branch},
         model_scope::ScopedModel,
         prompt_templates::PromptTemplate,
@@ -629,6 +631,14 @@ impl GuiApp {
             app.stage_session_repair(request.path, request.plan, intent, cx);
         }
 
+        // 上次进程崩溃过（panic 钩子写进 crashes.json）：提示一次，/bug 会自动带上崩溃详情
+        if let Some(crash) = crash_log::take_unnotified_crash() {
+            app.transcript.push_note(Note::Warning(format!(
+                "{} crashed on {} ({}). Run /bug to report it; the crash details are attached automatically.",
+                APP_NAME, crash.timestamp, crash.message
+            )));
+        }
+
         // 信任面板优先（安全门控），它没弹时才让登录面板占位
         if needs_login && app.overlay.is_none() {
             app.open_login_panel(cx);
@@ -706,23 +716,21 @@ impl GuiApp {
             }
             // 缓存保温回执（`showCacheMissNotices` 关闭时不打扰）：
             // 保温在后台跑，worker 排空回执后发这条事件
-            "cache_warm" => {
-                if settings_manager::read_settings_show_cache_miss_notices() {
-                    let cost = event.get("cost").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                    let note = if event
-                        .get("extensionOverride")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false)
-                    {
-                        " (extension override)"
-                    } else {
-                        ""
-                    };
-                    self.transcript.push_note(Note::Info(format!(
-                        "Cache warmed{note}: ${}",
-                        crate::utils::display::format_cost(cost)
-                    )));
-                }
+            "cache_warm" if settings_manager::read_settings_show_cache_miss_notices() => {
+                let cost = event.get("cost").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let note = if event
+                    .get("extensionOverride")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+                {
+                    " (extension override)"
+                } else {
+                    ""
+                };
+                self.transcript.push_note(Note::Info(format!(
+                    "Cache warmed{note}: ${}",
+                    crate::utils::display::format_cost(cost)
+                )));
             }
             _ => {}
         }

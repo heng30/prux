@@ -197,10 +197,15 @@
   disappears together with the main window. Animations are not built into the binary:
   `/pet download` prints where to get `anim.tar.gz` (`--open` also opens the browser), and
   `/pet switch <name>` picks among the pets installed under
-  `agent_dir()/extensions/pet/<pet>/anim/` (no name lists them). With no animations
-  installed nothing is drawn at all — the chat log gets one notice with the download address
-  instead. Its config lives in `agent_dir()/extensions/pet/config.json` (`pet`, `media` for
-  an animations folder elsewhere, `posX`/`posY` for the last position) rather than `settings.json`.
+  `agent_dir()/extensions/pet/<pet>/anim/` (no name lists them). `/pet mode free | docked`
+  picks how it is placed: free (the default) keeps both axes under the drag; docked keeps the pet
+  sitting on top of the input box — its vertical position follows the box as it moves (a new
+  session, a taller multi-line composer), and it can only be dragged sideways between the box's
+  left and right edges. With no animations installed nothing is drawn at all — the chat log gets
+  one notice with the download address instead. Its config lives in
+  `agent_dir()/extensions/pet/config.json` (`pet`, `media` for an animations folder elsewhere,
+  `mode` for the placement, `posX`/`posY` for the free position, `dockX` for the docked one)
+  rather than `settings.json`.
   Off by default, and toggling it in `/extension` shows or hides the pet immediately — no restart;
   available in the dev and creator extension modes.
 
@@ -439,6 +444,9 @@
   Input starting with `/` is now classified first: commands that are safe to run while busy execute
   immediately (as before), other commands are refused with a warning, and only real messages (plain
   text, `/skill:name`, prompt templates) are queued.
+- **The desktop app said nothing about the last crash**: the record `crashes.json` keeps was only
+  surfaced by the terminal app. The desktop app now shows the same one-time warning on startup, and
+  `/bug` attaches the crash details as well.
 
 ## 中文
 
@@ -578,9 +586,11 @@
   在窗口内拖到哪儿就记在哪儿，重启照原位摆；它是窗口的一部分，不归窗口管理器管，主窗口收起来时一起消失。
   动画不内嵌进二进制：`/pet download` 打印 `anim.tar.gz` 的下载地址（`--open` 顺手开浏览器），
   `/pet switch <名字>` 在 `agent_dir()/extensions/pet/<桌宠>/anim/` 里已装的桌宠之间切换（不带名字列出清单）。
-  一个动画都没装时不画，只在聊天区留一条带下载地址的提示。
-  配置写在 `agent_dir()/extensions/pet/config.json`（`pet`、`media` 指向别处的动画目录、`posX`/`posY` 记上次位置），
-  不占 `settings.json`。默认不启用，在 `/extension` 里开关即时显隐、不用重启，dev 与 creator 模式下可用。
+  `/pet mode free | docked` 选摆放方式：自由模式（默认）横纵都跟着拖动走；贴输入框模式让宠物站在输入框上方，
+  纵向跟着输入框实时对位（新建会话、输入框变成多行都算），横向只能拖、且夹在输入框左右边沿之间，
+  不填参数时报告当前模式。一个动画都没装时不画，只在聊天区留一条带下载地址的提示。
+  配置写在 `agent_dir()/extensions/pet/config.json`（`pet`、`media` 指向别处的动画目录、`mode` 记摆放方式、
+  `posX`/`posY` 记自由模式的位置、`dockX` 记贴输入框模式的横向位置），不占 `settings.json`。默认不启用，在 `/extension` 里开关即时显隐、不用重启，dev 与 creator 模式下可用。
 
 ### 变更
 
@@ -745,4 +755,6 @@
 - **回合进行中敲的斜杠命令被当成普通消息发给了模型**：忙碌时回车 `/model` 会把这一行排进 steer 队列，
   模型收到的就是命令原文。现在 `/` 开头的输入先分类：忙碌安全的命令立即执行（行为不变），
   其余命令给一条警告并丢弃，只有真正的消息（普通文本、`/skill:名`、提示词模板）才排队。
+- **桌面应用不提示上次崩溃**：`crashes.json` 里的记录只有终端界面会说出来，桌面应用启动时一声不响。
+  现在它也提示一次，`/bug` 同样会自动带上崩溃详情。
 

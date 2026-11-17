@@ -27,10 +27,13 @@ impl GuiApp {
         }
         self.start_pet_tick(cx);
 
+        // 上一帧实测的输入框位置：新建会话、多行输入都会变，贴输入框模式按它重新对位
+        let composer = self.composer_bounds.get();
         let Some(pet) = self.pet.as_mut() else {
             return root;
         };
-        let element = pet.element(window).on_mouse_down(
+
+        let element = pet.element(window, composer).on_mouse_down(
             MouseButton::Left,
             cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
                 if let Some(pet) = this.pet.as_mut() {
