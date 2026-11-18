@@ -260,7 +260,8 @@
   percentage and resident memory of the job's whole process tree — a `sh -c cargo build` job does its
   work in descendants, so the leader alone would read as idle. Sampling runs every two seconds, the
   first sample reports `0.0%` (a percentage needs two refreshes to difference) and an unreadable tree
-  shows `--` instead of a fake zero.
+  shows `--` instead of a fake zero. A process's threads are counted once, so a multi-threaded job
+  never reports dozens of gigabytes.
 
 - **A finished background job now wakes the agent**: when a `processes` job ends, the session also
   gets a `[bash-done] job-N …` notice — status, duration, command line and log path — so the model no
@@ -629,7 +630,8 @@
   1500 字符；设置面板里选 `off` 可关掉。
 - **`/ps` 面板显示每个后台 job 的 CPU 与内存占用**：运行中的每一行带上整棵进程树的 CPU 百分比与
   常驻内存（`sh -c cargo build` 的活是后代在干，只报组长会显示成空转）。每两秒采样一次，首次采样
-  CPU 报 `0.0%`（百分比要靠两次刷新的差值），采不到时显示 `--`，不假装 0。
+  CPU 报 `0.0%`（百分比要靠两次刷新的差值），采不到时显示 `--`，不假装 0。同一条进程的线程只计一次内存，
+  多线程进程不会被算成几十上百 GB。
 
 - **后台 job 跑完会唤醒 agent**：`processes` 扩展的 job 结束时，除写回 job 表外还给会话投一条
   `[bash-done] job-N …` 通知（状态、耗时、命令行、日志路径），模型不必轮询 `read_process_output`

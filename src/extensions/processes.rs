@@ -59,7 +59,7 @@ use crate::{
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs::File,
     io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
@@ -67,7 +67,7 @@ use std::{
     sync::{Arc, Mutex, MutexGuard, OnceLock},
     time::{Duration, Instant},
 };
-use sysinfo::{Pid, ProcessesToUpdate, System};
+use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 
 /// 扩展名（也是 `/extension` 面板中的标识）。
 const EXT: &str = "processes";
@@ -248,11 +248,20 @@ fn sample_metrics(st: &mut State) {
 ///
 /// 全表只摊一次：按 job 反复扫进程表是 O(job × 进程数)，几十个后台任务下每两秒白烧一次。
 fn collect_usage(sys: &mut System, targets: &[Pid]) -> HashMap<u32, Usage> {
-    sys.refresh_processes(ProcessesToUpdate::All, true);
+    // 不带 `.with_tasks()`：Linux 上线程条目读的是同一个 `statm`，一个上百线程的进程会被
+    // 重复计入上百倍（面板里冒出上百 GB）。只要 CPU% 与 RSS，也不需要 `disk_usage` / `exe`。
+    sys.refresh_processes_specifics(
+        ProcessesToUpdate::All,
+        true,
+        ProcessRefreshKind::nothing().with_memory().with_cpu(),
+    );
 
     // pid → 子进程列表，从组长往下摊平用。
     let mut children: HashMap<Pid, Vec<Pid>> = HashMap::new();
     for (pid, process) in sys.processes() {
+        if process.thread_kind().is_some() {
+            continue;
+        }
         if let Some(parent) = process.parent() {
             children.entry(parent).or_default().push(*pid);
         }
@@ -262,8 +271,13 @@ fn collect_usage(sys: &mut System, targets: &[Pid]) -> HashMap<u32, Usage> {
     for root in targets {
         let mut total = Usage { cpu: 0.0, rss: 0 };
         let mut seen = false;
+        let mut visited = HashSet::new();
         let mut stack = vec![*root];
+
         while let Some(pid) = stack.pop() {
+            if !visited.insert(pid) {
+                continue;
+            }
             if let Some(process) = sys.process(pid) {
                 seen = true;
                 total.cpu += process.cpu_usage();
@@ -1058,6 +1072,31 @@ mod tests {
             std::thread::sleep(Duration::from_millis(20));
         }
         None
+    }
+
+    /// 线程不能重复计入（`/proc/<tid>/statm` 报的是整个线程组的 RSS）。
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn collect_usage_counts_threads_once() {
+        let _g = lock_test();
+        let threads: Vec<_> = (0..8)
+            .map(|_| std::thread::spawn(|| std::thread::sleep(Duration::from_millis(500))))
+            .collect();
+
+        let me = std::process::id();
+        let mut sys = System::new().unwrap();
+        let rss = collect_usage(&mut sys, &[Pid::from_u32(me)])[&me].rss;
+        let statm = std::fs::read_to_string("/proc/self/statm").unwrap();
+        let pages: u64 = statm.split(' ').nth(1).unwrap().parse().unwrap();
+        // 页大小按 4 KiB 估，放大 3 倍仍挡得住「每线程各算一遍」的 9 倍膨胀。
+        assert!(
+            rss > 0 && rss < pages * 4096 * 3,
+            "rss={rss} statm_pages={pages}"
+        );
+
+        for t in threads {
+            t.join().unwrap();
+        }
     }
 
     /// 空命令与不存在的目录都直接拒绝。
