@@ -148,6 +148,11 @@ const ARG_STRINGS_MAX: usize = 32;
 /// 已投递记录的上界：超过就整体清空（宁可重投一次，也不无限占内存）。
 const TOOL_SEEN_MAX: usize = 512;
 
+/// 自动注入记账攒够多少次才落盘一次（见 [`note_recalled`]）。
+///
+/// 工具边界召回每次调用都会记账，取值太小就等于每轮对话写一次盘。
+const RECALL_TOUCH_SAVE_EVERY: usize = 24;
+
 /// 自声明工厂：linkme 分布式切片。
 #[linkme::distributed_slice(EXTENSION_FACTORIES)]
 static MEMORY_FACTORY: ExtensionFactory = ExtensionFactory {
@@ -195,6 +200,8 @@ struct State {
     recall_cache: Option<(String, Option<String>)>,
     /// 工具边界已投递过的条目：`id → updated_at`；条目被改写（时间戳变）后可再投一次。
     tool_seen: HashMap<String, String>,
+    /// 自上次落盘以来累计的自动注入记账次数（见 [`note_recalled`]）。
+    recall_touches: usize,
     /// 距上次抽取累计的 `turn_end` 次数。
     turns_since_extract: usize,
     /// 是否已到抽取时机（等待结算时执行）。
@@ -219,6 +226,7 @@ impl Default for State {
             model: None,
             recall_cache: None,
             tool_seen: HashMap::new(),
+            recall_touches: 0,
             turns_since_extract: 0,
             extract_pending: false,
             extracting: false,
@@ -1127,9 +1135,11 @@ fn build_recall_block(cfg: &Config, cwd: Option<&str>, query: &str) -> Option<St
     } else {
         MemoryScope::Global
     };
-    let scoped = store::read_scoped(scope, cwd).ok()?;
-    let ranked = recall::rank(&scoped.active_entries(), query, limit);
-    recall::format_block(&ranked, budget)
+    let mut scoped = store::read_scoped(scope, cwd).ok()?;
+    let ranked = recall::rank_auto(&scoped.active_entries(), query, limit);
+    let block = recall::format_block(&ranked, budget)?;
+    note_recalled(&mut scoped, &ranked);
+    Some(block)
 }
 
 /// 工具边界召回：按本次工具调用的信号词召回，返回要追加在工具结果后的块。
@@ -1143,8 +1153,8 @@ fn build_tool_recall_block(cfg: &Config, cwd: &str, query: &str) -> Option<Strin
         return None;
     }
 
-    let scoped = store::read_scoped(MemoryScope::All, Some(cwd)).ok()?;
-    let candidates = recall::rank(
+    let mut scoped = store::read_scoped(MemoryScope::All, Some(cwd)).ok()?;
+    let candidates = recall::rank_auto(
         &scoped.active_entries(),
         query,
         TOOL_RECALL_CANDIDATES.max(limit),
@@ -1167,15 +1177,17 @@ fn build_tool_recall_block(cfg: &Config, cwd: &str, query: &str) -> Option<Strin
         st.tool_seen
             .insert(item.entry.id.clone(), item.entry.updated_at.clone());
     }
+    drop(st);
+    note_recalled(&mut scoped, picked);
     Some(block)
 }
 
 /// 从一次工具调用里抽出「这次碰的是哪些文件 / 符号」的信号词，拼成召回查询。
 ///
 /// 取值只来自入参 JSON 的字符串叶子（深挖 [`ARG_WALK_DEPTH`] 层、最多
-/// [`ARG_STRINGS_MAX`] 条），再按空白切成候选、按 [`is_signal_token`] 过滤。
-/// 整段路径原样保留：`terms` 会自己按非字母数字切开，因此 `src/core/x.rs`
-/// 既能命中 `x` 也能命中 `x.rs`。没有可用信号时返回 `None`（这次调用没什么可召回的）。
+/// [`ARG_STRINGS_MAX`] 条），再按空白切成候选、按 [`signal_of`] 过滤。
+/// 路径只留主干（`src/core/x.rs` → `x`），目录名与扩展名不进查询。
+/// 没有可用信号时返回 `None`（这次调用没什么可召回的）。
 fn tool_signal_query(name: &str, args: &Value) -> Option<String> {
     if name == TOOL_MEMORY {
         // 读写记忆的调用不反过来触发召回：那会把刚写的条目立刻复读一遍。
@@ -1194,10 +1206,13 @@ fn tool_signal_query(name: &str, args: &Value) -> Option<String> {
             let token = chunk.trim_matches(|c: char| {
                 !c.is_alphanumeric() && !matches!(c, '_' | '-' | '.' | '/' | '@' | ':')
             });
-            if !is_signal_token(token) || signals.contains(&token) {
+            let Some(signal) = signal_of(token) else {
+                continue;
+            };
+            if signals.contains(&signal) {
                 continue;
             }
-            signals.push(token);
+            signals.push(signal);
             if signals.len() >= TOOL_SIGNAL_MAX {
                 break 'outer;
             }
@@ -1244,23 +1259,42 @@ fn collect_arg_strings(value: &Value, depth: usize, out: &mut Vec<String>) {
 ///
 /// 普通小写单词（`cargo` / `make`）刻意不收：它们几乎出现在每条记忆里，
 /// 只会把 BM25 的 idf 拉平，让真正的文件名信号失去区分度。
+/// 一个标识符是否值得当召回信号：蛇形 / 驼峰（`run_loop`、`MemoryEntry`）。
+///
+/// 普通小写单词（`cargo` / `make`）刻意不收：它们几乎出现在每条记忆里，
+/// 只会把 BM25 的 idf 拉平，让真正的文件名信号失去区分度。路径不经这里判，
+/// 由 [`signal_of`] 取干。
 fn is_signal_token(token: &str) -> bool {
     let chars = token.chars().count();
-    if !(3..=120).contains(&chars) {
-        return false;
-    }
-    if token.contains('/') || token.contains('.') {
-        return true;
-    }
     chars >= 4
         && token.chars().all(|c| c.is_alphanumeric() || c == '_')
         && (token.contains('_') || token.chars().any(|c| c.is_uppercase()))
 }
 
+/// 一个候选片段 → 召回信号词；不值得当信号时返回 `None`。
+///
+/// 路径与文件名**只保留主干**（`src/extensions/memory/recall.rs` → `recall`）：
+/// 整段路径会把 `src` / `extensions` / `rs` 这类仓库公共词元喂给 BM25，
+/// 任何正文里写过路径的条目都能命中，真正相关的那条反被挤掉。
+/// 代价是目录名不进查询——它几乎总是公共段，留着它的信噪比是负的。
+fn signal_of(token: &str) -> Option<&str> {
+    if token.contains('/') || token.contains('.') {
+        let stem = token
+            .rsplit('/')
+            .find(|segment| !segment.is_empty())
+            .unwrap_or("")
+            .split('.')
+            .next()
+            .unwrap_or("");
+        return (stem.chars().count() >= 3).then_some(stem);
+    }
+    is_signal_token(token).then_some(token)
+}
+
 /// 记录「这些条目被用到了」：累加访问次数并落盘。
 ///
-/// 只用于模型显式调 `recall` / `search`；自动注入走 [`build_recall_block`]，那条路径在
-/// 请求前跑，**不写盘**（否则每次请求都要 fsync 一次记忆图）。
+/// 只用于模型显式调 `recall` / `search`；自动注入走 [`note_recalled`]，那条路径在
+/// 请求前跑，攒批落盘（每次请求都 fsync 一次记忆图不划算）。
 fn touch_hits(scoped: &mut Scoped, ranked: &[Ranked]) {
     let mut changed = false;
     for item in ranked {
@@ -1272,6 +1306,35 @@ fn touch_hits(scoped: &mut Scoped, ranked: &[Ranked]) {
         }
     }
     if changed {
+        _ = scoped.save();
+    }
+}
+
+/// 自动注入后记账：刷新条目的 `last_recall_at`，攒够 [`RECALL_TOUCH_SAVE_EVERY`] 次才落盘。
+///
+/// 维护轮靠 `last_recall_at` 判断「这条还有没有人用」，而注入是唯一的高频使用信号；
+/// 代价是进程被杀时丢掉最后不足一批的记录。
+fn note_recalled(scoped: &mut Scoped, ranked: &[Ranked]) {
+    if ranked.is_empty() {
+        return;
+    }
+    for item in ranked {
+        if let Some(graph) = scoped.graph_mut(item.scope)
+            && let Some(entry) = graph.get_mut(&item.entry.id)
+        {
+            entry.note_recall();
+        }
+    }
+    let flush = {
+        let mut st = lock();
+        st.recall_touches = st.recall_touches.saturating_add(1);
+        let flush = st.recall_touches >= RECALL_TOUCH_SAVE_EVERY;
+        if flush {
+            st.recall_touches = 0;
+        }
+        flush
+    };
+    if flush {
         _ = scoped.save();
     }
 }
@@ -2197,9 +2260,13 @@ mod tests {
             "nested": {"files": ["docs/sessions.md"], "identifier": "run_loop"}
         });
         let query = tool_signal_query("read", &args).unwrap();
-        assert!(query.contains("src/core/agent_session.rs"), "{query}");
-        assert!(query.contains("docs/sessions.md"), "{query}");
+        assert!(query.contains("agent_session"), "{query}");
+        assert!(query.contains("sessions"), "{query}");
         assert!(query.contains("run_loop"), "{query}");
+        assert!(!query.contains("src"), "路径前缀不进查询: {query}");
+        assert!(!query.contains("core"), "目录段不进查询: {query}");
+        assert!(!query.contains("docs"), "{query}");
+        assert!(!query.contains("rs"), "扩展名不进查询: {query}");
         assert!(!query.contains("cargo"), "普通小写单词不当信号: {query}");
         assert!(!query.contains("nocapture"), "{query}");
         assert_eq!(

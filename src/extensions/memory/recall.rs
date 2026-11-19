@@ -23,6 +23,11 @@ const BM25_K1: f64 = 1.2;
 /// BM25 的长度归一化参数。
 const BM25_B: f64 = 0.75;
 
+/// 自动注入的分数下限（相对本次最高分）：低于它的条目只是蹭到一两个公共词元。
+///
+/// 显式搜索**不受这个下限约束**——用户搜「src」就该看到所有提到 src 的条目。
+const MIN_AUTO_RATIO: f64 = 0.35;
+
 /// 注入块的标题行（同时充当「这是自动注入」的标记）。
 const BLOCK_HEADER: &str = "[memory] Durable notes recalled from earlier sessions. They may be stale — verify before trusting.";
 
@@ -61,6 +66,28 @@ pub(super) fn rank(
     entries: &[(MemoryScope, &MemoryEntry)],
     query: &str,
     limit: usize,
+) -> Vec<Ranked> {
+    rank_with_floor(entries, query, limit, 0.0)
+}
+
+/// 自动注入用的召回：在 [`rank`] 之上砍掉分数低于最高分 [`MIN_AUTO_RATIO`] 倍的条目。
+///
+/// 长路径查询会切出 `src` / `extensions` 这类仓库公共词元，只命中它们并不代表相关；
+/// 宁可不注入，也不要把三条无关条目贴进上下文。
+pub(super) fn rank_auto(
+    entries: &[(MemoryScope, &MemoryEntry)],
+    query: &str,
+    limit: usize,
+) -> Vec<Ranked> {
+    rank_with_floor(entries, query, limit, MIN_AUTO_RATIO)
+}
+
+/// [`rank`] 的实现：`floor_ratio > 0` 时只保留分数不低于最高分该比例的条目。
+fn rank_with_floor(
+    entries: &[(MemoryScope, &MemoryEntry)],
+    query: &str,
+    limit: usize,
+    floor_ratio: f64,
 ) -> Vec<Ranked> {
     if limit == 0 {
         return Vec::new();
@@ -116,6 +143,12 @@ pub(super) fn rank(
     }
 
     sort_ranked(&mut ranked);
+    if floor_ratio > 0.0
+        && let Some(best) = ranked.first().map(|item| item.score)
+    {
+        let floor = best * floor_ratio;
+        ranked.retain(|item| item.score >= floor);
+    }
     ranked.truncate(limit);
     ranked
 }
@@ -224,6 +257,25 @@ mod tests {
         assert_eq!(ranked.len(), 1, "只有命中词元的条目入选");
         assert!(ranked[0].entry.content.contains("pnpm"));
         assert!(ranked[0].score > 0.0);
+    }
+
+    #[test]
+    fn auto_rank_drops_entries_that_only_share_a_common_term() {
+        let strong = entry(MemoryCategory::Fact, "memory recall scoring");
+        let weak = entry(MemoryCategory::Fact, "src extensions rs unrelated");
+        let other = entry(MemoryCategory::Fact, "src extensions rs other");
+        let refs = vec![
+            (strong.0, &strong.1),
+            (weak.0, &weak.1),
+            (other.0, &other.1),
+        ];
+
+        let explicit = rank(&refs, "memory recall src", 10);
+        assert_eq!(explicit.len(), 3, "显式搜索不做分数下限");
+
+        let auto = rank_auto(&refs, "memory recall src", 10);
+        assert_eq!(auto.len(), 1, "只蹭到公共词元的条目被砍: {auto:?}");
+        assert!(auto[0].entry.content.contains("memory recall"));
     }
 
     #[test]

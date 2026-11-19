@@ -175,6 +175,11 @@ pub(super) struct MemoryEntry {
     /// 被检索/引用过的次数。
     #[serde(default)]
     pub(super) access_count: u32,
+    /// 最近一次被自动召回（注入到上下文）的时间（UTC RFC3339）；从未为 `None`。
+    ///
+    /// 与 `updated_at` 分开存：注入不是内容变更，但维护轮需要它判断「这条还有没有人用」。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) last_recall_at: Option<String>,
     /// 来源（会话 id / `extract` / `skill` 等）；未知为 None。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) source: Option<String>,
@@ -223,6 +228,7 @@ impl MemoryEntry {
             created_at: now.clone(),
             updated_at: now,
             access_count: 0,
+            last_recall_at: None,
             source: None,
             trust: TrustLevel::default(),
             strength: 1,
@@ -324,11 +330,20 @@ impl MemoryEntry {
         score
     }
 
-    /// 记录一次使用（提升置信度、刷新时间）。
+    /// 记录一次使用（提升置信度、刷新时间、记下最近一次被用到的时间）。
     pub(super) fn touch(&mut self) {
         self.access_count = self.access_count.saturating_add(1);
         self.updated_at = now_iso();
+        self.last_recall_at = Some(self.updated_at.clone());
         self.confidence = (self.confidence + 0.05).min(1.0);
+    }
+
+    /// 记录一次自动注入：只刷新 `last_recall_at`，**不动** `updated_at` / 置信度。
+    ///
+    /// 注入是宿主行为，不是「这条记忆被确认过」；把它当成 `touch` 会让时间衰减和
+    /// 「最近更新」两个字段同时失真。
+    pub(super) fn note_recall(&mut self) {
+        self.last_recall_at = Some(now_iso());
     }
 
     /// 同一条信息再次出现：强度 +1，留下出处记录。
@@ -1037,6 +1052,23 @@ mod tests {
         assert!(
             entry.search_text.contains("repo runs make check"),
             "缺失的 search_text 被补算"
+        );
+    }
+
+    #[test]
+    fn note_recall_stamps_usage_without_touching_updated_at() {
+        let mut item = MemoryEntry::new(MemoryCategory::Fact, "x");
+        let before = item.updated_at.clone();
+        assert!(item.last_recall_at.is_none());
+        item.note_recall();
+        assert!(item.last_recall_at.is_some());
+        assert_eq!(item.updated_at, before, "注入不是内容变更");
+
+        item.touch();
+        assert_eq!(
+            item.last_recall_at.as_deref(),
+            Some(item.updated_at.as_str()),
+            "显式使用按真实使用时间记"
         );
     }
 

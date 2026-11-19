@@ -16,7 +16,10 @@
 
 use super::graph::{MemoryEntry, MemoryGraph, MemoryScope};
 use crate::utils::{
-    display::flatten_line, glyphs::DEF_ELLIPSIS, time::now_iso, truncate::truncate_chars,
+    display::flatten_line,
+    glyphs::DEF_ELLIPSIS,
+    time::{now_iso, short_date},
+    truncate::truncate_chars,
 };
 use serde::Deserialize;
 use strum_macros::{EnumString, IntoStaticStr};
@@ -125,8 +128,11 @@ pub(super) fn build_prompt(candidates: &[Candidate]) -> String {
          - \"adapt\" when it is vague (\"the project uses a bundler\"), mixes two facts into one \
          sentence, contradicts its own evidence, or uses identifiers that no longer match it. \
          Keep the original meaning; do not add facts that the entry or its evidence do not show.\n\
-         - \"retire\" when it is no longer true, states nothing checkable, or is fully covered by \
-         another entry that you keep. When two entries say the same thing, retire the weaker one.\n\
+         - \"retire\" when it is no longer true, states nothing checkable, is fully covered by \
+         another entry that you keep that nothing contradicts, or has never been recalled and has \
+         no evidence. Treat \"last recalled\" as a usage signal: an entry last recalled over 90 \
+         days ago is weakly supported, so retire it unless its evidence still stands. Usage never \
+         makes a false statement true.\n\
          - Entries without evidence may be kept when they are plainly true; retire them when they \
          are guesses or unverifiable.\n\
          - Every id must appear exactly once. Never invent ids. Do not merge two entries into one.\n\
@@ -148,6 +154,11 @@ pub(super) fn build_prompt(candidates: &[Candidate]) -> String {
             entry.confidence,
             one_line(&entry.content),
         ));
+        let recalled = match &entry.last_recall_at {
+            Some(stamp) => format!("last recalled {}", short_date(stamp)),
+            None => "never recalled".to_string(),
+        };
+        prompt.push_str(&format!("  {recalled}\n"));
         match &entry.evidence {
             Some(evidence) => {
                 prompt.push_str(&format!("  evidence: {}\n", one_line(evidence)));
@@ -301,6 +312,19 @@ mod tests {
         assert!(prompt.contains("evidence: user: always pnpm here"));
         assert!(prompt.contains("evidence: (none recorded)"));
         assert!(prompt.contains("exactly once"));
+        assert!(
+            prompt.contains("never recalled"),
+            "没被召回过的条目要说清: {prompt}"
+        );
+        assert!(prompt.contains("last recalled over 90"), "退役判定要看时间");
+    }
+
+    #[test]
+    fn prompt_reports_last_recall_when_the_entry_was_used() {
+        let mut item = entry("mem_c", "seen before", None);
+        item.entry.last_recall_at = Some("2024-05-01T00:00:00.000Z".to_string());
+        let prompt = build_prompt(&[item]);
+        assert!(prompt.contains("last recalled 2024-05-01"), "{prompt}");
     }
 
     #[test]

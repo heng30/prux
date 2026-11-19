@@ -38,11 +38,13 @@
 - **Dart and Nix code blocks are highlighted**: both languages were missing from the bundled
   syntax set and rendered as plain text. They now ship with the binary. Gradle has no grammar of its
   own, so `gradle` fences and `*.gradle` files are highlighted as Groovy.
-- **Starting a session whose working directory is gone now asks first**: `--session`, `--session-id`,
-  `--resume` and `--continue` used to open the session with a path that no longer exists, which made
-  every tool call fail. It now offers `Continue` (use the current directory for this run, ask again
-  next time), `Fork` (copy the session into the current directory as a new session and keep the
-  original) or `Cancel`. Without a terminal on stdin the run fails with the paths spelled out.
+- **A session whose working directory is gone now asks first**: `--session`, `--session-id`,
+  `--resume`, `--continue` and every way of reopening an existing session (`/import`, `/resume`, the
+  sidebar and the session pickers in both interfaces) used to open it with a path that no longer
+  exists, which made every tool call fail. It now offers `Continue` (use the current directory for
+  this run, ask again next time), `Fork` (copy the session into the current directory as a new
+  session and keep the original) or `Cancel`. Without a terminal on stdin the run fails with the
+  paths spelled out.
 - **GitHub Copilot's `Microsoft-Decision-1` works as a classifier**: Copilot serves the classifier at
   `/v1/systemone` on the account's own endpoint, so the request went to a path that does not exist.
   It now uses `/v1/systemone` and takes the host from the Copilot token, like the chat APIs do.
@@ -96,11 +98,6 @@
   also works. `--api-key` prompts for a key instead and `--no-browser` only prints the URL.
   `prux auth logout <provider>` removes the stored credential. Both exit non-zero with a message when
   the provider is unknown or nothing is stored.
-- **A session whose directory is gone asks what to do instead of failing**: reopening such a session
-  (`/import`, `/resume`, the sidebar and the session pickers in both interfaces) now offers
-  `Continue` (run it in the current directory this once, ask again next time), `Fork` (copy it into
-  the current directory as a new session, original kept) or `Cancel`.
-
 - **Inbound review of an existing PR or issue**: `/review <URL> [--comment]` (the `review` extension,
   off by default) fetches the PR or issue with `gh`, checks out `refs/pull/<n>/head` into a read-only
   copy under `agent_dir()` with `git init` + `git fetch --depth 1` — the user's checkout, remote refs
@@ -255,7 +252,11 @@
   appended after the tool result under a `[memory:tool]` header, leaving the result text byte for byte
   unchanged. Each `(entry, updated_at)` is delivered once per session, at most `toolRecallLimit`
   (default 3) cards per call, capped by the injection budget and 1500 characters; `off` in the
-  settings panel disables the second path.
+  settings panel disables the second path. Paths contribute only their last segment's stem
+  (`src/extensions/memory/recall.rs` → `recall`), and automatic recall drops any hit scoring below
+  35% of the best one, so an entry that merely shares a common segment like `src` no longer crowds
+  out the relevant one. Every injected entry records when it was last recalled, and the
+  maintenance pass retires entries that were never recalled and carry no evidence.
 - **The `/ps` panel shows CPU and memory per background job**: each running row now carries the CPU
   percentage and resident memory of the job's whole process tree — a `sh -c cargo build` job does its
   work in descendants, so the leader alone would read as idle. Sampling runs every two seconds, the
@@ -281,14 +282,16 @@
   block is reused until its text, width, base style or theme changes, so only the tail of a streaming
   reply is re-rendered.
 - **Streaming tool arguments no longer re-parse the whole buffer**: every delta used to re-parse the
-  accumulated JSON from the start (plus a full copy to repair it), so a large `write` grew quadratically
-  — a 90 KB call peaked around 140 MB of heap and showed stale arguments once past the old 64 KB cut-off.
-  Arguments are now parsed incrementally, one pass over each delta, and the shown snapshot refreshes at
-  most every 4 KB.
-- **Deeply nested quotes multiplied their lines**: each level stripped two columns and re-wrapped the
-  inner lines, and below a certain width the wrapping stopped shrinking and kept multiplying — a
-  30-level quote could stall rendering. Nesting past 8 levels is now rendered flat, and the content
-  stays visible.
+  accumulated JSON from the start (plus a full copy to repair it), so a large `write` grew
+  quadratically — a 90 KB call peaked around 140 MB of heap and, past the old 64 KB cut-off, cost
+  minutes of CPU while showing stale arguments. Arguments are now parsed incrementally, one pass over
+  each delta, the final arguments are still parsed in full once the call is complete, and the shown
+  snapshot refreshes at most every 4 KB.
+- **Deeply nested blockquotes no longer multiply their lines**: each level stripped two columns and
+  re-wrapped the inner lines, and below a certain width the wrapping stopped shrinking and kept
+  multiplying — a 30-level quote could stall rendering. Nesting past 8 levels is now rendered flat
+  with the content still visible, and a message that would render past 20,000 lines is cut there
+  with a notice instead.
 - **Pasting inside WSL did nothing**: without WSLg there is no X11/Wayland clipboard, so Ctrl+V found
   nothing. It now falls back to the Windows clipboard through `powershell.exe Get-Clipboard`.
 - **Exiting could lose a freshly rotated OAuth token**: a refresh runs in its own task and writes the
@@ -365,10 +368,6 @@
   authorization URL were accepted with any scheme, so a server could supply `file:` or a custom
   protocol such as `search-ms:` that the platform URL handler launches locally. Only `http:` and
   `https:` are accepted now.
-- **A large streamed tool call re-parsed its whole argument buffer on every delta**: each chunk
-  re-scanned the accumulated JSON from the start, so a big `write` cost minutes of CPU and hundreds
-  of MB of heap. Past 64 KB the intermediate deltas are no longer re-parsed; the final arguments are
-  still parsed in full once the call is complete.
 - **A failed session write left an entry that never reached the disk**: the entry went into memory
   anyway, so later entries chained to a parent the file does not have and a resumed session lost
   that history and its tool results. An entry is now applied to memory only after it is written;
@@ -376,9 +375,6 @@
 - **`--model` could not name a provider whose id contains a slash**: the split took the first slash,
   so a URL-derived provider id such as `llama/local` lost its second segment. The provider prefix
   is now matched against the longest known provider id.
-- **Deeply nested blockquotes could render without bound**: every level re-wrapped its inner lines,
-  so the line count multiplied until layout stalled. A message that would render past 20,000 lines is
-  cut there with a notice instead.
 - **PageUp/PageDown did nothing in settings sub-panels**: the checked-list sub-panel only moved one
   row per key. Both paging keys now move ten rows there too.
 - **ACP could cut its own cleanup short**: stdin EOF and SIGTERM arriving together dropped the
@@ -397,9 +393,22 @@
   first candidate under the byte limit and PNG always came first, so a large photo paid for a
   lossless encoding nobody asked for. PNG and the JPEG at the configured quality are now compared
   and the smaller one wins; lower JPEG quality is used only when neither fits.
-- **A display formula wider than the terminal was broken up character by character**: a fraction or
-  a sum is a 2D layout and cannot be wrapped row by row, so splitting it destroyed the meaning. A
-  formula whose rendered output does not fit the available width now falls back to its LaTeX source.
+- **Display formulas render faithfully**: a formula whose rendered output does not fit the available
+  width used to be broken up row by row — a fraction or a sum is a 2D layout, so splitting it
+  destroyed the meaning — and now falls back to its LaTeX source instead. Wrapping also no longer
+  drops the leading spaces the source carries, so a stacked formula's numerators, denominators and
+  sum limits stay aligned with the fraction rule; only the spaces a wrap introduces are dropped.
+  `\partial t` no longer renders as `∂ t` because of the space in the source, a leading minus is
+  U+2212 instead of merging into the fraction rule, a stacked fraction no longer carries a trailing
+  space (`── ,`), `90^\circ` comes out as `90°` (`\circ` as a superscript is `°`), and a symbol
+  with only a subscript no longer takes two lines. Spaces after a control word are now eaten as TeX does, and a script on one side only
+  stays inline (`x_c`, `x^n`) while a sub- and superscript pair still stacks. One unknown command
+  throws away the whole formula, so `\ulcorner` / `\urcorner` alone kept
+  `G \leftrightarrow \neg\mathbb{Provable}(\ulcorner G\urcorner)` from rendering at all; the corner
+  brackets, the card suits, `\lnot`, `\surd`, `\boxplus`/`\boxtimes`, `\lesssim`/`\gtrsim`,
+  `\nleq`/`\ngeq` and a handful of other common symbols are in the table now. `\mathbb` also stops
+  half-converting a word it has no glyphs for (`\mathbb{Provable}` gave `ℙrovable`, it stays
+  `Provable`).
 - **Editing around a collapsed paste could leave the marker half-deleted**: only Backspace treated
   `[paste #N …]` as one unit, so Delete, word deletes, kill-to-line-end and typing inside the marker
   could split it — the marker stopped matching, its stored text was dropped, and the leftover
@@ -418,21 +427,6 @@
   verification URL and copies the code to the clipboard (either step failing only prints a hint);
   cancelling stays on Esc. The desktop interface offers the same by click: the code copies itself and
   the URL opens the browser.
-- **Display formulas lost their alignment**: the TUI dropped the leading spaces on every line when
-  wrapping, so a stacked formula's numerators, denominators and sum limits collapsed against the left
-  edge while the fraction rule stayed where it was. Leading spaces that come from the source are kept
-  now; only the spaces a wrap introduces are dropped.
-- **A batch of small math-rendering defects**: `\partial t` rendered as `∂ t` because of the space in
-  the source, a leading minus merged into the fraction rule, every stacked fraction carried a trailing
-  space (`── ,`), `90^\circ` came out as `90^∘`, and a symbol with only a subscript took two lines.
-  Spaces after a control word are now eaten as TeX does, a minus is U+2212, a stacked fraction no
-  longer pads its right side, `\circ` as a superscript gives `°`, and a script on one side only stays
-  inline (`x_c`, `x^n`) while a sub- and superscript pair still stacks. One unknown command throws
-  away the whole formula, so `\ulcorner` / `\urcorner` alone kept `G \leftrightarrow
-  \neg\mathbb{Provable}(\ulcorner G\urcorner)` from rendering at all; the corner brackets, the
-  card suits, `\lnot`, `\surd`, `\boxplus`/`\boxtimes`, `\lesssim`/`\gtrsim`, `\nleq`/`\ngeq`
-  and a handful of other common symbols are in the table now. `\mathbb` also stops half-converting a
-  word it has no glyphs for (`\mathbb{Provable}` gave `ℙrovable`, it stays `Provable`).
 - **Windows path containment was case-sensitive**: `C:\Repo` and `C:\repo\file` were treated as
   unrelated, so a file inside the project could be reported as outside it. The comparison now folds
   case on Windows only; component-wise matching on other platforms is unchanged.
@@ -479,9 +473,10 @@
   里面会带扩展配置持有的凭据。默认不启用（`Dev`/`Creator` 模式）。
 - **Dart 与 Nix 代码块能高亮了**：这两种语言不在内置语法集里，此前只能当纯文本显示，现在随二进制一起内嵌。
   Gradle 没有独立语法，`gradle` 围栏与 `*.gradle` 文件按 Groovy 高亮。
-- **恢复的会话工作目录已消失时会先问怎么办**：`--session`、`--session-id`、`--resume` 与 `-c` 以前直接拿一个
-  不存在的路径开会话，之后每个工具调用都失败。现在给三选——`Continue`（本次用当前目录，下次仍会问）、
-  `Fork`（复制成当前目录下的新会话，原会话保留）、`Cancel`。stdin 不是终端时直接报错并列出两个路径。
+- **会话工作目录已消失时会先问怎么办**：`--session`、`--session-id`、`--resume`、`-c` 以及重新打开既有会话的所有入口
+  （`/import`、`/resume`、两个界面的侧栏与会话选择器）以前直接拿一个不存在的路径开会话，之后每个工具调用都失败。
+  现在给三选——`Continue`（本次用当前目录，下次仍会问）、`Fork`（复制成当前目录下的新会话，原会话保留）、
+  `Cancel`。stdin 不是终端时直接报错并列出两个路径。
 - **GitHub Copilot 的 `Microsoft-Decision-1` 可以当分类器用了**：Copilot 把分类器挂在账号端点下的
   `/v1/systemone`，此前请求打到了不存在的路径。现在用 `/v1/systemone`，域名与聊天接口一样取自 Copilot token。
 - **`/debug context` 说明上下文窗口被什么占着**：状态栏只给一个数——供应商上次实测的 token——
@@ -517,10 +512,6 @@
   打印授权地址（设备码流程还打印验证码），本机浏览器重定向会被自动接住，粘回回调 URL 或
   `code#state` 同样可用；`--api-key` 改为提示粘贴 key，`--no-browser` 只打印地址不开浏览器。
   `prux auth logout <provider>` 删除已存凭据。provider 未知或没有可删的凭据时以非零退出码报错。
-- **存储目录已消失的会话会先问怎么办**：重新打开这类会话（`/import`、`/resume`、两个界面的侧栏与
-  会话选择器）现在给三选——`Continue`（本次用当前目录，下次仍会问）、`Fork`（复制成当前目录下的
-  新会话，原会话保留）、`Cancel`。
-
 - **把别人的 PR / issue 拉进来评审**：`/review <URL> [--comment]`（`review` 扩展，默认关闭）用 `gh` 取
   元数据与 GitHub 自己的三点 diff，在 `agent_dir()` 下用 `git init` + `git fetch --depth 1` 把
   `refs/pull/<n>/head` 检出一份只读副本（不动用户仓库、不建 worktree、不写远端引用、不切分支），
@@ -627,7 +618,9 @@
   文件名。现在每次工具调用都会再召回一次，查询取自这次调用碰到的路径、带扩展名的文件名、蛇形 / 驼峰标识符
   （普通小写单词不算），命中条目带 `[memory:tool]` 标题**追加在工具结果后面**，结果正文逐字不动。
   同一 `(条目, 更新时间)` 每个会话只投一次，单次至多 `toolRecallLimit`（缺省 3）条、且不超过注入预算与
-  1500 字符；设置面板里选 `off` 可关掉。
+  1500 字符；设置面板里选 `off` 可关掉。路径只贡献最后一段的主干（`src/extensions/memory/recall.rs` →
+  `recall`），自动注入还会丢掉分数不到最高分 35% 的命中，只沾到 `src` 这类公共段的条目不会再挤掉
+  真正相关的那条；每条被注入时都记下最近召回时间，维护轮据此退役从未被召回且没有证据的条目。
 - **`/ps` 面板显示每个后台 job 的 CPU 与内存占用**：运行中的每一行带上整棵进程树的 CPU 百分比与
   常驻内存（`sh -c cargo build` 的活是后代在干，只报组长会显示成空转）。每两秒采样一次，首次采样
   CPU 报 `0.0%`（百分比要靠两次刷新的差值），采不到时显示 `--`，不假装 0。同一条进程的线程只计一次内存，
@@ -644,11 +637,13 @@
   重新读一次 pid 的身份（机器启动时刻 + 进程启动时刻），对不上就一个信号都不发，改报「already exited」。
 - **长回复流式期间每帧重排所有块**：消息每帧都从第一个字符重新排版。现在 markdown 按顶层块排版并逐块复用，
   只有文本、宽度、基础样式或主题变化的那块才重新排版，流式回复只重排末尾一块。
-- **流式工具参数不再整串重解析**：每个 delta 都从头的重新解析累积 JSON（必要时还要整串拷贝做修复），
-  大 `write` 调用因此是平方级增长——90 KB 的参数峰值吃掉约 140 MB 堆，越过旧的 64 KB 阈值后参数干脆不再更新。
-  现在参数走增量解析，每段只扫一遍新增字符，展示用快照最多每 4 KB 刷新一次。
-- **深层嵌套引用让行数乘法增长**：每层剥掉两列宽再把内层行重新折一次，宽度到一定程度后不再收缩、
-  于是继续成倍增长——30 层引用能把渲染卡住。超过 8 层后不再缩进加边框，内容照常显示。
+- **流式工具参数不再整串重解析**：每个 delta 都从头重新解析累积 JSON（必要时还要整串拷贝做修复），
+  大 `write` 调用因此是平方级增长——90 KB 的参数峰值吃掉约 140 MB 堆，越过旧的 64 KB 阈值后既浪费
+  几分钟 CPU、参数也不再更新。现在参数走增量解析，每段只扫一遍新增字符，收尾时仍完整解析一次，
+  展示用快照最多每 4 KB 刷新一次。
+- **深层嵌套引用不再让行数乘法增长**：每层剥掉两列宽再把内层行重新折一次，宽度到一定程度后不再收缩、
+  于是继续成倍增长——30 层引用能把渲染卡住。超过 8 层后不再缩进加边框，内容照常显示；
+  一条消息渲染超过 20000 行时在那里截断并附一行提示。
 - **WSL 里粘贴没反应**：没有 WSLg 时既无 X11 也无 Wayland 剪贴板，Ctrl+V 取不到任何内容。
   现在回退到经 `powershell.exe Get-Clipboard` 读 Windows 侧剪贴板。
 - **退出时可能丢掉刚轮转的 OAuth token**：刷新跑在独立任务里，provider 答完才写盘；此时退出会把它丢弃，
@@ -705,14 +700,10 @@
 - **恶意 MCP 服务器可以把非 web 地址交给浏览器**：OAuth 元数据与最终授权地址原先接受任意 scheme，
   服务器给 `file:` 或 `search-ms:` 这类自定义协议时会被平台 URL handler 本地拉起。
   现在只接受 `http:` 与 `https:`。
-- **大工具调用的流式参数在每个增量上重解析整串**：每来一段就把累积的 JSON 从头扫一遍，一次大
-  `write` 能吃掉几分钟 CPU 和几百 MB 堆。现在超过 64 KB 后中间增量不再重解析，收尾时仍完整解析一次。
 - **会话写盘失败时条目只留在内存里**：写入失败也照样应用，后续条目就挂到磁盘上没有的父节点上，
   恢复会话时那段历史与工具结果一起丢。现在只有写成功才应用进内存，失败仍然照报。
 - **`--model` 指不了 id 含 `/` 的 provider**：原先按第一个斜杠切，`llama/local` 这类从 URL 派生的
   provider 会丢掉第二段。现在按最长已知 provider id 匹配前缀。
-- **深层嵌套引用可以无限生成行**：每层都把内层行再折一次，行数乘法增长直到排版卡住。
-  一条消息渲染超过 20000 行时在那里截断并附一行提示。
 - **设置子面板里 PageUp/PageDown 不起作用**：勾选列表原先每次只移一行。现在两个翻页键都移十行。
 - **ACP 会把自己的收尾切断**：stdin EOF 与 SIGTERM 同时到达时在途工作被直接丢弃，刷新到的 MCP token
   与会话落盘可能一起丢。现在首个 EOF/信号让当前回合跑完，第二个信号才立即退出。
@@ -724,8 +715,17 @@
 - **缩放后的照片明明 JPEG 小几倍却仍然发 PNG**：编码器取第一个满足字节上限的候选，而 PNG 永远排第一，
   于是大照片白白走了没人要求的无损编码。现在先比较 PNG 与「配置质量的 JPEG」取较小者，
   两者都放不下才逐档降低 JPEG 质量。
-- **超宽的 display 公式被逐字符拆开**：分式、求和是 2D 布局，无法逐行折行，拆开就没了含义。
-  渲染结果放不进可用宽度的公式现在回退到 LaTeX 原文。
+- **display 公式渲染更靠得住**：渲染结果放不进可用宽度的公式以前被逐字符拆开，而分式、求和是 2D 布局、
+  无法逐行折行，拆开就没了含义——现在回退到 LaTeX 原文。折行也不再丢掉源码里的行首空格，
+  靠空格对齐的分子、分母与求和上下限因此和分数线对得上；只有自动换行产生的空格才丢。
+  `\partial t` 不再因源码里的空格渲染成 `∂ t`，负号改用 U+2212 而不和分数线连成一条长横线，
+  堆叠分式右侧不再缀空格（`── ,`），`90^\circ` 写成 `90°`（`\circ` 上标给 `°`），只带下标的符号不再独占两行。
+  控制词后的空格按 TeX 规则吞掉，单侧上下标走行内（`x_c`、`x^n`），上下标同时存在时才垂直堆叠。
+  另外，一个不认识的命令就会让整条公式退回原文，所以缺个 `\ulcorner` / `\urcorner` 就足以让
+  `G \leftrightarrow \neg\mathbb{Provable}(\ulcorner G\urcorner)` 完全渲染不出来——现在补上了
+  直角引号、四种花色、`\lnot`、`\surd`、`\boxplus`/`\boxtimes`、`\lesssim`/`\gtrsim`、
+  `\nleq`/`\ngeq` 等常见符号；`\mathbb` 也不会把没有黑板字形的词改一半
+  （`\mathbb{Provable}` 原先是 `ℙrovable`，现在是 `Provable`）。
 - **在折叠粘贴附近编辑会把 marker 删成半截**：原先只有 Backspace 把 `[paste #N …]` 当一个整体，
   Delete、删词、删到行尾、以及在 marker 中间打字都会把它切开；切开后正则失配、存储被丢，
   残骸会被当成正文发出去。现在所有编辑操作都把 paste marker 当原子单元。
@@ -738,18 +738,6 @@
 - **确认设备码登录反而把登录取消了**：登录面板上空输入 + Enter 原本等于「取消」，
   于是想「好，打开页面吧」的那一下把登录丢了。现在 Enter 打开验证地址并把验证码复制到剪贴板
   （两步失败都只提示），取消仍是 Esc。桌面版用点击达成同一件事：点验证码即复制，点地址即开浏览器。
-- **块级公式的分子分母塌到最左边**：终端界面折行时把每行的行首空格当成断行残留丢掉，靠空格对齐的分子、
-  分母与求和上下限因此全部贴着左边，和分数线完全对不上。现在源码里显式给出的行首空格保留，
-  只有自动换行产生的才丢。
-- **数学公式排版的一批小毛病**：`\partial t` 因源码里的空格渲染成 `∂ t`，负号和分数线连成一条长横线，
-  每处分式右侧都缀一个空格（`── ,`），`90^\circ` 写成 `90^∘`，只带下标的符号独占两行。
-  现在控制词后的空格按 TeX 规则吞掉，减号改用 U+2212，堆叠分式右侧不再留空隙，
-  `\circ` 上标给 `°`，单侧上下标走行内（`x_c`、`x^n`），上下标同时存在时才垂直堆叠。
-  另外，一个不认识的命令就会让整条公式退回原文，所以缺个 `\ulcorner` / `\urcorner` 就足以让
-  `G \leftrightarrow \neg\mathbb{Provable}(\ulcorner G\urcorner)` 完全渲染不出来——现在补上了
-  直角引号、四种花色、`\lnot`、`\surd`、`\boxplus`/`\boxtimes`、`\lesssim`/`\gtrsim`、
-  `\nleq`/`\ngeq` 等常见符号；`\mathbb` 也不会把没有黑板字形的词改一半
-  （`\mathbb{Provable}` 原先是 `ℙrovable`，现在是 `Provable`）。
 - **Windows 上路径包含判断区分了大小写**：`C:\Repo` 与 `C:\repo\file` 被当成无关路径，
   项目内的文件可能被判成「目录之外」。现在只在 Windows 上折叠大小写，其它平台仍按组件比较、行为不变。
 - **桌面应用里比块宽的图被裁掉**：mermaid 图按块的外宽排版，块自己的内边距与边框把它顶出边界，
