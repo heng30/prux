@@ -267,7 +267,7 @@
 - **A finished background job now wakes the agent**: when a `processes` job ends, the session also
   gets a `[bash-done] job-N …` notice — status, duration, command line and log path — so the model no
   longer has to poll `read_process_output` to learn that the command finished. An idle session starts
-  a new turn right away; a busy one keeps the notice until that turn settles, and each notice is
+  a new turn right away; a busy one gets the notice before its next turn, and each notice is
   delivered once.
 
 ### Fixed
@@ -628,7 +628,7 @@
 
 - **后台 job 跑完会唤醒 agent**：`processes` 扩展的 job 结束时，除写回 job 表外还给会话投一条
   `[bash-done] job-N …` 通知（状态、耗时、命令行、日志路径），模型不必轮询 `read_process_output`
-  才知道命令跑完了。空闲时直接起一轮，忙碌时留到本轮结算边界补投，同一条通知只投一次。
+  才知道命令跑完了。空闲时直接起一轮，忙碌时在下一个 turn 注入，同一条通知只投一次。
 
 ### 修复
 

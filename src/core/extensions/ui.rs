@@ -167,8 +167,9 @@ pub enum ExtensionUiRequest {
     /// TUI 显示期间接管键盘（type to search；↑/↓/Space/Enter；Esc/Ctrl+C 隐藏）。
     ShowSettings { ext: String },
     /// 扩展自主续跑：投一条消息并触发下一轮 prompt。
-    /// TUI 处理时若仍忙碌（用户 steer/follow-up 已 drained 并启动新一轮）则跳过，
-    /// 避免延续抢跑用户输入；空闲则入 `initial_queue` 由 `take_next_action` 发送。
+    /// 忙碌时并进运行中 steer 注入箱（内核在下一个 turn 落库注入，转录可见；
+    /// 直接丢弃会让只存在于内存上下文的通知彻底消失）；空闲则入 `initial_queue`
+    /// 由 `take_next_action` 发送。
     /// `Box` 避免枚举因内联 AgentMessage 而特大。
     Continuation { message: Box<AgentMessage> },
     /// 扩展请求中止当前回合（如 loop-detect 检测到死循环）：

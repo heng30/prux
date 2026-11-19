@@ -327,7 +327,14 @@ impl GuiApp {
                 self.follow_bottom();
             }
             ExtensionUiRequest::Continuation { message } => {
-                _ = self.cmd_tx.send(AgentCommand::PromptMessage(*message));
+                // 忙碌时并进 steer 注入箱：内核在下一个 turn 落库注入（转录可见），空闲才直接起一轮。
+                if self.busy {
+                    if let Ok(mut inbox) = self.steer_inbox.lock() {
+                        inbox.push_back(*message);
+                    }
+                } else {
+                    _ = self.cmd_tx.send(AgentCommand::PromptMessage(*message));
+                }
             }
             ExtensionUiRequest::AbortRun => self.abort_turn(cx),
             ExtensionUiRequest::RestartRun { message } => {

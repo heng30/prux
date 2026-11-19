@@ -9,8 +9,9 @@
 //! - `/ps`：打开停靠面板看运行中的 job，`/ps stop <id>` 停止，`/ps clear` 清掉已完成记录。
 //!
 //! **完成唤醒**：job 结束时除了写回 job 表，还给会话投一条 `[bash-done] job-N …` 通知——
-//! 空闲时直接起一轮（`Continuation`），忙碌时（TUI 会丢掉 `Continuation`）留到本轮
-//! `agent_before_settle` 边界补投。模型不必轮询 `read_process_output` 才知道命令跑完了；
+//! 空闲时直接起一轮（`Continuation`），忙碌时由宿主并进运行中 steer 注入箱、在下一个
+//! turn 落库注入；无 UI（headless / `-p`）时留到 `agent_before_settle` 边界补投。
+//! 模型不必轮询 `read_process_output` 才知道命令跑完了；
 //! 同一条通知只投一次（通知标记已在上下文里就不再重复）。
 //!
 //! **输出去处**：子进程的 stdout/stderr 全部写进 `agent_dir()` 外的临时日志文件（0600），
@@ -685,8 +686,8 @@ fn reap(mut child: std::process::Child, pid: u32) {
             notice
         };
 
-        // 空闲时这就起一轮（TUI 把 `Continuation` 入队）；忙碌时 TUI 会丢弃它，
-        // 留在 `notices` 里由 `on_boundary` 在本轮结算边界补投。
+        // 空闲时宿主据此起一轮；忙碌时并进 steer 注入箱，下一个 turn 落库注入
+        // （两条路径都会让通知进上下文，`notices` 里的同一条由边界按标记去重丢掉）。
         // 无事件循环（headless / `-p` / 测试）时没人消费这条请求：不入队，只靠边界补投。
         if ui_ready() {
             request_ui(ExtensionUiRequest::Continuation {

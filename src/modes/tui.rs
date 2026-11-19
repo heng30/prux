@@ -1270,10 +1270,15 @@ fn maybe_handle_extension_ui(shared: &Rc<RefCell<App>>) {
             st.dirty = true;
         }
         core::extensions::ExtensionUiRequest::Continuation { message } => {
-            // 扩展自主续跑：若仍忙碌（user steer/follow-up 已被 apply_sink_agent_settled
-            // drained 并启动新一轮）则跳过，避免延续抢跑用户输入；
-            // 空闲则入 initial_queue，由本循环尾部 take_next_action 触发下一轮。
-            if !st.busy {
+            // 扩展自主续跑：忙碌时并进 steer 注入箱，由内核在下一个 turn 注入
+            // （那里会落库并发 message 事件，转录里看得见）；直接丢弃会让完成通知
+            // 只存在于内存上下文里。空闲则入 initial_queue，由循环尾部触发下一轮。
+            if st.busy {
+                if let Ok(mut inbox) = st.runtime_steer_inbox.lock() {
+                    inbox.push_back(*message);
+                }
+                st.dirty = true;
+            } else {
                 st.initial_queue.push_back(*message);
             }
         }
@@ -1664,6 +1669,53 @@ mod tests {
         assert!(
             st.borrow().dirty,
             "ShowDock 应置 dirty：空闲时（无流式事件）也要立即重绘面板"
+        );
+    }
+
+    /// 忙碌时扩展的续跑消息不能丢：并进 steer 注入箱，等内核下一个 turn 落库注入。
+    /// 直接丢弃会让后台 job 的 `[bash-done]` 通知只存在于内存上下文、转录里看不到。
+    #[test]
+    fn continuation_while_busy_joins_steer_inbox() {
+        let _auth = crate::test_support::AUTH_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        while crate::core::extensions::take_pending_ui().is_some() {}
+        let shared = std::rc::Rc::new(std::cell::RefCell::new(App::new()));
+        shared.borrow_mut().busy = true;
+        crate::core::extensions::request_ui(
+            crate::core::extensions::ExtensionUiRequest::Continuation {
+                message: Box::new(AgentMessage::user_text("[bash-done] job-1 exit 0")),
+            },
+        );
+        maybe_handle_extension_ui(&shared);
+
+        {
+            let st = shared.borrow();
+            let inbox = st.runtime_steer_inbox.lock().unwrap();
+            assert_eq!(inbox.len(), 1, "忙碌时应并进 steer 注入箱");
+            assert_eq!(inbox[0].text(), "[bash-done] job-1 exit 0");
+            assert!(st.initial_queue.is_empty(), "忙碌时不该另起一轮");
+        }
+
+        // 空闲：走 initial_queue 由循环尾部起一轮
+        shared.borrow_mut().busy = false;
+        shared
+            .borrow_mut()
+            .runtime_steer_inbox
+            .lock()
+            .unwrap()
+            .clear();
+        crate::core::extensions::request_ui(
+            crate::core::extensions::ExtensionUiRequest::Continuation {
+                message: Box::new(AgentMessage::user_text("idle nudge")),
+            },
+        );
+        maybe_handle_extension_ui(&shared);
+        let st = shared.borrow();
+        assert_eq!(st.initial_queue.len(), 1, "空闲时应直接起一轮");
+        assert!(
+            st.runtime_steer_inbox.lock().unwrap().is_empty(),
+            "空闲时不该进 steer 注入箱"
         );
     }
 
