@@ -4,7 +4,6 @@ version = "1.5.2"
 edition = "2024"
 license = "MIT"
 readme = "README.md"
-homepage = "https://github.com/heng30/prux"
 repository = "https://github.com/heng30/prux"
 keywords = ["cli", "tui", "llm", "agent", "terminal"]
 exclude = ["screenshot/", "tests/", "examples/", "migrations/"]

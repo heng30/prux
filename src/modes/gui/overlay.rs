@@ -692,17 +692,22 @@ fn same_view(a: &OverlayView, b: &OverlayView) -> bool {
 }
 
 /// 一行扩展文本（主题键 + 兜底色 + 内容）→ GUI 元素；扩展覆盖层与停靠面板共用。
+///
+/// 一行只占一行、绝不折行（与 TUI 的截断语义一致）：片段宽度逐帧会变（耗时、CPU%），
+/// 折行会让同一行在单行/双行之间来回跳。放不下时由最后一个片段截断出省略号。
 pub(crate) fn render_dock_line(line: &DockLine, theme: &Theme) -> AnyElement {
-    let mut row = div().w_full().flex().flex_wrap();
-    for span in line {
-        // min_w_0：文本的 min-content 就是整行宽度，不显式清掉 flex 的最小宽度，
-        // 片段就缩不到容器宽度，长行会直接溢出卡片（不会折行）
-        row = row.child(
-            div()
-                .min_w_0()
-                .text_color(dock_span_color(span, theme))
-                .child(SharedString::from(span.text.clone())),
-        );
+    let mut row = div().w_full().flex().min_w_0().whitespace_nowrap();
+    let last = line.len().saturating_sub(1);
+    for (index, span) in line.iter().enumerate() {
+        let cell = div()
+            .min_w_0()
+            .text_color(dock_span_color(span, theme))
+            .child(SharedString::from(span.text.clone()));
+        row = row.child(if index == last {
+            cell.flex_1().truncate()
+        } else {
+            cell.flex_none()
+        });
     }
     row.into_any_element()
 }

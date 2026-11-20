@@ -305,26 +305,32 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App, _size: OverlaySize) 
         (((total - 1) as f64) * (scroll as f64 / max_scroll as f64)).round() as usize
     };
 
+    // 固定区（header）行数可能超过终端高度：track 必须夹回区域，否则会写到 buffer 外
+    let track_area = Rect {
+        x: scroll_x,
+        y: content_y,
+        width: 1,
+        height: track as u16,
+    }
+    .intersection(area);
+
     let thumb = if scrollable && track > 0 {
         let thumb = app.theme.style("scrollbarThumb", "#6a6a78");
         let mut sb = ScrollbarState::new(total)
             .position(position)
             .viewport_content_length(track);
-        frame.render_stateful_widget(
-            Scrollbar::new(ScrollbarOrientation::VerticalRight)
-                .begin_symbol(None)
-                .end_symbol(None)
-                .track_symbol(None)
-                .thumb_symbol(DEF_SCROLLBAR_THUMB)
-                .thumb_style(thumb),
-            Rect {
-                x: scroll_x,
-                y: content_y,
-                width: 1,
-                height: track as u16,
-            },
-            &mut sb,
-        );
+        if track_area.height > 0 {
+            frame.render_stateful_widget(
+                Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                    .begin_symbol(None)
+                    .end_symbol(None)
+                    .track_symbol(None)
+                    .thumb_symbol(DEF_SCROLLBAR_THUMB)
+                    .thumb_style(thumb),
+                track_area,
+                &mut sb,
+            );
+        }
 
         // thumb 相对区间（与 ratatui part_lengths 同公式，position 用上面映射后的值）
         let denom = (total - 1 + track).max(1);
@@ -602,6 +608,32 @@ mod tests {
             rows[1]
         );
         assert!(rows[3].contains("line-5"), "{:?}", rows[3]);
+    }
+
+    /// 极小终端下固定区（header）行数超过可用高度时不能越界渲染滚动条。
+    #[test]
+    fn tiny_area_with_tall_header_does_not_panic() {
+        let mut app = App::new();
+        let view = OverlayView {
+            title: "Viewer".to_string(),
+            header: (0..6)
+                .map(|i| vec![DockSpan::plain(format!("h{i}"))])
+                .collect(),
+            lines: (0..20)
+                .map(|i| vec![DockSpan::plain(format!("line-{i}"))])
+                .collect(),
+            footer: vec![("Esc".to_string(), "close".to_string())],
+            input: None,
+            editor: None,
+            size: OverlaySize::Fullscreen,
+            selected: None,
+            input_focus: false,
+            ..OverlayView::inline("x", Vec::new(), 8)
+        };
+        crate::modes::tui::overlay::open(&mut app, 1, view);
+        for (w, h) in [(50u16, 3u16), (47, 7), (30, 4), (20, 2)] {
+            let _ = draw(&mut app, w, h);
+        }
     }
 
     /// 多行编辑器区域：标签 + 内容 + 光标；`rows: 0` 在 Fullscreen 下填满剩余空间。
